@@ -2386,13 +2386,31 @@ def _normalize_clarification_question(raw_question: dict, index: int) -> dict | 
     return normalized
 
 
+def _dedupe_clarification_question_id(question_id: str, seen_ids: set[str], index: int) -> str:
+    base_id = question_id.strip()[:80] or f"question_{index}"
+    candidate = base_id
+    suffix = 2
+    while candidate in seen_ids:
+        suffix_text = f"_{suffix}"
+        candidate = f"{base_id[: max(1, 80 - len(suffix_text))]}{suffix_text}"
+        suffix += 1
+    seen_ids.add(candidate)
+    return candidate
+
+
 def _normalize_clarification_payload(tool_args: dict) -> dict:
     raw_questions = tool_args.get("questions") if isinstance(tool_args.get("questions"), list) else []
     questions = []
+    seen_question_ids: set[str] = set()
     question_limit = get_clarification_max_questions(get_app_settings())
     for index, raw_question in enumerate(raw_questions[:question_limit], start=1):
         normalized_question = _normalize_clarification_question(raw_question, index)
         if normalized_question is not None:
+            normalized_question["id"] = _dedupe_clarification_question_id(
+                str(normalized_question.get("id") or ""),
+                seen_question_ids,
+                index,
+            )
             questions.append(normalized_question)
 
     if not questions:

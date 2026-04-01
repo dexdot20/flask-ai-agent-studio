@@ -57,6 +57,7 @@ from db import (
     build_user_profile_system_context,
     count_visible_message_tokens,
     create_image_asset,
+    extract_pending_clarification,
     extract_message_usage,
     get_active_tool_names,
     get_app_settings,
@@ -330,18 +331,30 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["sub_agent_timeout_seconds"], 360)
         self.assertEqual(payload["sub_agent_retry_attempts"], 3)
         self.assertEqual(payload["sub_agent_retry_delay_seconds"], 7)
-        self.assertEqual(payload["custom_models"][0]["id"], "openrouter:anthropic/claude-sonnet-4.5")
+        self.assertEqual(
+            payload["custom_models"][0]["id"],
+            "openrouter:anthropic/claude-sonnet-4.5@@r=enabled:high;p=deepinfra/turbo;v=1;s=1",
+        )
         self.assertEqual(payload["custom_models"][0]["provider_slug"], "deepinfra/turbo")
         self.assertEqual(payload["custom_models"][0]["reasoning_mode"], "enabled")
         self.assertEqual(payload["custom_models"][0]["reasoning_effort"], "high")
-        self.assertEqual(payload["visible_model_order"], ["openrouter:anthropic/claude-sonnet-4.5", "deepseek-chat"])
-        self.assertEqual(payload["operation_model_preferences"]["summarize"], "openrouter:anthropic/claude-sonnet-4.5")
+        self.assertEqual(
+            payload["visible_model_order"],
+            ["openrouter:anthropic/claude-sonnet-4.5@@r=enabled:high;p=deepinfra/turbo;v=1;s=1", "deepseek-chat"],
+        )
+        self.assertEqual(
+            payload["operation_model_preferences"]["summarize"],
+            "openrouter:anthropic/claude-sonnet-4.5@@r=enabled:high;p=deepinfra/turbo;v=1;s=1",
+        )
         self.assertEqual(payload["operation_model_preferences"]["sub_agent"], "deepseek-reasoner")
         self.assertEqual(payload["operation_model_fallback_preferences"]["summarize"], ["deepseek-reasoner", "deepseek-chat"])
         self.assertEqual(payload["operation_model_fallback_preferences"]["sub_agent"], ["deepseek-chat", "deepseek-reasoner"])
         self.assertEqual(payload["image_processing_method"], "llm")
         self.assertTrue(
-            any(model["id"] == "openrouter:anthropic/claude-sonnet-4.5" for model in payload["available_models"])
+            any(
+                model["id"] == "openrouter:anthropic/claude-sonnet-4.5@@r=enabled:high;p=deepinfra/turbo;v=1;s=1"
+                for model in payload["available_models"]
+            )
         )
         self.assertEqual(payload["active_tools"], ["fetch_url", "search_web"])
         self.assertFalse(payload["rag_auto_inject"])
@@ -384,6 +397,42 @@ class AppRoutesTestCase(unittest.TestCase):
             conversation_response.get_json()["conversation"]["model_label"],
             "Claude Sonnet 4.5",
         )
+
+    def test_custom_openrouter_models_can_share_the_same_base_model_id_with_different_profiles(self):
+        response = self.client.patch(
+            "/api/settings",
+            json={
+                "custom_models": [
+                    {
+                        "name": "Gemini Flash",
+                        "api_model": "google/gemini-3-flash-preview",
+                        "reasoning_mode": "disabled",
+                        "supports_tools": True,
+                        "supports_vision": False,
+                        "supports_structured_outputs": False,
+                    },
+                    {
+                        "name": "Gemini Flash Thinking",
+                        "api_model": "google/gemini-3-flash-preview",
+                        "reasoning_mode": "enabled",
+                        "reasoning_effort": "xhigh",
+                        "supports_tools": True,
+                        "supports_vision": False,
+                        "supports_structured_outputs": False,
+                    },
+                ]
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        custom_models = payload["custom_models"]
+        self.assertEqual(len(custom_models), 2)
+        self.assertNotEqual(custom_models[0]["id"], custom_models[1]["id"])
+        self.assertTrue(custom_models[0]["id"].startswith("openrouter:google/gemini-3-flash-preview"))
+        self.assertTrue(custom_models[1]["id"].startswith("openrouter:google/gemini-3-flash-preview"))
+        self.assertIn("@@r=disabled", custom_models[0]["id"])
+        self.assertIn("@@r=enabled:xhigh", custom_models[1]["id"])
 
     def test_resolve_model_target_builds_openrouter_provider_and_reasoning_overrides(self):
         settings = {
@@ -2527,8 +2576,10 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertEqual(spec["parameters"]["required"], ["questions"])
         self.assertEqual(spec["parameters"]["properties"]["questions"]["minItems"], 1)
+        self.assertEqual(spec["parameters"]["properties"]["questions"]["maxItems"], 25)
         self.assertIn("explicitly asks you to ask questions first", spec["description"])
         self.assertIn("only tool call", spec["prompt"]["guidance"])
+        self.assertIn("ids short and unique", spec["prompt"]["guidance"])
 
     def test_openai_tool_specs_resize_clarification_question_limit(self):
         tools = get_openai_tool_specs(["ask_clarifying_question"], clarification_max_questions=7)
@@ -2654,6 +2705,41 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertTrue(result["text"].startswith("Q: Before I answer, I need a few details."))
         self.assertIn("Q: Which scope?", result["text"])
         self.assertIn("A: Type your answer.", result["text"])
+
+    def test_execute_clarification_tool_dedupes_question_ids(self):
+        result, summary = _execute_tool(
+            "ask_clarifying_question",
+            {
+                "questions": [
+                    {"id": "scope", "label": "Which scope?", "input_type": "text"},
+                    {"id": "scope", "label": "What style?", "input_type": "text"},
+                    {"label": "Any deadline?", "input_type": "text"},
+                ]
+            },
+        )
+
+        self.assertEqual(summary, "Awaiting user clarification")
+        self.assertEqual(
+            [question["id"] for question in result["clarification"]["questions"]],
+            ["scope", "scope_2", "question_3"],
+        )
+
+    def test_extract_pending_clarification_uses_configured_question_limit(self):
+        metadata = {
+            "pending_clarification": {
+                "questions": [
+                    {"id": f"q{index}", "label": f"Question {index}?", "input_type": "text"}
+                    for index in range(1, 8)
+                ]
+            }
+        }
+
+        with patch("db.get_clarification_max_questions", return_value=7):
+            payload = extract_pending_clarification(metadata)
+
+        self.assertIsNotNone(payload)
+        self.assertEqual(len(payload["questions"]), 7)
+        self.assertEqual(payload["questions"][-1]["id"], "q7")
 
     def test_load_proxies_uses_cached_file_contents(self):
         proxies_path = Path(self.temp_dir.name) / "proxies.txt"
@@ -3723,7 +3809,7 @@ class AppRoutesTestCase(unittest.TestCase):
         html = self.client.get("/settings").get_data(as_text=True)
         self.assertIn("Tool step budget", html)
         self.assertIn("Tool step limit (1-50)", html)
-        self.assertIn("Max clarification questions (1-10)", html)
+        self.assertIn("Max clarification questions (1-25)", html)
         self.assertIn('id="clarification-max-questions-input"', html)
         self.assertIn('value="append_scratchpad"', html)
         self.assertIn('value="ask_clarifying_question"', html)

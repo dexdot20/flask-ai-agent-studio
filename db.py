@@ -1665,7 +1665,8 @@ def extract_pending_clarification(metadata: dict | None) -> dict | None:
 
     questions = pending.get("questions") if isinstance(pending.get("questions"), list) else []
     normalized_questions = []
-    for question in questions[:5]:
+    question_limit = get_clarification_max_questions()
+    for question in questions[:question_limit]:
         normalized_question = _normalize_clarification_question_payload(question)
         if normalized_question is not None:
             normalized_questions.append(normalized_question)

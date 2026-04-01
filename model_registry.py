@@ -24,6 +24,9 @@ OPENROUTER_REASONING_MODES = {
     OPENROUTER_REASONING_MODE_DISABLED,
 }
 OPENROUTER_REASONING_EFFORTS = {"minimal", "low", "medium", "high", "xhigh"}
+OPENROUTER_MODEL_VARIANT_SEPARATOR = "@@"
+OPENROUTER_MODEL_VARIANT_PART_SEPARATOR = ";"
+OPENROUTER_MODEL_VARIANT_KEY_VALUE_SEPARATOR = "="
 DEFAULT_CHAT_MODEL = "deepseek-chat"
 DEFAULT_IMAGE_PROCESSING_METHOD = "auto"
 IMAGE_PROCESSING_METHODS = {"auto", "llm", "local_ocr", "local_vl", "local_both"}
@@ -177,11 +180,88 @@ def normalize_openrouter_api_model(value: Any) -> str:
     return api_model.strip().strip("/")[:200]
 
 
-def build_openrouter_model_id(api_model: str) -> str:
-    normalized_api_model = normalize_openrouter_api_model(api_model)
+def _split_openrouter_model_identity(value: Any) -> tuple[str, str]:
+    normalized_value = normalize_openrouter_api_model(value)
+    if not normalized_value:
+        return "", ""
+
+    base_api_model, separator, variant_suffix = normalized_value.partition(OPENROUTER_MODEL_VARIANT_SEPARATOR)
+    if not separator:
+        return base_api_model, ""
+    return base_api_model, variant_suffix
+
+
+def _normalize_openrouter_model_variant_suffix(variant: dict[str, Any] | None) -> str:
+    source = variant if isinstance(variant, dict) else {}
+    parts: list[str] = []
+
+    reasoning_mode, reasoning_effort = normalize_openrouter_reasoning_preferences(
+        source.get("reasoning_mode", source.get("reasoning_enabled")),
+        source.get("reasoning_effort"),
+    )
+    if reasoning_mode != OPENROUTER_REASONING_MODE_DEFAULT or reasoning_effort:
+        reasoning_value = reasoning_mode
+        if reasoning_effort:
+            reasoning_value = f"{reasoning_value}:{reasoning_effort}"
+        parts.append(f"r{OPENROUTER_MODEL_VARIANT_KEY_VALUE_SEPARATOR}{reasoning_value}")
+
+    provider_slug = normalize_openrouter_provider_slug(source.get("provider_slug") or source.get("openrouter_provider"))
+    if provider_slug:
+        parts.append(f"p{OPENROUTER_MODEL_VARIANT_KEY_VALUE_SEPARATOR}{provider_slug}")
+
+    if _coerce_bool(source.get("supports_tools", True)) is False:
+        parts.append(f"t{OPENROUTER_MODEL_VARIANT_KEY_VALUE_SEPARATOR}0")
+    if _coerce_bool(source.get("supports_vision", False)) is True:
+        parts.append(f"v{OPENROUTER_MODEL_VARIANT_KEY_VALUE_SEPARATOR}1")
+    if _coerce_bool(source.get("supports_structured_outputs", False)) is True:
+        parts.append(f"s{OPENROUTER_MODEL_VARIANT_KEY_VALUE_SEPARATOR}1")
+
+    if not parts:
+        return ""
+    return f"{OPENROUTER_MODEL_VARIANT_SEPARATOR}{OPENROUTER_MODEL_VARIANT_PART_SEPARATOR.join(parts)}"
+
+
+def _parse_openrouter_model_variant_suffix(variant_suffix: str) -> dict[str, Any]:
+    cleaned_suffix = str(variant_suffix or "").strip()
+    if not cleaned_suffix:
+        return {}
+
+    parsed: dict[str, Any] = {}
+    for part in cleaned_suffix.split(OPENROUTER_MODEL_VARIANT_PART_SEPARATOR):
+        key, separator, value = part.partition(OPENROUTER_MODEL_VARIANT_KEY_VALUE_SEPARATOR)
+        if not separator:
+            continue
+        key = key.strip().lower()
+        value = value.strip()
+        if key == "r" and value:
+            reasoning_mode, reasoning_effort = normalize_openrouter_reasoning_preferences(
+                value.split(":", 1)[0],
+                value.split(":", 1)[1] if ":" in value else "",
+            )
+            parsed["reasoning_mode"] = reasoning_mode
+            if reasoning_effort:
+                parsed["reasoning_effort"] = reasoning_effort
+        elif key == "p" and value:
+            parsed["provider_slug"] = normalize_openrouter_provider_slug(value)
+        elif key == "t":
+            parsed["supports_tools"] = value not in {"0", "false", "no", "off"}
+        elif key == "v":
+            parsed["supports_vision"] = value in {"1", "true", "yes", "on"}
+        elif key == "s":
+            parsed["supports_structured_outputs"] = value in {"1", "true", "yes", "on"}
+
+    return parsed
+
+
+def build_openrouter_model_id(api_model: str, variant: dict[str, Any] | None = None) -> str:
+    normalized_api_model, encoded_variant_suffix = _split_openrouter_model_identity(api_model)
     if not normalized_api_model:
         return ""
-    return f"{OPENROUTER_MODEL_PREFIX}{normalized_api_model}"
+
+    variant_suffix = _normalize_openrouter_model_variant_suffix(variant)
+    if not variant_suffix and encoded_variant_suffix:
+        variant_suffix = f"{OPENROUTER_MODEL_VARIANT_SEPARATOR}{encoded_variant_suffix}"
+    return f"{OPENROUTER_MODEL_PREFIX}{normalized_api_model}{variant_suffix}"
 
 
 def normalize_openrouter_provider_slug(value: Any) -> str:
@@ -233,23 +313,54 @@ def normalize_custom_model_definition(raw_value: Any) -> dict[str, Any] | None:
     if not isinstance(raw_value, dict):
         return None
 
-    api_model = normalize_openrouter_api_model(
-        raw_value.get("api_model") or raw_value.get("model") or raw_value.get("id")
-    )
+    raw_identity = raw_value.get("api_model") or raw_value.get("model") or raw_value.get("id")
+    parsed_api_model, parsed_variant_suffix = _split_openrouter_model_identity(raw_identity)
+    parsed_variant = _parse_openrouter_model_variant_suffix(parsed_variant_suffix)
+
+    api_model = normalize_openrouter_api_model(raw_value.get("api_model") or raw_value.get("model") or parsed_api_model)
     if not api_model:
         return None
 
-    model_id = build_openrouter_model_id(api_model)
+    reasoning_mode_input = raw_value.get("reasoning_mode")
+    if reasoning_mode_input is None:
+        reasoning_mode_input = parsed_variant.get("reasoning_mode")
+    reasoning_effort_input = raw_value.get("reasoning_effort")
+    if reasoning_effort_input is None:
+        reasoning_effort_input = parsed_variant.get("reasoning_effort")
+
+    provider_slug_input = raw_value.get("provider_slug")
+    if provider_slug_input is None:
+        provider_slug_input = parsed_variant.get("provider_slug")
+
+    supports_tools_input = raw_value.get("supports_tools")
+    if supports_tools_input is None:
+        supports_tools_input = parsed_variant.get("supports_tools", True)
+    supports_vision_input = raw_value.get("supports_vision")
+    if supports_vision_input is None:
+        supports_vision_input = parsed_variant.get("supports_vision", False)
+    supports_structured_outputs_input = raw_value.get("supports_structured_outputs")
+    if supports_structured_outputs_input is None:
+        supports_structured_outputs_input = parsed_variant.get("supports_structured_outputs", False)
+
+    model_id = build_openrouter_model_id(
+        api_model,
+        {
+            "reasoning_mode": reasoning_mode_input,
+            "reasoning_effort": reasoning_effort_input,
+            "provider_slug": provider_slug_input,
+            "supports_tools": supports_tools_input,
+            "supports_vision": supports_vision_input,
+            "supports_structured_outputs": supports_structured_outputs_input,
+        },
+    )
     if not model_id or model_id in BUILTIN_MODEL_IDS:
         return None
 
     name = str(raw_value.get("name") or api_model).strip()[:120] or api_model
-    provider_slug = normalize_openrouter_provider_slug(
-        raw_value.get("provider_slug") or raw_value.get("openrouter_provider")
-    )
+    provider_slug = normalize_openrouter_provider_slug(provider_slug_input or raw_value.get("openrouter_provider"))
     reasoning_mode, reasoning_effort = normalize_openrouter_reasoning_preferences(
-        raw_value.get("reasoning_mode", raw_value.get("reasoning_enabled")),
-        raw_value.get("reasoning_effort"),
+        reasoning_mode_input,
+        reasoning_effort_input,
     )
     return {
         "id": model_id,
@@ -259,9 +370,9 @@ def normalize_custom_model_definition(raw_value: Any) -> dict[str, Any] | None:
         "provider_slug": provider_slug,
         "reasoning_mode": reasoning_mode,
         "reasoning_effort": reasoning_effort,
-        "supports_tools": _coerce_bool(raw_value.get("supports_tools", True)),
-        "supports_vision": _coerce_bool(raw_value.get("supports_vision", False)),
-        "supports_structured_outputs": _coerce_bool(raw_value.get("supports_structured_outputs", False)),
+        "supports_tools": _coerce_bool(supports_tools_input),
+        "supports_vision": _coerce_bool(supports_vision_input),
+        "supports_structured_outputs": _coerce_bool(supports_structured_outputs_input),
         "is_custom": True,
         "pricing": dict(_EMPTY_PRICING),
     }
@@ -297,6 +408,11 @@ def get_model_record(model_id: str, settings: dict | None = None) -> dict[str, A
     for record in get_all_models(settings):
         if record["id"] == normalized_model_id:
             return record
+    if normalized_model_id.startswith(OPENROUTER_MODEL_PREFIX):
+        variant_prefix = f"{normalized_model_id}{OPENROUTER_MODEL_VARIANT_SEPARATOR}"
+        for record in get_all_models(settings):
+            if record["id"].startswith(variant_prefix):
+                return record
     return None
 
 
@@ -324,15 +440,15 @@ def _get_default_visible_model_order(settings: dict | None = None) -> list[str]:
 
 
 def normalize_visible_model_order(raw_value: Any, settings: dict | None = None) -> list[str]:
-    candidate_ids = {record["id"] for record in get_chat_capable_models(settings)}
     if raw_value in (None, ""):
         return _get_default_visible_model_order(settings)
 
     normalized: list[str] = []
     for item in _parse_json_list(raw_value):
         model_id = canonicalize_model_id(item)
-        if model_id in candidate_ids and model_id not in normalized:
-            normalized.append(model_id)
+        record = get_model_record(model_id, settings)
+        if record and record.get("supports_tools") and record["id"] not in normalized:
+            normalized.append(record["id"])
     if normalized:
         return normalized
     return _get_default_visible_model_order(settings)
@@ -370,8 +486,9 @@ def _normalize_operation_model_mapping(raw_value: Any, settings: dict | None = N
     normalized = dict(DEFAULT_OPERATION_MODEL_PREFERENCES)
     for operation in MODEL_OPERATION_KEYS:
         candidate = canonicalize_model_id(raw_preferences.get(operation))
-        if candidate and is_valid_model_id(candidate, settings):
-            normalized[operation] = candidate
+        record = get_model_record(candidate, settings)
+        if record:
+            normalized[operation] = record["id"]
     return normalized
 
 
@@ -401,8 +518,9 @@ def _normalize_operation_model_fallback_list(raw_value: Any, settings: dict | No
     normalized: list[str] = []
     for item in raw_items:
         candidate = canonicalize_model_id(item)
-        if candidate and is_valid_model_id(candidate, settings) and candidate not in normalized:
-            normalized.append(candidate)
+        record = get_model_record(candidate, settings)
+        if record and record["id"] not in normalized:
+            normalized.append(record["id"])
     return normalized
 
 

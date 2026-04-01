@@ -247,9 +247,110 @@ function normalizeOpenRouterApiModel(value) {
   return rawValue.replace(/^\/+/, "").trim();
 }
 
-function buildOpenRouterModelId(apiModel) {
+function splitOpenRouterModelId(value) {
+  const normalizedValue = normalizeOpenRouterApiModel(value);
+  if (!normalizedValue) {
+    return { apiModel: "", variantSuffix: "" };
+  }
+
+  const separatorIndex = normalizedValue.indexOf("@@");
+  if (separatorIndex < 0) {
+    return { apiModel: normalizedValue, variantSuffix: "" };
+  }
+
+  return {
+    apiModel: normalizedValue.slice(0, separatorIndex),
+    variantSuffix: normalizedValue.slice(separatorIndex + 2),
+  };
+}
+
+function normalizeOpenRouterVariantBool(value, defaultValue) {
+  if (value === undefined || value === null || value === "") {
+    return defaultValue;
+  }
+  return Boolean(value);
+}
+
+function parseOpenRouterModelVariantSuffix(value) {
+  const parsed = {
+    reasoning_mode: "default",
+    reasoning_effort: "",
+    provider_slug: "",
+    supports_tools: undefined,
+    supports_vision: undefined,
+    supports_structured_outputs: undefined,
+  };
+
+  const rawValue = String(value || "").trim();
+  if (!rawValue) {
+    return parsed;
+  }
+
+  rawValue.split(";").forEach((part) => {
+    const separatorIndex = part.indexOf("=");
+    if (separatorIndex < 0) {
+      return;
+    }
+    const key = part.slice(0, separatorIndex).trim().toLowerCase();
+    const partValue = part.slice(separatorIndex + 1).trim();
+    if (!partValue) {
+      return;
+    }
+
+    if (key === "r") {
+      const [modeValue, effortValue = ""] = partValue.split(":", 2);
+      const reasoning = normalizeOpenRouterReasoningConfig(modeValue, effortValue);
+      parsed.reasoning_mode = reasoning.mode;
+      parsed.reasoning_effort = reasoning.effort;
+    } else if (key === "p") {
+      parsed.provider_slug = normalizeOpenRouterProviderSlug(partValue);
+    } else if (key === "t") {
+      parsed.supports_tools = !["0", "false", "no", "off"].includes(partValue.toLowerCase());
+    } else if (key === "v") {
+      parsed.supports_vision = ["1", "true", "yes", "on"].includes(partValue.toLowerCase());
+    } else if (key === "s") {
+      parsed.supports_structured_outputs = ["1", "true", "yes", "on"].includes(partValue.toLowerCase());
+    }
+  });
+
+  return parsed;
+}
+
+function buildOpenRouterModelVariantSuffix(variant = {}) {
+  const parts = [];
+  const reasoning = normalizeOpenRouterReasoningConfig(variant.reasoning_mode ?? variant.reasoning_enabled, variant.reasoning_effort);
+
+  if (reasoning.mode !== "default" || reasoning.effort) {
+    parts.push(`r=${reasoning.effort ? `${reasoning.mode}:${reasoning.effort}` : reasoning.mode}`);
+  }
+
+  const providerSlug = normalizeOpenRouterProviderSlug(variant.provider_slug || variant.openrouter_provider || "");
+  if (providerSlug) {
+    parts.push(`p=${providerSlug}`);
+  }
+
+  if (normalizeOpenRouterVariantBool(variant.supports_tools, true) === false) {
+    parts.push("t=0");
+  }
+  if (normalizeOpenRouterVariantBool(variant.supports_vision, false) === true) {
+    parts.push("v=1");
+  }
+  if (normalizeOpenRouterVariantBool(variant.supports_structured_outputs, false) === true) {
+    parts.push("s=1");
+  }
+
+  return parts.length ? `@@${parts.join(";")}` : "";
+}
+
+function buildOpenRouterModelId(apiModel, variant = {}) {
   const normalizedApiModel = normalizeOpenRouterApiModel(apiModel);
-  return normalizedApiModel ? `openrouter:${normalizedApiModel}` : "";
+  if (!normalizedApiModel) {
+    return "";
+  }
+
+  const split = splitOpenRouterModelId(normalizedApiModel);
+  const variantSuffix = buildOpenRouterModelVariantSuffix(variant) || (split.variantSuffix ? `@@${split.variantSuffix}` : "");
+  return `openrouter:${split.apiModel || normalizedApiModel}${variantSuffix}`;
 }
 
 function normalizeOpenRouterProviderSlug(value) {
@@ -298,24 +399,39 @@ function normalizeOpenRouterReasoningConfig(modeValue, effortValue) {
 }
 
 function normalizeDraftCustomModel(model) {
-  const apiModel = normalizeOpenRouterApiModel(model?.api_model || model?.id || "");
-  const modelId = buildOpenRouterModelId(apiModel) || String(model?.id || "").trim();
+  const parsedIdentity = splitOpenRouterModelId(model?.id || model?.api_model || model?.model || "");
+  const parsedVariant = parseOpenRouterModelVariantSuffix(parsedIdentity.variantSuffix);
+  const apiModel = normalizeOpenRouterApiModel(model?.api_model || model?.model || parsedIdentity.apiModel || "");
   const reasoning = normalizeOpenRouterReasoningConfig(
-    model?.reasoning_mode ?? model?.reasoning_enabled,
-    model?.reasoning_effort
+    model?.reasoning_mode ?? model?.reasoning_enabled ?? parsedVariant.reasoning_mode,
+    model?.reasoning_effort ?? parsedVariant.reasoning_effort
   );
+  const providerSlug = normalizeOpenRouterProviderSlug(model?.provider_slug || model?.openrouter_provider || parsedVariant.provider_slug || "");
+  const supportsTools = model?.supports_tools !== undefined ? Boolean(model.supports_tools) : (parsedVariant.supports_tools ?? true);
+  const supportsVision = model?.supports_vision !== undefined ? Boolean(model.supports_vision) : (parsedVariant.supports_vision ?? false);
+  const supportsStructuredOutputs = model?.supports_structured_outputs !== undefined
+    ? Boolean(model.supports_structured_outputs)
+    : (parsedVariant.supports_structured_outputs ?? false);
+  const modelId = buildOpenRouterModelId(apiModel, {
+    reasoning_mode: reasoning.mode,
+    reasoning_effort: reasoning.effort,
+    provider_slug: providerSlug,
+    supports_tools: supportsTools,
+    supports_vision: supportsVision,
+    supports_structured_outputs: supportsStructuredOutputs,
+  }) || String(model?.id || "").trim();
   return {
     ...model,
     id: modelId,
     name: String(model?.name || apiModel || modelId).trim() || apiModel || modelId,
     provider: "openrouter",
     api_model: apiModel,
-    provider_slug: normalizeOpenRouterProviderSlug(model?.provider_slug || model?.openrouter_provider || ""),
+    provider_slug: providerSlug,
     reasoning_mode: reasoning.mode,
     reasoning_effort: reasoning.effort,
-    supports_tools: Boolean(model?.supports_tools),
-    supports_vision: Boolean(model?.supports_vision),
-    supports_structured_outputs: Boolean(model?.supports_structured_outputs),
+    supports_tools: supportsTools,
+    supports_vision: supportsVision,
+    supports_structured_outputs: supportsStructuredOutputs,
     is_custom: true,
   };
 }
@@ -797,13 +913,20 @@ function addCustomModelFromInputs() {
     return;
   }
 
-  const modelId = buildOpenRouterModelId(apiModel);
+  const modelId = buildOpenRouterModelId(apiModel, {
+    reasoning_mode: reasoning.mode,
+    reasoning_effort: reasoning.effort,
+    provider_slug: providerSlug,
+    supports_tools: Boolean(customModelSupportsToolsEl?.checked),
+    supports_vision: Boolean(customModelSupportsVisionEl?.checked),
+    supports_structured_outputs: Boolean(customModelSupportsStructuredEl?.checked),
+  });
   if (!modelId) {
     setCustomModelStatus("OpenRouter model id is invalid.", "error");
     return;
   }
   if (draftCustomModels.some((model) => model.id === modelId)) {
-    setCustomModelStatus("That OpenRouter model is already configured.", "warning");
+    setCustomModelStatus("That OpenRouter model configuration is already configured.", "warning");
     return;
   }
 

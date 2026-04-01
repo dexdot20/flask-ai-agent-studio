@@ -58,6 +58,7 @@ from model_registry import (
     get_all_models,
     get_chat_capable_models,
     get_default_chat_model_id,
+        get_model_record,
     get_operation_model_fallback_preferences,
     get_operation_model_preferences,
     get_visible_chat_models,
@@ -383,14 +384,14 @@ def register_page_routes(app) -> None:
             if not isinstance(visible_model_order_raw, list):
                 return jsonify({"error": "visible_model_order must be an array."}), 400
 
-            valid_chat_model_ids = {model["id"] for model in get_chat_capable_models(settings)}
             normalized_visible_model_order: list[str] = []
             for value in visible_model_order_raw:
                 model_id = canonicalize_model_id(value)
-                if model_id not in valid_chat_model_ids:
+                record = get_model_record(model_id, settings)
+                if not record or not record.get("supports_tools"):
                     return jsonify({"error": "visible_model_order contains unsupported chat models."}), 400
-                if model_id not in normalized_visible_model_order:
-                    normalized_visible_model_order.append(model_id)
+                if record["id"] not in normalized_visible_model_order:
+                    normalized_visible_model_order.append(record["id"])
 
             normalized_visible_model_order = normalize_visible_model_order(normalized_visible_model_order, settings)
             if not normalized_visible_model_order:
@@ -406,7 +407,7 @@ def register_page_routes(app) -> None:
 
             for operation_key, model_value in operation_model_preferences_raw.items():
                 candidate = canonicalize_model_id(model_value)
-                if candidate and not any(model["id"] == candidate for model in get_all_models(settings)):
+                if candidate and get_model_record(candidate, settings) is None:
                     return jsonify({"error": f"operation_model_preferences.{operation_key} must reference a known model."}), 400
 
             normalized_operation_preferences = normalize_operation_model_preferences(operation_model_preferences_raw, settings)
@@ -432,7 +433,7 @@ def register_page_routes(app) -> None:
 
                 for candidate_value in candidate_values:
                     candidate = canonicalize_model_id(candidate_value)
-                    if candidate and not any(model["id"] == candidate for model in get_all_models(settings)):
+                    if candidate and get_model_record(candidate, settings) is None:
                         return jsonify({"error": f"operation_model_fallback_preferences.{operation_key} must reference known models."}), 400
 
             normalized_operation_fallback_preferences = normalize_operation_model_fallback_preferences(

@@ -374,7 +374,7 @@ TOOL_SPECS = [
                     "type": "array",
                     "description": "List of clarification questions.",
                     "minItems": 1,
-                    "maxItems": 5,
+                    "maxItems": CLARIFICATION_QUESTION_LIMIT_MAX,
                     "items": {
                         "type": "object",
                         "properties": {
@@ -439,6 +439,7 @@ TOOL_SPECS = [
                 "Ask only the smallest set of questions needed to continue. "
                 "When the user asks you to ask questions first, this is the required tool. "
                 "Use a simple Q:/A: style. When you call this tool, it must be the only tool call in that assistant message and you must wait for the user's reply before answering. "
+                "Prefer single_select or multi_select when the likely answers are known, keep question ids short and unique, and use required=false for optional follow-ups. "
                 "Each questions item must be an object with id, label, and input_type; example: {\"id\":\"scope\",\"label\":\"Which scope?\",\"input_type\":\"text\"}."
             ),
         },

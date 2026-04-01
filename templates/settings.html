@@ -134,6 +134,7 @@
                   <button class="btn-primary" id="add-custom-model-btn" type="button">Add OpenRouter model</button>
                   <span id="custom-model-status" class="settings-status" data-tone="muted">No pending model changes</span>
                 </div>
+                <p class="settings-copy">You can add the same base model more than once if the reasoning mode, provider route, or capability flags differ.</p>
               </div>
               <div class="settings-model-catalog-summary">
                 <div class="settings-label">Configured OpenRouter models</div>
@@ -282,8 +283,8 @@
                 </div>
                 <p>Control how many clarification questions the assistant may ask in one turn.</p>
               </div>
-              <label class="settings-label" for="clarification-max-questions-input">Max clarification questions (1-10)</label>
-              <input type="number" class="settings-number" id="clarification-max-questions-input" min="1" max="10" value="5" />
+              <label class="settings-label" for="clarification-max-questions-input">Max clarification questions (1-25)</label>
+              <input type="number" class="settings-number" id="clarification-max-questions-input" min="1" max="25" value="5" />
               <p class="settings-copy">Higher values allow broader clarification turns, but the assistant should still ask only the minimum needed.</p>
             </div>
 
