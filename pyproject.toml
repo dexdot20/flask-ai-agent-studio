@@ -1,0 +1,31 @@
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+exclude = [
+  "venv",
+  ".venv",
+  "__pycache__",
+  "chroma_db",
+]
+
+[tool.ruff.lint]
+select = [
+  "F",
+  "I",
+  "B",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.pytest.ini_options]
+filterwarnings = [
+  "ignore:urllib3 .* doesn't match a supported version!:Warning",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]

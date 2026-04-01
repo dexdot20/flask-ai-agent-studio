@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ChatBot</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css" />
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+</head>
+<body data-page="chat">
+
+<header>
+  <div class="header-left">
+    <button class="btn-sidebar-toggle" id="sidebar-toggle-btn" type="button" aria-controls="sidebar" aria-expanded="true" title="Hide conversations">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="3" y1="6" x2="21" y2="6"/>
+        <line x1="3" y1="12" x2="21" y2="12"/>
+        <line x1="3" y1="18" x2="21" y2="18"/>
+      </svg>
+    </button>
+    <div class="header-brand">
+      <div class="header-logo">✦</div>
+      <h1>ChatBot</h1>
+    </div>
+  </div>
+  <div class="header-controls">
+    <div class="model-select-wrapper">
+      <select id="model-select" title="Select model">
+        {% for m in models %}
+        <option value="{{ m.id }}">{{ m.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button class="btn-ghost btn-canvas" id="canvas-toggle-btn" type="button" aria-controls="canvas-panel" aria-expanded="false" title="Open Canvas">
+      <span class="btn-canvas__label">Canvas</span>
+      <span id="canvas-btn-indicator" class="canvas-btn-indicator" hidden></span>
+    </button>
+    <button class="btn-ghost mobile-tools-toggle" id="mobile-tools-btn" type="button" aria-controls="mobile-tools-panel" aria-expanded="false" title="More options">
+      <span aria-hidden="true">⋯</span>
+    </button>
+  </div>
+</header>
+
+<div id="mobile-tools-panel" class="mobile-tools-panel" aria-hidden="true">
+  <div class="mobile-tools-panel__header">
+    <span>Menu</span>
+    <button id="mobile-tools-close" type="button" title="Close">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>
+  </div>
+  <div class="mobile-tools-panel__section mobile-tools-panel__section--model">
+    <div class="settings-label">Model</div>
+    <div class="model-select-wrapper model-select-wrapper--mobile">
+      <select id="mobile-model-select" title="Select model">
+        {% for m in models %}
+        <option value="{{ m.id }}">{{ m.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+  <div class="mobile-tools-panel__section mobile-tools-panel__section--actions">
+    <button class="mobile-tools-action" id="mobile-summary-btn" type="button">Summarize Conversation</button>
+    <button class="mobile-tools-action" id="mobile-canvas-btn" type="button">Canvas</button>
+    <button class="mobile-tools-action" id="mobile-export-btn" type="button">Export chat</button>
+    <button class="mobile-tools-action" id="mobile-prune-btn" type="button">Prune history</button>
+    <a class="mobile-tools-action" id="mobile-settings-btn" href="/settings">Settings</a>
+    {% if auth_enabled %}
+    <form action="/logout" method="post">
+      <button class="mobile-tools-action mobile-tools-action--danger" id="mobile-logout-btn" type="submit">Sign out</button>
+    </form>
+    {% endif %}
+    <button class="mobile-tools-action mobile-tools-action--stats" id="mobile-tokens-btn" type="button">
+      <span>Usage &amp; cost</span>
+      <span class="mobile-tools-action__badge" id="tokens-badge">0</span>
+    </button>
+  </div>
+</div>
+<div id="mobile-tools-overlay" class="mobile-tools-overlay"></div>
+
+<div id="summary-panel" class="summary-panel" aria-hidden="true" aria-labelledby="summary-panel-title">
+  <div class="summary-panel__header">
+    <div>
+      <span id="summary-panel-title">Summarize Conversation</span>
+      <p class="summary-panel__subtitle">Tell me what to emphasize before I compress the conversation.</p>
+    </div>
+    <button id="summary-close" title="Close" type="button">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>
+  </div>
+  <div class="summary-panel__body">
+    <label class="summary-field">
+      <span>Focus</span>
+      <textarea id="summary-focus-input" rows="3" placeholder="Example: action items, decisions, and unresolved questions"></textarea>
+    </label>
+    <label class="summary-field">
+      <span>Detail level</span>
+      <select id="summary-detail-select">
+        <option value="balanced" selected>Balanced</option>
+        <option value="concise">Concise</option>
+        <option value="detailed">Detailed</option>
+      </select>
+    </label>
+  </div>
+  <div class="summary-panel__actions">
+    <button class="btn-primary" id="summary-submit-btn" type="button">Summarize Conversation</button>
+  </div>
+</div>
+<div id="summary-overlay" class="summary-overlay"></div>
+
+<div id="export-panel" class="export-panel" aria-hidden="true" aria-labelledby="export-panel-title">
+  <div class="export-panel-header">
+    <div>
+      <span id="export-panel-title">Export chat</span>
+      <p id="export-subtitle" class="export-panel-subtitle">Select a format for the current conversation.</p>
+    </div>
+    <button id="export-close" title="Close" type="button">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>
+  </div>
+  <div class="export-panel-actions">
+    <button class="btn-ghost" id="conversation-export-md-btn" type="button">Download .md</button>
+    <button class="btn-ghost" id="conversation-export-docx-btn" type="button">Download .docx</button>
+    <button class="btn-primary" id="conversation-export-pdf-btn" type="button">Download .pdf</button>
+  </div>
+  <div id="export-status" class="export-status">Export idle</div>
+</div>
+<div id="export-overlay" class="export-overlay"></div>
+
+<div id="stats-panel" class="stats-panel" aria-hidden="true">
+  <div class="stats-panel-header">
+    <span>Usage & Cost</span>
+    <button id="stats-close" title="Close">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>
+  </div>
+
+  <div class="stats-section stats-section-intro">
+    <div class="stats-section-title">How to read this</div>
+    <p class="stats-note">Provider totals come from the API usage payload for completed assistant turns. Input-source sections below are local estimates of how each prompt was assembled.</p>
+    <p class="stats-note">Cost is estimated only when the selected model has known pricing. For models without configured pricing, the panel shows cost as — instead of pretending the request cost $0.000000.</p>
+  </div>
+
+  <div class="stats-section">
+    <div class="stats-section-title">Provider totals (session)</div>
+    <div class="stats-section-card">
+    <div class="stats-row">
+      <span class="stats-label">
+        <span class="stats-dot dot-user"></span>Input tokens (prompt)
+      </span>
+      <span class="stats-value" id="stat-user">0</span>
+    </div>
+    <div class="stats-row">
+      <span class="stats-label">Prompt cache hit tokens</span>
+      <span class="stats-value" id="stat-cache-hit">—</span>
+    </div>
+    <div class="stats-row">
+      <span class="stats-label">Prompt cache miss tokens</span>
+      <span class="stats-value" id="stat-cache-miss">—</span>
+    </div>
+    <div class="stats-row">
+      <span class="stats-label">
+        <span class="stats-dot dot-asst"></span>Output tokens (completion)
+      </span>
+      <span class="stats-value" id="stat-asst">0</span>
+    </div>
+    <div class="stats-row stats-row-total">
+      <span class="stats-label">Total tokens</span>
+      <span class="stats-value" id="stat-total">0</span>
+    </div>
+    <div class="stats-row">
+      <span class="stats-label">Estimated cost (USD, cache-miss basis)</span>
+      <span class="stats-value" id="stat-cost">$0.000000</span>
+    </div>
+    </div>
+    <p class="stats-note">Session totals aggregate every completed assistant turn in the current conversation.</p>
+  </div>
+
+  <div class="stats-section">
+    <div class="stats-section-title">Provider totals (latest assistant turn)</div>
+    <div class="stats-section-card">
+    <div class="stats-row">
+      <span class="stats-label">Billed prompt tokens (all model calls)</span>
+      <span class="stats-value" id="stat-last-input">—</span>
+    </div>
+    <div class="stats-row">
+      <span class="stats-label">Prompt cache hit tokens</span>
+      <span class="stats-value" id="stat-last-cache-hit">—</span>
+    </div>
+    <div class="stats-row">
+      <span class="stats-label">Prompt cache miss tokens</span>
+      <span class="stats-value" id="stat-last-cache-miss">—</span>
+    </div>
+    <div class="stats-row">
+      <span class="stats-label">Peak prompt in one model call</span>
+      <span class="stats-value" id="stat-last-peak-input">—</span>
+    </div>
+    <div class="stats-row">
+      <span class="stats-label">Model calls</span>
+      <span class="stats-value" id="stat-last-call-count">—</span>
+    </div>
+    <div class="stats-row">
+      <span class="stats-label">Configured per-call prompt cap</span>
+      <span class="stats-value" id="stat-last-prompt-cap">—</span>
+    </div>
+    <div class="stats-row">
+      <span class="stats-label">Output tokens (completion, all calls)</span>
+      <span class="stats-value" id="stat-last-output">—</span>
+    </div>
+    <div class="stats-row stats-row-total">
+      <span class="stats-label">Total tokens (all calls)</span>
+      <span class="stats-value" id="stat-last-total">—</span>
+    </div>
+    <div class="stats-row">
+      <span class="stats-label">Model</span>
+      <span class="stats-value" id="stat-last-model">—</span>
+    </div>
+    </div>
+    <p class="stats-note">Includes every model call made while producing the latest assistant reply, including tool-execution rounds. The billed prompt total can exceed a model's single-call context window because later calls rebill prior history and tool results; compare the peak single-call prompt to the per-call cap.</p>
+  </div>
+
+  <div class="stats-section">
+    <div class="stats-section-title">Estimated billed input sources (session)</div>
+    <div class="stats-section-card">
+    <div class="stats-row">
+      <span class="stats-label">Aligned billed input total</span>
+      <span class="stats-value" id="stat-breakdown-session-total">0</span>
+    </div>
+    <div id="session-breakdown-list" class="breakdown-list"></div>
+    </div>
+    <p class="stats-note">This is a cumulative session estimate across completed assistant turns. Source categories are inferred locally, then aligned to the provider billed prompt total; anything not attributed confidently appears under Unknown/Provider overhead.</p>
+  </div>
+
+  <div class="stats-section">
+    <div class="stats-section-title">Estimated billed input sources (latest assistant turn)</div>
+    <div class="stats-section-card">
+    <div class="stats-row">
+      <span class="stats-label">Aligned billed input total (all model calls)</span>
+      <span class="stats-value" id="stat-breakdown-latest-total">—</span>
+    </div>
+    <div id="latest-breakdown-list" class="breakdown-list"></div>
+    </div>
+    <p class="stats-note">This breakdown tracks the latest assistant reply as a billed multi-call run, not just the visible final message.</p>
+  </div>
+
+  <div class="stats-section" id="turns-section">
+    <div class="stats-section-title">Completed assistant turns</div>
+    <p class="stats-note">Each row is one completed assistant reply with provider totals, provider-aligned source estimates, and a per-call drawer for the internal model calls that produced it.</p>
+    <div id="turns-list" class="stats-turns-list"></div>
+  </div>
+</div>
+<div id="stats-overlay" class="stats-overlay"></div>
+
+<div id="canvas-panel" class="canvas-panel" aria-hidden="true" aria-labelledby="canvas-subtitle">
+  <div id="canvas-resize-handle" class="canvas-resize-handle" aria-hidden="true"></div>
+  <div class="canvas-panel-header">
+    <div>
+      <span>Canvas</span>
+      <p id="canvas-subtitle" class="canvas-panel-subtitle">No canvas document yet.</p>
+    </div>
+    <button id="canvas-close" title="Close">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>
+  </div>
+  <div class="canvas-panel-actions">
+    <div id="canvas-actions-edit" class="canvas-action-group" role="group" aria-label="Canvas editing actions">
+      <span class="canvas-action-group__label">Edit</span>
+      <button class="btn-ghost" id="canvas-edit-btn" type="button">Edit</button>
+      <button class="btn-primary" id="canvas-save-btn" type="button" hidden>Save</button>
+      <button class="btn-ghost" id="canvas-cancel-btn" type="button" hidden>Cancel</button>
+      <button class="btn-ghost" id="canvas-copy-btn" type="button" hidden>Copy</button>
+    </div>
+    <div id="canvas-actions-manage" class="canvas-action-group" role="group" aria-label="Canvas management actions">
+      <span class="canvas-action-group__label">Manage</span>
+      <button class="btn-ghost btn-ghost--danger" id="canvas-delete-btn" type="button">Delete current</button>
+      <button class="btn-ghost btn-ghost--danger" id="canvas-clear-btn" type="button">Clear all</button>
+    </div>
+    <div id="canvas-actions-export" class="canvas-action-group" role="group" aria-label="Canvas export actions">
+      <span class="canvas-action-group__label">Export</span>
+      <button class="btn-ghost" id="canvas-download-html-btn" type="button">Download .html</button>
+      <button class="btn-ghost" id="canvas-download-md-btn" type="button">Download .md</button>
+      <button class="btn-primary" id="canvas-download-pdf-btn" type="button">Download .pdf</button>
+    </div>
+  </div>
+  <div id="canvas-document-tabs" class="canvas-document-tabs" hidden></div>
+  <div id="canvas-meta-bar" class="canvas-meta-bar" hidden>
+    <div id="canvas-meta-chips" class="canvas-meta-chips"></div>
+    <div class="canvas-meta-actions">
+      <button class="btn-ghost" id="canvas-copy-ref-btn" type="button">Copy reference</button>
+      <button class="btn-ghost" id="canvas-reset-filters-btn" type="button">Reset filters</button>
+    </div>
+  </div>
+  <div class="canvas-search-row">
+    <label class="sr-only" for="canvas-search-input">Search canvas</label>
+    <input id="canvas-search-input" class="canvas-search-input" type="search" placeholder="Search in canvas" autocomplete="off" spellcheck="false" />
+    <label class="sr-only" for="canvas-format-select">Canvas format</label>
+    <select id="canvas-format-select" class="canvas-format-select" aria-label="Canvas format">
+      <option value="markdown">Markdown</option>
+      <option value="code">Code</option>
+    </select>
+  </div>
+  <div id="canvas-search-status" class="canvas-search-status" role="status" aria-live="polite" hidden></div>
+  <div id="canvas-status" class="canvas-status" role="status" aria-live="polite">Canvas idle</div>
+  <div id="canvas-hint" class="canvas-hint" hidden></div>
+    <div class="canvas-workspace-shell">
+      <aside id="canvas-tree-panel" class="canvas-tree-panel" hidden>
+        <div class="canvas-tree-panel__header">
+          <span>Project files</span>
+          <span id="canvas-tree-count" class="canvas-tree-count">0 shown</span>
+        </div>
+        <div class="canvas-filter-row">
+          <label class="sr-only" for="canvas-role-filter">Filter by role</label>
+          <select id="canvas-role-filter" class="canvas-filter-select" aria-label="Filter canvas by role">
+            <option value="">All roles</option>
+          </select>
+          <label class="sr-only" for="canvas-path-filter">Filter by path</label>
+          <select id="canvas-path-filter" class="canvas-filter-select" aria-label="Filter canvas by path">
+            <option value="">All paths</option>
+          </select>
+        </div>
+        <div id="canvas-tree" class="canvas-tree" role="tree" aria-label="Canvas project tree"></div>
+      </aside>
+      <div class="canvas-workspace-main">
+        <section id="canvas-diff" class="canvas-diff" hidden></section>
+        <div id="canvas-empty-state" class="canvas-empty-state">
+          <h3>No canvas document yet</h3>
+          <p>Ask the assistant to draft something substantial, then continue refining it with line-based edits.</p>
+        </div>
+        <textarea id="canvas-editor" class="canvas-editor" hidden spellcheck="false" aria-label="Canvas editor"></textarea>
+        <article id="canvas-document" class="canvas-document" role="document" aria-label="Canvas document" hidden></article>
+      </div>
+    </div>
+</div>
+<div id="canvas-overlay" class="canvas-overlay"></div>
+
+<div id="canvas-confirm-overlay" class="canvas-confirm-overlay"></div>
+<div id="canvas-confirm-modal" class="canvas-confirm-modal" aria-hidden="true" aria-labelledby="canvas-confirm-title" aria-describedby="canvas-confirm-message">
+  <div class="canvas-confirm-modal__header">
+    <div>
+      <span class="canvas-confirm-modal__eyebrow">Canvas ready</span>
+      <h2 id="canvas-confirm-title">Open document in Canvas?</h2>
+    </div>
+    <button id="canvas-confirm-close" title="Close" type="button">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>
+  </div>
+  <p id="canvas-confirm-message" class="canvas-confirm-modal__message">Your uploaded document is ready in Canvas.</p>
+  <div class="canvas-confirm-modal__actions">
+    <button id="canvas-confirm-later" class="btn-ghost" type="button">Later</button>
+    <button id="canvas-confirm-open" class="btn-primary" type="button">Open Canvas</button>
+  </div>
+</div>
+
+<div class="main-layout">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <button class="btn-new-chat" id="new-chat-btn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+        </svg>
+        New Chat
+      </button>
+    </div>
+    <nav class="sidebar-list" id="sidebar-list"></nav>
+  </aside>
+
+  <div class="chat-area">
+    <div id="messages">
+      <div class="empty-state" id="empty-state">
+        <div class="empty-state-icon">✦</div>
+        <h2>How can I help you?</h2>
+        <p>Ask anything — I'll respond instantly using the selected model.</p>
+      </div>
+    </div>
+
+    <div id="input-area">
+      <div id="edit-banner" class="edit-banner" hidden>
+        <span id="edit-banner-text">Editing an earlier message.</span>
+        <button id="edit-banner-cancel" class="edit-banner__cancel" type="button">Cancel</button>
+      </div>
+      <div class="input-wrapper">
+        <input id="image-input" type="file" accept="image/png,image/jpeg,image/webp,.docx,.pdf,.txt,.csv,.md,.py,.js,.ts,.tsx,.jsx,.json,.html,.css,.scss,.sh,.sql,.yaml,.yml,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf,text/plain,text/csv,text/markdown" multiple hidden />
+        <input id="doc-input" type="file" accept=".docx,.pdf,.txt,.csv,.md,.py,.js,.ts,.tsx,.jsx,.json,.html,.css,.scss,.sh,.sql,.yaml,.yml,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf,text/plain,text/csv,text/markdown" multiple hidden />
+        <button id="attach-btn" class="btn-attach" title="Add file" type="button">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 1 1 5.66 5.66L9.41 17.41a2 2 0 1 1-2.83-2.83l8.49-8.48"/>
+          </svg>
+        </button>
+        <textarea id="user-input" rows="1" placeholder="Type a message…"></textarea>
+        <button class="btn-fix" id="fix-btn" title="Improve text" aria-label="Improve text" type="button">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12.3 6.3l5.4 5.4"/>
+            <path d="M4 20l3.4-.9L19.1 7.4a2 2 0 0 0 0-2.8l-.7-.7a2 2 0 0 0-2.8 0L3.9 16.5 4 20z"/>
+            <path d="M14.8 3.7l5.5 5.5"/>
+          </svg>
+        </button>
+        <button id="cancel-btn" class="btn-cancel" title="Cancel" style="display:none">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+        <button id="send-btn" title="Send">
+          <svg width="15" height="15" viewBox="0 0 24 24">
+            <path d="M2 21l21-9L2 3v7l15 2-15 2z"/>
+          </svg>
+        </button>
+      </div>
+      <div id="attachment-preview" class="attachment-preview" hidden></div>
+      <p id="vision-disabled-note" class="input-hint" hidden>Image uploads are disabled in .env. Document uploads (DOCX, PDF, TXT, CSV, MD) are still available.</p>
+      <p class="input-hint">Press <kbd>Enter</kbd> to send &nbsp;·&nbsp; <kbd>Shift+Enter</kbd> for a new line</p>
+      <div id="error-area"></div>
+    </div>
+  </div>
+</div>
+
+  <div id="sidebar-overlay" class="sidebar-overlay"></div>
+
+<script id="app-bootstrap" type="application/json">{{ {"settings": settings, "features": settings.features}|tojson }}</script>
+<script src="/static/app.js"></script>
+</body>
+</html>
