@@ -532,12 +532,17 @@ def build_model_request_extra_body(record: dict[str, Any] | None) -> dict[str, A
         return {}
 
     extra_body: dict[str, Any] = {}
+    provider_options: dict[str, Any] = {"sort": "throughput"}
     provider_slug = normalize_openrouter_provider_slug(record.get("provider_slug"))
     if provider_slug:
-        extra_body["provider"] = {
-            "only": [provider_slug],
-            "allow_fallbacks": False,
-        }
+        provider_options.update(
+            {
+                "only": [provider_slug],
+                "allow_fallbacks": False,
+            }
+        )
+
+    extra_body["provider"] = provider_options
 
     # Automatic prompt caching for Anthropic Claude models via OpenRouter
     api_model = str(record.get("api_model") or "").strip()

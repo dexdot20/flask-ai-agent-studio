@@ -124,6 +124,37 @@ TITLE_MAX_WORDS = 5
 TITLE_MAX_CHARS = 48
 TITLE_FALLBACK = "New Chat"
 TITLE_ALLOWED_SOURCE_ROLES = {"user", "summary"}
+TITLE_REJECTED_PREFIXES = (
+    "sure",
+    "here is",
+    "here's",
+    "generated",
+    "summary:",
+    "conversation title",
+    "title:",
+    "tamam",
+    "tamamlandı",
+    "tamamlandi",
+    "elbette",
+    "tabii",
+    "işte",
+    "iste",
+    "greeting",
+    "hello",
+    "hi ",
+    "hey ",
+)
+TITLE_REJECTED_SUBSTRINGS = (
+    "can help",
+    "bakıp",
+    "baki̇p",
+    "detay",
+    "details",
+    "ekleyebilirim",
+    "i can",
+    "i will",
+    "let me",
+)
 SUMMARY_MIN_TEXT_LENGTH = 100
 SUMMARY_EXECUTOR = ThreadPoolExecutor(max_workers=2)
 POST_RESPONSE_EXECUTOR = ThreadPoolExecutor(max_workers=2)
@@ -268,29 +299,6 @@ def _normalize_generated_title(raw_title: str) -> str:
     if not text:
         return ""
 
-    # Detect non-title noise and optionally extract explicit titles.
-    normalized_lower = text.lower().strip()
-    if normalized_lower.startswith("here is your title:"):
-        text = text[len("here is your title:") :].strip()
-        normalized_lower = text.lower().strip()
-    if normalized_lower.startswith("here is title:"):
-        text = text[len("here is title:") :].strip()
-        normalized_lower = text.lower().strip()
-    if normalized_lower.startswith(
-        (
-            "sure",
-            "here is",
-            "generated",
-            "title:",
-            "conversation title",
-            "summary:",
-            "new chat",
-            "invalid",
-            "none",
-        )
-    ):
-        return ""
-
     text = re.sub(r"^[\s\-*>#`\"'“”‘’\[\](){}:;,.!?]+", "", text)
     text = re.sub(r"[\s\-*>#`\"'“”‘’\[\](){}:;,.!?]+$", "", text)
     text = re.sub(r"[^\w\s'\-]+", " ", text, flags=re.UNICODE)
@@ -302,10 +310,13 @@ def _normalize_generated_title(raw_title: str) -> str:
     if not words or len(words) > TITLE_MAX_WORDS or len(text) > TITLE_MAX_CHARS:
         return ""
 
-    # discard overly generic token-only titles
-    generic_tokens = {"chat", "conversation", "topic", "dialogue", "question"}
-    title_tokens = [w.lower() for w in words if len(w) > 2]
-    if all(token in generic_tokens for token in title_tokens):
+    normalized_lower = text.lower()
+    if normalized_lower.startswith(TITLE_REJECTED_PREFIXES):
+        return ""
+    if any(fragment in normalized_lower for fragment in TITLE_REJECTED_SUBSTRINGS):
+        return ""
+
+    if any(char in text for char in ("!", "?", "🚀", "✨", "😊", "🤖")):
         return ""
 
     return text
@@ -331,9 +342,7 @@ def _looks_related_to_source(title: str, source_text: str) -> bool:
     if not title_tokens:
         return False
 
-    matched = [token for token in title_tokens if token in source_tokens]
-    ratio = len(matched) / len(title_tokens)
-    return ratio >= 0.4
+    return any(token in source_tokens for token in title_tokens)
 
 
 def _build_fallback_title_from_source(source_text: str) -> str:
@@ -369,15 +378,6 @@ def _build_fallback_title_from_source(source_text: str) -> str:
         "you",
         "your",
     }
-    normalized_source = str(source_text or "").strip().lower()
-    if "how to" in normalized_source or "how do i" in normalized_source:
-        match = re.search(r"how (?:to|do i) ([\w\s]+?)($|\?|\.|!)", normalized_source)
-        if match:
-            candidates = re.findall(r"[^\W_]+", match.group(1), flags=re.UNICODE)
-            title = " ".join(c.capitalize() for c in candidates[:5])
-            title = title or "How To"
-            return _normalize_generated_title(title)
-
     tokens = [
         token
         for token in re.findall(r"[^\W_]+", str(source_text or "").lower(), flags=re.UNICODE)
@@ -387,8 +387,6 @@ def _build_fallback_title_from_source(source_text: str) -> str:
         return ""
 
     title = " ".join(token.capitalize() for token in tokens[:4]).strip()
-    if title.lower() in {"generating", "list", "chat", "conversation"}:
-        return ""
     return _normalize_generated_title(title)
 
 
@@ -2675,18 +2673,19 @@ def register_chat_routes(app) -> None:
             {
                 "role": "system",
                 "content": (
-                    "You are a conversation title generator. "
-                    "Your ONLY task is to produce a short title for what the user wrote.\n\n"
+                    "You generate a compact conversation title from the user's message. "
+                    "Return only a noun phrase or short topic label, not a sentence.\n\n"
                     "Rules:\n"
                     "- Return ONLY the title — nothing else.\n"
-                    "- Maximum 3-5 words.\n"
-                    "- Use the same language as the user message.\n"
-                    "- Do NOT answer the question. Do NOT greet. Do NOT explain.\n"
-                    "- No quotes, markdown, or punctuation at the end.\n"
-                    "- If the topic is unclear, return: New Chat\n\n"
+                    "- Use 2-5 words when possible; 1 word is allowed if it is specific.\n"
+                    "- Match the user's language when clear.\n"
+                    "- Prefer the concrete topic over generic labels like 'Greeting', 'Question', 'Canvas', or 'Completed'.\n"
+                    "- Do NOT answer, explain, apologize, greet, or mention that you are generating a title.\n"
+                    "- No quotes, markdown, emojis, or punctuation at the end.\n"
+                    "- If the topic is unclear, return exactly: New Chat\n\n"
                     "Examples:\n"
                     "User: 'How do I sort a list in Python?' → Python List Sorting\n"
-                    "User: 'Hello, how are you?' → Greeting\n"
+                    "User: 'Hello, how are you?' → Hello\n"
                     "User: 'What is the capital of France?' → Capital of France\n"
                     "User: 'What's the weather like today?' → Weather Forecast"
                 ),
@@ -2728,10 +2727,8 @@ def register_chat_routes(app) -> None:
                 "UPDATE conversations SET title = ?, updated_at = datetime('now') WHERE id = ?",
                 (title, conv_id),
             )
-        try:
+        if RAG_ENABLED:
             sync_conversations_to_rag_safe(conversation_id=conv_id)
-        except Exception:
-            pass
 
         return jsonify({"title": title})
 

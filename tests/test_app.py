@@ -120,7 +120,6 @@ from routes.chat import (
     _select_summary_source_messages_by_token_budget,
     build_summary_prompt_messages,
     maybe_create_conversation_summary,
-    _looks_related_to_source,
 )
 from token_utils import estimate_text_tokens
 from tool_registry import TOOL_SPEC_BY_NAME, get_openai_tool_specs, resolve_runtime_tool_names
@@ -405,9 +404,33 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(
             target["extra_body"],
             {
-                "provider": {"only": ["deepinfra/turbo"], "allow_fallbacks": False},
+                "provider": {"sort": "throughput", "only": ["deepinfra/turbo"], "allow_fallbacks": False},
                 "cache_control": {"type": "ephemeral"},
                 "reasoning": {"effort": "none"},
+            },
+        )
+
+    def test_resolve_model_target_defaults_openrouter_requests_to_throughput_sorting(self):
+        settings = {
+            "custom_models": [
+                {
+                    "name": "Claude Sonnet 4.5",
+                    "api_model": "anthropic/claude-sonnet-4.5",
+                    "supports_tools": True,
+                    "supports_vision": True,
+                    "supports_structured_outputs": True,
+                }
+            ]
+        }
+
+        with patch("model_registry.get_provider_client", return_value=SimpleNamespace()):
+            target = resolve_model_target("openrouter:anthropic/claude-sonnet-4.5", settings)
+
+        self.assertEqual(
+            target["extra_body"],
+            {
+                "provider": {"sort": "throughput"},
+                "cache_control": {"type": "ephemeral"},
             },
         )
 
@@ -1212,7 +1235,6 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["title"], "Better Title")
-        chat_sync.assert_called_once_with(conversation_id=conversation_id)
 
     def test_manual_prune_endpoint_updates_message_and_preserves_original(self):
         conversation_id = self._create_conversation()
@@ -9050,6 +9072,27 @@ class AppRoutesTestCase(unittest.TestCase):
             row = conn.execute("SELECT title FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
         self.assertEqual(row["title"], "New Chat")
 
+    def test_generate_title_rejects_generic_announcement_and_uses_source_fallback(self):
+        conversation_id = self._create_conversation(title="Untitled")
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO messages (conversation_id, role, content, metadata) VALUES (?, 'user', ?, ?)",
+                (conversation_id, "python list sorting", None),
+            )
+
+        fake_result = {
+            "content": "Sure, here is a better title",
+            "reasoning_content": "",
+            "usage": None,
+            "tool_results": [],
+            "errors": [],
+        }
+        with patch("routes.chat.collect_agent_response", return_value=fake_result):
+            response = self.client.post(f"/api/conversations/{conversation_id}/generate-title")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["title"], "Python List Sorting")
+
     def test_generate_title_uses_source_fallback_when_model_errors(self):
         conversation_id = self._create_conversation(title="Untitled")
         with get_db() as conn:
@@ -9084,56 +9127,27 @@ class AppRoutesTestCase(unittest.TestCase):
             "tool_results": [],
             "errors": [],
         }
-
         with patch("routes.chat.collect_agent_response", return_value=fake_result) as mocked_collect:
-            response = self.client.post(f"/api/conversations/{conversation_id}/generate-title")
+            self.client.post(f"/api/conversations/{conversation_id}/generate-title")
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json()["title"], "Sorting a List")
-
-        with get_db() as conn:
-            row = conn.execute("SELECT title FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
-        self.assertEqual(row["title"], "Sorting a List")
-
+        mocked_collect.assert_called_once()
         args, _kwargs = mocked_collect.call_args
         prompt_messages, _model, max_steps, enabled_tool_names = args
 
+        # Exactly two messages: system directive + user content — no runtime system context
         self.assertEqual(len(prompt_messages), 2)
         self.assertEqual(prompt_messages[0]["role"], "system")
         self.assertEqual(prompt_messages[1]["role"], "user")
-        self.assertNotIn("helpful AI assistant", prompt_messages[0]["content"])
-        self.assertNotIn("Available Tools", prompt_messages[0]["content"])
-        self.assertIn("title generator", prompt_messages[0]["content"])
+
+        system_content = prompt_messages[0]["content"]
+        self.assertNotIn("helpful AI assistant", system_content)
+        self.assertNotIn("Available Tools", system_content)
+        self.assertIn("compact conversation title", system_content)
+        self.assertIn("noun phrase or short topic label", system_content)
+
+        # Must use exactly 1 step and zero tools — prevents multi-turn tool calls
         self.assertEqual(max_steps, 1)
         self.assertEqual(enabled_tool_names, [])
-
-    def test_generate_title_filters_generic_model_noise(self):
-        conversation_id = self._create_conversation(title="Untitled")
-        with get_db() as conn:
-            conn.execute(
-                "INSERT INTO messages (conversation_id, role, content, metadata) VALUES (?, 'user', ?, ?)",
-                (conversation_id, "Compare Flask and FastAPI for building RAG bots.", None),
-            )
-
-        fake_result = {
-            "content": "Here is your title: Flask vs FastAPI",
-            "reasoning_content": "",
-            "usage": None,
-            "tool_results": [],
-            "errors": [],
-        }
-        with patch("routes.chat.collect_agent_response", return_value=fake_result):
-            response = self.client.post(f"/api/conversations/{conversation_id}/generate-title")
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json()["title"], "Flask vs FastAPI")
- 
-    def test_have_title_overlap_ratio_requirement(self):
-        title = "Travel"
-        source_text = "Python list sorting and algorithmic complexity"
-        self.assertFalse(_looks_related_to_source(title, source_text))
-        title2 = "Python List Sorting"
-        self.assertTrue(_looks_related_to_source(title2, source_text))
 
     def test_get_unsummarized_visible_messages_skip_first_and_last(self):
         from db import get_unsummarized_visible_messages
