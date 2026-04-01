@@ -24,7 +24,6 @@ from config import (
     CLARIFICATION_QUESTION_LIMIT_MAX,
     CLARIFICATION_QUESTION_LIMIT_MIN,
     DB_PATH,
-    DEFAULT_ACTIVE_TOOL_NAMES,
     DEFAULT_SETTINGS,
     DOCUMENT_STORAGE_DIR,
     FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS,
@@ -62,6 +61,7 @@ from config import (
     SUB_AGENT_TIMEOUT_MIN_SECONDS,
     VISION_ENABLED,
 )
+from tool_registry import TOOL_SPEC_BY_NAME
 from token_utils import estimate_text_tokens
 
 _db_path = DB_PATH
@@ -2131,7 +2131,7 @@ def normalize_active_tool_names(raw_value) -> list[str]:
             names = []
 
     normalized = []
-    allowed = set(DEFAULT_ACTIVE_TOOL_NAMES)
+    allowed = set(TOOL_SPEC_BY_NAME)
     for name in names:
         if isinstance(name, str) and name in allowed and name not in normalized:
             normalized.append(name)

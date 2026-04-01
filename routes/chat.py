@@ -1142,6 +1142,51 @@ def _select_recent_prompt_window(
     return selected_messages
 
 
+def _message_identity(message: dict) -> tuple[int, int, str, str]:
+    return (
+        int(message.get("id") or 0),
+        int(message.get("position") or 0),
+        str(message.get("role") or "").strip(),
+        str(message.get("tool_call_id") or "").strip(),
+    )
+
+
+def _select_prefix_prompt_window(
+    messages: list[dict],
+    max_tokens: int,
+    *,
+    canvas_documents: list[dict] | None = None,
+) -> list[dict]:
+    if max_tokens <= 0:
+        return []
+    current_turn_start_key = _get_last_user_message_key(messages)
+    blocks = _iter_message_blocks(messages)
+    selected_blocks: list[list[dict]] = []
+
+    for block_index, block in enumerate(blocks):
+        block_messages = block.get("messages") or []
+        if not block_messages or not block.get("valid_for_prompt"):
+            continue
+        if _historical_tool_block_is_resolved(blocks, block_index, current_turn_start_key):
+            continue
+        prompt_block_messages = _redact_old_tool_messages(block_messages, current_turn_start_key)
+        if not prompt_block_messages:
+            continue
+        candidate_blocks = [*selected_blocks, prompt_block_messages]
+        candidate = [message for candidate_block in candidate_blocks for message in candidate_block]
+        candidate_tokens = _estimate_prompt_tokens(build_api_messages(candidate, canvas_documents=canvas_documents))
+        if candidate_tokens > max_tokens:
+            if selected_blocks:
+                break
+            return []
+        selected_blocks.append(prompt_block_messages)
+
+    selected_messages: list[dict] = []
+    for block_messages in selected_blocks:
+        selected_messages.extend(block_messages)
+    return selected_messages
+
+
 def _build_budgeted_prompt_messages(
     canonical_messages: list[dict],
     settings: dict,
@@ -1179,19 +1224,35 @@ def _build_budgeted_prompt_messages(
     summary_messages = [message for message in ordered_messages if str(message.get("role") or "").strip() == "summary"]
     recent_messages = [message for message in ordered_messages if str(message.get("role") or "").strip() != "summary"]
 
-    selected_recent = _select_recent_prompt_window(
+    prefix_anchor_budget = 0
+    if history_budget >= 1_500:
+        prefix_anchor_budget = min(4_096, max(1_024, history_budget // 4))
+    selected_prefix = _select_prefix_prompt_window(
         recent_messages,
-        min(get_prompt_recent_history_max_tokens(settings), history_budget),
+        prefix_anchor_budget,
+        canvas_documents=canvas_documents,
+    )
+    prefix_message_ids = {_message_identity(message) for message in selected_prefix if isinstance(message, dict)}
+    remaining_recent_candidates = [
+        message
+        for message in recent_messages
+        if isinstance(message, dict) and _message_identity(message) not in prefix_message_ids
+    ]
+    prefix_tokens = _estimate_prompt_tokens(build_api_messages(selected_prefix, canvas_documents=canvas_documents)) if selected_prefix else 0
+
+    selected_recent = _select_recent_prompt_window(
+        remaining_recent_candidates,
+        min(get_prompt_recent_history_max_tokens(settings), max(0, history_budget - prefix_tokens)),
         canvas_documents=canvas_documents,
     )
     recent_tokens = count_visible_message_tokens(selected_recent)
-    remaining_for_summaries = max(0, history_budget - recent_tokens)
+    remaining_for_summaries = max(0, history_budget - prefix_tokens - recent_tokens)
     selected_summaries = _select_tail_messages_by_token_budget(
         summary_messages,
         min(get_prompt_summary_max_tokens(settings), remaining_for_summaries),
     )
 
-    prompt_history = [*selected_summaries, *selected_recent]
+    prompt_history = [*selected_prefix, *selected_summaries, *selected_recent]
     prompt_history_api = build_api_messages(prompt_history, canvas_documents=canvas_documents)
     history_tokens = _estimate_prompt_tokens(prompt_history_api)
     remaining_context_budget = max(0, prompt_budget - base_system_tokens - history_tokens)
@@ -1248,6 +1309,7 @@ def _build_budgeted_prompt_messages(
     stats = {
         "prompt_budget": prompt_budget,
         "base_system_tokens": base_system_tokens,
+        "prefix_tokens": prefix_tokens,
         "history_tokens": history_tokens,
         "summary_tokens": count_visible_message_tokens(selected_summaries),
         "recent_tokens": recent_tokens,
@@ -1256,6 +1318,7 @@ def _build_budgeted_prompt_messages(
         "tool_memory_tokens": estimate_text_tokens(trimmed_tool_memory or ""),
         "estimated_total_tokens": _estimate_prompt_tokens(api_messages),
         "summary_message_count": len(selected_summaries),
+        "prefix_message_count": len(selected_prefix),
         "recent_message_count": len(selected_recent),
     }
     return api_messages, stats, current_context_injection or None

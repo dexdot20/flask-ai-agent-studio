@@ -9,6 +9,7 @@ from config import CLARIFICATION_DEFAULT_MAX_QUESTIONS, CLARIFICATION_QUESTION_L
 CANVAS_DOCUMENT_TOOL_NAMES = {
     "expand_canvas_document",
     "scroll_canvas_document",
+    "search_canvas_document",
     "rewrite_canvas_document",
     "replace_canvas_lines",
     "insert_canvas_lines",
@@ -270,6 +271,14 @@ def build_canvas_decision_matrix(
                 "situation": "You need a specific hidden range outside the visible excerpt.",
                 "tool": "scroll_canvas_document",
                 "notes": "Read the smallest relevant hidden window before editing.",
+            }
+        )
+    if enabled("search_canvas_document"):
+        rows.append(
+            {
+                "situation": "You need to locate text, symbols, or a pattern inside a large canvas before deciding what to inspect or edit.",
+                "tool": "search_canvas_document",
+                "notes": "Use this before scrolling or expanding when you are still trying to find the right region.",
             }
         )
     if enabled("expand_canvas_document"):
@@ -780,6 +789,66 @@ TOOL_SPECS = [
                 "After inspecting the right window, prefer line-level edit tools for localized changes instead of rewriting the whole file. "
                 "If you do not know the document_id, use document_path from the workspace summary or manifest instead of stopping to search for the id. "
                 "In project mode, prefer document_path over document_id so file targeting stays stable."
+            ),
+        },
+    },
+    {
+        "name": "search_canvas_document",
+        "description": (
+            "Search the active canvas document, or all open canvas documents, for literal text or a regex pattern. "
+            "Use this before scroll_canvas_document or expand_canvas_document when you first need to locate the relevant region."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Literal text or regex pattern to search for."
+                },
+                "document_id": {
+                    "type": "string",
+                    "description": "Optional target canvas document id. Defaults to the active document when all_documents is false."
+                },
+                "document_path": {
+                    "type": "string",
+                    "description": "Optional target project-relative path. Prefer this in project mode."
+                },
+                "all_documents": {
+                    "type": "boolean",
+                    "description": "Search across all open canvas documents instead of only the active or explicitly targeted one."
+                },
+                "is_regex": {
+                    "type": "boolean",
+                    "description": "Treat query as a regex pattern instead of plain text."
+                },
+                "case_sensitive": {
+                    "type": "boolean",
+                    "description": "Whether the search should be case-sensitive."
+                },
+                "max_results": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50,
+                    "description": "Maximum number of matches to return. Defaults to 10."
+                }
+            },
+            "required": ["query"]
+        },
+        "prompt": {
+            "purpose": "Finds where text or patterns appear inside canvas documents without loading more lines than necessary.",
+            "inputs": {
+                "query": "literal text or regex pattern",
+                "document_id": "optional target id",
+                "document_path": "optional target project-relative path",
+                "all_documents": "optional boolean to search all open canvas documents",
+                "is_regex": "optional boolean",
+                "case_sensitive": "optional boolean",
+                "max_results": "optional result limit"
+            },
+            "guidance": (
+                "Use this first when the user asks you to find something inside a large canvas or when you do not yet know which lines matter. "
+                "After locating the right lines, use scroll_canvas_document for the smallest relevant window or expand_canvas_document for a wider view. "
+                "In project mode, prefer document_path over document_id when you know the file path."
             ),
         },
     },

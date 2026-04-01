@@ -49,6 +49,7 @@ from canvas_service import (
     get_canvas_runtime_active_document_id,
     normalize_canvas_document,
     replace_canvas_lines,
+    search_canvas_document,
     scroll_canvas_document,
 )
 from db import (
@@ -82,6 +83,7 @@ from doc_service import (
     _try_extract_borderless_table,
     build_canvas_markdown,
     build_document_context_block,
+    extract_document_text,
     infer_canvas_format,
     infer_canvas_language,
 )
@@ -121,6 +123,7 @@ from routes.chat import (
     build_summary_prompt_messages,
     maybe_create_conversation_summary,
 )
+from routes.pages import build_tool_permission_options, build_tool_permission_sections
 from token_utils import estimate_text_tokens
 from tool_registry import TOOL_SPEC_BY_NAME, get_openai_tool_specs, resolve_runtime_tool_names
 from vision import normalize_image_analysis
@@ -798,6 +801,59 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertTrue(result["has_more_above"])
         self.assertTrue(result["has_more_below"])
 
+    def test_search_canvas_document_defaults_to_active_document(self):
+        runtime_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "doc-1",
+                    "title": "a.py",
+                    "path": "src/a.py",
+                    "format": "code",
+                    "content": "alpha\nbeta\ngamma",
+                },
+                {
+                    "id": "doc-2",
+                    "title": "b.py",
+                    "path": "src/b.py",
+                    "format": "code",
+                    "content": "beta only",
+                },
+            ],
+            active_document_id="doc-1",
+        )
+
+        result = search_canvas_document(runtime_state, "beta")
+
+        self.assertEqual(result["match_count"], 1)
+        self.assertEqual(result["matches"][0]["document_id"], "doc-1")
+        self.assertEqual(result["matches"][0]["line"], 2)
+
+    def test_search_canvas_document_can_search_all_documents(self):
+        runtime_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "doc-1",
+                    "title": "a.py",
+                    "path": "src/a.py",
+                    "format": "code",
+                    "content": "alpha\nbeta",
+                },
+                {
+                    "id": "doc-2",
+                    "title": "b.py",
+                    "path": "src/b.py",
+                    "format": "code",
+                    "content": "beta\ngamma",
+                },
+            ],
+            active_document_id="doc-1",
+        )
+
+        result = search_canvas_document(runtime_state, "beta", all_documents=True)
+
+        self.assertEqual(result["match_count"], 2)
+        self.assertEqual([match["document_id"] for match in result["matches"]], ["doc-1", "doc-2"])
+
     def test_execute_tool_scroll_canvas_document_uses_runtime_window_limit(self):
         content = "\n".join(f"line {index}" for index in range(1, 101))
         runtime_state = {
@@ -825,6 +881,39 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(result["start_line"], 5)
         self.assertEqual(result["end_line_actual"], 16)
         self.assertIn("Canvas scrolled", summary)
+
+    def test_execute_tool_search_canvas_document_supports_all_documents(self):
+        runtime_state = {
+            "canvas": create_canvas_runtime_state(
+                [
+                    {
+                        "id": "doc-1",
+                        "title": "a.py",
+                        "path": "src/a.py",
+                        "format": "code",
+                        "content": "alpha\nbeta",
+                    },
+                    {
+                        "id": "doc-2",
+                        "title": "b.py",
+                        "path": "src/b.py",
+                        "format": "code",
+                        "content": "beta\ngamma",
+                    },
+                ],
+                active_document_id="doc-1",
+            )
+        }
+
+        result, summary = _execute_tool(
+            "search_canvas_document",
+            {"query": "beta", "all_documents": True},
+            runtime_state=runtime_state,
+        )
+
+        self.assertEqual(result["action"], "searched")
+        self.assertEqual(result["match_count"], 2)
+        self.assertIn("canvas matches found", summary)
 
     def test_runtime_system_message_mentions_canvas_scroll_for_truncated_excerpt(self):
         content = "\n".join(f"line {index}" for index in range(1, 51))
@@ -1998,12 +2087,14 @@ class AppRoutesTestCase(unittest.TestCase):
             "search_web",
             "fetch_url",
             "image_explain",
+            "search_canvas_document",
             "search_tool_memory",
         ])
 
         rules_text = "\n".join(contract["rules"])
         self.assertIn("Concurrently executed (I/O runs in parallel)", rules_text)
         self.assertIn("search_web, fetch_url, image_explain", rules_text)
+        self.assertIn("search_canvas_document", rules_text)
         self.assertIn("search_tool_memory", rules_text)
 
     def test_build_tool_call_contract_mentions_clarification_limit(self):
@@ -2076,12 +2167,14 @@ class AppRoutesTestCase(unittest.TestCase):
         expand_description = TOOL_SPEC_BY_NAME["expand_canvas_document"]["description"]
         expand_guidance = TOOL_SPEC_BY_NAME["expand_canvas_document"]["prompt"]["guidance"]
         scroll_description = TOOL_SPEC_BY_NAME["scroll_canvas_document"]["description"]
+        search_guidance = TOOL_SPEC_BY_NAME["search_canvas_document"]["prompt"]["guidance"]
 
         self.assertIn("Do not default to this when only part of the file needs to change", rewrite_guidance)
         self.assertIn("Multiple localized replace_canvas_lines calls are fine", replace_guidance)
         self.assertIn("document_id is optional", expand_description)
         self.assertIn("use document_path from the workspace summary or manifest", expand_guidance)
         self.assertIn("before line-level edits", scroll_description)
+        self.assertIn("Use this first when the user asks you to find something inside a large canvas", search_guidance)
 
     def test_openai_tool_specs_include_expand_canvas_document_with_canvas_documents(self):
         tools = get_openai_tool_specs(
@@ -2300,6 +2393,51 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn('data-settings-tab="knowledge"', html)
         self.assertIn('src="/static/settings.js"', html)
         self.assertIn('id="kb-sync-btn"', html)
+
+    def test_settings_tools_cover_all_defined_tool_specs(self):
+        option_names = [option["name"] for option in build_tool_permission_options()]
+
+        self.assertIn("replace_scratchpad", option_names)
+        self.assertIn("delete_canvas_document", option_names)
+        self.assertIn("clear_canvas", option_names)
+
+    def test_settings_tools_group_access_surfaces(self):
+        sections = build_tool_permission_sections()
+        section_titles = [section["title"] for section in sections]
+
+        self.assertEqual(
+            section_titles,
+            ["Assistant & Memory", "Web Research", "Canvas Editing", "Workspace Sandbox"],
+        )
+
+        workspace_tools = next(section for section in sections if section["key"] == "workspace")["tools"]
+        canvas_tools = next(section for section in sections if section["key"] == "canvas")["tools"]
+
+        self.assertIn("read_file", [tool["name"] for tool in workspace_tools])
+        self.assertIn("validate_project_workspace", [tool["name"] for tool in workspace_tools])
+        self.assertIn("search_canvas_document", [tool["name"] for tool in canvas_tools])
+
+    def test_settings_api_roundtrip_preserves_all_tool_permissions(self):
+        response = self.client.patch(
+            "/api/settings",
+            json={
+                "active_tools": [
+                    "append_scratchpad",
+                    "replace_scratchpad",
+                    "delete_canvas_document",
+                    "clear_canvas",
+                ]
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        active_tools = response.get_json()["active_tools"]
+        self.assertEqual(
+            active_tools[:4],
+            ["append_scratchpad", "replace_scratchpad", "delete_canvas_document", "clear_canvas"],
+        )
+        self.assertIn("expand_canvas_document", active_tools)
+        self.assertIn("scroll_canvas_document", active_tools)
 
     def test_build_user_message_for_model_includes_stored_image_reference(self):
         content = build_user_message_for_model(
@@ -2593,6 +2731,37 @@ class AppRoutesTestCase(unittest.TestCase):
             ),
         ):
             ocr_service.preload_ocr_engine(SimpleNamespace(debug=False))
+
+    def test_resolve_device_uses_cpu_without_importing_torch(self):
+        from rag import embedder
+
+        original_import = __import__
+
+        def guarded_import(name, *args, **kwargs):
+            if name == "torch":
+                raise AssertionError("torch should not be imported for cpu device selection")
+            return original_import(name, *args, **kwargs)
+
+        with patch.dict(os.environ, {"BGE_M3_DEVICE": "cpu"}, clear=False), patch(
+            "builtins.__import__", side_effect=guarded_import
+        ):
+            self.assertEqual(embedder._resolve_device(), "cpu")
+
+    def test_resolve_device_raises_clear_error_when_cuda_is_requested_without_torch(self):
+        from rag import embedder
+
+        original_import = __import__
+
+        def guarded_import(name, *args, **kwargs):
+            if name == "torch":
+                raise ModuleNotFoundError("No module named 'torch'")
+            return original_import(name, *args, **kwargs)
+
+        with patch.dict(os.environ, {"BGE_M3_DEVICE": "cuda"}, clear=False), patch(
+            "builtins.__import__", side_effect=guarded_import
+        ):
+            with self.assertRaisesRegex(RuntimeError, "torch could not be imported"):
+                embedder._resolve_device()
 
     def test_canvas_tools_create_and_edit_document_in_runtime_state(self):
         runtime_state = {}
@@ -3280,6 +3449,7 @@ class AppRoutesTestCase(unittest.TestCase):
         runtime_names = resolve_runtime_tool_names(
             [
                 "create_canvas_document",
+                "search_canvas_document",
                 "rewrite_canvas_document",
                 "replace_canvas_lines",
             ],
@@ -3297,7 +3467,7 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertEqual(
             runtime_names,
-            ["create_canvas_document", "rewrite_canvas_document", "replace_canvas_lines"],
+            ["create_canvas_document", "search_canvas_document", "rewrite_canvas_document", "replace_canvas_lines"],
         )
 
     def test_extract_message_usage_maps_legacy_system_prompt_breakdown(self):
@@ -5525,6 +5695,11 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertEqual(result, "SCANNED PAGE TEXT")
         ocr_mock.assert_called_once()
+
+    def test_extract_document_text_raises_clear_error_for_pdf_parser_failures(self):
+        with patch("doc_service.pdfplumber.open", side_effect=RuntimeError("broken PDF parser")):
+            with self.assertRaisesRegex(ValueError, "Could not read the PDF document: broken PDF parser"):
+                extract_document_text(b"%PDF-FAKE", "application/pdf")
 
     def test_looks_like_real_table_accepts_small_borderless_tables(self):
         table = [["Model", "Price", "Context"], ["GPT-4o", "$0.01", "128k"]]
@@ -9538,6 +9713,51 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertGreater(stats["tool_memory_tokens"], 0)
         self.assertLessEqual(stats["tool_memory_tokens"], 240)
         self.assertGreater(stats["tool_memory_tokens"], stats["tool_trace_tokens"])
+
+    def test_budgeted_prompt_messages_keep_prefix_anchor_before_summaries(self):
+        canonical_messages = normalize_chat_messages(
+            [
+                {
+                    "id": 1,
+                    "position": 1,
+                    "role": "user",
+                    "content": "First question about a long-lived topic.",
+                    "metadata": parse_message_metadata(
+                        serialize_message_metadata({"context_injection": "## Current Date and Time\n- Time: 21:35"})
+                    ),
+                },
+                {"id": 2, "position": 2, "role": "assistant", "content": "First answer."},
+                {"id": 3, "position": 3, "role": "summary", "content": "Earlier compressed context."},
+                {"id": 4, "position": 4, "role": "user", "content": "Latest question that should stay near the end."},
+            ]
+        )
+        settings = {"user_preferences": "", "scratchpad": ""}
+
+        with patch("routes.chat.get_prompt_max_input_tokens", return_value=6000), patch(
+            "routes.chat.get_prompt_response_token_reserve", return_value=1000
+        ), patch("routes.chat.get_prompt_recent_history_max_tokens", return_value=1000), patch(
+            "routes.chat.get_prompt_summary_max_tokens", return_value=400
+        ), patch("routes.chat.get_prompt_rag_max_tokens", return_value=0), patch(
+            "routes.chat.get_prompt_tool_trace_max_tokens", return_value=0
+        ), patch("routes.chat.get_prompt_tool_memory_max_tokens", return_value=0), patch(
+            "routes.chat.get_clarification_max_questions", return_value=5
+        ):
+            api_messages, stats, _ = _build_budgeted_prompt_messages(
+                canonical_messages,
+                settings,
+                active_tool_names=[],
+                retrieved_context=None,
+                tool_memory_context=None,
+            )
+
+        first_user_index = next(index for index, message in enumerate(api_messages) if message["role"] == "user")
+        first_summary_index = next(
+            index
+            for index, message in enumerate(api_messages)
+            if message["role"] == "assistant" and "Conversation summary" in message["content"]
+        )
+        self.assertLess(first_user_index, first_summary_index)
+        self.assertGreaterEqual(stats["prefix_message_count"], 1)
 
     def test_undo_summary_restores_messages_in_original_order(self):
         conversation_id = self._create_conversation()

@@ -36,6 +36,7 @@ PARALLEL_SAFE_READ_ONLY_TOOL_NAMES = (
     # Canvas inspection (non-mutating)
     "expand_canvas_document",
     "scroll_canvas_document",
+    "search_canvas_document",
 )
 # Tools whose results may still be inputs for other calls in the same batch;
 # they are parallel-safe among themselves but must not be batched with any
@@ -517,6 +518,7 @@ def _build_canvas_decision_matrix_rows(active_tool_names: list[str], canvas_payl
             "delete_canvas_lines",
             "expand_canvas_document",
             "scroll_canvas_document",
+            "search_canvas_document",
         }
     ):
         return []
@@ -542,6 +544,7 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
             "delete_canvas_lines",
             "expand_canvas_document",
             "scroll_canvas_document",
+            "search_canvas_document",
         }
     ):
         return []
@@ -550,6 +553,7 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
         "## Canvas Editing Guidance",
         "- Prefer the smallest valid canvas change that satisfies the request.",
         "- Do not rewrite the whole document when only part needs to change; use replace_canvas_lines, insert_canvas_lines, or delete_canvas_lines for local edits when the exact visible lines are known.",
+        "- If you first need to locate text or a symbol in a large canvas, use search_canvas_document before expanding or scrolling.",
         "- If the target lines are not visible yet, inspect first with scroll_canvas_document or expand_canvas_document.",
         "- If you do not know the document_id, use the document_path from the workspace summary, active file label, or manifest; document_id is optional.",
         "- Use rewrite_canvas_document when most of the document should change or when you already know the complete intended replacement content.",
@@ -597,7 +601,7 @@ def build_tool_call_contract(
         rules.append(
             "## Parallel and Batched Tool Calls\n"
             "Batching independent tool calls into one assistant turn reduces LLM round trips and saves tokens. "
-            "Prefer this pattern aggressively.\n\n"
+            "Prefer this pattern aggressively, even for simple edits and straightforward repo work.\n\n"
             "**GATHER → REASON → ACT** — the core pattern:\n"
             "  1. Issue ALL independent reads in one turn (gather phase).\n"
             "  2. Reason over all returned results together.\n"
@@ -613,6 +617,7 @@ def build_tool_call_contract(
             "**Examples of correct batching:**\n"
             "  - Read three files at once: emit read_file × 3 in one turn.\n"
             "  - Explore a directory and search for a keyword simultaneously: list_dir + search_files in one turn.\n"
+            "  - Search a large canvas and inspect a workspace file simultaneously: search_canvas_document + read_file in one turn.\n"
             "  - Search the web and the knowledge base for the same topic simultaneously: search_web + search_knowledge_base in one turn.\n"
             "  - Write two independent new files in one turn: create_file × 2.\n\n"
             "**When NOT to batch (data dependency requires two turns):**\n"

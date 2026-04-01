@@ -313,7 +313,7 @@ At least one provider key is required.
 | --- | --- | --- |
 | `RAG_ENABLED` | `true` | Enables RAG endpoints, sync, and retrieval |
 | `BGE_M3_MODEL_PATH` | `BAAI/bge-m3` | Embedding model name or local path |
-| `BGE_M3_DEVICE` | `cuda` | Device used by the embedder in this codebase |
+| `BGE_M3_DEVICE` | `auto` | Device used by the embedder in this codebase; defaults to CUDA when available, otherwise CPU |
 | `BGE_M3_LOCAL_FILES_ONLY` | `false` | Load the embedding model only from local files |
 | `BGE_M3_TRUST_REMOTE_CODE` | `false` | Allow Sentence Transformers remote code |
 | `BGE_M3_BATCH_SIZE` | `32` | Embedding batch size |

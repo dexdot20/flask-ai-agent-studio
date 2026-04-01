@@ -525,9 +525,31 @@
               </div>
               <p>Only enabled tools are exposed to the assistant and allowed to execute.</p>
             </div>
-            <div class="tool-toggles tool-toggles--page" id="tool-toggles">
-              {% for tool in tool_options %}
-              <label class="tool-toggle"><input type="checkbox" value="{{ tool.name }}" /> <span>{{ tool.label }}</span></label>
+            <div class="settings-page-note-block">
+              <strong>What this panel controls</strong>
+              <p>You can turn tool families on or off here, but some access is still decided at runtime. Workspace tools stay inside the sandbox, canvas edit tools can pull in inspection helpers automatically, and web or news tools may be hidden when the user request does not call for them.</p>
+              <ul class="settings-page-note-list">
+                <li>Turning a tool on allows the assistant to request it when context permits.</li>
+                <li>Turning a tool off removes it from the assistant's available options.</li>
+                <li>This page does not widen the workspace sandbox or override feature flags.</li>
+              </ul>
+            </div>
+            <div class="tool-permission-sections" id="tool-toggles">
+              {% for section in tool_sections %}
+              <section class="tool-permission-section">
+                <div class="tool-permission-section__header">
+                  <div>
+                    <div class="settings-label">{{ section.title }}</div>
+                    <p class="settings-copy">{{ section.description }}</p>
+                  </div>
+                  <p class="settings-copy">{{ section.note }}</p>
+                </div>
+                <div class="tool-toggles tool-toggles--page tool-permission-section__tools">
+                  {% for tool in section.tools %}
+                  <label class="tool-toggle"><input type="checkbox" value="{{ tool.name }}" /> <span>{{ tool.label }}</span></label>
+                  {% endfor %}
+                </div>
+              </section>
               {% endfor %}
             </div>
           </div>

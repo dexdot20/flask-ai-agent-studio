@@ -1026,6 +1026,78 @@ def scroll_canvas_document(
     }
 
 
+def search_canvas_document(
+    runtime_state: dict,
+    query: str,
+    *,
+    document_id: str | None = None,
+    document_path: str | None = None,
+    all_documents: bool = False,
+    is_regex: bool = False,
+    case_sensitive: bool = False,
+    max_results: int = 10,
+) -> dict:
+    documents = get_canvas_runtime_documents(runtime_state)
+    if not documents:
+        raise ValueError("No canvas document is available yet.")
+
+    raw_query = str(query or "")
+    if not raw_query.strip():
+        raise ValueError("Search query is required.")
+
+    result_limit = max(1, min(50, int(max_results or 10)))
+    flags = 0 if case_sensitive else re.IGNORECASE
+    pattern = None
+    if is_regex:
+        try:
+            pattern = re.compile(raw_query, flags)
+        except re.error as exc:
+            raise ValueError(f"Invalid regex pattern: {exc}") from exc
+    else:
+        raw_query = raw_query if case_sensitive else raw_query.casefold()
+
+    target_documents = documents
+    if not all_documents:
+        _, target_document = _find_canvas_document(
+            runtime_state,
+            document_id=document_id,
+            document_path=document_path,
+        )
+        target_documents = [target_document]
+
+    matches: list[dict] = []
+    for document in target_documents:
+        for index, line in enumerate(list_canvas_lines(document.get("content") or ""), start=1):
+            haystack = line if case_sensitive else line.casefold()
+            found = bool(pattern.search(line)) if pattern is not None else raw_query in haystack
+            if not found:
+                continue
+            matches.append(
+                {
+                    "document_id": document.get("id"),
+                    "document_path": document.get("path"),
+                    "title": document.get("title"),
+                    "line": index,
+                    "excerpt": line[:200],
+                }
+            )
+            if len(matches) >= result_limit:
+                break
+        if len(matches) >= result_limit:
+            break
+
+    return {
+        "status": "ok",
+        "action": "searched",
+        "query": query,
+        "is_regex": is_regex,
+        "case_sensitive": case_sensitive,
+        "all_documents": all_documents,
+        "match_count": len(matches),
+        "matches": matches,
+    }
+
+
 def delete_canvas_document(
     runtime_state: dict,
     document_id: str | None = None,

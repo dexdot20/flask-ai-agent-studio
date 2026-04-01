@@ -32,6 +32,7 @@ from canvas_service import (
     insert_canvas_lines,
     replace_canvas_lines,
     rewrite_canvas_document,
+    search_canvas_document,
     scroll_canvas_document,
     scale_canvas_char_limit,
 )
@@ -115,6 +116,7 @@ MAX_REASONING_REPLAY_TOTAL_CHARS = 10_000
 CANVAS_TOOL_NAMES = {
     "expand_canvas_document",
     "scroll_canvas_document",
+    "search_canvas_document",
     "create_canvas_document",
     "rewrite_canvas_document",
     "replace_canvas_lines",
@@ -179,6 +181,7 @@ PARALLEL_SAFE_TOOL_NAMES = WEB_TOOL_NAMES | {
     # Canvas inspection (non-mutating)
     "expand_canvas_document",
     "scroll_canvas_document",
+    "search_canvas_document",
 }
 SUB_AGENT_ALLOWED_TOOL_NAMES = {
     "search_knowledge_base",
@@ -189,6 +192,7 @@ SUB_AGENT_ALLOWED_TOOL_NAMES = {
     "search_news_google",
     "expand_canvas_document",
     "scroll_canvas_document",
+    "search_canvas_document",
     "read_file",
     "list_dir",
     "search_files",
@@ -2933,6 +2937,26 @@ def _run_scroll_canvas_document(tool_args: dict, runtime_state: dict):
     return result, f"Canvas scrolled: {target_label} {result.get('start_line')}-{result.get('end_line_actual')}"
 
 
+def _run_search_canvas_document(tool_args: dict, runtime_state: dict):
+    canvas_state = _get_canvas_runtime_state(runtime_state)
+    result = search_canvas_document(
+        canvas_state,
+        tool_args.get("query", ""),
+        document_id=tool_args.get("document_id"),
+        document_path=tool_args.get("document_path"),
+        all_documents=tool_args.get("all_documents") is True,
+        is_regex=tool_args.get("is_regex") is True,
+        case_sensitive=tool_args.get("case_sensitive") is True,
+        max_results=tool_args.get("max_results") or 10,
+    )
+    if result.get("all_documents"):
+        scope_label = "all canvas documents"
+    else:
+        first_match = (result.get("matches") or [{}])[0]
+        scope_label = str(first_match.get("document_path") or first_match.get("title") or "active canvas").strip()
+    return result, f"{len(result.get('matches') or [])} canvas matches found in {scope_label}"
+
+
 def _get_workspace_runtime_state(runtime_state: dict) -> dict:
     return runtime_state.setdefault("workspace", create_workspace_runtime_state())
 
@@ -3122,6 +3146,7 @@ _TOOL_EXECUTORS = {
     "fetch_url": _run_fetch_url,
     "expand_canvas_document": _run_expand_canvas_document,
     "scroll_canvas_document": _run_scroll_canvas_document,
+    "search_canvas_document": _run_search_canvas_document,
     "create_directory": _run_create_directory,
     "create_file": _run_create_file,
     "update_file": _run_update_file,
@@ -3221,6 +3246,12 @@ def _tool_input_preview(tool_name: str, tool_args: dict) -> str:
             if start_line or end_line:
                 return f"{target} {start_line}-{end_line}"[:300]
         return target[:300]
+    if tool_name == "search_canvas_document":
+        target = str(tool_args.get("document_path") or tool_args.get("document_id") or "active document").strip()
+        query = str(tool_args.get("query") or "").strip()
+        if tool_args.get("all_documents") is True:
+            target = "all canvas documents"
+        return f"{query} @ {target}"[:300]
     if tool_name == "sub_agent":
         return str(tool_args.get("task") or "").strip()[:300]
     return ""

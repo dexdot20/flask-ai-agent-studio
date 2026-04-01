@@ -487,7 +487,12 @@ def extract_document_text(doc_bytes: bytes, mime_type: str) -> str:
     if mime == MIME_DOCX:
         return _extract_text_from_docx(doc_bytes)
     if mime == MIME_PDF:
-        return _extract_text_from_pdf(doc_bytes)
+        try:
+            return _extract_text_from_pdf(doc_bytes)
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError(f"Could not read the PDF document: {exc}") from exc
     if mime == MIME_CSV:
         return _extract_text_csv(doc_bytes)
     if mime in (MIME_PLAIN, MIME_MARKDOWN):

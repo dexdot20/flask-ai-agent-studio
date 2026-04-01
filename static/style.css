@@ -4961,6 +4961,39 @@ kbd {
   font-size: 0.82rem;
 }
 
+.settings-page-note-list {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.tool-permission-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.tool-permission-section {
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.tool-permission-section__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.tool-permission-section__header .settings-copy {
+  max-width: 58ch;
+}
+
 .tool-toggles--page {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

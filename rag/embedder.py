@@ -19,16 +19,22 @@ def _parse_bool_env(name: str, default: bool) -> bool:
 
 def _resolve_device() -> str:
     requested = (os.getenv("BGE_M3_DEVICE") or "").strip().lower()
+    if requested in {"cpu", "cpu:0"}:
+        return "cpu"
+    if requested and requested not in {"cuda", "cuda:0"}:
+        raise RuntimeError("BGE_M3_DEVICE must be set to cpu or cuda for this application.")
+
     try:
         import torch
     except Exception as exc:
-        raise RuntimeError("CUDA is required for the RAG embedder, but torch could not be imported.") from exc
+        if requested:
+            raise RuntimeError("BGE_M3_DEVICE is set to CUDA, but torch could not be imported.") from exc
+        return "cpu"
 
     if not torch.cuda.is_available():
-        raise RuntimeError("CUDA is required for the RAG embedder. No CUDA-capable GPU was detected.")
-
-    if requested and requested not in {"cuda", "cuda:0"}:
-        raise RuntimeError("BGE_M3_DEVICE must be set to CUDA for this application.")
+        if requested:
+            raise RuntimeError("BGE_M3_DEVICE is set to CUDA, but no CUDA-capable GPU was detected.")
+        return "cpu"
 
     return requested or "cuda"
 
@@ -51,7 +57,7 @@ def get_embedder():
             from sentence_transformers import SentenceTransformer
         except ImportError as exc:
             raise RuntimeError(
-                "BGE-M3 dependencies are missing. Install sentence-transformers before using RAG."
+                "BGE-M3 dependencies are missing. Install sentence-transformers and torch before using RAG."
             ) from exc
 
         sentence_transformers_logger = logging.getLogger("sentence_transformers")

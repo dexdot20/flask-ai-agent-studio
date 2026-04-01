@@ -177,6 +177,7 @@ DEFAULT_ACTIVE_TOOL_NAMES = [
     "create_canvas_document",
     "expand_canvas_document",
     "scroll_canvas_document",
+    "search_canvas_document",
     "rewrite_canvas_document",
     "replace_canvas_lines",
     "insert_canvas_lines",

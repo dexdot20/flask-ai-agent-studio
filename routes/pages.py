@@ -8,7 +8,6 @@ from config import (
     CHAT_SUMMARY_ALLOWED_MODES,
     CLARIFICATION_QUESTION_LIMIT_MAX,
     CLARIFICATION_QUESTION_LIMIT_MIN,
-    DEFAULT_ACTIVE_TOOL_NAMES,
     DEFAULT_SETTINGS,
     MAX_USER_PREFERENCES_LENGTH,
     RAG_CONTEXT_SIZE_PRESETS,
@@ -69,6 +68,7 @@ from model_registry import (
     normalize_operation_model_preferences,
     normalize_visible_model_order,
 )
+from tool_registry import TOOL_SPEC_BY_NAME
 
 
 TOOL_PERMISSION_LABELS = {
@@ -89,6 +89,8 @@ TOOL_PERMISSION_LABELS = {
     "replace_canvas_lines": "Replace canvas lines",
     "insert_canvas_lines": "Insert canvas lines",
     "delete_canvas_lines": "Delete canvas lines",
+    "delete_canvas_document": "Delete canvas document",
+    "clear_canvas": "Clear canvas",
     "create_directory": "Create directory",
     "create_file": "Create file",
     "update_file": "Update file",
@@ -98,14 +100,56 @@ TOOL_PERMISSION_LABELS = {
     "write_project_tree": "Write project tree",
     "validate_project_workspace": "Validate project workspace",
 }
-TOOL_PERMISSION_HIDDEN_NAMES = {"replace_scratchpad"}
+
+TOOL_PERMISSION_SECTION_ORDER = ["assistant", "research", "canvas", "workspace"]
+TOOL_PERMISSION_SECTION_METADATA = {
+    "assistant": {
+        "title": "Assistant & Memory",
+        "description": "Memory, clarifications, and sub-agent behavior that stays closest to the chat loop.",
+        "note": "These tools affect how the assistant reasons and remembers, not the filesystem sandbox.",
+    },
+    "research": {
+        "title": "Web Research",
+        "description": "Search and fetch public web content when the request calls for outside information.",
+        "note": "These tools are still context-gated during runtime if the prompt is not web-related.",
+    },
+    "canvas": {
+        "title": "Canvas Editing",
+        "description": "Editable draft documents, canvas search, and line-level changes inside the conversation canvas.",
+        "note": "Canvas edit tools can automatically pull in inspection helpers such as expand and scroll.",
+    },
+    "workspace": {
+        "title": "Workspace Sandbox",
+        "description": "Create, read, update, and validate files inside the conversation workspace only.",
+        "note": "This panel cannot expand the sandbox boundary. It only controls which sandbox operations the assistant may request.",
+    },
+}
+
+
+def _get_tool_permission_section_key(name: str) -> str:
+    if name in {"append_scratchpad", "replace_scratchpad", "ask_clarifying_question", "sub_agent", "image_explain", "search_knowledge_base", "search_tool_memory"}:
+        return "assistant"
+    if name in {"search_web", "fetch_url", "search_news_ddgs", "search_news_google"}:
+        return "research"
+    if name in {
+        "create_canvas_document",
+        "expand_canvas_document",
+        "scroll_canvas_document",
+        "search_canvas_document",
+        "rewrite_canvas_document",
+        "replace_canvas_lines",
+        "insert_canvas_lines",
+        "delete_canvas_lines",
+        "delete_canvas_document",
+        "clear_canvas",
+    }:
+        return "canvas"
+    return "workspace"
 
 
 def build_tool_permission_options() -> list[dict[str, str]]:
     options: list[dict[str, str]] = []
-    for name in DEFAULT_ACTIVE_TOOL_NAMES:
-        if name in TOOL_PERMISSION_HIDDEN_NAMES:
-            continue
+    for name in TOOL_SPEC_BY_NAME:
         options.append(
             {
                 "name": name,
@@ -113,6 +157,30 @@ def build_tool_permission_options() -> list[dict[str, str]]:
             }
         )
     return options
+
+
+def build_tool_permission_sections() -> list[dict[str, object]]:
+    grouped_tools: dict[str, list[dict[str, str]]] = {key: [] for key in TOOL_PERMISSION_SECTION_ORDER}
+    for tool in build_tool_permission_options():
+        section_key = _get_tool_permission_section_key(tool["name"])
+        grouped_tools.setdefault(section_key, []).append(tool)
+
+    sections: list[dict[str, object]] = []
+    for section_key in TOOL_PERMISSION_SECTION_ORDER:
+        tools = grouped_tools.get(section_key) or []
+        if not tools:
+            continue
+        metadata = TOOL_PERMISSION_SECTION_METADATA[section_key]
+        sections.append(
+            {
+                "key": section_key,
+                "title": metadata["title"],
+                "description": metadata["description"],
+                "note": metadata["note"],
+                "tools": tools,
+            }
+        )
+    return sections
 
 
 def build_settings_payload() -> dict:
@@ -174,7 +242,7 @@ def register_page_routes(app) -> None:
         return render_template(
             "settings.html",
             settings=settings,
-            tool_options=build_tool_permission_options(),
+            tool_sections=build_tool_permission_sections(),
             auth_enabled=is_login_pin_enabled(),
         )
 
