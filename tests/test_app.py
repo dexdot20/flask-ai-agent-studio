@@ -3364,6 +3364,25 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(usage["prompt_cache_hit_tokens"], 5)
         self.assertEqual(usage["prompt_cache_miss_tokens"], 7)
 
+    def test_extract_message_usage_preserves_provider_and_pricing_availability(self):
+        usage = extract_message_usage(
+            {
+                "usage": {
+                    "prompt_tokens": 12,
+                    "cost_available": False,
+                    "currency": "USD",
+                    "provider": "openrouter",
+                    "model": "openrouter:anthropic/claude-sonnet-4.5",
+                }
+            }
+        )
+
+        self.assertEqual(usage["prompt_tokens"], 12)
+        self.assertFalse(usage["cost_available"])
+        self.assertEqual(usage["currency"], "USD")
+        self.assertEqual(usage["provider"], "openrouter")
+        self.assertEqual(usage["model"], "openrouter:anthropic/claude-sonnet-4.5")
+
     def test_extract_usage_metrics_normalizes_openrouter_prompt_tokens_details(self):
         # OpenRouter returns cached_tokens inside prompt_tokens_details
         usage = SimpleNamespace(

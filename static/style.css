@@ -4085,6 +4085,16 @@ kbd {
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+.turn-provider {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.06);
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  text-transform: capitalize;
+}
+
 .turn-details {
   display: flex;
   flex-wrap: wrap;
@@ -4242,6 +4252,10 @@ kbd {
 .cost-stat {
   color: var(--accent);
   font-weight: 500;
+}
+
+.turn-stat-muted {
+  color: var(--text-muted);
 }
 
 /* ── Step Log (agentic tool events) ─────────────────────── */

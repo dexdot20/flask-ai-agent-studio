@@ -1303,9 +1303,16 @@ def _normalize_message_usage(value: dict | None) -> dict | None:
     if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost >= 0:
         cleaned["cost"] = round(float(cost), 6)
 
+    if isinstance(value.get("cost_available"), bool):
+        cleaned["cost_available"] = value["cost_available"]
+
     currency = str(value.get("currency") or "").strip()[:16]
     if currency:
         cleaned["currency"] = currency
+
+    provider = str(value.get("provider") or "").strip()[:40]
+    if provider:
+        cleaned["provider"] = provider
 
     model = str(value.get("model") or "").strip()[:80]
     if model:
