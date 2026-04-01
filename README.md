@@ -153,6 +153,7 @@ Manual smoke test checklist for the Canvas UI is available in [docs/canvas-ui-sm
 ├── tests/
 │   └── test_app.py         # Backend, streaming, tool, RAG, pruning, and UI bootstrap tests
 ├── proxies.example.txt     # Sample proxy file
+├── models/                 # Downloaded local model caches created by install.sh
 ├── requirements.txt        # Runtime dependencies
 ├── requirements-dev.txt    # Runtime + development tooling
 └── pyproject.toml          # Ruff configuration
@@ -166,7 +167,7 @@ Quick start:
 bash install.sh
 ```
 
-The installer asks for a system profile, accelerator, image stack (`None`, `OCR only`, or `OCR + VL`), and OCR provider when needed. It writes `.env` and installs only the dependency sets needed for that selection. If you prefer a manual setup, follow the steps below.
+The installer asks for a system profile, accelerator, image stack (`None`, `OCR only`, or `OCR + VL`), and OCR provider when needed. It writes `.env`, installs only the dependency sets needed for that selection, and automatically downloads the local RAG and vision model caches into `models/` when those features are enabled. If you prefer a manual setup, follow the steps below.
 
 ### 1) Create a virtual environment
 
@@ -215,6 +216,7 @@ RAG and local vision remain GPU-first in this codebase, while OCR can run withou
 - Local Qwen2.5-VL vision inference requires CUDA and a local model directory.
 - There is no CPU fallback in the current codebase for local RAG or local Qwen vision.
 - PaddleOCR GPU installs can require a CUDA-specific PaddlePaddle wheel; `install.sh` attempts a best-effort install and falls back to CPU PaddlePaddle when needed.
+- The installer stores the downloaded BGE-M3 cache in `models/rag/bge-m3` and the local Qwen2.5-VL cache in `models/vl/Qwen2.5-VL-3B-Instruct`.
 - If you do not have the required GPU stack, disable the features explicitly in `.env` instead of leaving them enabled.
 
 Example overrides for a lighter setup:
@@ -862,6 +864,7 @@ RAG data is stored in a persistent Chroma collection under `CHROMA_DB_PATH`.
 - Chroma persistence defaults to `chroma_db/`
 - agent logs default to `logs/agent-trace.log`
 - optional proxies are loaded from `proxies.txt`
+- downloaded model caches default to `models/rag/bge-m3` and `models/vl/Qwen2.5-VL-3B-Instruct`
 - uploaded images are stored in `data/images/`
 - uploaded documents are stored in `data/documents/`
 - project workspace files default to `data/workspaces/`

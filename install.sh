@@ -9,6 +9,11 @@ ENV_FILE="${ROOT_DIR}/.env"
 ENV_EXAMPLE="${ROOT_DIR}/.env.example"
 PROXIES_EXAMPLE="${ROOT_DIR}/proxies.example.txt"
 PROXIES_FILE="${ROOT_DIR}/proxies.txt"
+MODEL_DIR="${ROOT_DIR}/models"
+RAG_MODEL_DIR="${MODEL_DIR}/rag/bge-m3"
+RAG_MODEL_REPO="BAAI/bge-m3"
+VISION_MODEL_DIR="${MODEL_DIR}/vl/Qwen2.5-VL-3B-Instruct"
+VISION_MODEL_REPO="Qwen/Qwen2.5-VL-3B-Instruct"
 PYTHON_BIN=""
 
 info() {
@@ -93,6 +98,42 @@ install_paddle_runtime() {
 
   info "Installing PaddlePaddle runtime"
   "${VENV_DIR}/bin/python" -m pip install paddlepaddle
+}
+
+download_model_snapshot() {
+  local repo_id="$1"
+  local target_dir="$2"
+  local description="$3"
+
+  mkdir -p "$(dirname "${target_dir}")"
+  info "Downloading ${description} into ${target_dir}"
+  "${VENV_DIR}/bin/python" - "${repo_id}" "${target_dir}" <<'PY'
+from huggingface_hub import snapshot_download
+import sys
+
+repo_id = sys.argv[1]
+target_dir = sys.argv[2]
+
+try:
+    snapshot_download(
+        repo_id=repo_id,
+        local_dir=target_dir,
+        local_dir_use_symlinks=False,
+    )
+except Exception as exc:
+    raise SystemExit(f"Failed to download {repo_id} into {target_dir}: {exc}") from exc
+PY
+}
+
+preload_ocr_assets() {
+  info "Preloading OCR engine assets"
+  "${VENV_DIR}/bin/python" - <<'PY'
+from types import SimpleNamespace
+
+from ocr_service import preload_ocr_engine
+
+preload_ocr_engine(SimpleNamespace(debug=False))
+PY
 }
 
 prompt_choice() {
@@ -217,15 +258,6 @@ cuda_available() {
   return 1
 }
 
-normalize_model_path() {
-  local candidate="$1"
-  if [[ -n "${candidate}" && "${candidate}" != /* ]]; then
-    printf '%s\n' "${ROOT_DIR}/${candidate}"
-    return
-  fi
-  printf '%s\n' "${candidate}"
-}
-
 require_linux
 find_python
 
@@ -279,6 +311,7 @@ OCR_ENABLED_VALUE="false"
 OCR_PROVIDER_VALUE="paddleocr"
 OCR_PRELOAD="false"
 VISION_ENABLED_VALUE="false"
+BGE_MODEL_PATH="BAAI/bge-m3"
 BGE_BATCH_SIZE="8"
 BGE_DEVICE="cpu"
 BGE_PRELOAD="false"
@@ -347,26 +380,21 @@ if [[ "${ACCELERATOR}" == "CUDA" ]]; then
   if [[ "${RAG_ENABLED_VALUE}" == "false" ]]; then
     BGE_PRELOAD="false"
   fi
+  if [[ "${RAG_ENABLED_VALUE}" == "true" ]]; then
+    BGE_MODEL_PATH="${RAG_MODEL_DIR}"
+  fi
   if [[ "${VISION_ENABLED_VALUE}" == "true" ]]; then
     QWEN_PRELOAD="true"
     QWEN_LOAD_IN_4BIT="true"
     QWEN_DTYPE="float16"
-    DEFAULT_QWEN_PATH="${ROOT_DIR}/models/vl"
-    if [[ -d "${DEFAULT_QWEN_PATH}" ]]; then
-      QWEN_MODEL_PATH="${DEFAULT_QWEN_PATH}"
-    else
-      QWEN_MODEL_PATH="$(prompt_text "Enter the local Qwen2.5-VL model directory:")"
-      QWEN_MODEL_PATH="$(normalize_model_path "${QWEN_MODEL_PATH}")"
-    fi
-    if [[ -z "${QWEN_MODEL_PATH}" ]]; then
-      die "QWEN_VL_MODEL_PATH is required when Vision is enabled."
-    fi
+    QWEN_MODEL_PATH="${VISION_MODEL_DIR}"
   fi
 else
   BGE_DEVICE="cpu"
   BGE_PRELOAD="false"
   RAG_ENABLED_VALUE="false"
   VISION_ENABLED_VALUE="false"
+  BGE_MODEL_PATH="BAAI/bge-m3"
   QWEN_MODEL_PATH=""
   QWEN_PRELOAD="false"
   QWEN_LOAD_IN_4BIT="false"
@@ -394,7 +422,7 @@ write_env "${ENV_FILE}" \
   "OCR_PROVIDER=${OCR_PROVIDER_VALUE}" \
   "OCR_PRELOAD=${OCR_PRELOAD}" \
   "VISION_ENABLED=${VISION_ENABLED_VALUE}" \
-  "BGE_M3_MODEL_PATH=BAAI/bge-m3" \
+  "BGE_M3_MODEL_PATH=${BGE_MODEL_PATH}" \
   "BGE_M3_DEVICE=${BGE_DEVICE}" \
   "BGE_M3_BATCH_SIZE=${BGE_BATCH_SIZE}" \
   "BGE_M3_PRELOAD=${BGE_PRELOAD}" \
@@ -406,6 +434,15 @@ write_env "${ENV_FILE}" \
 ensure_proxies
 ensure_venv
 install_requirements
+if [[ "${RAG_ENABLED_VALUE}" == "true" ]]; then
+  download_model_snapshot "${RAG_MODEL_REPO}" "${RAG_MODEL_DIR}" "BGE-M3 embedding model"
+fi
+if [[ "${VISION_ENABLED_VALUE}" == "true" ]]; then
+  download_model_snapshot "${VISION_MODEL_REPO}" "${VISION_MODEL_DIR}" "Qwen2.5-VL vision model"
+fi
+if [[ "${OCR_ENABLED_VALUE}" == "true" ]]; then
+  preload_ocr_assets
+fi
 
 info "Installation summary"
 printf '  profile: %s\n' "${PROFILE}"
@@ -416,11 +453,13 @@ printf '  OpenRouter API configured: %s\n' "$( [[ -n "${OPENROUTER_API_KEY}" ]] 
 printf '  workspace root: %s\n' "${ROOT_DIR}/data/workspaces"
 printf '  ChromaDB path: %s\n' "${ROOT_DIR}/chroma_db"
 printf '  RAG_ENABLED: %s\n' "${RAG_ENABLED_VALUE}"
+printf '  BGE_M3_MODEL_PATH: %s\n' "${BGE_MODEL_PATH}"
 printf '  OCR_ENABLED: %s\n' "${OCR_ENABLED_VALUE}"
 if [[ "${OCR_ENABLED_VALUE}" == "true" ]]; then
   printf '  OCR_PROVIDER: %s\n' "${OCR_PROVIDER_VALUE}"
 fi
 printf '  VISION_ENABLED: %s\n' "${VISION_ENABLED_VALUE}"
+printf '  model cache: %s\n' "${MODEL_DIR}"
 printf '  .env: %s\n' "${ENV_FILE}"
 if [[ -n "${QWEN_MODEL_PATH}" ]]; then
   printf '  QWEN_VL_MODEL_PATH: %s\n' "${QWEN_MODEL_PATH}"
