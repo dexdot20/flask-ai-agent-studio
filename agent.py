@@ -2488,7 +2488,7 @@ def _normalize_clarification_question(raw_question: dict, index: int) -> dict | 
     if input_type not in {"text", "single_select", "multi_select"}:
         input_type = "single_select" if normalized_options else "text"
     if input_type in {"single_select", "multi_select"} and not normalized_options:
-        input_type = "text"
+        return None
 
     normalized["input_type"] = input_type
     if normalized_options:
@@ -2538,38 +2538,8 @@ def _normalize_clarification_payload(tool_args: dict) -> dict:
 
 
 def _build_clarification_text(payload: dict) -> str:
-    questions = payload.get("questions") if isinstance(payload.get("questions"), list) else []
-    lines = []
-    intro = str(payload.get("intro") or "").strip()
-    if intro:
-        lines.append(f"Q: {intro}")
-    else:
-        lines.append("Q: I need a few details before I can answer well.")
-
-    for question in questions:
-        if not isinstance(question, dict):
-            continue
-        question_label = str(question.get('label') or '').strip()
-        if not question_label:
-            continue
-        lines.append(f"Q: {question_label}")
-        options = question.get("options") if isinstance(question.get("options"), list) else []
-        if options:
-            option_values = []
-            for option in options:
-                if not isinstance(option, dict):
-                    continue
-                label = str(option.get("label") or option.get("value") or "").strip()
-                if label:
-                    option_values.append(label)
-            if option_values:
-                lines.append(f"A: {', '.join(option_values)}")
-            else:
-                lines.append("A: Reply with your choice.")
-        else:
-            lines.append("A: Type your answer.")
-
-    return "\n".join(line for line in lines if line).strip()
+    del payload
+    return "Soruları hazırladım."
 
 
 def _get_canvas_runtime_state(runtime_state: dict) -> dict:
@@ -3791,6 +3761,7 @@ def run_agent_stream(
     model: str,
     max_steps: int,
     enabled_tool_names: list[str],
+    prompt_tool_names: list[str] | None = None,
     *,
     temperature: float = 0.7,
     fetch_url_token_threshold: int | None = None,
@@ -4117,8 +4088,9 @@ def run_agent_stream(
         }
         if allow_tools:
             current_canvas_documents = get_canvas_runtime_documents(runtime_state.get("canvas"))
+            prompt_enabled_tool_names = enabled_tool_names if prompt_tool_names is None else prompt_tool_names
             turn_tools = get_openai_tool_specs(
-                enabled_tool_names,
+                prompt_enabled_tool_names,
                 canvas_documents=current_canvas_documents,
                 clarification_max_questions=get_clarification_max_questions(model_settings),
             )

@@ -1639,6 +1639,55 @@ class AppRoutesTestCase(unittest.TestCase):
         persisted_metadata = parse_message_metadata(row["metadata"])
         self.assertNotIn("Stale branch excerpt", str(persisted_metadata.get("context_injection") or ""))
 
+    def test_chat_route_separates_prompt_tools_from_execution_whitelist(self):
+        captured = {}
+        conversation_id = self._create_conversation()
+
+        save_app_settings(
+            {
+                "user_preferences": "",
+                "max_steps": "1",
+                "active_tools": json.dumps(["append_scratchpad", "search_web"], ensure_ascii=False),
+                "rag_auto_inject": "false",
+            }
+        )
+
+        def fake_run_agent_stream(api_messages, *args, **kwargs):
+            captured["api_messages"] = api_messages
+            captured["args"] = args
+            captured["enabled_tool_names"] = kwargs.get("enabled_tool_names")
+            captured["prompt_tool_names"] = kwargs.get("prompt_tool_names")
+            return iter(
+                [
+                    {"type": "answer_start"},
+                    {"type": "answer_delta", "text": "OK"},
+                    {"type": "tool_capture", "tool_results": []},
+                    {"type": "done"},
+                ]
+            )
+
+        with patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream), patch(
+            "routes.chat.sync_conversations_to_rag_safe"
+        ):
+            response = self.client.post(
+                "/chat",
+                json={
+                    "conversation_id": conversation_id,
+                    "model": "deepseek-chat",
+                    "messages": [{"role": "user", "content": "Merhaba"}],
+                },
+            )
+            response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured["args"][0], "deepseek-chat")
+        self.assertEqual(captured["args"][1], 1)
+        self.assertEqual(captured["args"][2][:2], ["append_scratchpad", "search_web"])
+        self.assertIn("replace_scratchpad", captured["args"][2])
+        self.assertIn("append_scratchpad", captured["prompt_tool_names"])
+        self.assertIn("replace_scratchpad", captured["prompt_tool_names"])
+        self.assertNotIn("search_web", captured["prompt_tool_names"])
+
     def test_chat_route_defers_postprocess_outside_testing(self):
         fake_events = iter(
             [
@@ -2472,7 +2521,8 @@ class AppRoutesTestCase(unittest.TestCase):
 
         rules_text = "\n".join(contract["rules"])
         self.assertIn("Ask at most 3 question(s) per call", rules_text)
-        self.assertIn("Q:/A: style", rules_text)
+        self.assertIn("Put the actual questions only in the tool arguments", rules_text)
+        self.assertIn("assistant-visible reply short and brief", rules_text)
 
     def test_runtime_system_message_includes_canvas_workspace_summary(self):
         message = build_runtime_system_message(
@@ -3010,6 +3060,10 @@ class AppRoutesTestCase(unittest.TestCase):
                         "key": "software",
                         "question": "Hangi sanallaştırma yazılımını kullanacaksın?",
                         "type": "single",
+                        "options": [
+                            {"label": "VMware", "value": "vmware"},
+                            {"label": "VirtualBox", "value": "virtualbox"},
+                        ],
                     }
                 ]
             },
@@ -3019,7 +3073,18 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(result["status"], "needs_user_input")
         self.assertEqual(result["clarification"]["questions"][0]["id"], "software")
         self.assertEqual(result["clarification"]["questions"][0]["label"], "Hangi sanallaştırma yazılımını kullanacaksın?")
-        self.assertEqual(result["clarification"]["questions"][0]["input_type"], "text")
+        self.assertEqual(result["clarification"]["questions"][0]["input_type"], "single_select")
+
+    def test_execute_clarification_tool_rejects_select_questions_without_options(self):
+        with self.assertRaises(ValueError):
+            _execute_tool(
+                "ask_clarifying_question",
+                {
+                    "questions": [
+                        {"id": "scope", "label": "Which scope?", "input_type": "single_select"},
+                    ]
+                },
+            )
 
     def test_execute_clarification_tool_respects_max_question_setting_and_qa_format(self):
         with patch("agent.get_clarification_max_questions", return_value=2):
@@ -3038,9 +3103,9 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(summary, "Awaiting user clarification")
         self.assertEqual(result["status"], "needs_user_input")
         self.assertEqual(len(result["clarification"]["questions"]), 2)
-        self.assertTrue(result["text"].startswith("Q: Before I answer, I need a few details."))
-        self.assertIn("Q: Which scope?", result["text"])
-        self.assertIn("A: Type your answer.", result["text"])
+        self.assertEqual(result["text"], "Soruları hazırladım.")
+        self.assertEqual(result["clarification"]["intro"], "Before I answer, I need a few details.")
+        self.assertEqual(result["clarification"]["questions"][0]["label"], "Which scope?")
 
     def test_execute_clarification_tool_dedupes_question_ids(self):
         result, summary = _execute_tool(
@@ -4058,8 +4123,10 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("function appendClarificationPanel(group, metadata, options = {})", script_text)
         self.assertIn("pending_clarification: pendingClarification", script_text)
         self.assertIn('clarification_response', script_text)
-        self.assertIn("Q: ", script_text)
         self.assertIn("A: Type your answer", script_text)
+        self.assertIn("Your draft answers stay in this browser until you send them.", script_text)
+        self.assertIn("clarification-card__intro", script_text)
+        self.assertIn("clarification-card__summary", script_text)
         self.assertIn("function renderBubbleWithCursor(bubbleEl, text)", script_text)
         self.assertIn('bubbleEl.classList.add("streaming-text")', script_text)
         self.assertIn("function renderBubbleMarkdown(bubbleEl, text)", script_text)
@@ -4067,6 +4134,8 @@ class AppRoutesTestCase(unittest.TestCase):
         style_path = Path(__file__).resolve().parent.parent / "static" / "style.css"
         style_text = style_path.read_text(encoding="utf-8")
         self.assertIn(".clarification-card", style_text)
+        self.assertIn(".clarification-card__intro", style_text)
+        self.assertIn(".clarification-card__helper", style_text)
         self.assertIn(".clarification-form", style_text)
         self.assertIn(".bubble.streaming-text", style_text)
 
@@ -4652,7 +4721,8 @@ class AppRoutesTestCase(unittest.TestCase):
             )
 
         clarification_event = next(event for event in events if event["type"] == "clarification_request")
-        self.assertIn("Before I answer", clarification_event["text"])
+        self.assertEqual(clarification_event["text"], "Soruları hazırladım.")
+        self.assertEqual(clarification_event["clarification"]["intro"], "Before I answer, I need two details.")
         self.assertEqual(clarification_event["clarification"]["questions"][0]["id"], "scope")
         self.assertFalse(any(event["type"] == "answer_delta" for event in events))
         self.assertEqual(events[-1]["type"], "done")
@@ -5019,7 +5089,7 @@ class AppRoutesTestCase(unittest.TestCase):
             [
                 {
                     "type": "clarification_request",
-                    "text": "Before I answer, I need two details.\n1. Which scope?\n2. Anything else?",
+                    "text": "Soruları hazırladım.",
                     "clarification": {
                         "intro": "Before I answer, I need two details.",
                         "submit_label": "Continue",
@@ -7369,6 +7439,41 @@ class AppRoutesTestCase(unittest.TestCase):
             events = list(run_agent_stream([{"role": "user", "content": "Test"}], "deepseek-chat", 1, ["search_web"]))
 
         self.assertIn({"type": "answer_delta", "text": "Final after compaction."}, events)
+
+    def test_run_agent_stream_allows_active_tool_calls_even_when_prompt_tools_are_pruned(self):
+        responses = [
+            iter(
+                [
+                    self._tool_call_chunk("search_web", {"queries": ["x"]}),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=1, total_tokens=3)),
+                ]
+            ),
+            iter(
+                [
+                    self._stream_chunk(content="Final answer."),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=4, total_tokens=6)),
+                ]
+            ),
+        ]
+
+        with patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create, patch(
+            "agent.search_web_tool",
+            return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+        ):
+            events = list(
+                run_agent_stream(
+                    [{"role": "user", "content": "Test"}],
+                    "deepseek-chat",
+                    2,
+                    ["search_web"],
+                    prompt_tool_names=[],
+                )
+            )
+
+        first_call_kwargs = mocked_create.call_args_list[0].kwargs
+        self.assertNotIn("tools", first_call_kwargs)
+        self.assertFalse(any(event["type"] == "tool_error" and event.get("error") == "Tool disabled: search_web" for event in events))
+        self.assertTrue(any(event["type"] == "tool_result" and event.get("tool") == "search_web" for event in events))
 
     def test_run_agent_stream_separates_reasoning_turns_with_blank_line(self):
         responses = [

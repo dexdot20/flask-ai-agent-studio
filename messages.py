@@ -636,7 +636,8 @@ def build_tool_call_contract(
         limit = _normalize_clarification_max_questions(clarification_max_questions)
         rules.append(
             "ask_clarifying_question must be the only tool call in its assistant turn. "
-            f"Ask at most {limit} question(s) per call and keep the wording in a simple Q:/A: style."
+            "Put the actual questions only in the tool arguments, not in the assistant text. "
+            f"Ask at most {limit} question(s) per call and keep the assistant-visible reply short and brief."
         )
 
     return {"rules": rules}

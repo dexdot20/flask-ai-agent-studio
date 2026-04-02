@@ -438,7 +438,9 @@ TOOL_SPECS = [
                 "Use this instead of guessing when important requirements are missing. "
                 "Ask only the smallest set of questions needed to continue. "
                 "When the user asks you to ask questions first, this is the required tool. "
-                "Use a simple Q:/A: style. When you call this tool, it must be the only tool call in that assistant message and you must wait for the user's reply before answering. "
+                "Put the actual question text only in the tool arguments, not in the assistant text. "
+                "Keep the assistant-visible reply short and brief, and let the UI render the questions. "
+                "When you call this tool, it must be the only tool call in that assistant message and you must wait for the user's reply before answering. "
                 "Prefer single_select or multi_select when the likely answers are known, keep question ids short and unique, and use required=false for optional follow-ups. "
                 "Each questions item must be an object with id, label, and input_type; example: {\"id\":\"scope\",\"label\":\"Which scope?\",\"input_type\":\"text\"}."
             ),

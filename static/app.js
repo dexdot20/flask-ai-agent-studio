@@ -465,6 +465,7 @@ const markdownEngine = globalThis.marked || null;
 const sanitizer = globalThis.DOMPurify || null;
 const highlighter = globalThis.hljs || null;
 const SIDEBAR_STORAGE_KEY = "chatbot.sidebarOpen";
+const CLARIFICATION_DRAFT_STORAGE_PREFIX = "chatbot.clarificationDraft";
 const CANVAS_STREAMING_PREVIEW_TOOLS = new Set(["create_canvas_document", "rewrite_canvas_document"]);
 
 function isCanvasStreamingPreviewTool(toolName) {
@@ -3339,6 +3340,121 @@ function getPendingClarification(metadata) {
     submit_label: String(payload.submit_label || "").trim() || "Send answers",
     questions,
   };
+}
+
+function getClarificationDraftStorageKey(messageId) {
+  const normalizedConvId = Number.isInteger(Number(currentConvId)) ? String(Number(currentConvId)) : "conversation";
+  const normalizedMessageId = Number.isInteger(Number(messageId)) ? String(Number(messageId)) : "message";
+  return `${CLARIFICATION_DRAFT_STORAGE_PREFIX}.${normalizedConvId}.${normalizedMessageId}`;
+}
+
+function loadClarificationDraft(messageId) {
+  const key = getClarificationDraftStorageKey(messageId);
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function saveClarificationDraft(messageId, draft) {
+  const key = getClarificationDraftStorageKey(messageId);
+  try {
+    if (!draft || typeof draft !== "object") {
+      localStorage.removeItem(key);
+      return;
+    }
+    localStorage.setItem(key, JSON.stringify(draft));
+  } catch (_) {
+    // Ignore storage failures.
+  }
+}
+
+function collectClarificationDraft(form, clarification) {
+  const draft = {};
+
+  clarification.questions.forEach((question, index) => {
+    const fieldName = `clarify_${index}`;
+    const freeTextName = `${fieldName}_free`;
+
+    if (question.input_type === "text") {
+      const input = form.elements[fieldName];
+      draft[question.id] = { value: String(input?.value || "") };
+      return;
+    }
+
+    if (question.input_type === "single_select") {
+      const selected = form.querySelector(`input[name="${fieldName}"]:checked`);
+      const freeTextInput = form.elements[freeTextName];
+      draft[question.id] = {
+        value: selected ? String(selected.value || "") : "",
+        free_text: String(freeTextInput?.value || ""),
+      };
+      return;
+    }
+
+    const selected = Array.from(form.querySelectorAll(`input[name="${fieldName}"]:checked`));
+    const freeTextInput = form.elements[freeTextName];
+    draft[question.id] = {
+      value: selected.map((element) => String(element.value || "").trim()).filter(Boolean),
+      free_text: String(freeTextInput?.value || ""),
+    };
+  });
+
+  return draft;
+}
+
+function applyClarificationDraft(form, clarification, draft) {
+  if (!draft || typeof draft !== "object") {
+    return;
+  }
+
+  clarification.questions.forEach((question, index) => {
+    const entry = draft[question.id];
+    if (!entry || typeof entry !== "object") {
+      return;
+    }
+
+    const fieldName = `clarify_${index}`;
+    const freeTextName = `${fieldName}_free`;
+
+    if (question.input_type === "text") {
+      const input = form.elements[fieldName];
+      if (input instanceof HTMLTextAreaElement) {
+        input.value = String(entry.value || "");
+        autoResize(input);
+      }
+    } else if (question.input_type === "single_select") {
+      const selectedValue = String(entry.value || "").trim();
+      if (selectedValue) {
+        const selected = form.querySelector(`input[name="${fieldName}"][value="${CSS.escape(selectedValue)}"]`);
+        if (selected instanceof HTMLInputElement) {
+          selected.checked = true;
+        }
+      }
+    } else if (Array.isArray(entry.value)) {
+      entry.value.forEach((selectedValue) => {
+        const normalizedValue = String(selectedValue || "").trim();
+        if (!normalizedValue) {
+          return;
+        }
+        const selected = form.querySelector(`input[name="${fieldName}"][value="${CSS.escape(normalizedValue)}"]`);
+        if (selected instanceof HTMLInputElement) {
+          selected.checked = true;
+        }
+      });
+    }
+
+    const freeTextInput = form.elements[freeTextName];
+    if (freeTextInput instanceof HTMLInputElement) {
+      freeTextInput.value = String(entry.free_text || "");
+    }
+  });
 }
 
 function formatClarificationResponse(clarification, answers) {
@@ -6411,6 +6527,18 @@ function appendClarificationPanel(group, metadata, options = {}) {
   title.textContent = clarification.questions.length === 1 ? "Clarification needed" : "Clarifications needed";
   panel.appendChild(title);
 
+  const summary = document.createElement("div");
+  summary.className = "clarification-card__summary";
+  summary.textContent = `${clarification.questions.length} question${clarification.questions.length === 1 ? "" : "s"} to answer`;
+  panel.appendChild(summary);
+
+  if (clarification.intro) {
+    const intro = document.createElement("div");
+    intro.className = "clarification-card__intro";
+    intro.textContent = clarification.intro;
+    panel.appendChild(intro);
+  }
+
   const isInteractive = Boolean(options.isLatestVisible && Number.isInteger(Number(options.messageId)));
   if (!isInteractive) {
     const state = document.createElement("div");
@@ -6424,13 +6552,18 @@ function appendClarificationPanel(group, metadata, options = {}) {
   const form = document.createElement("form");
   form.className = "clarification-form";
 
+  const helper = document.createElement("div");
+  helper.className = "clarification-card__helper";
+  helper.textContent = "Your draft answers stay in this browser until you send them.";
+  form.appendChild(helper);
+
   clarification.questions.forEach((question, index) => {
     const field = document.createElement("div");
     field.className = "clarification-field";
 
     const label = document.createElement("label");
     label.className = "clarification-field__label";
-    label.textContent = `Q: ${question.label}`;
+    label.textContent = `${question.required ? "* " : ""}Q: ${question.label}`;
     field.appendChild(label);
 
     const fieldName = `clarify_${index}`;
@@ -6479,6 +6612,16 @@ function appendClarificationPanel(group, metadata, options = {}) {
     form.appendChild(field);
   });
 
+  applyClarificationDraft(form, clarification, loadClarificationDraft(options.messageId));
+
+  form.addEventListener("input", () => {
+    saveClarificationDraft(options.messageId, collectClarificationDraft(form, clarification));
+  });
+
+  form.addEventListener("change", () => {
+    saveClarificationDraft(options.messageId, collectClarificationDraft(form, clarification));
+  });
+
   const error = document.createElement("div");
   error.className = "clarification-form__error";
   error.hidden = true;
@@ -6504,6 +6647,7 @@ function appendClarificationPanel(group, metadata, options = {}) {
     }
 
     error.hidden = true;
+    saveClarificationDraft(options.messageId, null);
     await sendMessage({
       forcedText: collected.text,
       forcedMetadata: {

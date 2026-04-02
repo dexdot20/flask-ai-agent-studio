@@ -859,6 +859,25 @@ body.sidebar-collapsed .chat-area {
   letter-spacing: 0.04em;
 }
 
+.clarification-card__summary {
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+}
+
+.clarification-card__intro {
+  margin-top: 8px;
+  color: var(--text-primary);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.clarification-card__helper {
+  color: var(--text-secondary);
+  font-size: 0.83rem;
+  line-height: 1.4;
+}
+
 .clarification-card__state {
   margin-top: 8px;
   color: var(--text-secondary);
