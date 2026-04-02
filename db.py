@@ -61,6 +61,7 @@ from config import (
     SUB_AGENT_TIMEOUT_MIN_SECONDS,
     VISION_ENABLED,
 )
+from proxy_settings import normalize_proxy_enabled_operations
 from tool_registry import TOOL_SPEC_BY_NAME
 from token_utils import estimate_text_tokens
 
@@ -2006,6 +2007,12 @@ def get_app_settings() -> dict:
         settings[row["key"]] = row["value"]
 
     return settings
+
+
+def get_proxy_enabled_operations(settings: dict | None = None) -> list[str]:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get("proxy_enabled_operations") if isinstance(source, dict) else None
+    return normalize_proxy_enabled_operations(raw_value)
 
 
 def normalize_scratchpad_text(value) -> str:

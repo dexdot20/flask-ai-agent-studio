@@ -82,6 +82,7 @@ from db import (
 )
 from model_registry import (
     DEEPSEEK_PROVIDER,
+    OPENROUTER_PROVIDER,
     apply_model_target_request_options,
     get_operation_model_candidates,
     get_operation_model,
@@ -1529,20 +1530,114 @@ def _coerce_text(value) -> str:
 
 
 def _extract_reasoning_and_content(message) -> tuple[str, str]:
-    reasoning_text = _coerce_text(getattr(message, "reasoning_content", "")).strip()
+    reasoning_text = _extract_reasoning_text(message).strip()
     content_text = _coerce_text(getattr(message, "content", "")).strip()
     return reasoning_text, content_text
 
 
-def _extract_stream_delta_texts(chunk) -> tuple[str, str]:
+def _normalize_json_like(value, depth: int = 0):
+    if depth >= 6:
+        return None
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, dict):
+        normalized = {}
+        for key, item in value.items():
+            normalized[str(key)] = _normalize_json_like(item, depth + 1)
+        return normalized
+    if isinstance(value, (list, tuple)):
+        return [_normalize_json_like(item, depth + 1) for item in value]
+    if hasattr(value, "__dict__"):
+        return _normalize_json_like(vars(value), depth + 1)
+    return _coerce_text(value)
+
+
+def _normalize_reasoning_details(value) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    normalized = []
+    for item in value:
+        candidate = _normalize_json_like(item)
+        if isinstance(candidate, dict):
+            normalized.append(candidate)
+    return normalized
+
+
+def _extract_reasoning_details_text(reasoning_details) -> str:
+    parts = []
+    for detail in _normalize_reasoning_details(reasoning_details):
+        text = _coerce_text(detail.get("text") or "")
+        if text:
+            parts.append(text)
+    return "".join(parts)
+
+
+def _extract_reasoning_text(value) -> str:
+    reasoning_text = _coerce_text(getattr(value, "reasoning_content", ""))
+    if reasoning_text:
+        return reasoning_text
+
+    reasoning_text = _coerce_text(_read_api_field(value, "reasoning", ""))
+    if reasoning_text:
+        return reasoning_text
+
+    return _extract_reasoning_details_text(_read_api_field(value, "reasoning_details", []))
+
+
+def _merge_reasoning_details(target: list[dict], new_items) -> list[dict]:
+    merged = list(target or [])
+    for detail in _normalize_reasoning_details(new_items):
+        detail_type = str(detail.get("type") or "").strip()
+        detail_id = str(detail.get("id") or "").strip()
+        detail_index = detail.get("index")
+        detail_format = str(detail.get("format") or "").strip()
+        text = _coerce_text(detail.get("text") or "")
+        existing = None
+        for candidate in merged:
+            if not isinstance(candidate, dict):
+                continue
+            if str(candidate.get("type") or "").strip() != detail_type:
+                continue
+            if str(candidate.get("id") or "").strip() != detail_id:
+                continue
+            if candidate.get("index") != detail_index:
+                continue
+            if str(candidate.get("format") or "").strip() != detail_format:
+                continue
+            existing = candidate
+            break
+        if existing is None:
+            merged.append(dict(detail))
+            continue
+        if text:
+            existing["text"] = _coerce_text(existing.get("text") or "") + text
+        for key, value in detail.items():
+            if key == "text":
+                continue
+            if existing.get(key) in (None, "", []):
+                existing[key] = value
+    return merged
+
+
+def _extract_stream_delta_texts(chunk) -> tuple[str, str, list[dict]]:
     if not getattr(chunk, "choices", None):
-        return "", ""
+        return "", "", []
     delta = getattr(chunk.choices[0], "delta", None)
     if delta is None:
-        return "", ""
-    reasoning_text = _coerce_text(getattr(delta, "reasoning_content", ""))
+        return "", "", []
+    reasoning_details = _normalize_reasoning_details(_read_api_field(delta, "reasoning_details", []))
+    reasoning_text = _extract_reasoning_text(delta)
     content_text = _coerce_text(getattr(delta, "content", ""))
-    return reasoning_text, content_text
+    return reasoning_text, content_text, reasoning_details
+
+
+def _close_model_response(response) -> None:
+    close_response = getattr(response, "close", None)
+    if callable(close_response):
+        try:
+            close_response()
+        except Exception:
+            pass
 
 
 def _read_api_field(value, key: str, default=None):
@@ -2067,7 +2162,7 @@ def _finalize_stream_tool_calls(tool_call_parts: list[dict]) -> tuple[list[dict]
     return normalized_calls, None
 
 
-def _build_assistant_tool_call_message(content_text: str, tool_calls: list[dict]) -> dict:
+def _build_assistant_tool_call_message(content_text: str, tool_calls: list[dict], reasoning_details=None) -> dict:
     serialized_tool_calls = []
     assistant_message_id = ""
     for tool_call in tool_calls:
@@ -2084,12 +2179,28 @@ def _build_assistant_tool_call_message(content_text: str, tool_calls: list[dict]
                 },
             }
         )
-    return {
+    message = {
         "role": "assistant",
         "content": str(content_text or ""),
         "tool_calls": parse_message_tool_calls(serialized_tool_calls),
         **({"id": assistant_message_id} if assistant_message_id else {}),
     }
+    normalized_reasoning_details = _normalize_reasoning_details(reasoning_details)
+    if normalized_reasoning_details:
+        message["reasoning_details"] = normalized_reasoning_details
+    return message
+
+
+def _has_native_reasoning_details(messages: list[dict]) -> bool:
+    for message in reversed(messages or []):
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("role") or "").strip() != "assistant":
+            continue
+        if not isinstance(message.get("tool_calls"), list) or not message.get("tool_calls"):
+            continue
+        return bool(_normalize_reasoning_details(message.get("reasoning_details")))
+    return False
 
 
 def _serialize_tool_message_content(payload) -> str:
@@ -3748,6 +3859,7 @@ def run_agent_stream(
     }
     model_settings = get_app_settings()
     model_target = resolve_model_target(model, model_settings)
+    native_reasoning_continuation = str(model_target["record"].get("provider") or "").strip() == OPENROUTER_PROVIDER
     pricing = get_model_pricing(model, model_settings)
     pricing_known = has_known_model_pricing(model, model_settings)
 
@@ -3968,6 +4080,7 @@ def run_agent_stream(
     ) -> dict:
         turn_reasoning_emitted = False
         turn_tools = []
+        turn_reasoning_details = []
         provider_usage = {
             "prompt_tokens": 0,
             "prompt_cache_hit_tokens": 0,
@@ -4048,144 +4161,152 @@ def run_agent_stream(
                     usage_totals["input_breakdown"][key] += value
             return estimated_breakdown, estimated_input_tokens, tool_schema_tokens
 
-        if getattr(response, "choices", None):
-            provider_usage = add_usage(getattr(response, "usage", None))
-            finalize_call_usage()
-            message = response.choices[0].message
-            reasoning_text, content_text = _extract_reasoning_and_content(message)
-            tool_calls, tool_call_error = _extract_native_tool_calls(message)
-            content_text, tool_calls, tool_call_error = _prefer_content_dsml_tool_calls(
-                content_text,
+        try:
+            if getattr(response, "choices", None):
+                provider_usage = add_usage(getattr(response, "usage", None))
+                finalize_call_usage()
+                message = response.choices[0].message
+                reasoning_text, content_text = _extract_reasoning_and_content(message)
+                turn_reasoning_details = _merge_reasoning_details([], _read_api_field(message, "reasoning_details", []))
+                tool_calls, tool_call_error = _extract_native_tool_calls(message)
+                content_text, tool_calls, tool_call_error = _prefer_content_dsml_tool_calls(
+                    content_text,
+                    tool_calls,
+                    tool_call_error,
+                )
+                _trace_agent_event(
+                    "model_turn_completed",
+                    trace_id=trace_id,
+                    step=step,
+                    reasoning_excerpt=reasoning_text,
+                    content_excerpt=content_text,
+                    tool_calls=tool_calls or [],
+                )
+                for event in emit_turn_reasoning(reasoning_text):
+                    yield event
+                return {
+                    "reasoning_text": reasoning_text,
+                    "reasoning_details": turn_reasoning_details,
+                    "content_text": content_text,
+                    "tool_calls": tool_calls,
+                    "tool_call_error": tool_call_error,
+                    "stream_error": None,
+                }
+
+            reasoning_parts = []
+            content_parts = []
+            buffered_content_deltas = []
+            tool_call_parts = []
+            content_streaming_live = False
+            stream_error = None
+            announced_canvas_preview_key = None
+            streamed_canvas_content_length = 0
+
+            try:
+                for chunk in response:
+                    reasoning_delta, content_delta, reasoning_details_delta = _extract_stream_delta_texts(chunk)
+                    if reasoning_details_delta:
+                        turn_reasoning_details = _merge_reasoning_details(turn_reasoning_details, reasoning_details_delta)
+                    if reasoning_delta:
+                        reasoning_parts.append(reasoning_delta)
+                        for event in emit_turn_reasoning(reasoning_delta):
+                            yield event
+                    if getattr(chunk, "choices", None):
+                        delta = getattr(chunk.choices[0], "delta", None)
+                        if delta is not None:
+                            _merge_stream_tool_call_delta(tool_call_parts, delta)
+                            canvas_preview = _build_streaming_canvas_tool_preview(tool_call_parts)
+                            if canvas_preview is not None:
+                                preview_tool_name = canvas_preview["tool"]
+                                preview_key = str(canvas_preview.get("preview_key") or "").strip()
+                                if announced_canvas_preview_key != preview_key:
+                                    announced_canvas_preview_key = preview_key
+                                    streamed_canvas_content_length = 0
+                                    yield {
+                                        "type": "canvas_tool_starting",
+                                        "tool": preview_tool_name,
+                                        "preview_key": preview_key,
+                                        "snapshot": canvas_preview["snapshot"],
+                                    }
+                                preview_content = canvas_preview.get("content")
+                                if preview_content is not None and len(preview_content) > streamed_canvas_content_length:
+                                    next_content_delta = preview_content[streamed_canvas_content_length:]
+                                    streamed_canvas_content_length = len(preview_content)
+                                    if next_content_delta:
+                                        yield {
+                                            "type": "canvas_content_delta",
+                                            "tool": preview_tool_name,
+                                            "preview_key": preview_key,
+                                            "delta": next_content_delta,
+                                            "snapshot": canvas_preview["snapshot"],
+                                        }
+                    if content_delta:
+                        content_parts.append(content_delta)
+                        if not turn_tools and not buffer_answer:
+                            for event in emit_answer(content_delta):
+                                yield event
+                        elif not turn_tools and buffer_answer:
+                            buffered_content_deltas.append(content_delta)
+                        elif content_streaming_live:
+                            for event in emit_answer(content_delta):
+                                yield event
+                        elif tool_call_parts:
+                            buffered_content_deltas.append(content_delta)
+                        else:
+                            content_streaming_live = True
+                            for event in emit_answer(content_delta):
+                                yield event
+                    if getattr(chunk, "usage", None):
+                        usage_snapshot = add_usage(chunk.usage)
+                        provider_usage["prompt_tokens"] += usage_snapshot["prompt_tokens"]
+                        provider_usage["prompt_cache_hit_tokens"] += usage_snapshot["prompt_cache_hit_tokens"]
+                        provider_usage["prompt_cache_miss_tokens"] += usage_snapshot["prompt_cache_miss_tokens"]
+                        provider_usage["completion_tokens"] += usage_snapshot["completion_tokens"]
+                        provider_usage["total_tokens"] += usage_snapshot["total_tokens"]
+                        provider_usage["received"] = provider_usage["received"] or usage_snapshot["received"]
+            except Exception as exc:
+                stream_error = str(exc)
+                _trace_agent_event(
+                    "model_stream_interrupted",
+                    trace_id=trace_id,
+                    step=step,
+                    error=stream_error,
+                    partial_content_excerpt="".join(content_parts),
+                )
+
+            final_reasoning = "".join(reasoning_parts).strip()
+            final_content = "".join(content_parts).strip()
+            tool_calls, tool_call_error = _finalize_stream_tool_calls(tool_call_parts)
+            final_content, tool_calls, tool_call_error = _prefer_content_dsml_tool_calls(
+                final_content,
                 tool_calls,
                 tool_call_error,
             )
+            finalize_call_usage()
+            if buffered_content_deltas and not tool_calls and not tool_call_error:
+                for pending_delta in buffered_content_deltas:
+                    for event in emit_answer(pending_delta):
+                        yield event
+
             _trace_agent_event(
                 "model_turn_completed",
                 trace_id=trace_id,
                 step=step,
-                reasoning_excerpt=reasoning_text,
-                content_excerpt=content_text,
+                reasoning_excerpt=final_reasoning,
+                content_excerpt=final_content,
                 tool_calls=tool_calls or [],
+                stream_error=stream_error,
             )
-            for event in emit_turn_reasoning(reasoning_text):
-                yield event
             return {
-                "reasoning_text": reasoning_text,
-                "content_text": content_text,
+                "reasoning_text": final_reasoning,
+                "reasoning_details": turn_reasoning_details,
+                "content_text": final_content,
                 "tool_calls": tool_calls,
                 "tool_call_error": tool_call_error,
-                "stream_error": None,
+                "stream_error": stream_error,
             }
-
-        reasoning_parts = []
-        content_parts = []
-        buffered_content_deltas = []
-        tool_call_parts = []
-        content_streaming_live = False
-        stream_error = None
-        announced_canvas_preview_key = None
-        streamed_canvas_content_length = 0
-
-        try:
-            for chunk in response:
-                reasoning_delta, content_delta = _extract_stream_delta_texts(chunk)
-                if reasoning_delta:
-                    reasoning_parts.append(reasoning_delta)
-                    for event in emit_turn_reasoning(reasoning_delta):
-                        yield event
-                if getattr(chunk, "choices", None):
-                    delta = getattr(chunk.choices[0], "delta", None)
-                    if delta is not None:
-                        _merge_stream_tool_call_delta(tool_call_parts, delta)
-                        canvas_preview = _build_streaming_canvas_tool_preview(tool_call_parts)
-                        if canvas_preview is not None:
-                            preview_tool_name = canvas_preview["tool"]
-                            preview_key = str(canvas_preview.get("preview_key") or "").strip()
-                            if announced_canvas_preview_key != preview_key:
-                                announced_canvas_preview_key = preview_key
-                                streamed_canvas_content_length = 0
-                                yield {
-                                    "type": "canvas_tool_starting",
-                                    "tool": preview_tool_name,
-                                    "preview_key": preview_key,
-                                    "snapshot": canvas_preview["snapshot"],
-                                }
-                            preview_content = canvas_preview.get("content")
-                            if preview_content is not None and len(preview_content) > streamed_canvas_content_length:
-                                next_content_delta = preview_content[streamed_canvas_content_length:]
-                                streamed_canvas_content_length = len(preview_content)
-                                if next_content_delta:
-                                    yield {
-                                        "type": "canvas_content_delta",
-                                        "tool": preview_tool_name,
-                                        "preview_key": preview_key,
-                                        "delta": next_content_delta,
-                                        "snapshot": canvas_preview["snapshot"],
-                                    }
-                if content_delta:
-                    content_parts.append(content_delta)
-                    if not turn_tools and not buffer_answer:
-                        for event in emit_answer(content_delta):
-                            yield event
-                    elif not turn_tools and buffer_answer:
-                        buffered_content_deltas.append(content_delta)
-                    elif content_streaming_live:
-                        for event in emit_answer(content_delta):
-                            yield event
-                    elif tool_call_parts:
-                        buffered_content_deltas.append(content_delta)
-                    else:
-                        content_streaming_live = True
-                        for event in emit_answer(content_delta):
-                            yield event
-                if getattr(chunk, "usage", None):
-                    usage_snapshot = add_usage(chunk.usage)
-                    provider_usage["prompt_tokens"] += usage_snapshot["prompt_tokens"]
-                    provider_usage["prompt_cache_hit_tokens"] += usage_snapshot["prompt_cache_hit_tokens"]
-                    provider_usage["prompt_cache_miss_tokens"] += usage_snapshot["prompt_cache_miss_tokens"]
-                    provider_usage["completion_tokens"] += usage_snapshot["completion_tokens"]
-                    provider_usage["total_tokens"] += usage_snapshot["total_tokens"]
-                    provider_usage["received"] = provider_usage["received"] or usage_snapshot["received"]
-        except Exception as exc:
-            stream_error = str(exc)
-            _trace_agent_event(
-                "model_stream_interrupted",
-                trace_id=trace_id,
-                step=step,
-                error=stream_error,
-                partial_content_excerpt="".join(content_parts),
-            )
-
-        final_reasoning = "".join(reasoning_parts).strip()
-        final_content = "".join(content_parts).strip()
-        tool_calls, tool_call_error = _finalize_stream_tool_calls(tool_call_parts)
-        final_content, tool_calls, tool_call_error = _prefer_content_dsml_tool_calls(
-            final_content,
-            tool_calls,
-            tool_call_error,
-        )
-        finalize_call_usage()
-        if buffered_content_deltas and not tool_calls and not tool_call_error:
-            for pending_delta in buffered_content_deltas:
-                for event in emit_answer(pending_delta):
-                    yield event
-
-        _trace_agent_event(
-            "model_turn_completed",
-            trace_id=trace_id,
-            step=step,
-            reasoning_excerpt=final_reasoning,
-            content_excerpt=final_content,
-            tool_calls=tool_calls or [],
-            stream_error=stream_error,
-        )
-        return {
-            "reasoning_text": final_reasoning,
-            "content_text": final_content,
-            "tool_calls": tool_calls,
-            "tool_call_error": tool_call_error,
-            "stream_error": stream_error,
-        }
+        finally:
+            _close_model_response(response)
 
     pending_step_retry_reason: str | None = None
     while step < max_steps:
@@ -4198,10 +4319,12 @@ def run_agent_stream(
         needs_separator_for_sync = pending_answer_separator
         step_retry_reason = pending_step_retry_reason
         pending_step_retry_reason = None
-        reasoning_replay_instruction = _build_reasoning_replay_instruction(
-            reasoning_state,
-            current_goal=working_state.get("current_goal") or "",
-        )
+        reasoning_replay_instruction = None
+        if not (native_reasoning_continuation and _has_native_reasoning_details(messages)):
+            reasoning_replay_instruction = _build_reasoning_replay_instruction(
+                reasoning_state,
+                current_goal=working_state.get("current_goal") or "",
+            )
         working_memory_instruction = _build_working_state_instruction(working_state)
         extra_messages = []
         if reasoning_replay_instruction:
@@ -4253,6 +4376,7 @@ def run_agent_stream(
             break
 
         reasoning_text = turn_result.get("reasoning_text") or ""
+        reasoning_details = _normalize_reasoning_details(turn_result.get("reasoning_details"))
         content_text = turn_result.get("content_text") or ""
         tool_calls = turn_result.get("tool_calls")
         tool_call_error = turn_result.get("tool_call_error")
@@ -4361,7 +4485,7 @@ def run_agent_stream(
                     if str(tool_call.get("name") or "").strip()
                 ],
             )
-        assistant_tool_call_message = _build_assistant_tool_call_message(content_text, tool_calls)
+        assistant_tool_call_message = _build_assistant_tool_call_message(content_text, tool_calls, reasoning_details)
         messages.append(assistant_tool_call_message)
         if content_text.strip() and answer_started:
             pending_answer_separator = True

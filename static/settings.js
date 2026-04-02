@@ -73,6 +73,7 @@ const ragSensitivityEl = document.getElementById("rag-sensitivity-select");
 const ragSensitivityHintEl = document.getElementById("rag-sensitivity-hint");
 const ragContextSizeEl = document.getElementById("rag-context-size-select");
 const ragSourceTypeEls = Array.from(document.querySelectorAll("input[name='rag-source-type']"));
+const proxyOperationEls = Array.from(document.querySelectorAll("input[name='proxy-enabled-operation']"));
 const ragSourceSummaryEl = document.getElementById("rag-source-summary");
 const toolMemoryAutoInjectEl = document.getElementById("tool-memory-auto-inject-toggle");
 const toolMemoryDisabledNoteEl = document.getElementById("tool-memory-disabled-note");
@@ -1104,6 +1105,10 @@ function getSelectedRagSourceTypes() {
   return ragSourceTypeEls.filter((element) => element.checked).map((element) => element.value);
 }
 
+function getSelectedProxyOperations() {
+  return proxyOperationEls.filter((element) => element.checked).map((element) => element.value);
+}
+
 function applySelectedTools(selected) {
   const active = new Set(Array.isArray(selected) ? selected : []);
   toolToggleEls.forEach((element) => {
@@ -1117,6 +1122,13 @@ function applySelectedRagSourceTypes(selected) {
     element.checked = active.has(element.value);
   });
   updateRagSourceSummary();
+}
+
+function applySelectedProxyOperations(selected) {
+  const active = new Set(Array.isArray(selected) ? selected : []);
+  proxyOperationEls.forEach((element) => {
+    element.checked = active.has(element.value);
+  });
 }
 
 function updateRagSourceSummary() {
@@ -1184,6 +1196,7 @@ function applySettingsToForm() {
   if (subAgentRetryAttemptsEl) subAgentRetryAttemptsEl.value = String(appSettings.sub_agent_retry_attempts ?? 2);
   if (subAgentRetryDelayEl) subAgentRetryDelayEl.value = String(appSettings.sub_agent_retry_delay_seconds ?? 5);
   applySelectedTools(appSettings.active_tools || []);
+  applySelectedProxyOperations(appSettings.proxy_enabled_operations || []);
   if (ragAutoInjectEl) {
     ragAutoInjectEl.checked = Boolean(featureFlags.rag_enabled ? appSettings.rag_auto_inject : false);
   }
@@ -1291,6 +1304,7 @@ function applyServerSettingsData(data) {
   appSettings.sub_agent_retry_attempts = data.sub_agent_retry_attempts ?? 2;
   appSettings.sub_agent_retry_delay_seconds = data.sub_agent_retry_delay_seconds ?? 5;
   appSettings.active_tools = Array.isArray(data.active_tools) ? data.active_tools : [];
+  appSettings.proxy_enabled_operations = Array.isArray(data.proxy_enabled_operations) ? data.proxy_enabled_operations : [];
   appSettings.rag_auto_inject = Boolean(data.rag_auto_inject);
   appSettings.rag_sensitivity = data.rag_sensitivity || "normal";
   appSettings.rag_context_size = data.rag_context_size || "medium";
@@ -1348,6 +1362,7 @@ async function saveSettings() {
     operation_model_fallback_preferences: getOperationModelFallbackPreferencesDraft(),
     image_processing_method: imageProcessingMethodEl?.value || "auto",
     active_tools: getSelectedTools(),
+    proxy_enabled_operations: getSelectedProxyOperations(),
     rag_auto_inject: featureFlags.rag_enabled ? Boolean(ragAutoInjectEl?.checked) : false,
     rag_sensitivity: ragSensitivityEl?.value || "normal",
     rag_context_size: ragContextSizeEl?.value || "medium",
@@ -1752,6 +1767,9 @@ function registerDirtyListeners() {
       markDirty();
       syncOverviewStats();
     });
+  });
+  proxyOperationEls.forEach((element) => {
+    element.addEventListener("change", markDirty);
   });
 }
 

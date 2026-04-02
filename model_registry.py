@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import os
 import re
+import weakref
 from functools import lru_cache
 from typing import Any
 
 import httpx
 from dotenv import load_dotenv
 from openai import OpenAI
+from proxy_settings import PROXY_OPERATION_OPENROUTER
 
 load_dotenv()
 
@@ -57,6 +59,78 @@ class _OpenRouterChatProxy:
         self.completions = _OpenRouterChatCompletionsProxy(owner)
 
 
+class _ManagedChatCompletionResponse:
+    def __init__(self, response, iterator=None, prefetched_chunks=None, retained_resources=None):
+        self._response = response
+        self._iterator = iterator
+        self._prefetched_chunks = list(prefetched_chunks or [])
+        self._closed = False
+        self._retained_resources = tuple(retained_resources or ())
+        if len(self._retained_resources) >= 2:
+            self._resource_finalizer = weakref.finalize(
+                self,
+                _close_openrouter_client_resources,
+                self._retained_resources[0],
+                self._retained_resources[1],
+            )
+        else:
+            self._resource_finalizer = None
+
+    def __iter__(self):
+        try:
+            if self._iterator is None:
+                self._iterator = iter(self._response)
+            while self._prefetched_chunks:
+                yield self._prefetched_chunks.pop(0)
+            for chunk in self._iterator:
+                yield chunk
+        finally:
+            self.close()
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            close_response = getattr(self._response, "close", None)
+            if callable(close_response):
+                try:
+                    close_response()
+                except Exception:
+                    pass
+        finally:
+            return
+
+    def __getattr__(self, name: str):
+        return getattr(self._response, name)
+
+
+def _close_openrouter_client_resources(client: OpenAI | None, http_client: httpx.Client | None) -> None:
+    try:
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
+    finally:
+        if http_client is not None:
+            try:
+                http_client.close()
+            except Exception:
+                pass
+
+
+def _close_chat_completion_response(response) -> None:
+    if response is None:
+        return
+    close_response = getattr(response, "close", None)
+    if callable(close_response):
+        try:
+            close_response()
+        except Exception:
+            pass
+
+
 class _OpenRouterClientProxy:
     def __init__(self, base_kwargs: dict[str, Any]):
         self._base_kwargs = dict(base_kwargs)
@@ -70,17 +144,39 @@ class _OpenRouterClientProxy:
         return client, http_client
 
     def _create_chat_completion(self, *args, **kwargs):
-        from web_tools import get_proxy_candidates
+        from web_tools import get_proxy_candidates_for_operation
 
         last_error: Exception | None = None
-        for proxy in get_proxy_candidates(include_direct_fallback=True):
+        for proxy in get_proxy_candidates_for_operation(PROXY_OPERATION_OPENROUTER, include_direct_fallback=True):
             client = None
             http_client = None
+            response = None
             try:
                 client, http_client = self._build_client(proxy)
-                return client.chat.completions.create(*args, **kwargs)
+                response = client.chat.completions.create(*args, **kwargs)
+                if kwargs.get("stream") is True:
+                    iterator = iter(response)
+                    prefetched_chunks = []
+                    try:
+                        first_chunk = next(iterator)
+                    except StopIteration:
+                        pass
+                    else:
+                        prefetched_chunks.append(first_chunk)
+                    managed_response = _ManagedChatCompletionResponse(
+                        response,
+                        iterator=iterator,
+                        prefetched_chunks=prefetched_chunks,
+                        retained_resources=(client, http_client),
+                    )
+                    client = None
+                    http_client = None
+                    response = None
+                    return managed_response
+                return response
             except Exception as error:
                 last_error = error
+                _close_chat_completion_response(response)
             finally:
                 if client is not None:
                     client.close()

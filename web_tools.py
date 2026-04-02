@@ -34,7 +34,13 @@ from config import (
     PROXIES_PATH,
     SEARCH_MAX_RESULTS,
 )
-from db import cache_get, cache_set
+from db import cache_get, cache_set, get_proxy_enabled_operations
+from proxy_settings import (
+    PROXY_OPERATION_FETCH_URL,
+    PROXY_OPERATION_SEARCH_NEWS_DDGS,
+    PROXY_OPERATION_SEARCH_NEWS_GOOGLE,
+    PROXY_OPERATION_SEARCH_WEB,
+)
 
 _BROWSER_UAS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -183,6 +189,19 @@ def get_proxy_candidates(include_direct_fallback: bool = False) -> list[str | No
     if include_direct_fallback:
         ordered.append(None)
     return ordered
+
+
+def get_proxy_candidates_for_operation(
+    operation: str,
+    *,
+    include_direct_fallback: bool = False,
+    settings: dict | None = None,
+) -> list[str | None]:
+    enabled_operations = set(get_proxy_enabled_operations(settings))
+    normalized_operation = str(operation or "").strip().lower()
+    if normalized_operation not in enabled_operations:
+        return [None]
+    return get_proxy_candidates(include_direct_fallback=include_direct_fallback)
 
 
 def _requests_proxy_dict(proxy: str | None):
@@ -448,7 +467,7 @@ def fetch_url_tool(url: str) -> dict:
     last_error = None
     best_result = None
     header_variants = list(_iter_fetch_header_variants(url))
-    for proxy in get_proxy_candidates(include_direct_fallback=True):
+    for proxy in get_proxy_candidates_for_operation(PROXY_OPERATION_FETCH_URL, include_direct_fallback=True):
         for index, headers in enumerate(header_variants):
             session = None
             try:
@@ -579,7 +598,7 @@ def search_web_tool(queries: list) -> list:
         try:
             hits = None
             last_error = None
-            for proxy in get_proxy_candidates(include_direct_fallback=True):
+            for proxy in get_proxy_candidates_for_operation(PROXY_OPERATION_SEARCH_WEB, include_direct_fallback=True):
                 try:
                     with DDGS(proxy=proxy) as ddgs:
                         hits = list(ddgs.text(query, max_results=SEARCH_MAX_RESULTS))
@@ -633,7 +652,7 @@ def search_news_ddgs_tool(queries: list, lang: str = "tr", when: str | None = No
         try:
             hits = None
             last_error = None
-            for proxy in get_proxy_candidates(include_direct_fallback=True):
+            for proxy in get_proxy_candidates_for_operation(PROXY_OPERATION_SEARCH_NEWS_DDGS, include_direct_fallback=True):
                 try:
                     with DDGS(proxy=proxy) as ddgs:
                         hits = list(
@@ -701,7 +720,7 @@ def search_news_google_tool(queries: list, lang: str = "tr", when: str | None = 
         try:
             resp = None
             last_error = None
-            for proxy in get_proxy_candidates(include_direct_fallback=True):
+            for proxy in get_proxy_candidates_for_operation(PROXY_OPERATION_SEARCH_NEWS_GOOGLE, include_direct_fallback=True):
                 try:
                     resp = http_requests.get(
                         rss_url,

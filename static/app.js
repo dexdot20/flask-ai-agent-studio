@@ -7297,7 +7297,7 @@ async function sendMessage(options = {}) {
       flushAnswerRender();
     }
     pendingDocumentCanvasOpen = null;
-    if (fullAnswer.trim()) {
+    if (fullAnswer.trim() || rawReasoning.trim()) {
       asstBubble.classList.remove("cursor");
       renderBubbleMarkdown(asstBubble, fullAnswer);
 

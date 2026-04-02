@@ -17,6 +17,7 @@ from werkzeug.datastructures import MultiDict
 import web_tools
 import ocr_service
 import model_registry
+from proxy_settings import DEFAULT_PROXY_ENABLED_OPERATIONS, PROXY_OPERATION_FETCH_URL
 from agent import (
     CONTEXT_OVERFLOW_RECOVERY_ERROR_TEXT,
     FINAL_ANSWER_ERROR_TEXT,
@@ -131,6 +132,7 @@ from vision import normalize_image_analysis
 from web_tools import (
     _extract_html,
     fetch_url_tool,
+    get_proxy_candidates_for_operation,
     load_proxies,
     search_news_ddgs_tool,
     search_news_google_tool,
@@ -179,6 +181,24 @@ class AppRoutesTestCase(unittest.TestCase):
         )
 
     @staticmethod
+    def _stream_chunk_openrouter(reasoning: str = "", content: str = "", reasoning_details=None, tool_calls=None, usage=None):
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(
+                        reasoning=reasoning,
+                        reasoning_details=reasoning_details or [],
+                        content=content,
+                        tool_calls=tool_calls or [],
+                    )
+                )
+            ]
+            if (reasoning or content or tool_calls or reasoning_details)
+            else [],
+            usage=usage,
+        )
+
+    @staticmethod
     def _tool_call_chunk(name: str, arguments: dict, call_id: str = "tool-call-1", index: int = 0):
         return AppRoutesTestCase._stream_chunk(
             tool_calls=[
@@ -207,7 +227,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["sub_agent_timeout_seconds"], 240)
         self.assertEqual(payload["sub_agent_retry_attempts"], 2)
         self.assertEqual(payload["sub_agent_retry_delay_seconds"], 5)
-        self.assertTrue(payload["rag_auto_inject"])
+        self.assertEqual(payload["rag_auto_inject"], bool(payload["features"]["rag_enabled"]))
         self.assertEqual(payload["chat_summary_mode"], "auto")
         self.assertEqual(payload["chat_summary_trigger_token_count"], 80000)
         self.assertFalse(payload["pruning_enabled"])
@@ -217,6 +237,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["fetch_url_clip_aggressiveness"], 50)
         self.assertEqual(payload["custom_models"], [])
         self.assertEqual(payload["visible_model_order"], ["deepseek-chat", "deepseek-reasoner"])
+        self.assertEqual(payload["proxy_enabled_operations"], DEFAULT_PROXY_ENABLED_OPERATIONS)
         self.assertEqual(
             payload["operation_model_preferences"],
             {
@@ -244,14 +265,18 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["rag_context_size"], "small")
         self.assertEqual(
             payload["rag_source_types"],
-            ["conversation", "tool_result", "tool_memory", "uploaded_document"],
+            ["conversation", "tool_result", "tool_memory", "uploaded_document"] if payload["features"]["rag_enabled"] else [],
         )
         self.assertFalse(payload["tool_memory_auto_inject"])
         self.assertIn("features", payload)
-        self.assertTrue(payload["features"]["rag_enabled"])
-        self.assertTrue(payload["features"]["ocr_enabled"])
-        self.assertTrue(payload["features"]["image_uploads_enabled"])
-        self.assertTrue(payload["features"]["vision_enabled"])
+        self.assertIn("rag_enabled", payload["features"])
+        self.assertIn("ocr_enabled", payload["features"])
+        self.assertIn("image_uploads_enabled", payload["features"])
+        self.assertIn("vision_enabled", payload["features"])
+        self.assertIsInstance(payload["features"]["rag_enabled"], bool)
+        self.assertIsInstance(payload["features"]["ocr_enabled"], bool)
+        self.assertIsInstance(payload["features"]["image_uploads_enabled"], bool)
+        self.assertIsInstance(payload["features"]["vision_enabled"], bool)
 
         response = self.client.patch(
             "/api/settings",
@@ -304,6 +329,7 @@ class AppRoutesTestCase(unittest.TestCase):
                 },
                 "image_processing_method": "llm",
                 "active_tools": ["fetch_url", "search_web"],
+                "proxy_enabled_operations": ["openrouter", "fetch_url"],
                 "rag_auto_inject": False,
                 "rag_sensitivity": "strict",
                 "rag_context_size": "large",
@@ -357,11 +383,23 @@ class AppRoutesTestCase(unittest.TestCase):
             )
         )
         self.assertEqual(payload["active_tools"], ["fetch_url", "search_web"])
+        self.assertEqual(payload["proxy_enabled_operations"], ["openrouter", "fetch_url"])
         self.assertFalse(payload["rag_auto_inject"])
         self.assertEqual(payload["rag_sensitivity"], "strict")
         self.assertEqual(payload["rag_context_size"], "large")
-        self.assertEqual(payload["rag_source_types"], ["tool_memory", "uploaded_document"])
+        self.assertEqual(
+            payload["rag_source_types"],
+            ["tool_memory", "uploaded_document"] if payload["features"]["rag_enabled"] else [],
+        )
         self.assertFalse(payload["tool_memory_auto_inject"])
+
+    def test_settings_patch_rejects_invalid_proxy_operations(self):
+        response = self.client.patch(
+            "/api/settings",
+            json={"proxy_enabled_operations": ["openrouter", "invalid_proxy_scope"]},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("proxy_enabled_operations", response.get_json()["error"])
 
     def test_create_conversation_accepts_custom_openrouter_model(self):
         response = self.client.patch(
@@ -529,7 +567,7 @@ class AppRoutesTestCase(unittest.TestCase):
 
         model_registry.get_provider_client.cache_clear()
         try:
-            with patch("web_tools.get_proxy_candidates", return_value=["http://proxy.example:8080", None]), patch(
+            with patch("web_tools.get_proxy_candidates_for_operation", return_value=["http://proxy.example:8080", None]), patch(
                 "model_registry.httpx.Client",
                 side_effect=lambda *args, **kwargs: FakeHttpClient(*args, **kwargs),
             ), patch("model_registry.OpenAI", side_effect=lambda **kwargs: FakeOpenAI(**kwargs)):
@@ -540,6 +578,214 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertEqual(attempts, ["http://proxy.example:8080", None])
         self.assertEqual(response.choices[0].message.content, "ok")
+
+    def test_openrouter_stream_wrapper_defers_client_close_until_stream_close(self):
+        import gc
+
+        close_events = []
+
+        class FakeHttpClient:
+            def __init__(self, *args, **kwargs):
+                self.proxy = kwargs.get("proxy")
+
+            def close(self):
+                close_events.append("http")
+
+        class FakeStream:
+            def __iter__(self):
+                yield SimpleNamespace(choices=[])
+
+            def close(self):
+                close_events.append("stream")
+
+        class FakeOpenAI:
+            def __init__(self, **kwargs):
+                self.http_client = kwargs.get("http_client")
+                self.chat = SimpleNamespace(completions=self)
+
+            def create(self, *args, **kwargs):
+                return FakeStream()
+
+            def close(self):
+                close_events.append("client")
+
+        model_registry.get_provider_client.cache_clear()
+        try:
+            with patch("web_tools.get_proxy_candidates_for_operation", return_value=[None]), patch(
+                "model_registry.httpx.Client",
+                side_effect=lambda *args, **kwargs: FakeHttpClient(*args, **kwargs),
+            ), patch("model_registry.OpenAI", side_effect=lambda **kwargs: FakeOpenAI(**kwargs)):
+                client = model_registry.get_provider_client(model_registry.OPENROUTER_PROVIDER)
+                response = client.chat.completions.create(model="anthropic/claude-sonnet-4.5", messages=[], stream=True)
+                self.assertEqual(close_events, [])
+                list(response)
+                self.assertEqual(close_events, ["stream"])
+                del response
+                gc.collect()
+                self.assertEqual(close_events, ["stream", "client", "http"])
+        finally:
+            model_registry.get_provider_client.cache_clear()
+
+    def test_openrouter_stream_retries_next_proxy_when_first_chunk_read_fails(self):
+        import gc
+
+        attempts = []
+        close_events = []
+
+        class FakeHttpClient:
+            def __init__(self, *args, **kwargs):
+                self.proxy = kwargs.get("proxy")
+
+            def close(self):
+                close_events.append(f"http:{self.proxy or 'direct'}")
+
+        class BrokenStream:
+            def __init__(self, label):
+                self.label = label
+
+            def __iter__(self):
+                raise OSError(9, "Bad file descriptor")
+                yield
+
+            def close(self):
+                close_events.append(f"stream:{self.label}")
+
+        class WorkingStream:
+            def __iter__(self):
+                yield SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="ok"))])
+
+            def close(self):
+                close_events.append("stream:direct")
+
+        class FakeOpenAI:
+            def __init__(self, **kwargs):
+                self.http_client = kwargs.get("http_client")
+                self.chat = SimpleNamespace(completions=self)
+
+            def create(self, *args, **kwargs):
+                proxy = self.http_client.proxy if self.http_client else None
+                attempts.append(proxy)
+                if proxy:
+                    return BrokenStream("proxy")
+                return WorkingStream()
+
+            def close(self):
+                label = self.http_client.proxy if self.http_client and self.http_client.proxy else "direct"
+                close_events.append(f"client:{label}")
+
+        model_registry.get_provider_client.cache_clear()
+        try:
+            with patch("web_tools.get_proxy_candidates_for_operation", return_value=["http://proxy.example:8080", None]), patch(
+                "model_registry.httpx.Client",
+                side_effect=lambda *args, **kwargs: FakeHttpClient(*args, **kwargs),
+            ), patch("model_registry.OpenAI", side_effect=lambda **kwargs: FakeOpenAI(**kwargs)):
+                client = model_registry.get_provider_client(model_registry.OPENROUTER_PROVIDER)
+                response = client.chat.completions.create(model="anthropic/claude-sonnet-4.5", messages=[], stream=True)
+                chunks = list(response)
+                self.assertEqual(attempts, ["http://proxy.example:8080", None])
+                self.assertEqual(len(chunks), 1)
+                self.assertEqual(close_events[:3], ["stream:proxy", "client:http://proxy.example:8080", "http:http://proxy.example:8080"])
+                del response
+                gc.collect()
+                self.assertEqual(
+                    close_events,
+                    [
+                        "stream:proxy",
+                        "client:http://proxy.example:8080",
+                        "http:http://proxy.example:8080",
+                        "stream:direct",
+                        "client:direct",
+                        "http:direct",
+                    ],
+                )
+        finally:
+            model_registry.get_provider_client.cache_clear()
+
+    def test_openrouter_proxy_scope_disabled_forces_direct_connection(self):
+        attempts = []
+
+        class FakeHttpClient:
+            def __init__(self, *args, **kwargs):
+                self.proxy = kwargs.get("proxy")
+
+            def close(self):
+                return None
+
+        class FakeOpenAI:
+            def __init__(self, **kwargs):
+                self.http_client = kwargs.get("http_client")
+                self.chat = SimpleNamespace(completions=self)
+
+            def create(self, *args, **kwargs):
+                attempts.append(self.http_client.proxy if self.http_client else None)
+                return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))])
+
+            def close(self):
+                return None
+
+        save_app_settings({"proxy_enabled_operations": json.dumps([PROXY_OPERATION_FETCH_URL], ensure_ascii=False)})
+        model_registry.get_provider_client.cache_clear()
+        try:
+            with patch("web_tools.get_proxy_candidates", return_value=["http://proxy.example:8080", None]), patch(
+                "model_registry.httpx.Client",
+                side_effect=lambda *args, **kwargs: FakeHttpClient(*args, **kwargs),
+            ), patch("model_registry.OpenAI", side_effect=lambda **kwargs: FakeOpenAI(**kwargs)):
+                client = model_registry.get_provider_client(model_registry.OPENROUTER_PROVIDER)
+                response = client.chat.completions.create(model="anthropic/claude-sonnet-4.5", messages=[])
+
+            self.assertEqual(response.choices[0].message.content, "ok")
+            self.assertEqual(attempts, [None])
+        finally:
+            model_registry.get_provider_client.cache_clear()
+
+    def test_openrouter_stream_wrapper_swallows_close_errors(self):
+        import gc
+
+        close_events = []
+
+        class FakeHttpClient:
+            def __init__(self, *args, **kwargs):
+                self.proxy = kwargs.get("proxy")
+
+            def close(self):
+                close_events.append("http")
+                raise OSError(9, "Bad file descriptor")
+
+        class FakeStream:
+            def __iter__(self):
+                yield SimpleNamespace(choices=[])
+
+            def close(self):
+                close_events.append("stream")
+                raise OSError(9, "Bad file descriptor")
+
+        class FakeOpenAI:
+            def __init__(self, **kwargs):
+                self.http_client = kwargs.get("http_client")
+                self.chat = SimpleNamespace(completions=self)
+
+            def create(self, *args, **kwargs):
+                return FakeStream()
+
+            def close(self):
+                close_events.append("client")
+                raise OSError(9, "Bad file descriptor")
+
+        model_registry.get_provider_client.cache_clear()
+        try:
+            with patch("web_tools.get_proxy_candidates_for_operation", return_value=[None]), patch(
+                "model_registry.httpx.Client",
+                side_effect=lambda *args, **kwargs: FakeHttpClient(*args, **kwargs),
+            ), patch("model_registry.OpenAI", side_effect=lambda **kwargs: FakeOpenAI(**kwargs)):
+                client = model_registry.get_provider_client(model_registry.OPENROUTER_PROVIDER)
+                response = client.chat.completions.create(model="anthropic/claude-sonnet-4.5", messages=[], stream=True)
+                list(response)
+                self.assertEqual(close_events, ["stream"])
+                del response
+                gc.collect()
+                self.assertEqual(close_events, ["stream", "client", "http"])
+        finally:
+            model_registry.get_provider_client.cache_clear()
 
     def test_operation_model_uses_configured_fallback_model(self):
         settings = {
@@ -2440,8 +2686,10 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn('data-settings-tab="memory"', html)
         self.assertIn('data-settings-tab="tools"', html)
         self.assertIn('data-settings-tab="knowledge"', html)
-        self.assertIn('src="/static/settings.js"', html)
+        self.assertIn('src="/static/settings.js?v=', html)
         self.assertIn('id="kb-sync-btn"', html)
+        self.assertIn("Proxy scope", html)
+        self.assertIn("proxy-enabled-operation", html)
 
     def test_settings_tools_cover_all_defined_tool_specs(self):
         option_names = [option["name"] for option in build_tool_permission_options()]
@@ -2487,6 +2735,19 @@ class AppRoutesTestCase(unittest.TestCase):
         )
         self.assertIn("expand_canvas_document", active_tools)
         self.assertIn("scroll_canvas_document", active_tools)
+
+    def test_proxy_candidates_for_operation_respect_saved_scope(self):
+        save_app_settings({"proxy_enabled_operations": json.dumps([PROXY_OPERATION_FETCH_URL], ensure_ascii=False)})
+
+        with patch("web_tools.get_proxy_candidates", return_value=["http://proxy.example:8080", None]):
+            self.assertEqual(
+                get_proxy_candidates_for_operation("openrouter", include_direct_fallback=True),
+                [None],
+            )
+            self.assertEqual(
+                get_proxy_candidates_for_operation("fetch_url", include_direct_fallback=True),
+                ["http://proxy.example:8080", None],
+            )
 
     def test_build_user_message_for_model_includes_stored_image_reference(self):
         content = build_user_message_for_model(
@@ -5340,6 +5601,32 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(assistant_messages[0]["usage"]["total_tokens"], 11)
         self.assertEqual(assistant_messages[0]["metadata"]["reasoning_content"], "Reasoning completed.")
 
+    def test_persist_streaming_assistant_message_keeps_reasoning_only_partial_output(self):
+        conversation_id = self._create_conversation()
+
+        assistant_message_id = _persist_streaming_assistant_message(
+            conversation_id,
+            None,
+            content="",
+            reasoning="Reasoning only.",
+            usage_data=None,
+            tool_results=[],
+            canvas_documents=[],
+            active_document_id=None,
+            canvas_cleared=False,
+            tool_trace_entries=[],
+            pending_clarification=None,
+        )
+
+        self.assertIsInstance(assistant_message_id, int)
+
+        conversation_response = self.client.get(f"/api/conversations/{conversation_id}")
+        messages = conversation_response.get_json()["messages"]
+        assistant_messages = [message for message in messages if message["role"] == "assistant"]
+        self.assertEqual(len(assistant_messages), 1)
+        self.assertEqual(assistant_messages[0]["content"], "")
+        self.assertEqual(assistant_messages[0]["metadata"]["reasoning_content"], "Reasoning only.")
+
     def test_uploaded_document_prompts_before_opening_canvas(self):
         conversation_id = self._create_conversation()
 
@@ -6980,7 +7267,15 @@ class AppRoutesTestCase(unittest.TestCase):
             ),
         ]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses), patch(
+        fake_create = Mock(side_effect=responses)
+        fake_target = {
+            "record": {"provider": model_registry.DEEPSEEK_PROVIDER},
+            "client": SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))),
+            "api_model": "deepseek-reasoner",
+            "extra_body": {},
+        }
+
+        with patch("agent.resolve_model_target", return_value=fake_target), patch(
             "agent.search_web_tool",
             return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
         ):
@@ -6988,6 +7283,35 @@ class AppRoutesTestCase(unittest.TestCase):
 
         reasoning_deltas = [event["text"] for event in events if event["type"] == "reasoning_delta"]
         self.assertEqual(reasoning_deltas, ["First reasoning block.", "\n\n", "Second reasoning block."])
+
+    def test_run_agent_stream_closes_provider_stream_when_generator_closes(self):
+        class FakeResponse:
+            def __init__(self):
+                self.closed = False
+
+            def __iter__(self):
+                yield AppRoutesTestCase._stream_chunk(content="Partial answer.")
+                yield AppRoutesTestCase._stream_chunk(usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2))
+
+            def close(self):
+                self.closed = True
+
+        fake_response = FakeResponse()
+        fake_create = Mock(return_value=fake_response)
+        fake_target = {
+            "record": {"provider": model_registry.DEEPSEEK_PROVIDER},
+            "client": SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))),
+            "api_model": "deepseek-chat",
+            "extra_body": {},
+        }
+
+        with patch("agent.resolve_model_target", return_value=fake_target):
+            stream = run_agent_stream([{"role": "user", "content": "Test"}], "deepseek-chat", 1, [])
+            self.assertEqual(next(stream)["type"], "step_started")
+            self.assertEqual(next(stream)["type"], "answer_start")
+            stream.close()
+
+        self.assertTrue(fake_response.closed)
 
     def test_run_agent_stream_replays_reasoning_into_next_tool_step(self):
         responses = [
@@ -7006,14 +7330,22 @@ class AppRoutesTestCase(unittest.TestCase):
             ),
         ]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create, patch(
+        fake_create = Mock(side_effect=responses)
+        fake_target = {
+            "record": {"provider": model_registry.DEEPSEEK_PROVIDER},
+            "client": SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))),
+            "api_model": "deepseek-reasoner",
+            "extra_body": {},
+        }
+
+        with patch("agent.resolve_model_target", return_value=fake_target), patch(
             "agent.search_web_tool",
             return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
         ):
             events = list(run_agent_stream([{"role": "user", "content": "Test"}], "deepseek-reasoner", 2, ["search_web"]))
 
         self.assertIn({"type": "answer_delta", "text": "Final answer."}, events)
-        second_call_messages = mocked_create.call_args_list[1].kwargs["messages"]
+        second_call_messages = fake_create.call_args_list[1].kwargs["messages"]
         replay_message = next(
             (
                 message
@@ -7025,6 +7357,107 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIsNotNone(replay_message)
         self.assertIn("Need current info before I answer.", replay_message["content"])
         self.assertIn("planned tools = search_web", replay_message["content"])
+
+    def test_run_agent_stream_preserves_openrouter_reasoning_details_across_tool_calls(self):
+        responses = [
+            iter(
+                [
+                    self._stream_chunk_openrouter(
+                        reasoning_details=[
+                            {
+                                "type": "reasoning.text",
+                                "text": "Need current info. ",
+                                "id": "reasoning-text-1",
+                                "format": "anthropic-claude-v1",
+                                "index": 0,
+                            }
+                        ]
+                    ),
+                    self._stream_chunk_openrouter(
+                        reasoning_details=[
+                            {
+                                "type": "reasoning.text",
+                                "text": "Search first.",
+                                "id": "reasoning-text-1",
+                                "format": "anthropic-claude-v1",
+                                "index": 0,
+                            }
+                        ],
+                        tool_calls=[
+                            {
+                                "index": 0,
+                                "id": "tool-call-1",
+                                "function": {
+                                    "name": "search_web",
+                                    "arguments": json.dumps({"queries": ["latest update"]}, ensure_ascii=False),
+                                },
+                            }
+                        ],
+                    ),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=3, total_tokens=5)),
+                ]
+            ),
+            iter(
+                [
+                    self._stream_chunk(content="Final answer."),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=4, total_tokens=6)),
+                ]
+            ),
+        ]
+        fake_create = Mock(side_effect=responses)
+        fake_target = {
+            "record": {"provider": model_registry.OPENROUTER_PROVIDER},
+            "client": SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))),
+            "api_model": "anthropic/claude-3.7-sonnet",
+            "extra_body": {},
+        }
+
+        with patch("agent.resolve_model_target", return_value=fake_target), patch(
+            "agent.search_web_tool",
+            return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+        ):
+            events = list(
+                run_agent_stream(
+                    [{"role": "user", "content": "Test"}],
+                    "openrouter:anthropic/claude-3.7-sonnet",
+                    2,
+                    ["search_web"],
+                )
+            )
+
+        self.assertIn({"type": "reasoning_delta", "text": "Need current info. "}, events)
+        self.assertIn({"type": "reasoning_delta", "text": "Search first."}, events)
+        self.assertIn({"type": "answer_delta", "text": "Final answer."}, events)
+
+        second_call_messages = fake_create.call_args_list[1].kwargs["messages"]
+        replay_messages = [
+            message
+            for message in second_call_messages
+            if message.get("role") == "system" and "[AGENT REASONING CONTEXT]" in message.get("content", "")
+        ]
+        self.assertEqual(replay_messages, [])
+
+        assistant_tool_message = next(
+            (
+                message
+                for message in second_call_messages
+                if message.get("role") == "assistant" and message.get("tool_calls")
+            ),
+            None,
+        )
+        self.assertIsNotNone(assistant_tool_message)
+        self.assertEqual(
+            assistant_tool_message["reasoning_details"],
+            [
+                {
+                    "type": "reasoning.text",
+                    "text": "Need current info. Search first.",
+                    "id": "reasoning-text-1",
+                    "format": "anthropic-claude-v1",
+                    "index": 0,
+                }
+            ],
+        )
 
     def test_run_agent_stream_skips_reasoning_replay_when_reasoning_empty(self):
         responses = [
@@ -7042,14 +7475,22 @@ class AppRoutesTestCase(unittest.TestCase):
             ),
         ]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create, patch(
+        fake_create = Mock(side_effect=responses)
+        fake_target = {
+            "record": {"provider": model_registry.DEEPSEEK_PROVIDER},
+            "client": SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))),
+            "api_model": "deepseek-chat",
+            "extra_body": {},
+        }
+
+        with patch("agent.resolve_model_target", return_value=fake_target), patch(
             "agent.search_web_tool",
             return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
         ):
             events = list(run_agent_stream([{"role": "user", "content": "Test"}], "deepseek-chat", 2, ["search_web"]))
 
         self.assertIn({"type": "answer_delta", "text": "Final answer."}, events)
-        second_call_messages = mocked_create.call_args_list[1].kwargs["messages"]
+        second_call_messages = fake_create.call_args_list[1].kwargs["messages"]
         replay_messages = [
             message
             for message in second_call_messages
@@ -7074,14 +7515,22 @@ class AppRoutesTestCase(unittest.TestCase):
             ),
         ]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create, patch(
+        fake_create = Mock(side_effect=responses)
+        fake_target = {
+            "record": {"provider": model_registry.DEEPSEEK_PROVIDER},
+            "client": SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))),
+            "api_model": "deepseek-reasoner",
+            "extra_body": {},
+        }
+
+        with patch("agent.resolve_model_target", return_value=fake_target), patch(
             "agent.search_web_tool",
             side_effect=RuntimeError("search backend unavailable"),
         ):
             events = list(run_agent_stream([{"role": "user", "content": "Find current info"}], "deepseek-reasoner", 2, ["search_web"]))
 
         self.assertIn({"type": "answer_delta", "text": "Fallback answer."}, events)
-        second_call_messages = mocked_create.call_args_list[1].kwargs["messages"]
+        second_call_messages = fake_create.call_args_list[1].kwargs["messages"]
         replay_message = next(
             (
                 message
@@ -7134,14 +7583,22 @@ class AppRoutesTestCase(unittest.TestCase):
             ),
         ]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create, patch(
+        fake_create = Mock(side_effect=responses)
+        fake_target = {
+            "record": {"provider": model_registry.DEEPSEEK_PROVIDER},
+            "client": SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))),
+            "api_model": "deepseek-reasoner",
+            "extra_body": {},
+        }
+
+        with patch("agent.resolve_model_target", return_value=fake_target), patch(
             "agent.search_web_tool",
             return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
         ):
             events = list(run_agent_stream([{"role": "user", "content": "Find current info"}], "deepseek-reasoner", 4, ["search_web"]))
 
         self.assertIn({"type": "answer_delta", "text": "Final answer."}, events)
-        fourth_call_messages = mocked_create.call_args_list[3].kwargs["messages"]
+        fourth_call_messages = fake_create.call_args_list[3].kwargs["messages"]
         replay_message = next(
             (
                 message

@@ -554,6 +554,31 @@
               {% endfor %}
             </div>
           </div>
+
+          <div class="settings-page-section-card">
+            <div class="settings-page-section-card__header">
+              <div>
+                <span class="settings-section-kicker">Proxy routing</span>
+                <h3>Proxy scope</h3>
+              </div>
+              <p>Choose which operations may read and use proxies from proxies.txt. Unchecked operations always connect directly.</p>
+            </div>
+            <div class="settings-page-note-block">
+              <strong>Recommended baseline</strong>
+              <p>OpenRouter provider traffic stays direct by default. Enable it only if your network actually requires a proxy for model requests.</p>
+            </div>
+            <div class="tool-toggles tool-toggles--page">
+              {% for option in proxy_operation_options %}
+              <label class="tool-toggle">
+                <input type="checkbox" name="proxy-enabled-operation" value="{{ option.name }}" />
+                <span>
+                  <strong>{{ option.label }}</strong><br />
+                  <small>{{ option.description }}</small>
+                </span>
+              </label>
+              {% endfor %}
+            </div>
+          </div>
         </section>
 
         <section class="settings-tab-panel" data-settings-panel="knowledge" aria-labelledby="knowledge-tab">

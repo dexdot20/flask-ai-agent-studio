@@ -15,6 +15,7 @@ from model_registry import (
     DEFAULT_OPERATION_MODEL_FALLBACK_PREFERENCES,
     DEFAULT_VISIBLE_CHAT_MODEL_ORDER,
 )
+from proxy_settings import DEFAULT_PROXY_ENABLED_OPERATIONS
 
 load_dotenv()
 
@@ -296,6 +297,7 @@ DEFAULT_SETTINGS = {
     "operation_model_fallback_preferences": json.dumps(DEFAULT_OPERATION_MODEL_FALLBACK_PREFERENCES, ensure_ascii=False),
     "image_processing_method": DEFAULT_IMAGE_PROCESSING_METHOD,
     "active_tools": json.dumps(DEFAULT_ACTIVE_TOOL_NAMES, ensure_ascii=False),
+    "proxy_enabled_operations": json.dumps(DEFAULT_PROXY_ENABLED_OPERATIONS, ensure_ascii=False),
     "rag_auto_inject": "true",
     "rag_sensitivity": RAG_DEFAULT_SENSITIVITY_PRESET,
     "rag_context_size": RAG_DEFAULT_CONTEXT_SIZE_PRESET,

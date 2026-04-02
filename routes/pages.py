@@ -35,6 +35,7 @@ from db import (
     get_fetch_url_clip_aggressiveness,
     get_fetch_url_token_threshold,
     get_model_temperature,
+    get_proxy_enabled_operations,
     get_pruning_batch_size,
     get_pruning_enabled,
     get_pruning_token_threshold,
@@ -69,6 +70,15 @@ from model_registry import (
     normalize_operation_model_fallback_preferences,
     normalize_operation_model_preferences,
     normalize_visible_model_order,
+)
+from proxy_settings import (
+    PROXY_OPERATION_FETCH_URL,
+    PROXY_OPERATION_KEYS,
+    PROXY_OPERATION_OPENROUTER,
+    PROXY_OPERATION_SEARCH_NEWS_DDGS,
+    PROXY_OPERATION_SEARCH_NEWS_GOOGLE,
+    PROXY_OPERATION_SEARCH_WEB,
+    normalize_proxy_enabled_operations,
 )
 from tool_registry import TOOL_SPEC_BY_NAME
 
@@ -126,6 +136,34 @@ TOOL_PERMISSION_SECTION_METADATA = {
         "note": "This panel cannot expand the sandbox boundary. It only controls which sandbox operations the assistant may request.",
     },
 }
+
+PROXY_OPERATION_OPTIONS = [
+    {
+        "name": PROXY_OPERATION_OPENROUTER,
+        "label": "OpenRouter model requests",
+        "description": "Apply proxies.txt to chat, title generation, sub-agent, and other OpenRouter-backed model calls.",
+    },
+    {
+        "name": PROXY_OPERATION_FETCH_URL,
+        "label": "URL fetch tool",
+        "description": "Use proxies.txt when fetch_url reads a page directly.",
+    },
+    {
+        "name": PROXY_OPERATION_SEARCH_WEB,
+        "label": "Web search",
+        "description": "Use proxies.txt for DDGS web search requests.",
+    },
+    {
+        "name": PROXY_OPERATION_SEARCH_NEWS_DDGS,
+        "label": "News search (DDGS)",
+        "description": "Use proxies.txt for DDGS news search requests.",
+    },
+    {
+        "name": PROXY_OPERATION_SEARCH_NEWS_GOOGLE,
+        "label": "News search (Google)",
+        "description": "Use proxies.txt for Google News RSS fetches.",
+    },
+]
 
 
 def _get_tool_permission_section_key(name: str) -> str:
@@ -203,6 +241,7 @@ def build_settings_payload() -> dict:
         "operation_model_fallback_preferences": get_operation_model_fallback_preferences(raw),
         "image_processing_method": normalize_image_processing_method(raw.get("image_processing_method")),
         "active_tools": get_active_tool_names(raw),
+        "proxy_enabled_operations": get_proxy_enabled_operations(raw),
         "rag_auto_inject": get_rag_auto_inject_enabled(raw),
         "rag_sensitivity": get_rag_sensitivity(raw),
         "rag_context_size": get_rag_context_size(raw),
@@ -257,6 +296,7 @@ def register_page_routes(app) -> None:
             "settings.html",
             settings=settings,
             tool_sections=build_tool_permission_sections(),
+            proxy_operation_options=PROXY_OPERATION_OPTIONS,
             auth_enabled=is_login_pin_enabled(),
             settings_js_version=_static_asset_version(app, "settings.js"),
         )
@@ -278,6 +318,7 @@ def register_page_routes(app) -> None:
         operation_model_fallback_preferences_raw = data.get("operation_model_fallback_preferences")
         image_processing_method_raw = data.get("image_processing_method")
         active_tools_raw = data.get("active_tools")
+        proxy_enabled_operations_raw = data.get("proxy_enabled_operations")
         rag_auto_inject = data.get("rag_auto_inject")
         rag_sensitivity = data.get("rag_sensitivity")
         rag_context_size = data.get("rag_context_size")
@@ -312,6 +353,7 @@ def register_page_routes(app) -> None:
             and operation_model_fallback_preferences_raw is None
             and image_processing_method_raw is None
             and active_tools_raw is None
+            and proxy_enabled_operations_raw is None
             and rag_auto_inject is None
             and rag_sensitivity is None
             and rag_context_size is None
@@ -469,6 +511,19 @@ def register_page_routes(app) -> None:
             if not isinstance(active_tools_raw, list):
                 return jsonify({"error": "Invalid active tools."}), 400
             settings["active_tools"] = json.dumps(normalize_active_tool_names(active_tools_raw), ensure_ascii=False)
+
+        if proxy_enabled_operations_raw is not None:
+            if not isinstance(proxy_enabled_operations_raw, list):
+                return jsonify({"error": "proxy_enabled_operations must be an array."}), 400
+
+            incoming_proxy_operations = [str(value or "").strip().lower() for value in proxy_enabled_operations_raw]
+            if any(operation not in PROXY_OPERATION_KEYS for operation in incoming_proxy_operations):
+                return jsonify({"error": "proxy_enabled_operations contains unsupported operations."}), 400
+
+            settings["proxy_enabled_operations"] = json.dumps(
+                normalize_proxy_enabled_operations(incoming_proxy_operations),
+                ensure_ascii=False,
+            )
 
         if rag_auto_inject is not None and RAG_ENABLED:
             if isinstance(rag_auto_inject, bool):

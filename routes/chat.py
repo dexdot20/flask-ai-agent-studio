@@ -219,6 +219,7 @@ def _persist_streaming_assistant_message(
     normalized_content = str(content or "")
     has_meaningful_output = bool(
         normalized_content.strip()
+        or str(reasoning or "").strip()
         or pending_clarification
         or canvas_documents
         or canvas_cleared
@@ -2347,6 +2348,21 @@ def register_chat_routes(app) -> None:
             tool_trace_by_call_id = {}
             persisted_assistant_message_id = None
             summary_future = None
+            stream_aborted = False
+            agent_stream = run_agent_stream(
+                api_messages,
+                model,
+                max_steps,
+                runtime_tool_names,
+                temperature=temperature,
+                fetch_url_token_threshold=fetch_url_token_threshold,
+                fetch_url_clip_aggressiveness=fetch_url_clip_aggressiveness,
+                initial_canvas_documents=initial_canvas_documents,
+                initial_canvas_active_document_id=initial_canvas_active_document_id,
+                canvas_expand_max_lines=get_canvas_expand_max_lines(settings),
+                canvas_scroll_window_lines=get_canvas_scroll_window_lines(settings),
+                workspace_runtime_state=workspace_runtime_state,
+            )
 
             def persist_assistant_snapshot() -> None:
                 nonlocal persisted_assistant_message_id
@@ -2428,128 +2444,140 @@ def register_chat_routes(app) -> None:
                     ensure_ascii=False,
                 ) + "\n"
 
-            for event in run_agent_stream(
-                api_messages,
-                model,
-                max_steps,
-                runtime_tool_names,
-                temperature=temperature,
-                fetch_url_token_threshold=fetch_url_token_threshold,
-                fetch_url_clip_aggressiveness=fetch_url_clip_aggressiveness,
-                initial_canvas_documents=initial_canvas_documents,
-                initial_canvas_active_document_id=initial_canvas_active_document_id,
-                canvas_expand_max_lines=get_canvas_expand_max_lines(settings),
-                canvas_scroll_window_lines=get_canvas_scroll_window_lines(settings),
-                workspace_runtime_state=workspace_runtime_state,
-            ):
-                if event["type"] == "answer_delta":
-                    full_response += event["text"]
-                    persist_assistant_snapshot()
-                elif event["type"] == "answer_sync":
-                    full_response = event["text"]
-                    persist_assistant_snapshot()
-                elif event["type"] == "clarification_request":
-                    full_response = str(event.get("text") or "").strip()
-                    pending_clarification = event.get("clarification") if isinstance(event.get("clarification"), dict) else None
-                    persist_assistant_snapshot()
-                elif event["type"] == "reasoning_delta":
-                    full_reasoning += event["text"]
-                elif event["type"] == "usage":
-                    usage_data = event
-                    if isinstance(usage_data, dict):
-                        usage_data["preflight_prompt_budget"] = prompt_budget_stats
-                elif event["type"] in {"step_update", "tool_result", "tool_error"}:
-                    upsert_tool_trace_entry(tool_trace_entries, tool_trace_by_call_id, event)
-                elif event["type"] == "tool_history":
-                    history_messages = normalize_chat_messages(event.get("messages") or [])
-                    if history_messages:
-                        if conv_id:
-                            persist_tool_history_rows(
-                                conv_id,
-                                history_messages,
-                                trailing_assistant_message_id=persisted_assistant_message_id,
-                            )
+            try:
+                for event in agent_stream:
+                    if event["type"] == "answer_delta":
+                        full_response += event["text"]
+                        persist_assistant_snapshot()
+                    elif event["type"] == "answer_sync":
+                        full_response = event["text"]
+                        persist_assistant_snapshot()
+                    elif event["type"] == "clarification_request":
+                        full_response = str(event.get("text") or "").strip()
+                        pending_clarification = event.get("clarification") if isinstance(event.get("clarification"), dict) else None
+                        persist_assistant_snapshot()
+                    elif event["type"] == "reasoning_delta":
+                        full_reasoning += event["text"]
+                    elif event["type"] == "usage":
+                        usage_data = event
+                        if isinstance(usage_data, dict):
+                            usage_data["preflight_prompt_budget"] = prompt_budget_stats
+                    elif event["type"] in {"step_update", "tool_result", "tool_error"}:
+                        upsert_tool_trace_entry(tool_trace_entries, tool_trace_by_call_id, event)
+                    elif event["type"] == "tool_history":
+                        history_messages = normalize_chat_messages(event.get("messages") or [])
+                        if history_messages:
+                            if conv_id:
+                                persist_tool_history_rows(
+                                    conv_id,
+                                    history_messages,
+                                    trailing_assistant_message_id=persisted_assistant_message_id,
+                                )
+                            yield json.dumps(
+                                {
+                                    "type": "assistant_tool_history",
+                                    "messages": history_messages,
+                                },
+                                ensure_ascii=False,
+                            ) + "\n"
+                        continue
+                    elif event["type"] == "sub_agent_trace_update":
+                        live_trace = event.get("entry") if isinstance(event.get("entry"), dict) else None
+                        next_trace = upsert_streaming_sub_agent_trace(live_trace) if live_trace else None
+                        if next_trace:
+                            yield json.dumps(
+                                {
+                                    "type": "assistant_sub_agent_trace_update",
+                                    "entry": next_trace,
+                                },
+                                ensure_ascii=False,
+                            ) + "\n"
+                        continue
+                    elif event["type"] == "canvas_tool_starting":
                         yield json.dumps(
                             {
-                                "type": "assistant_tool_history",
-                                "messages": history_messages,
+                                "type": "canvas_loading",
+                                "tool": str(event.get("tool") or "").strip(),
+                                "preview_key": str(event.get("preview_key") or "").strip(),
+                                "snapshot": event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {},
                             },
                             ensure_ascii=False,
                         ) + "\n"
-                    continue
-                elif event["type"] == "sub_agent_trace_update":
-                    live_trace = event.get("entry") if isinstance(event.get("entry"), dict) else None
-                    next_trace = upsert_streaming_sub_agent_trace(live_trace) if live_trace else None
-                    if next_trace:
+                        continue
+                    elif event["type"] == "canvas_content_delta":
                         yield json.dumps(
                             {
-                                "type": "assistant_sub_agent_trace_update",
-                                "entry": next_trace,
+                                "type": "canvas_content_delta",
+                                "tool": str(event.get("tool") or "").strip(),
+                                "preview_key": str(event.get("preview_key") or "").strip(),
+                                "delta": str(event.get("delta") or ""),
+                                "snapshot": event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {},
                             },
                             ensure_ascii=False,
                         ) + "\n"
-                    continue
-                elif event["type"] == "canvas_tool_starting":
-                    yield json.dumps(
-                        {
-                            "type": "canvas_loading",
-                            "tool": str(event.get("tool") or "").strip(),
-                            "preview_key": str(event.get("preview_key") or "").strip(),
-                            "snapshot": event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {},
-                        },
-                        ensure_ascii=False,
-                    ) + "\n"
-                    continue
-                elif event["type"] == "canvas_content_delta":
-                    yield json.dumps(
-                        {
-                            "type": "canvas_content_delta",
-                            "tool": str(event.get("tool") or "").strip(),
-                            "preview_key": str(event.get("preview_key") or "").strip(),
-                            "delta": str(event.get("delta") or ""),
-                            "snapshot": event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {},
-                        },
-                        ensure_ascii=False,
-                    ) + "\n"
-                    continue
-                elif event["type"] == "tool_capture":
-                    stored_tool_results = extract_message_tool_results({"tool_results": event.get("tool_results")})
-                    stored_sub_agent_traces = extract_sub_agent_traces({"sub_agent_traces": event.get("sub_agent_traces")})
-                    canvas_documents = extract_canvas_documents({"canvas_documents": event.get("canvas_documents")})
-                    active_document_id = str(event.get("active_document_id") or "").strip() or None
-                    canvas_modified = event.get("canvas_modified") is True
-                    canvas_cleared = event.get("canvas_cleared") is True
-                    persist_assistant_snapshot()
-                    ui_tool_results = build_tool_results_ui_payload(stored_tool_results)
-                    if ui_tool_results:
-                        yield json.dumps(
-                            {
-                                "type": "assistant_tool_results",
-                                "tool_results": ui_tool_results,
-                            },
-                            ensure_ascii=False,
-                        ) + "\n"
-                    if stored_sub_agent_traces:
-                        yield json.dumps(
-                            {
-                                "type": "assistant_sub_agent_traces",
-                                "sub_agent_traces": stored_sub_agent_traces,
-                            },
-                            ensure_ascii=False,
-                        ) + "\n"
-                    if canvas_documents or canvas_cleared:
-                        yield json.dumps(
-                            {
-                                "type": "canvas_sync",
-                                "documents": canvas_documents,
-                                "active_document_id": active_document_id,
-                                "auto_open": canvas_modified,
-                                "cleared": canvas_cleared,
-                            },
-                            ensure_ascii=False,
-                        ) + "\n"
-                    continue
-                yield json.dumps(event, ensure_ascii=False) + "\n"
+                        continue
+                    elif event["type"] == "tool_capture":
+                        stored_tool_results = extract_message_tool_results({"tool_results": event.get("tool_results")})
+                        stored_sub_agent_traces = extract_sub_agent_traces({"sub_agent_traces": event.get("sub_agent_traces")})
+                        canvas_documents = extract_canvas_documents({"canvas_documents": event.get("canvas_documents")})
+                        active_document_id = str(event.get("active_document_id") or "").strip() or None
+                        canvas_modified = event.get("canvas_modified") is True
+                        canvas_cleared = event.get("canvas_cleared") is True
+                        persist_assistant_snapshot()
+                        ui_tool_results = build_tool_results_ui_payload(stored_tool_results)
+                        if ui_tool_results:
+                            yield json.dumps(
+                                {
+                                    "type": "assistant_tool_results",
+                                    "tool_results": ui_tool_results,
+                                },
+                                ensure_ascii=False,
+                            ) + "\n"
+                        if stored_sub_agent_traces:
+                            yield json.dumps(
+                                {
+                                    "type": "assistant_sub_agent_traces",
+                                    "sub_agent_traces": stored_sub_agent_traces,
+                                },
+                                ensure_ascii=False,
+                            ) + "\n"
+                        if canvas_documents or canvas_cleared:
+                            yield json.dumps(
+                                {
+                                    "type": "canvas_sync",
+                                    "documents": canvas_documents,
+                                    "active_document_id": active_document_id,
+                                    "auto_open": canvas_modified,
+                                    "cleared": canvas_cleared,
+                                },
+                                ensure_ascii=False,
+                            ) + "\n"
+                        continue
+                    yield json.dumps(event, ensure_ascii=False) + "\n"
+            except GeneratorExit:
+                stream_aborted = True
+                raise
+            finally:
+                if stream_aborted:
+                    with app_obj.app_context():
+                        _persist_streaming_assistant_message(
+                            conv_id,
+                            persisted_assistant_message_id,
+                            content=full_response,
+                            reasoning=full_reasoning,
+                            usage_data=usage_data,
+                            tool_results=stored_tool_results,
+                            sub_agent_traces=stored_sub_agent_traces,
+                            canvas_documents=canvas_documents,
+                            active_document_id=active_document_id,
+                            canvas_cleared=canvas_cleared,
+                            tool_trace_entries=tool_trace_entries,
+                            pending_clarification=pending_clarification,
+                        )
+                try:
+                    agent_stream.close()
+                except Exception:
+                    pass
 
             with app_obj.app_context():
                 if conv_id and persisted_tool_history:
