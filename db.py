@@ -1244,6 +1244,8 @@ def _normalize_message_usage_call(value: dict | None) -> dict | None:
         cleaned["is_retry"] = True
     if value.get("missing_provider_usage") is True:
         cleaned["missing_provider_usage"] = True
+    if value.get("cache_metrics_estimated") is True:
+        cleaned["cache_metrics_estimated"] = True
 
     target_total = cleaned.get("prompt_tokens")
     normalized_breakdown = _normalize_usage_breakdown(
@@ -1310,6 +1312,8 @@ def _normalize_message_usage(value: dict | None) -> dict | None:
 
     if isinstance(value.get("cost_available"), bool):
         cleaned["cost_available"] = value["cost_available"]
+    if value.get("cache_metrics_estimated") is True:
+        cleaned["cache_metrics_estimated"] = True
 
     currency = str(value.get("currency") or "").strip()[:16]
     if currency:

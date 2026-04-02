@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from io import BytesIO
+from markdown_rendering import append_markdown_docx, append_markdown_pdf_story
 
 from docx import Document
 from reportlab.lib import colors
@@ -10,7 +11,7 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import ListFlowable, ListItem, Paragraph, Preformatted, SimpleDocTemplate, Spacer
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
 from canvas_service import extract_canvas_documents
 
@@ -145,13 +146,10 @@ def build_conversation_docx_download(conversation: dict, messages: list[dict]) -
 
     for section in _iter_message_sections(messages):
         document.add_heading(section["title"].replace("## ", ""), level=1)
-        document.add_paragraph(section["content"] or "(empty)")
+        append_markdown_docx(document, section["content"] or "(empty)", heading_level_offset=2)
         for label, value in section["details"]:
             document.add_heading(label, level=2)
-            for block in str(value).split("\n\n"):
-                stripped = block.strip()
-                if stripped:
-                    document.add_paragraph(stripped)
+            append_markdown_docx(document, str(value or "").strip() or "(empty)", heading_level_offset=2)
 
     output = BytesIO()
     document.save(output)
@@ -209,40 +207,28 @@ def build_conversation_pdf_download(conversation: dict, messages: list[dict]) ->
     for section in _iter_message_sections(messages):
         story.append(Spacer(1, 6))
         story.append(Paragraph(_escape_pdf_text(section["title"].replace("## ", "")), heading_style))
-        story.append(Paragraph(_escape_pdf_text(section["content"] or "(empty)").replace("\n", "<br/>"), body_style))
+        append_markdown_pdf_story(
+            story,
+            section["content"] or "(empty)",
+            body_style=body_style,
+            heading1_style=subheading_style,
+            heading_style=subheading_style,
+            subheading_style=subheading_style,
+            code_style=code_style,
+            heading_level_offset=2,
+        )
         for label, value in section["details"]:
             story.append(Paragraph(_escape_pdf_text(label), subheading_style))
-            stripped_value = str(value or "").strip()
-            if "```" in stripped_value:
-                code_lines = []
-                in_code_block = False
-                for line in stripped_value.splitlines():
-                    if line.strip().startswith("```"):
-                        if in_code_block and code_lines:
-                            story.append(Preformatted("\n".join(code_lines), code_style))
-                            story.append(Spacer(1, 4))
-                            code_lines = []
-                        in_code_block = not in_code_block
-                        continue
-                    if in_code_block:
-                        code_lines.append(line)
-                    else:
-                        story.append(Paragraph(_escape_pdf_text(line or " "), body_style))
-                if code_lines:
-                    story.append(Preformatted("\n".join(code_lines), code_style))
-            elif stripped_value.startswith("- "):
-                items = [line[2:].strip() for line in stripped_value.splitlines() if line.strip().startswith("- ")]
-                if items:
-                    story.append(
-                        ListFlowable(
-                            [ListItem(Paragraph(_escape_pdf_text(item), body_style)) for item in items],
-                            bulletType="bullet",
-                            leftIndent=18,
-                        )
-                    )
-                    story.append(Spacer(1, 4))
-            else:
-                story.append(Paragraph(_escape_pdf_text(stripped_value).replace("\n", "<br/>"), body_style))
+            append_markdown_pdf_story(
+                story,
+                str(value or "").strip() or "(empty)",
+                body_style=body_style,
+                heading1_style=subheading_style,
+                heading_style=subheading_style,
+                subheading_style=subheading_style,
+                code_style=code_style,
+                heading_level_offset=2,
+            )
 
     output = BytesIO()
     doc = SimpleDocTemplate(output, pagesize=A4, topMargin=18 * mm, bottomMargin=18 * mm)

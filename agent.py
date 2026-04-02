@@ -89,6 +89,7 @@ from model_registry import (
     DEEPSEEK_PROVIDER,
     OPENROUTER_PROVIDER,
     apply_model_target_request_options,
+    build_openrouter_cache_estimate_context,
     get_operation_model_candidates,
     get_operation_model,
     get_model_pricing as lookup_model_pricing,
@@ -323,8 +324,11 @@ def _extract_usage_metrics(usage) -> dict[str, int]:
             if attr_value is not None:
                 payload[key] = attr_value
 
+    prompt_cache_hit_present = "prompt_cache_hit_tokens" in payload and payload.get("prompt_cache_hit_tokens") is not None
+    prompt_cache_miss_present = "prompt_cache_miss_tokens" in payload and payload.get("prompt_cache_miss_tokens") is not None
+
     # Normalize OpenRouter prompt_tokens_details.cached_tokens → prompt_cache_hit_tokens
-    if not payload.get("prompt_cache_hit_tokens"):
+    if not prompt_cache_hit_present:
         prompt_tokens_details = payload.get("prompt_tokens_details")
         if isinstance(prompt_tokens_details, dict):
             cached = prompt_tokens_details.get("cached_tokens")
@@ -334,8 +338,13 @@ def _extract_usage_metrics(usage) -> dict[str, int]:
             cached = None
         if cached is not None:
             payload["prompt_cache_hit_tokens"] = cached
+            prompt_cache_hit_present = True
 
-    return {key: _coerce_usage_int(payload.get(key)) for key in fields}
+    metrics = {key: _coerce_usage_int(payload.get(key)) for key in fields}
+    metrics["cache_hit_present"] = prompt_cache_hit_present
+    metrics["cache_miss_present"] = prompt_cache_miss_present
+    metrics["cache_metrics_present"] = prompt_cache_hit_present or prompt_cache_miss_present
+    return metrics
 
 
 def _empty_input_breakdown() -> dict[str, int]:
@@ -354,6 +363,45 @@ def _estimate_serialized_tokens(value) -> int:
     except (TypeError, ValueError):
         serialized = str(value)
     return _estimate_text_tokens(serialized)
+
+
+def _shared_prefix_char_count(left: str, right: str) -> int:
+    if not left or not right:
+        return 0
+    limit = min(len(left), len(right))
+    index = 0
+    while index < limit and left[index] == right[index]:
+        index += 1
+    return index
+
+
+def _estimate_openrouter_cache_metrics(
+    cache_state: dict[str, str],
+    cache_context: dict[str, object] | None,
+    prompt_token_target: int,
+) -> dict[str, int | bool] | None:
+    if not isinstance(cache_context, dict):
+        return None
+    if cache_context.get("supports_prompt_cache") is not True:
+        return None
+
+    normalized_prompt_tokens = _coerce_usage_int(prompt_token_target)
+    if normalized_prompt_tokens <= 0:
+        return None
+
+    current_text = str(cache_context.get("cacheable_text") or "")
+    previous_text = str(cache_state.get("previous_cacheable_text") or "")
+    cache_state["previous_cacheable_text"] = current_text
+
+    shared_prefix_chars = _shared_prefix_char_count(previous_text, current_text)
+    shared_prefix_tokens = _estimate_text_tokens(current_text[:shared_prefix_chars]) if shared_prefix_chars > 0 else 0
+    prompt_cache_hit_tokens = min(normalized_prompt_tokens, max(0, shared_prefix_tokens))
+    prompt_cache_miss_tokens = max(0, normalized_prompt_tokens - prompt_cache_hit_tokens)
+    return {
+        "prompt_cache_hit_tokens": prompt_cache_hit_tokens,
+        "prompt_cache_miss_tokens": prompt_cache_miss_tokens,
+        "cache_metrics_estimated": True,
+    }
 
 
 def _estimate_message_wrapper_tokens(role: str, *, include_tool_calls: bool = False) -> int:
@@ -3936,7 +3984,9 @@ def run_agent_stream(
         "input_breakdown": _empty_input_breakdown(),
         "model_call_count": 0,
         "model_calls": [],
+        "cache_metrics_estimated": False,
     }
+    openrouter_cache_estimate_state = {"previous_cacheable_text": ""}
     normalized_enabled_tool_names = _normalize_tool_name_list(enabled_tool_names)
     normalized_prompt_tool_names = [
         name
@@ -4017,6 +4067,9 @@ def run_agent_stream(
                 "completion_tokens": 0,
                 "total_tokens": 0,
                 "received": False,
+                "cache_hit_present": False,
+                "cache_miss_present": False,
+                "cache_metrics_present": False,
             }
 
         metrics = _extract_usage_metrics(usage)
@@ -4025,12 +4078,6 @@ def run_agent_stream(
         prompt_cache_miss_tokens = metrics["prompt_cache_miss_tokens"]
         completion_tokens = metrics["completion_tokens"]
         total_tokens = metrics["total_tokens"]
-
-        usage_totals["prompt_tokens"] += prompt_tokens
-        usage_totals["prompt_cache_hit_tokens"] += prompt_cache_hit_tokens
-        usage_totals["prompt_cache_miss_tokens"] += prompt_cache_miss_tokens
-        usage_totals["completion_tokens"] += completion_tokens
-        usage_totals["total_tokens"] += total_tokens
         return {
             "prompt_tokens": prompt_tokens,
             "prompt_cache_hit_tokens": prompt_cache_hit_tokens,
@@ -4047,6 +4094,9 @@ def run_agent_stream(
                     total_tokens,
                 )
             ),
+            "cache_hit_present": bool(metrics.get("cache_hit_present")),
+            "cache_miss_present": bool(metrics.get("cache_miss_present")),
+            "cache_metrics_present": bool(metrics.get("cache_metrics_present")),
         }
 
     def calculate_cost(
@@ -4156,6 +4206,7 @@ def run_agent_stream(
             "currency": "USD",
             "model": model,
             "provider": model_target["record"]["provider"],
+            "cache_metrics_estimated": usage_totals["cache_metrics_estimated"],
         }
 
     def remember_tool_result(tool_name: str, tool_args: dict, result, summary: str, cache_key: str, transcript_result=None):
@@ -4209,6 +4260,9 @@ def run_agent_stream(
             "completion_tokens": 0,
             "total_tokens": 0,
             "received": False,
+            "cache_hit_present": False,
+            "cache_miss_present": False,
+            "cache_metrics_present": False,
         }
         _trace_agent_event(
             "model_turn_started",
@@ -4248,6 +4302,10 @@ def run_agent_stream(
                 request_kwargs["tools"] = turn_tools
                 request_kwargs["tool_choice"] = "auto"
         request_kwargs = apply_model_target_request_options(request_kwargs, model_target)
+        cache_estimate_context = build_openrouter_cache_estimate_context(
+            request_kwargs.get("messages"),
+            model_target.get("record") if isinstance(model_target, dict) else None,
+        )
         response = model_target["client"].chat.completions.create(**request_kwargs)
 
         def finalize_call_usage() -> tuple[dict[str, int], int, int]:
@@ -4257,6 +4315,46 @@ def run_agent_stream(
                 provider_prompt_tokens=provider_usage["prompt_tokens"] if provider_usage["received"] else None,
                 request_tools=turn_tools,
             )
+            prompt_token_basis = provider_usage["prompt_tokens"] if provider_usage["prompt_tokens"] > 0 else estimated_input_tokens
+            cache_hit_tokens = provider_usage["prompt_cache_hit_tokens"] if provider_usage["cache_hit_present"] else None
+            cache_miss_tokens = provider_usage["prompt_cache_miss_tokens"] if provider_usage["cache_miss_present"] else None
+            cache_metrics_estimated = False
+
+            if cache_hit_tokens is None and cache_miss_tokens is None:
+                estimated_cache_metrics = _estimate_openrouter_cache_metrics(
+                    openrouter_cache_estimate_state,
+                    cache_estimate_context,
+                    prompt_token_basis,
+                )
+                if estimated_cache_metrics is not None:
+                    cache_hit_tokens = estimated_cache_metrics["prompt_cache_hit_tokens"]
+                    cache_miss_tokens = estimated_cache_metrics["prompt_cache_miss_tokens"]
+                    cache_metrics_estimated = bool(estimated_cache_metrics["cache_metrics_estimated"])
+            else:
+                if cache_hit_tokens is None:
+                    cache_hit_tokens = max(0, prompt_token_basis - _coerce_usage_int(cache_miss_tokens))
+                    cache_metrics_estimated = True
+                if cache_miss_tokens is None:
+                    cache_miss_tokens = max(0, prompt_token_basis - _coerce_usage_int(cache_hit_tokens))
+                    cache_metrics_estimated = True
+                accounted_prompt_tokens = _coerce_usage_int(cache_hit_tokens) + _coerce_usage_int(cache_miss_tokens)
+                if prompt_token_basis > accounted_prompt_tokens:
+                    cache_miss_tokens = _coerce_usage_int(cache_miss_tokens) + (prompt_token_basis - accounted_prompt_tokens)
+                    cache_metrics_estimated = True
+                if isinstance(cache_estimate_context, dict):
+                    openrouter_cache_estimate_state["previous_cacheable_text"] = str(cache_estimate_context.get("cacheable_text") or "")
+
+            final_cache_hit_tokens = _coerce_usage_int(cache_hit_tokens)
+            final_cache_miss_tokens = _coerce_usage_int(cache_miss_tokens)
+
+            usage_totals["prompt_tokens"] += provider_usage["prompt_tokens"]
+            usage_totals["prompt_cache_hit_tokens"] += final_cache_hit_tokens
+            usage_totals["prompt_cache_miss_tokens"] += final_cache_miss_tokens
+            usage_totals["completion_tokens"] += provider_usage["completion_tokens"]
+            usage_totals["total_tokens"] += provider_usage["total_tokens"]
+            if cache_metrics_estimated:
+                usage_totals["cache_metrics_estimated"] = True
+
             usage_totals["model_call_count"] += 1
             usage_totals["model_calls"].append(
                 {
@@ -4268,13 +4366,14 @@ def run_agent_stream(
                     "message_count": len(messages_to_send),
                     "tool_schema_tokens": tool_schema_tokens,
                     "prompt_tokens": provider_usage["prompt_tokens"] if provider_usage["received"] else None,
-                    "prompt_cache_hit_tokens": provider_usage["prompt_cache_hit_tokens"] if provider_usage["received"] else None,
-                    "prompt_cache_miss_tokens": provider_usage["prompt_cache_miss_tokens"] if provider_usage["received"] else None,
+                    "prompt_cache_hit_tokens": final_cache_hit_tokens,
+                    "prompt_cache_miss_tokens": final_cache_miss_tokens,
                     "completion_tokens": provider_usage["completion_tokens"] if provider_usage["received"] else None,
                     "total_tokens": provider_usage["total_tokens"] if provider_usage["received"] else None,
                     "estimated_input_tokens": estimated_input_tokens,
                     "input_breakdown": dict(estimated_breakdown),
                     "missing_provider_usage": not provider_usage["received"],
+                    "cache_metrics_estimated": cache_metrics_estimated,
                 }
             )
             if provider_usage["received"]:
@@ -4386,6 +4485,9 @@ def run_agent_stream(
                         provider_usage["completion_tokens"] += usage_snapshot["completion_tokens"]
                         provider_usage["total_tokens"] += usage_snapshot["total_tokens"]
                         provider_usage["received"] = provider_usage["received"] or usage_snapshot["received"]
+                        provider_usage["cache_hit_present"] = provider_usage["cache_hit_present"] or usage_snapshot["cache_hit_present"]
+                        provider_usage["cache_miss_present"] = provider_usage["cache_miss_present"] or usage_snapshot["cache_miss_present"]
+                        provider_usage["cache_metrics_present"] = provider_usage["cache_metrics_present"] or usage_snapshot["cache_metrics_present"]
             except Exception as exc:
                 stream_error = str(exc)
                 _trace_agent_event(

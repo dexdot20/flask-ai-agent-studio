@@ -2803,6 +2803,7 @@ function normalizeModelCallPayload(callEntry) {
     estimated_input_tokens: estimatedTarget ?? sumBreakdown(inputBreakdown),
     input_breakdown: inputBreakdown,
     missing_provider_usage: source.missing_provider_usage === true,
+    cache_metrics_estimated: source.cache_metrics_estimated === true,
   };
 }
 
@@ -2825,8 +2826,6 @@ function normalizeUsagePayload(usage) {
   const maxInputTokensPerCall =
     toNonNegativeIntOrNull(source.max_input_tokens_per_call) ??
     getMaxInputTokensPerCall(modelCalls, promptTokens || estimatedInputTokens);
-  const hasExplicitCost = source.cost !== null && source.cost !== undefined;
-  const costAvailable = source.cost_available === true || (source.cost_available !== false && hasExplicitCost);
 
   return {
     prompt_tokens: promptTokens,
@@ -2840,23 +2839,10 @@ function normalizeUsagePayload(usage) {
     model_calls: modelCalls,
     max_input_tokens_per_call: maxInputTokensPerCall,
     configured_prompt_max_input_tokens: configuredPromptMaxInputTokens,
-    cost: costAvailable && hasExplicitCost ? Math.max(0, toFiniteNumber(source.cost, 0)) : null,
-    cost_available: costAvailable,
-    currency: String(source.currency || "USD") || "USD",
     provider: String(source.provider || "").trim() || null,
     model: String(source.model || "—") || "—",
+    cache_metrics_estimated: source.cache_metrics_estimated === true,
   };
-}
-
-function formatCostDisplay(amount, currency = "USD") {
-  if (!Number.isFinite(amount)) {
-    return "—";
-  }
-  const normalizedCurrency = String(currency || "USD").trim().toUpperCase() || "USD";
-  if (normalizedCurrency === "USD") {
-    return `$${amount.toFixed(6)}`;
-  }
-  return `${amount.toFixed(6)} ${normalizedCurrency}`;
 }
 
 function summarizeValueList(values, fallback = "—") {
@@ -2876,31 +2862,10 @@ function summarizeValueList(values, fallback = "—") {
   return `${normalizedValues.slice(0, 2).join(", ")} +${normalizedValues.length - 2}`;
 }
 
-function getPricingCoverageLabel(turns) {
-  const totalTurns = Array.isArray(turns) ? turns.length : 0;
-  if (!totalTurns) {
-    return "—";
-  }
-  const pricedTurnCount = turns.filter((turn) => turn && turn.cost_available !== false).length;
-  if (!pricedTurnCount) {
-    return "Unavailable";
-  }
-  if (pricedTurnCount === totalTurns) {
-    return "Complete";
-  }
-  return `Partial (${fmt(pricedTurnCount)}/${fmt(totalTurns)} turns)`;
-}
 
-function getPricingStatusLabel(turn) {
-  if (!turn) {
-    return "—";
-  }
-  if (turn.cost_available === false) {
-    return "Unavailable";
-  }
-  return hasCacheUsageMetrics(turn)
-    ? `Available (${turn.currency}, cache-aware)`
-    : `Available (${turn.currency}, standard input rate)`;
+function formatCacheMetricValue(value, estimated = false) {
+  const formattedValue = fmt(toFiniteNumber(value, 0));
+  return estimated ? `${formattedValue} est.` : formattedValue;
 }
 
 function aggregateBreakdown(turns) {
@@ -3000,11 +2965,13 @@ function renderModelCallItem(call) {
   const promptStat = call.prompt_tokens !== null
     ? `<span class="turn-call-stat">${fmt(call.prompt_tokens)} prompt</span>`
     : `<span class="turn-call-stat">${fmt(call.estimated_input_tokens)} estimated prompt</span>`;
+  const cacheHitLabel = call.cache_metrics_estimated ? "estimated cache hit" : "cache hit";
+  const cacheMissLabel = call.cache_metrics_estimated ? "estimated cache miss" : "cache miss";
   const cacheHitStat = call.prompt_cache_hit_tokens !== null
-    ? `<span class="turn-call-stat">${fmt(call.prompt_cache_hit_tokens)} cache hit</span>`
+    ? `<span class="turn-call-stat">${formatCacheMetricValue(call.prompt_cache_hit_tokens, call.cache_metrics_estimated)} ${cacheHitLabel}</span>`
     : "";
   const cacheMissStat = call.prompt_cache_miss_tokens !== null
-    ? `<span class="turn-call-stat">${fmt(call.prompt_cache_miss_tokens)} cache miss</span>`
+    ? `<span class="turn-call-stat">${formatCacheMetricValue(call.prompt_cache_miss_tokens, call.cache_metrics_estimated)} ${cacheMissLabel}</span>`
     : "";
   const completionStat = call.completion_tokens !== null
     ? `<span class="turn-call-stat">${fmt(call.completion_tokens)} completion</span>`
@@ -3070,30 +3037,29 @@ function renderTokenStats() {
   const totalCacheMiss = tokenTurns.reduce((sum, turn) => sum + toFiniteNumber(turn.prompt_cache_miss_tokens, 0), 0);
   const totalAsst = tokenTurns.reduce((sum, turn) => sum + turn.completion_tokens, 0);
   const grandTotal = tokenTurns.reduce((sum, turn) => sum + turn.total_tokens, 0);
-  const sessionCostAvailable = tokenTurns.length > 0 && tokenTurns.every((turn) => turn.cost_available !== false);
-  const totalCost = tokenTurns.reduce((sum, turn) => sum + (turn.cost_available !== false ? toFiniteNumber(turn.cost, 0) : 0), 0);
   const sessionBreakdown = aggregateBreakdown(tokenTurns);
   const lastTurn = tokenTurns.length ? tokenTurns[tokenTurns.length - 1] : null;
   const sessionHasCacheMetrics = tokenTurns.some(hasCacheUsageMetrics);
+  const sessionHasEstimatedCacheMetrics = tokenTurns.some((turn) => turn?.cache_metrics_estimated === true);
   const lastTurnHasCacheMetrics = hasCacheUsageMetrics(lastTurn);
   const sessionProviders = summarizeValueList(tokenTurns.map((turn) => turn.provider));
 
   document.getElementById("stat-user").textContent = fmt(totalUser);
-  document.getElementById("stat-cache-hit").textContent = sessionHasCacheMetrics ? fmt(totalCacheHit) : "—";
-  document.getElementById("stat-cache-miss").textContent = sessionHasCacheMetrics ? fmt(totalCacheMiss) : "—";
+  document.getElementById("stat-cache-hit").textContent = sessionHasCacheMetrics
+    ? formatCacheMetricValue(totalCacheHit, sessionHasEstimatedCacheMetrics)
+    : "—";
+  document.getElementById("stat-cache-miss").textContent = sessionHasCacheMetrics
+    ? formatCacheMetricValue(totalCacheMiss, sessionHasEstimatedCacheMetrics)
+    : "—";
   document.getElementById("stat-asst").textContent = fmt(totalAsst);
   document.getElementById("stat-total").textContent = fmt(grandTotal);
   document.getElementById("stat-session-providers").textContent = sessionProviders;
-  document.getElementById("stat-session-pricing").textContent = getPricingCoverageLabel(tokenTurns);
-  document.getElementById("stat-cost").textContent = tokenTurns.length
-    ? (sessionCostAvailable ? formatCostDisplay(totalCost, "USD") : "—")
-    : "$0.000000";
   document.getElementById("stat-last-input").textContent = lastTurn ? fmt(lastTurn.prompt_tokens) : "—";
   document.getElementById("stat-last-cache-hit").textContent = lastTurnHasCacheMetrics
-    ? fmt(toFiniteNumber(lastTurn.prompt_cache_hit_tokens, 0))
+    ? formatCacheMetricValue(toFiniteNumber(lastTurn.prompt_cache_hit_tokens, 0), lastTurn?.cache_metrics_estimated === true)
     : "—";
   document.getElementById("stat-last-cache-miss").textContent = lastTurnHasCacheMetrics
-    ? fmt(toFiniteNumber(lastTurn.prompt_cache_miss_tokens, 0))
+    ? formatCacheMetricValue(toFiniteNumber(lastTurn.prompt_cache_miss_tokens, 0), lastTurn?.cache_metrics_estimated === true)
     : "—";
   document.getElementById("stat-last-peak-input").textContent = lastTurn
     ? fmt(lastTurn.max_input_tokens_per_call)
@@ -3108,10 +3074,6 @@ function renderTokenStats() {
   document.getElementById("stat-last-total").textContent = lastTurn ? fmt(lastTurn.total_tokens) : "—";
   document.getElementById("stat-last-model").textContent = lastTurn ? lastTurn.model : "—";
   document.getElementById("stat-last-provider").textContent = lastTurn?.provider || "—";
-  document.getElementById("stat-last-pricing").textContent = getPricingStatusLabel(lastTurn);
-  document.getElementById("stat-last-cost").textContent = lastTurn && lastTurn.cost_available !== false
-    ? formatCostDisplay(toFiniteNumber(lastTurn.cost, 0), lastTurn.currency)
-    : "—";
   document.getElementById("stat-breakdown-session-total").textContent = fmt(sumBreakdown(sessionBreakdown));
   document.getElementById("stat-breakdown-latest-total").textContent = lastTurn
     ? fmt(lastTurn.estimated_input_tokens)
@@ -3140,14 +3102,11 @@ function renderTokenStats() {
           ? `<span class="turn-stat">${fmt(turn.configured_prompt_max_input_tokens)} per-call prompt cap</span>`
           : "";
         const cacheHitStat = hasCacheUsageMetrics(turn)
-          ? `<span class="turn-stat">${fmt(toFiniteNumber(turn.prompt_cache_hit_tokens, 0))} cache hit</span>`
+          ? `<span class="turn-stat">${formatCacheMetricValue(toFiniteNumber(turn.prompt_cache_hit_tokens, 0), turn.cache_metrics_estimated === true)} ${turn.cache_metrics_estimated === true ? "estimated cache hit" : "cache hit"}</span>`
           : "";
         const cacheMissStat = hasCacheUsageMetrics(turn)
-          ? `<span class="turn-stat">${fmt(toFiniteNumber(turn.prompt_cache_miss_tokens, 0))} cache miss</span>`
+          ? `<span class="turn-stat">${formatCacheMetricValue(toFiniteNumber(turn.prompt_cache_miss_tokens, 0), turn.cache_metrics_estimated === true)} ${turn.cache_metrics_estimated === true ? "estimated cache miss" : "cache miss"}</span>`
           : "";
-        const pricingStat = turn.cost_available !== false
-          ? `<span class="turn-stat cost-stat">${formatCostDisplay(toFiniteNumber(turn.cost, 0), turn.currency)}</span>`
-          : `<span class="turn-stat turn-stat-muted">Pricing unavailable</span>`;
         return (
         `<div class="turn-item">` +
           `<div class="turn-header">` +
@@ -3167,7 +3126,6 @@ function renderTokenStats() {
             cacheMissStat +
             `<span class="turn-stat"><span class="stats-dot dot-asst"></span>${fmt(turn.completion_tokens)} completion</span>` +
             `<span class="turn-stat">${fmt(turn.total_tokens)} total</span>` +
-            pricingStat +
           `</div>` +
           renderTurnBreakdownInline(turn.input_breakdown) +
           renderModelCallDrawer(turn) +

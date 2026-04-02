@@ -17,7 +17,9 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import ListFlowable, ListItem, Paragraph, Preformatted, SimpleDocTemplate, Spacer
+from reportlab.platypus import Paragraph, Preformatted, SimpleDocTemplate, Spacer
+
+from markdown_rendering import append_markdown_pdf_story
 
 # Unicode font registration for Turkish / non-Latin character support.
 _FONT_PATHS = {
@@ -1452,7 +1454,7 @@ def build_pdf_download(document: dict) -> bytes:
         borderPadding=8,
     )
 
-    story = [Paragraph(normalized["title"], title_style), Spacer(1, 6)]
+    story = [Paragraph(escape(normalized["title"]), title_style), Spacer(1, 6)]
     if normalized.get("format") == "code":
         story.append(Preformatted(_normalize_line_endings(normalized["content"]), code_style))
         output = BytesIO()
@@ -1460,63 +1462,16 @@ def build_pdf_download(document: dict) -> bytes:
         doc.build(story)
         return output.getvalue()
 
-    lines = list_canvas_lines(normalized["content"])
-    in_code_block = False
-    code_lines: list[str] = []
-    list_buffer: list[str] = []
-
-    def flush_list_buffer():
-        nonlocal list_buffer
-        if not list_buffer:
-            return
-        flowable = ListFlowable(
-            [ListItem(Paragraph(item, body_style)) for item in list_buffer],
-            bulletType="bullet",
-            leftIndent=18,
-        )
-        story.append(flowable)
-        story.append(Spacer(1, 4))
-        list_buffer = []
-
-    def flush_code_lines():
-        nonlocal code_lines
-        if not code_lines:
-            return
-        story.append(Preformatted("\n".join(code_lines), code_style))
-        story.append(Spacer(1, 6))
-        code_lines = []
-
-    for raw_line in lines:
-        line = raw_line.rstrip()
-        stripped = line.strip()
-        if stripped.startswith("```"):
-            flush_list_buffer()
-            if in_code_block:
-                flush_code_lines()
-            in_code_block = not in_code_block
-            continue
-        if in_code_block:
-            code_lines.append(line)
-            continue
-        if not stripped:
-            flush_list_buffer()
-            story.append(Spacer(1, 4))
-            continue
-        if stripped.startswith("#"):
-            flush_list_buffer()
-            level = len(stripped) - len(stripped.lstrip("#"))
-            heading_text = stripped[level:].strip() or "Untitled"
-            style = heading1_style if level <= 1 else heading_style
-            story.append(Paragraph(heading_text, style))
-            continue
-        if stripped.startswith(("- ", "* ")):
-            list_buffer.append(stripped[2:].strip())
-            continue
-        flush_list_buffer()
-        story.append(Paragraph(stripped.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"), body_style))
-
-    flush_list_buffer()
-    flush_code_lines()
+    append_markdown_pdf_story(
+        story,
+        normalized["content"],
+        body_style=body_style,
+        heading1_style=heading1_style,
+        heading_style=heading_style,
+        subheading_style=heading_style,
+        code_style=code_style,
+        heading_level_offset=0,
+    )
 
     output = BytesIO()
     doc = SimpleDocTemplate(output, pagesize=A4, topMargin=18 * mm, bottomMargin=18 * mm)

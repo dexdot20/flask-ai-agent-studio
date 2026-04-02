@@ -443,6 +443,72 @@ def _with_openrouter_cache_breakpoint(content: Any, *, min_tokens: int) -> tuple
     return ([{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}], True)
 
 
+def _serialize_openrouter_cache_payload(value: Any) -> str:
+    if value in (None, "", [], {}):
+        return ""
+    try:
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _extract_openrouter_breakpoint_prefix(messages: Any) -> str:
+    if not isinstance(messages, list):
+        return ""
+
+    prefix_messages: list[dict[str, Any]] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            return ""
+
+        copied_message = dict(message)
+        content = copied_message.get("content")
+        if not isinstance(content, list):
+            prefix_messages.append(copied_message)
+            continue
+
+        prefix_blocks: list[Any] = []
+        for block in content:
+            copied_block = dict(block) if isinstance(block, dict) else block
+            prefix_blocks.append(copied_block)
+            if isinstance(block, dict) and isinstance(block.get("cache_control"), dict):
+                copied_message["content"] = prefix_blocks
+                prefix_messages.append(copied_message)
+                return _serialize_openrouter_cache_payload(prefix_messages)
+
+        prefix_messages.append(copied_message)
+
+    return ""
+
+
+def build_openrouter_cache_estimate_context(messages: Any, record: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(record, dict):
+        return None
+    if str(record.get("provider") or "").strip() != OPENROUTER_PROVIDER:
+        return None
+
+    api_model = str(record.get("api_model") or "").strip()
+    if _openrouter_supports_top_level_prompt_cache(api_model):
+        return {
+            "supports_prompt_cache": True,
+            "strategy": "top_level",
+            "cacheable_text": _serialize_openrouter_cache_payload(messages),
+        }
+
+    if _openrouter_requires_explicit_cache_breakpoints(api_model):
+        return {
+            "supports_prompt_cache": True,
+            "strategy": "explicit_breakpoint",
+            "cacheable_text": _extract_openrouter_breakpoint_prefix(messages),
+        }
+
+    return {
+        "supports_prompt_cache": False,
+        "strategy": "none",
+        "cacheable_text": "",
+    }
+
+
 def _prepare_model_request_messages(messages: Any, record: dict[str, Any] | None) -> Any:
     if not isinstance(messages, list) or not isinstance(record, dict):
         return messages
@@ -456,6 +522,8 @@ def _prepare_model_request_messages(messages: Any, record: dict[str, Any] | None
     prepared_messages = list(messages)
     cache_min_tokens = _openrouter_gemini_cache_min_tokens(api_model)
     fallback_index: int | None = None
+    candidate_index: int | None = None
+    candidate_content: Any = None
     for index, message in enumerate(prepared_messages):
         if not isinstance(message, dict):
             continue
@@ -467,7 +535,11 @@ def _prepare_model_request_messages(messages: Any, record: dict[str, Any] | None
         updated_content, applied = _with_openrouter_cache_breakpoint(message.get("content"), min_tokens=cache_min_tokens)
         if not applied:
             continue
-        prepared_messages[index] = {**message, "content": updated_content}
+        candidate_index = index
+        candidate_content = updated_content
+
+    if candidate_index is not None:
+        prepared_messages[candidate_index] = {**prepared_messages[candidate_index], "content": candidate_content}
         return prepared_messages
 
     if fallback_index is None or fallback_index >= len(prepared_messages):

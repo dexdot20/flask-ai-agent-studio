@@ -12,11 +12,13 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import requests as http_requests
+import pdfplumber
 from werkzeug.datastructures import MultiDict
 
 import web_tools
 import ocr_service
 import model_registry
+from docx import Document
 from proxy_settings import DEFAULT_PROXY_ENABLED_OPERATIONS, PROXY_OPERATION_FETCH_URL
 from agent import (
     CONTEXT_OVERFLOW_RECOVERY_ERROR_TEXT,
@@ -554,6 +556,31 @@ class AppRoutesTestCase(unittest.TestCase):
             {"type": "ephemeral"},
         )
         self.assertEqual(merged["messages"][1]["content"], "Summarize the stable prefix.")
+
+    def test_apply_model_target_request_options_prefers_last_eligible_gemini_system_message(self):
+        request_kwargs = {
+            "messages": [
+                {"role": "system", "content": "Stable prefix. " * 90},
+                {"role": "system", "content": "Later stable prefix. " * 1000},
+                {"role": "user", "content": "Summarize the stable prefix."},
+            ]
+        }
+        target = {
+            "record": {
+                "provider": model_registry.OPENROUTER_PROVIDER,
+                "api_model": "google/gemini-2.5-pro",
+            },
+            "extra_body": {"provider": {"sort": "throughput"}},
+        }
+
+        merged = model_registry.apply_model_target_request_options(request_kwargs, target)
+
+        self.assertEqual(merged["messages"][0]["content"], request_kwargs["messages"][0]["content"])
+        self.assertIsInstance(merged["messages"][1]["content"], list)
+        self.assertEqual(
+            merged["messages"][1]["content"][0]["cache_control"],
+            {"type": "ephemeral"},
+        )
 
     def test_apply_model_target_request_options_leaves_non_gemini_messages_unchanged(self):
         request_kwargs = {
@@ -4153,6 +4180,30 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(usage["prompt_cache_hit_tokens"], 5)
         self.assertEqual(usage["prompt_cache_miss_tokens"], 7)
 
+    def test_extract_message_usage_preserves_cache_estimation_flags(self):
+        usage = extract_message_usage(
+            {
+                "usage": {
+                    "prompt_tokens": 12,
+                    "prompt_cache_hit_tokens": 5,
+                    "prompt_cache_miss_tokens": 7,
+                    "cache_metrics_estimated": True,
+                    "model_calls": [
+                        {
+                            "index": 1,
+                            "estimated_input_tokens": 12,
+                            "prompt_cache_hit_tokens": 5,
+                            "prompt_cache_miss_tokens": 7,
+                            "cache_metrics_estimated": True,
+                        }
+                    ],
+                }
+            }
+        )
+
+        self.assertTrue(usage["cache_metrics_estimated"])
+        self.assertTrue(usage["model_calls"][0]["cache_metrics_estimated"])
+
     def test_extract_message_usage_preserves_provider_and_pricing_availability(self):
         usage = extract_message_usage(
             {
@@ -4203,6 +4254,23 @@ class AppRoutesTestCase(unittest.TestCase):
         metrics = _extract_usage_metrics(usage)
         self.assertEqual(metrics["prompt_cache_hit_tokens"], 600)
 
+    def test_extract_usage_metrics_marks_openrouter_cache_field_presence(self):
+        usage = SimpleNamespace(
+            prompt_tokens=1000,
+            completion_tokens=50,
+            total_tokens=1050,
+            prompt_cache_hit_tokens=None,
+            prompt_cache_miss_tokens=None,
+            model_extra={
+                "prompt_tokens_details": {"cached_tokens": 800}
+            },
+        )
+
+        metrics = _extract_usage_metrics(usage)
+
+        self.assertTrue(metrics["cache_hit_present"])
+        self.assertFalse(metrics["cache_miss_present"])
+
     def test_summarize_model_call_usage_reports_peak_single_call_input(self):
         summary = _summarize_model_call_usage(
             [
@@ -4242,12 +4310,16 @@ class AppRoutesTestCase(unittest.TestCase):
         script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
         script_text = script_path.read_text(encoding="utf-8")
 
+        self.assertIn("Token Usage", html_text)
         self.assertIn('id="stat-cache-hit"', html_text)
         self.assertIn('id="stat-cache-miss"', html_text)
         self.assertIn('id="stat-last-cache-hit"', html_text)
         self.assertIn('id="stat-last-cache-miss"', html_text)
+        self.assertNotIn('id="stat-cost"', html_text)
+        self.assertNotIn('id="stat-last-cost"', html_text)
         self.assertIn("prompt_cache_hit_tokens", script_text)
         self.assertIn("prompt_cache_miss_tokens", script_text)
+        self.assertIn("cache_metrics_estimated", script_text)
 
     def test_frontend_includes_clarification_ui_hooks(self):
         script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
@@ -6131,6 +6203,14 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(pdf_response.mimetype, "application/pdf")
         self.assertTrue(pdf_response.data.startswith(b"%PDF"))
 
+        with pdfplumber.open(io.BytesIO(pdf_response.data)) as pdf:
+            pdf_text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+        self.assertIn("Export", pdf_text)
+        self.assertIn("One", pdf_text)
+        self.assertIn("Two", pdf_text)
+        self.assertNotIn("# Export", pdf_text)
+        self.assertNotIn("- One", pdf_text)
+
         html_response = self.client.get(
             f"/api/conversations/{conversation_id}/canvas/export?format=html&document_id=canvas-export"
         )
@@ -6697,10 +6777,22 @@ class AppRoutesTestCase(unittest.TestCase):
         )
         self.assertTrue(docx_response.data.startswith(b"PK"))
 
+        docx_document = Document(io.BytesIO(docx_response.data))
+        docx_text = "\n".join(paragraph.text for paragraph in docx_document.paragraphs)
+        self.assertIn("Reasoned through the request.", docx_text)
+        self.assertNotIn("```markdown", docx_text)
+        self.assertNotIn("### Canvas", docx_text)
+
         pdf_response = self.client.get(f"/api/conversations/{conversation_id}/export?format=pdf")
         self.assertEqual(pdf_response.status_code, 200)
         self.assertEqual(pdf_response.mimetype, "application/pdf")
         self.assertTrue(pdf_response.data.startswith(b"%PDF"))
+
+        with pdfplumber.open(io.BytesIO(pdf_response.data)) as pdf:
+            pdf_text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+        self.assertIn("Reasoned through the request.", pdf_text)
+        self.assertNotIn("```markdown", pdf_text)
+        self.assertNotIn("### Canvas", pdf_text)
 
     def test_canvas_line_replace_rejects_out_of_bounds_start_line(self):
         runtime_state = create_canvas_runtime_state(
@@ -6955,6 +7047,114 @@ class AppRoutesTestCase(unittest.TestCase):
         usage_event = next(event for event in events if event["type"] == "usage")
         self.assertIsNone(usage_event["cost"])
         self.assertFalse(usage_event["cost_available"])
+
+    def test_run_agent_stream_estimates_openrouter_cache_miss_from_cached_tokens(self):
+        responses = [
+            iter(
+                [
+                    self._stream_chunk_openrouter(content="Final answer."),
+                    self._stream_chunk_openrouter(
+                        usage=SimpleNamespace(
+                            prompt_tokens=1000,
+                            completion_tokens=50,
+                            total_tokens=1050,
+                            model_extra={
+                                "prompt_tokens_details": {"cached_tokens": 800}
+                            },
+                        )
+                    ),
+                ]
+            )
+        ]
+        mock_create = Mock(side_effect=responses)
+        fake_target = {
+            "record": {"provider": model_registry.OPENROUTER_PROVIDER, "api_model": "anthropic/claude-sonnet-4.5"},
+            "client": SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=mock_create))),
+            "api_model": "anthropic/claude-sonnet-4.5",
+            "extra_body": {},
+        }
+
+        with patch("agent.resolve_model_target", return_value=fake_target):
+            events = list(
+                run_agent_stream(
+                    [{"role": "user", "content": "Test"}],
+                    "openrouter:anthropic/claude-sonnet-4.5",
+                    1,
+                    [],
+                )
+            )
+
+        usage_event = next(event for event in events if event["type"] == "usage")
+        self.assertEqual(usage_event["prompt_cache_hit_tokens"], 800)
+        self.assertEqual(usage_event["prompt_cache_miss_tokens"], 200)
+        self.assertTrue(usage_event["cache_metrics_estimated"])
+        self.assertTrue(usage_event["model_calls"][0]["cache_metrics_estimated"])
+
+    def test_run_agent_stream_estimates_openrouter_cache_hits_when_provider_omits_cache_usage(self):
+        responses = [
+            iter(
+                [
+                    self._stream_chunk_openrouter(
+                        tool_calls=[
+                            {
+                                "index": 0,
+                                "id": "tool-call-1",
+                                "function": {
+                                    "name": "search_web",
+                                    "arguments": json.dumps({"queries": ["latest update"]}, ensure_ascii=False),
+                                },
+                            }
+                        ]
+                    ),
+                    self._stream_chunk_openrouter(
+                        usage=SimpleNamespace(
+                            prompt_tokens=12,
+                            completion_tokens=3,
+                            total_tokens=15,
+                        )
+                    ),
+                ]
+            ),
+            iter(
+                [
+                    self._stream_chunk_openrouter(content="Final answer."),
+                    self._stream_chunk_openrouter(
+                        usage=SimpleNamespace(
+                            prompt_tokens=14,
+                            completion_tokens=4,
+                            total_tokens=18,
+                        )
+                    ),
+                ]
+            ),
+        ]
+        mock_create = Mock(side_effect=responses)
+        fake_target = {
+            "record": {"provider": model_registry.OPENROUTER_PROVIDER, "api_model": "anthropic/claude-sonnet-4.5"},
+            "client": SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=mock_create))),
+            "api_model": "anthropic/claude-sonnet-4.5",
+            "extra_body": {},
+        }
+
+        with patch("agent.resolve_model_target", return_value=fake_target), patch(
+            "agent.search_web_tool",
+            return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+        ):
+            events = list(
+                run_agent_stream(
+                    [{"role": "user", "content": "Test"}],
+                    "openrouter:anthropic/claude-sonnet-4.5",
+                    3,
+                    ["search_web"],
+                )
+            )
+
+        usage_event = next(event for event in events if event["type"] == "usage")
+        self.assertTrue(usage_event["cache_metrics_estimated"])
+        self.assertEqual(usage_event["model_calls"][0]["prompt_cache_hit_tokens"], 0)
+        self.assertEqual(usage_event["model_calls"][0]["prompt_cache_miss_tokens"], 12)
+        self.assertGreater(usage_event["model_calls"][1]["prompt_cache_hit_tokens"], 0)
+        self.assertLess(usage_event["model_calls"][1]["prompt_cache_miss_tokens"], 14)
 
     def test_run_agent_stream_passes_openrouter_extra_body_preferences(self):
         responses = [

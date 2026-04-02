@@ -75,7 +75,7 @@
     </form>
     {% endif %}
     <button class="mobile-tools-action mobile-tools-action--stats" id="mobile-tokens-btn" type="button">
-      <span>Usage &amp; cost</span>
+      <span>Token usage</span>
       <span class="mobile-tools-action__badge" id="tokens-badge">0</span>
     </button>
   </div>
@@ -137,7 +137,7 @@
 
 <div id="stats-panel" class="stats-panel" aria-hidden="true">
   <div class="stats-panel-header">
-    <span>Usage & Cost</span>
+    <span>Token Usage</span>
     <button id="stats-close" title="Close">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
         <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
@@ -148,7 +148,7 @@
   <div class="stats-section stats-section-intro">
     <div class="stats-section-title">How to read this</div>
     <p class="stats-note">Provider totals come from the API usage payload for completed assistant turns. Input-source sections below are local estimates of how each prompt was assembled.</p>
-    <p class="stats-note">Cost is estimated only when the selected model has known pricing. For models without configured pricing, the panel shows cost as — instead of pretending the request cost $0.000000.</p>
+    <p class="stats-note">When OpenRouter omits cache detail, cache hit/miss rows fall back to a local estimate aligned to the billed prompt total.</p>
   </div>
 
   <div class="stats-section">
@@ -181,14 +181,6 @@
     <div class="stats-row">
       <span class="stats-label">Providers</span>
       <span class="stats-value" id="stat-session-providers">—</span>
-    </div>
-    <div class="stats-row">
-      <span class="stats-label">Pricing coverage</span>
-      <span class="stats-value" id="stat-session-pricing">—</span>
-    </div>
-    <div class="stats-row">
-      <span class="stats-label">Estimated cost (USD, cache-miss basis)</span>
-      <span class="stats-value" id="stat-cost">$0.000000</span>
     </div>
     </div>
     <p class="stats-note">Session totals aggregate every completed assistant turn in the current conversation.</p>
@@ -236,14 +228,6 @@
     <div class="stats-row">
       <span class="stats-label">Provider</span>
       <span class="stats-value" id="stat-last-provider">—</span>
-    </div>
-    <div class="stats-row">
-      <span class="stats-label">Pricing status</span>
-      <span class="stats-value" id="stat-last-pricing">—</span>
-    </div>
-    <div class="stats-row">
-      <span class="stats-label">Estimated cost</span>
-      <span class="stats-value" id="stat-last-cost">—</span>
     </div>
     </div>
     <p class="stats-note">Includes every model call made while producing the latest assistant reply, including tool-execution rounds. The billed prompt total can exceed a model's single-call context window because later calls rebill prior history and tool results; compare the peak single-call prompt to the per-call cap.</p>
