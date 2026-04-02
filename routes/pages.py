@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from flask import jsonify, render_template, request
 
@@ -226,6 +227,17 @@ def build_settings_payload() -> dict:
     }
 
 
+def _static_asset_version(app, filename: str) -> str:
+    static_folder = getattr(app, "static_folder", None)
+    if not static_folder:
+        return "1"
+    asset_path = Path(static_folder) / filename
+    try:
+        return str(int(asset_path.stat().st_mtime))
+    except OSError:
+        return "1"
+
+
 def register_page_routes(app) -> None:
     @app.route("/")
     def index():
@@ -235,6 +247,7 @@ def register_page_routes(app) -> None:
             models=get_visible_chat_models(get_app_settings()),
             settings=settings,
             auth_enabled=is_login_pin_enabled(),
+            app_js_version=_static_asset_version(app, "app.js"),
         )
 
     @app.route("/settings")
@@ -245,6 +258,7 @@ def register_page_routes(app) -> None:
             settings=settings,
             tool_sections=build_tool_permission_sections(),
             auth_enabled=is_login_pin_enabled(),
+            settings_js_version=_static_asset_version(app, "settings.js"),
         )
 
     @app.route("/api/settings", methods=["GET"])
