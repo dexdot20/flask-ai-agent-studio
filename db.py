@@ -1711,6 +1711,14 @@ def extract_clarification_response(metadata: dict | None) -> dict | None:
     return cleaned or None
 
 
+def sanitize_edited_user_message_metadata(metadata: dict | None) -> dict:
+    source = parse_message_metadata(metadata)
+    attachments = extract_message_attachments(source)
+    if not attachments:
+        return {}
+    return {"attachments": attachments}
+
+
 def serialize_message_metadata(metadata: dict | None) -> str | None:
     metadata = metadata if isinstance(metadata, dict) else {}
     cleaned = {}

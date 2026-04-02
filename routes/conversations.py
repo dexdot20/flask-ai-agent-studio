@@ -45,6 +45,7 @@ from db import (
     normalize_rag_source_types,
     parse_message_metadata,
     parse_message_tool_calls,
+    sanitize_edited_user_message_metadata,
     serialize_message_metadata,
 )
 from doc_service import extract_document_text, read_uploaded_document
@@ -630,9 +631,13 @@ def register_conversation_routes(app) -> None:
             if not normalized_content.strip() and (role != "user" or not attachments):
                 return jsonify({"error": "Message content cannot be empty."}), 400
 
+            updated_metadata = metadata
+            if role == "user":
+                updated_metadata = sanitize_edited_user_message_metadata(metadata)
+
             conn.execute(
-                "UPDATE messages SET content = ? WHERE id = ?",
-                (normalized_content, message_id),
+                "UPDATE messages SET content = ?, metadata = ? WHERE id = ?",
+                (normalized_content, serialize_message_metadata(updated_metadata), message_id),
             )
             conn.execute(
                 "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",

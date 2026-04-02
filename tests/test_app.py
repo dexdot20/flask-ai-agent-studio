@@ -1564,6 +1564,81 @@ class AppRoutesTestCase(unittest.TestCase):
         runtime_state = find_latest_canvas_state(messages)
         self.assertEqual([doc["title"] for doc in runtime_state["documents"]], ["draft-a.md"])
 
+    def test_chat_edit_does_not_replay_stale_context_injection(self):
+        captured = {}
+        conversation_id = self._create_conversation()
+        stale_context = "## Knowledge Base\nStale branch excerpt: Old message / Old answer"
+
+        save_app_settings(
+            {
+                "user_preferences": "",
+                "max_steps": "1",
+                "active_tools": "[]",
+                "rag_auto_inject": "false",
+            }
+        )
+
+        with get_db() as conn:
+            insert_message(conn, conversation_id, "user", "First question")
+            insert_message(conn, conversation_id, "assistant", "First answer")
+            edited_message_id = insert_message(
+                conn,
+                conversation_id,
+                "user",
+                "Old message",
+                metadata=serialize_message_metadata({"context_injection": stale_context}),
+            )
+            insert_message(conn, conversation_id, "assistant", "Old answer")
+
+        def fake_run_agent_stream(api_messages, *args, **kwargs):
+            captured["api_messages"] = api_messages
+            return iter(
+                [
+                    {"type": "answer_start"},
+                    {"type": "answer_delta", "text": "New answer"},
+                    {"type": "tool_capture", "tool_results": []},
+                    {"type": "done"},
+                ]
+            )
+
+        with patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream), patch(
+            "routes.chat.sync_conversations_to_rag_safe"
+        ):
+            response = self.client.post(
+                "/chat",
+                json={
+                    "conversation_id": conversation_id,
+                    "edited_message_id": edited_message_id,
+                    "model": "deepseek-chat",
+                    "user_content": "New message",
+                    "messages": [
+                        {"role": "user", "content": "First question"},
+                        {"role": "assistant", "content": "First answer"},
+                        {
+                            "role": "user",
+                            "content": "New message",
+                            "metadata": {"context_injection": stale_context},
+                        },
+                    ],
+                },
+            )
+            response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("api_messages", captured)
+        system_text = "\n\n".join(
+            str(message.get("content") or "")
+            for message in captured["api_messages"]
+            if message.get("role") == "system"
+        )
+        self.assertNotIn("Stale branch excerpt", system_text)
+        self.assertIn("New message", "\n".join(str(message.get("content") or "") for message in captured["api_messages"]))
+
+        with get_db() as conn:
+            row = conn.execute("SELECT metadata FROM messages WHERE id = ?", (edited_message_id,)).fetchone()
+        persisted_metadata = parse_message_metadata(row["metadata"])
+        self.assertNotIn("Stale branch excerpt", str(persisted_metadata.get("context_injection") or ""))
+
     def test_chat_route_defers_postprocess_outside_testing(self):
         fake_events = iter(
             [
@@ -6791,6 +6866,52 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("21:40", api_messages[3]["content"])
         self.assertEqual(api_messages[4]["role"], "user")
         self.assertTrue(api_messages[4]["id"])
+
+    def test_patch_user_message_clears_stale_context_injection_but_keeps_attachments(self):
+        conversation_id = self._create_conversation()
+
+        with get_db() as conn:
+            message_id = insert_message(
+                conn,
+                conversation_id,
+                "user",
+                "Old prompt",
+                metadata=serialize_message_metadata(
+                    {
+                        "context_injection": "## Knowledge Base\nStale branch excerpt",
+                        "attachments": [
+                            {
+                                "kind": "document",
+                                "file_id": "doc-1",
+                                "file_name": "notes.txt",
+                                "file_mime_type": "text/plain",
+                                "file_context_block": "Original attachment context",
+                            }
+                        ],
+                    }
+                ),
+            )
+
+        with patch("routes.conversations.sync_conversations_to_rag_safe"):
+            response = self.client.patch(
+                f"/api/messages/{message_id}",
+                json={
+                    "conversation_id": conversation_id,
+                    "content": "Edited prompt",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        response_metadata = response.get_json()["message"]["metadata"]
+        self.assertNotIn("context_injection", response_metadata)
+        self.assertEqual(response_metadata["attachments"][0]["file_id"], "doc-1")
+        self.assertEqual(response_metadata["attachments"][0]["file_name"], "notes.txt")
+
+        with get_db() as conn:
+            row = conn.execute("SELECT metadata FROM messages WHERE id = ?", (message_id,)).fetchone()
+        persisted_metadata = parse_message_metadata(row["metadata"])
+        self.assertNotIn("context_injection", persisted_metadata)
+        self.assertEqual(persisted_metadata["attachments"][0]["file_id"], "doc-1")
 
     def test_run_agent_stream_retries_until_content_final_answer_arrives(self):
         responses = [

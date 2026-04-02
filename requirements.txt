@@ -1,6 +1,7 @@
-## Core runtime dependencies shared by the Flask app and its services.
+## Core runtime dependencies shared by the Flask app, its services, and the proxy-aware OpenRouter client.
 flask>=3.0
 openai>=1.54.0
+httpx>=0.27
 python-dotenv>=1.0
 ddgs>=2.0
 requests>=2.31

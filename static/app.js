@@ -441,6 +441,18 @@ function buildPendingAttachmentMetadata(imageFiles, documentFiles) {
       }
     : null;
 }
+
+function sanitizeEditedUserMetadata(metadata) {
+  const attachments = getMessageAttachments(metadata);
+  if (!attachments.length) {
+    return null;
+  }
+
+  return {
+    attachments,
+    ...buildLegacyAttachmentMetadata(attachments),
+  };
+}
 const ragDisabledNoteEl = document.getElementById("rag-disabled-note");
 const visionDisabledNoteEl = document.getElementById("vision-disabled-note");
 const RAG_SENSITIVITY_HINTS = {
@@ -6733,7 +6745,7 @@ async function sendMessage(options = {}) {
     }
 
     if (!pendingImages.length && !pendingDocuments.length) {
-      userMetadata = editingEntry.metadata || null;
+      userMetadata = sanitizeEditedUserMetadata(editingEntry.metadata);
     }
 
     history = history.slice(0, editIndex + 1).map((item) => ({

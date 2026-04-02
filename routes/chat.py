@@ -80,6 +80,7 @@ from db import (
     insert_message,
     parse_message_metadata,
     restore_soft_deleted_messages,
+    sanitize_edited_user_message_metadata,
     serialize_message_metadata,
     serialize_message_tool_calls,
     shift_message_positions,
@@ -2156,10 +2157,15 @@ def register_chat_routes(app) -> None:
         canonical_messages = messages
 
         if latest_user_message is not None and conv_id:
-            user_message_metadata = serialize_message_metadata(latest_user_message.get("metadata"))
+            user_message_metadata_payload = latest_user_message.get("metadata")
             persisted_user_content = latest_user_message["content"]
             if user_content is not None:
                 persisted_user_content = str(user_content)
+
+            if edited_message_id is not None:
+                user_message_metadata_payload = sanitize_edited_user_message_metadata(user_message_metadata_payload)
+
+            user_message_metadata = serialize_message_metadata(user_message_metadata_payload)
 
             if edited_message_id is not None:
                 with get_db() as conn:

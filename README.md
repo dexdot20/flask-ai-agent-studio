@@ -41,6 +41,7 @@ It is not a minimal prompt/response demo. The app keeps conversation history in 
 - Ships with built-in DeepSeek chat and reasoner models
 - Supports user-defined OpenRouter models from Settings, including tool-capable, vision-capable, provider-scoped, and reasoning-configured models
 - Uses OpenAI-compatible clients for both DeepSeek and OpenRouter providers
+- Routes OpenRouter requests through configured proxy candidates before falling back to a direct connection
 - Validates tool names and tool argument schemas before execution
 - Supports native function calls from the model
 - Supports model-emitted tool JSON fallback handling
@@ -209,12 +210,12 @@ pip install -r requirements-dev.txt
 
 ### 3) Hardware and runtime requirements
 
-RAG and local vision remain GPU-first in this codebase, while OCR can run without the Qwen vision model.
+RAG can now fall back to CPU-only embedding, while local vision remains CUDA-only in this codebase and OCR can run without the Qwen vision model.
 
-- RAG embeddings require PyTorch with CUDA support and a CUDA-capable GPU.
+- RAG embeddings work on CPU or CUDA; set `BGE_M3_DEVICE=cpu` for a CPU-only path or leave it on auto to use CUDA when available.
 - Local OCR can run in OCR-only mode with EasyOCR or PaddleOCR.
 - Local Qwen2.5-VL vision inference requires CUDA and a local model directory.
-- There is no CPU fallback in the current codebase for local RAG or local Qwen vision.
+- There is no CPU fallback in the current codebase for local Qwen vision.
 - PaddleOCR GPU installs can require a CUDA-specific PaddlePaddle wheel; `install.sh` attempts a best-effort install and falls back to CPU PaddlePaddle when needed.
 - The installer stores the downloaded BGE-M3 cache in `models/rag/bge-m3` and the local Qwen2.5-VL cache in `models/vl/Qwen2.5-VL-3B-Instruct`.
 - If you do not have the required GPU stack, disable the features explicitly in `.env` instead of leaving them enabled.
@@ -223,6 +224,7 @@ Example overrides for a lighter setup:
 
 ```env
 RAG_ENABLED=false
+BGE_M3_DEVICE=cpu
 OCR_ENABLED=true
 OCR_PROVIDER=easyocr
 VISION_ENABLED=false
@@ -313,7 +315,7 @@ At least one provider key is required.
 | --- | --- | --- |
 | `RAG_ENABLED` | `true` | Enables RAG endpoints, sync, and retrieval |
 | `BGE_M3_MODEL_PATH` | `BAAI/bge-m3` | Embedding model name or local path |
-| `BGE_M3_DEVICE` | `auto` | Device used by the embedder in this codebase; defaults to CUDA when available, otherwise CPU |
+| `BGE_M3_DEVICE` | `auto` | Device used by the embedder in this codebase; `cpu` and `cpu:0` force CPU-only mode, while auto prefers CUDA when available |
 | `BGE_M3_LOCAL_FILES_ONLY` | `false` | Load the embedding model only from local files |
 | `BGE_M3_TRUST_REMOTE_CODE` | `false` | Allow Sentence Transformers remote code |
 | `BGE_M3_BATCH_SIZE` | `32` | Embedding batch size |
@@ -374,7 +376,7 @@ Note: `rag_context_size` and `rag_sensitivity` are the runtime settings used dur
 | `PROMPT_SUMMARY_MAX_TOKENS` | `15000` | Max summary budget |
 | `PROMPT_RAG_MAX_TOKENS` | `6000` | Max RAG budget |
 | `PROMPT_RAG_AUTO_MAX_TOKENS` | `1200` | Auto-inject RAG cap used when no stronger override is set |
-| `PROMPT_TOOL_MEMORY_MAX_TOKENS` | `4000` | Max tool-memory budget |
+| `PROMPT_TOOL_MEMORY_MAX_TOKENS` | `1500` | Max tool-memory budget |
 | `PROMPT_PREFLIGHT_SUMMARY_TOKEN_COUNT` | `90000` | Preflight summary trigger budget |
 | `AGENT_CONTEXT_COMPACTION_THRESHOLD` | `0.85` | Fraction of budget that triggers context compaction |
 | `AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS` | `2` | How many recent exchanges are preserved during compaction |
@@ -397,6 +399,9 @@ Note: `rag_context_size` and `rag_sensitivity` are the runtime settings used dur
 - max upload image size: 10 MB
 - document upload max size: 20 MB
 - document max extracted text: 50,000 characters
+- canvas prompt max lines: 800
+- canvas expand max lines: 1,600
+- canvas scroll window lines: 200
 - canvas document limit: 12 documents per conversation
 - canvas title length limit: 160 characters
 
