@@ -3103,7 +3103,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(summary, "Awaiting user clarification")
         self.assertEqual(result["status"], "needs_user_input")
         self.assertEqual(len(result["clarification"]["questions"]), 2)
-        self.assertEqual(result["text"], "Soruları hazırladım.")
+        self.assertEqual(result["text"], "")
         self.assertEqual(result["clarification"]["intro"], "Before I answer, I need a few details.")
         self.assertEqual(result["clarification"]["questions"][0]["label"], "Which scope?")
 
@@ -4554,6 +4554,13 @@ class AppRoutesTestCase(unittest.TestCase):
                 for message in second_messages
             )
         )
+        for message in second_messages:
+            if message.get("role") != "assistant":
+                continue
+            for tool_call in message.get("tool_calls") or []:
+                self.assertIn("function", tool_call)
+                self.assertNotIn("preview", tool_call)
+                self.assertNotIn("arguments", tool_call)
         self.assertEqual(events[-1]["entry"]["model"], "deepseek-chat")
         self.assertEqual(events[-1]["entry"]["summary"], "Recovered after timeout.")
         self.assertEqual(runtime_state["sub_agent_traces"][0]["status"], "partial")
@@ -4721,7 +4728,7 @@ class AppRoutesTestCase(unittest.TestCase):
             )
 
         clarification_event = next(event for event in events if event["type"] == "clarification_request")
-        self.assertEqual(clarification_event["text"], "Soruları hazırladım.")
+        self.assertEqual(clarification_event["text"], "")
         self.assertEqual(clarification_event["clarification"]["intro"], "Before I answer, I need two details.")
         self.assertEqual(clarification_event["clarification"]["questions"][0]["id"], "scope")
         self.assertFalse(any(event["type"] == "answer_delta" for event in events))
@@ -5089,7 +5096,7 @@ class AppRoutesTestCase(unittest.TestCase):
             [
                 {
                     "type": "clarification_request",
-                    "text": "Soruları hazırladım.",
+                    "text": "",
                     "clarification": {
                         "intro": "Before I answer, I need two details.",
                         "submit_label": "Continue",

@@ -6705,6 +6705,7 @@ function createMessageGroup(role, text, metadata = null, options = {}) {
   const hasImage = attachments.some((attachment) => attachment.kind === "image");
   const hasDocument = attachments.some((attachment) => attachment.kind === "document");
   const displayText = text || (attachments.length ? "Attachments uploaded." : hasImage ? "Image uploaded." : hasDocument ? "Document uploaded." : "");
+  const pendingClarification = role === "assistant" ? getPendingClarification(normalizedMetadata) : null;
   const footerActions = createMessageActions(
     {
       id: options.messageId,
@@ -6738,7 +6739,9 @@ function createMessageGroup(role, text, metadata = null, options = {}) {
     } else {
       bubble.textContent = displayText;
     }
-    group.appendChild(bubble);
+    if (!(role === "assistant" && !displayText && pendingClarification)) {
+      group.appendChild(bubble);
+    }
   }
 
   if (role === "assistant" && !options.isInlineEditingTarget) {
@@ -7255,10 +7258,14 @@ async function sendMessage(options = {}) {
         pendingClarification = event.clarification && typeof event.clarification === "object" ? event.clarification : null;
         rawAnswer = String(event.text || "").trim();
         fullAnswer = rawAnswer;
-        flushAnswerRender();
         asstBubble.classList.remove("thinking");
         asstBubble.classList.remove("cursor");
-        renderBubbleMarkdown(asstBubble, fullAnswer);
+        if (fullAnswer) {
+          flushAnswerRender();
+          renderBubbleMarkdown(asstBubble, fullAnswer);
+        } else {
+          asstBubble.remove();
+        }
         scrollToBottom();
       } else if (event.type === "usage") {
         latestUsage = normalizeUsagePayload(event);

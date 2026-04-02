@@ -908,6 +908,86 @@ def _normalize_sub_agent_history_message(message: dict) -> dict | None:
     return normalized
 
 
+def _build_sub_agent_retry_messages(child_history: list[dict]) -> list[dict]:
+    if not isinstance(child_history, list):
+        return []
+
+    retry_messages: list[dict] = []
+    index = 0
+    while index < len(child_history):
+        message = child_history[index]
+        if not isinstance(message, dict):
+            index += 1
+            continue
+
+        role = str(message.get("role") or "").strip()
+        content = _clean_tool_text(message.get("content") or "", limit=SUB_AGENT_MAX_MESSAGE_CONTENT_CHARS)
+
+        if role == "assistant":
+            retry_message: dict[str, Any] = {"role": "assistant"}
+            if content:
+                retry_message["content"] = content
+
+            raw_tool_calls = message.get("tool_calls") if isinstance(message.get("tool_calls"), list) else []
+            normalized_tool_calls = []
+            tool_call_ids: list[str] = []
+            lookahead_index = index + 1
+            while lookahead_index < len(child_history):
+                next_message = child_history[lookahead_index]
+                if not isinstance(next_message, dict) or str(next_message.get("role") or "").strip() != "tool":
+                    break
+                tool_call_ids.append(str(next_message.get("tool_call_id") or "").strip()[:120])
+                lookahead_index += 1
+
+            for call_index, raw_tool_call in enumerate(raw_tool_calls[:8], start=1):
+                if not isinstance(raw_tool_call, dict):
+                    continue
+                function_name = _clean_tool_text(raw_tool_call.get("name") or "", limit=80)
+                if not function_name:
+                    continue
+                arguments_text = _clean_tool_text(raw_tool_call.get("arguments") or "", limit=1_200)
+                if not arguments_text:
+                    arguments_text = "{}"
+                tool_call_id = ""
+                if call_index - 1 < len(tool_call_ids):
+                    tool_call_id = tool_call_ids[call_index - 1]
+                if not tool_call_id:
+                    tool_call_id = str(raw_tool_call.get("id") or f"tool-call-{call_index}").strip()[:120]
+                normalized_tool_calls.append(
+                    {
+                        "id": tool_call_id,
+                        "type": "function",
+                        "function": {
+                            "name": function_name,
+                            "arguments": arguments_text,
+                        },
+                    }
+                )
+
+            if normalized_tool_calls:
+                retry_message["tool_calls"] = normalized_tool_calls
+            if retry_message.get("content") or normalized_tool_calls:
+                retry_messages.append(retry_message)
+            index += 1
+            continue
+
+        if role == "tool":
+            tool_message: dict[str, Any] = {"role": "tool", "content": content}
+            tool_call_id = str(message.get("tool_call_id") or "").strip()[:120]
+            if tool_call_id:
+                tool_message["tool_call_id"] = tool_call_id
+            if tool_message.get("content"):
+                retry_messages.append(tool_message)
+            index += 1
+            continue
+
+        if content:
+            retry_messages.append({"role": role, "content": content})
+        index += 1
+
+    return retry_messages
+
+
 def _upsert_sub_agent_tool_trace(entries: list[dict], call_map: dict[str, int], event: dict) -> None:
     tool_name = str(event.get("tool") or "").strip()
     if not tool_name:
@@ -2539,7 +2619,7 @@ def _normalize_clarification_payload(tool_args: dict) -> dict:
 
 def _build_clarification_text(payload: dict) -> str:
     del payload
-    return "Soruları hazırladım."
+    return ""
 
 
 def _get_canvas_runtime_state(runtime_state: dict) -> dict:
@@ -2781,7 +2861,7 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
 
             if (timed_out or retryable_model_error) and retry_count < retry_attempts and time.monotonic() < overall_deadline:
                 retry_reason = "a timeout" if timed_out else "a model error"
-                resume_messages.extend(child_history)
+                resume_messages.extend(_build_sub_agent_retry_messages(child_history))
                 resume_messages.append(_build_sub_agent_resume_message(child_model, retry_reason))
                 retry_count += 1
                 sleep_for = min(float(retry_delay_seconds), max(0.0, overall_deadline - time.monotonic()))
@@ -2801,7 +2881,7 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
                 if not fallback_attempt_logged:
                     fallback_attempts.append({"model": child_model, "error": error_text or fallback_note or "Retryable model failure."})
                     fallback_attempt_logged = True
-                resume_messages.extend(child_history)
+                resume_messages.extend(_build_sub_agent_retry_messages(child_history))
                 resume_messages.append(_build_sub_agent_resume_message(child_model, prompt_reason_label))
                 result_status = "partial"
 
@@ -3677,9 +3757,14 @@ def _build_reasoning_replay_instruction(reasoning_state: dict, current_goal: str
 
     parts = [REASONING_REPLAY_MARKER]
     parts.append(
-        "Use this as your prior reasoning from earlier steps in the current run. Continue from it when it still fits, but correct it if tool results changed the picture."
+        "This is a compact memory of your own earlier thinking in the current run. Read it as a working note, not as new user input."
     )
-    parts.append("Do not restart the plan from scratch after each tool result unless new evidence clearly invalidates it.")
+    parts.append(
+        "Use it to keep the same plan across tool calls: remember what you already checked, what you concluded, and what the next step was."
+    )
+    parts.append(
+        "If a tool result changes the situation, update the plan instead of restarting from zero. If it does not change the picture, continue where you left off."
+    )
 
     normalized_goal = _clean_tool_text(current_goal or "", limit=180)
     if normalized_goal:
