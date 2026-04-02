@@ -103,6 +103,7 @@ from token_utils import estimate_text_tokens
 from vision import answer_image_question
 from web_tools import (
     fetch_url_tool,
+    grep_fetched_content_tool,
     search_news_ddgs_tool,
     search_news_google_tool,
     search_web_tool,
@@ -181,6 +182,8 @@ PARALLEL_SAFE_TOOL_NAMES = WEB_TOOL_NAMES | {
     "search_knowledge_base",
     "search_tool_memory",
     "read_scratchpad",
+    # Fetch content grep (read-only, cache-based)
+    "grep_fetched_content",
     # Workspace reads
     "read_file",
     "list_dir",
@@ -197,6 +200,7 @@ SUB_AGENT_ALLOWED_TOOL_NAMES = {
     "read_scratchpad",
     "search_web",
     "fetch_url",
+    "grep_fetched_content",
     "search_news_ddgs",
     "search_news_google",
     "expand_canvas_document",
@@ -1488,10 +1492,11 @@ def _build_fetch_clipped_text(result: dict, token_threshold: int, clip_aggressiv
         return raw_content, token_estimate
 
     clip_ratio = min(1.0, token_threshold / max(token_estimate, 1))
-    preserve_multiplier = 1.8 - (_normalize_fetch_clip_aggressiveness(clip_aggressiveness) / 100) * 1.0
+    preserve_multiplier = min(1.0, 1.8 - (_normalize_fetch_clip_aggressiveness(clip_aggressiveness) / 100) * 1.0)
     target_chars = max(2000, min(FETCH_SUMMARY_MAX_CHARS, int(len(raw_content) * clip_ratio * preserve_multiplier)))
     clipped_content = _clean_tool_text(raw_content, limit=target_chars)
-    return clipped_content or raw_content, token_estimate
+    result_text = clipped_content or raw_content
+    return result_text, _estimate_text_tokens(result_text)
 
 
 def _build_fetch_diagnostic_fields(result: dict) -> dict:
@@ -1532,7 +1537,8 @@ def _build_fetch_diagnostic_fields(result: dict) -> dict:
         "same_url_retry_recommended": False,
         "fetch_diagnostic": (
             f"fetch_url already attempted this URL. Outcome: {detail} "
-            "Do not repeat the same fetch_url call for the same URL unless you have a concrete new reason, a different URL, or the user explicitly asks for a retry."
+            "Do not call fetch_url again for the same URL in this turn. "
+            "If you need to find specific text from this page, use grep_fetched_content instead."
         ).strip(),
     }
 
@@ -1585,11 +1591,17 @@ def _prepare_fetch_result_for_model(
     if not clipped_text or clipped_text == content:
         return prepared
 
+    raw_char_count = len(content)
+    clipped_char_count = len(clipped_text)
+    clipped_pct = int(100 * clipped_char_count / max(raw_char_count, 1))
     prepared["content"] = clipped_text
     prepared["content_mode"] = "clipped_text"
     prepared["summary_notice"] = (
-        "Content was cleaned and clipped because the fetched page exceeded the token threshold. "
-        "The leading portion is preserved to keep the original page wording intact."
+        f"Content was clipped: showing {clipped_char_count:,} of {raw_char_count:,} characters "
+        f"({clipped_pct}% of the page, approximately {token_estimate:,} tokens). "
+        "The leading portion is preserved. "
+        "To find specific text in the full page, use grep_fetched_content with this URL and a keyword or regex pattern. "
+        "To search semantically across past fetched pages, use search_tool_memory with this URL or a related query."
     )
     prepared["content_token_estimate"] = token_estimate
     prepared["raw_content_available"] = True
@@ -3156,6 +3168,24 @@ def _run_fetch_url(tool_args: dict, runtime_state: dict):
     return result, _summarize_fetch_result(result, tool_args.get("url", ""))
 
 
+def _run_grep_fetched_content(tool_args: dict, runtime_state: dict):
+    del runtime_state
+    result = grep_fetched_content_tool(
+        url=tool_args.get("url", ""),
+        pattern=tool_args.get("pattern", ""),
+        context_lines=tool_args.get("context_lines", 2),
+        max_matches=tool_args.get("max_matches", 20),
+    )
+    match_count = result.get("match_count", 0)
+    if result.get("error"):
+        summary = f"grep_fetched_content error: {_clean_tool_text(result['error'], limit=120)}"
+    elif match_count == 0:
+        summary = f"grep_fetched_content: no matches for pattern '{_clean_tool_text(tool_args.get('pattern', ''), limit=60)}'"
+    else:
+        summary = f"grep_fetched_content: {match_count} match(es) for pattern '{_clean_tool_text(tool_args.get('pattern', ''), limit=60)}'"
+    return result, summary
+
+
 def _run_create_canvas_document(tool_args: dict, runtime_state: dict):
     canvas_state = _get_canvas_runtime_state(runtime_state)
     document = create_canvas_document(
@@ -3416,6 +3446,7 @@ _TOOL_EXECUTORS = {
     "search_news_ddgs": _run_search_news_ddgs,
     "search_news_google": _run_search_news_google,
     "fetch_url": _run_fetch_url,
+    "grep_fetched_content": _run_grep_fetched_content,
     "expand_canvas_document": _run_expand_canvas_document,
     "scroll_canvas_document": _run_scroll_canvas_document,
     "search_canvas_document": _run_search_canvas_document,
@@ -3542,19 +3573,34 @@ def _build_compact_tool_message_content(
         parts = []
         title = _clean_tool_text(transcript_result.get("title") or "", limit=160)
         url = _clean_tool_text(transcript_result.get("url") or tool_args.get("url") or "", limit=200)
-        notice = _clean_tool_text(transcript_result.get("summary_notice") or "", limit=240)
+        notice = _clean_tool_text(transcript_result.get("summary_notice") or "", limit=500)
         diagnostic = _clean_tool_text(transcript_result.get("fetch_diagnostic") or "", limit=280)
-        body = _clean_tool_text(transcript_result.get("content") or "", limit=4_000)
+        content_format = str(transcript_result.get("content_format") or "").strip()
+        outline = transcript_result.get("outline")
+        pages_extracted = transcript_result.get("pages_extracted")
+        page_count = transcript_result.get("page_count")
+        body = _clean_tool_text(transcript_result.get("content") or "", limit=FETCH_SUMMARY_MAX_CHARS)
         if title:
             parts.append(f"Title: {title}")
         if url:
             parts.append(f"URL: {url}")
+        if content_format and content_format != "html":
+            fmt_info = f"Format: {content_format}"
+            if content_format == "pdf" and isinstance(pages_extracted, int) and isinstance(page_count, int):
+                fmt_info += f" ({pages_extracted} of {page_count} pages extracted)"
+            elif content_format == "pdf" and isinstance(pages_extracted, int):
+                fmt_info += f" ({pages_extracted} pages extracted)"
+            parts.append(fmt_info)
         if summary:
             parts.append(f"Summary: {_clean_tool_text(summary, limit=300)}")
         if notice:
             parts.append(f"Note: {notice}")
         if diagnostic:
             parts.append(f"Fetch status: {diagnostic}")
+        if outline and isinstance(outline, list) and transcript_result.get("content_mode") == "clipped_text":
+            heading_lines = [f"  - {_clean_tool_text(str(h), limit=120)}" for h in outline[:30] if str(h).strip()]
+            if heading_lines:
+                parts.append("## Page Outline\n" + "\n".join(heading_lines))
         if body:
             parts.append(body)
         return "\n\n".join(parts).strip()
@@ -3581,19 +3627,34 @@ def _build_compact_tool_message_content(
         parts = []
         title = _clean_tool_text(transcript_result.get("title") or "", limit=160)
         url = _clean_tool_text(transcript_result.get("url") or tool_args.get("url") or "", limit=200)
-        notice = _clean_tool_text(transcript_result.get("summary_notice") or "", limit=240)
+        notice = _clean_tool_text(transcript_result.get("summary_notice") or "", limit=500)
         diagnostic = _clean_tool_text(transcript_result.get("fetch_diagnostic") or "", limit=280)
-        body = _clean_tool_text(transcript_result.get("content") or "", limit=4_000)
+        content_format = str(transcript_result.get("content_format") or "").strip()
+        outline = transcript_result.get("outline")
+        pages_extracted = transcript_result.get("pages_extracted")
+        page_count = transcript_result.get("page_count")
+        body = _clean_tool_text(transcript_result.get("content") or "", limit=FETCH_SUMMARY_MAX_CHARS)
         if title:
             parts.append(f"Title: {title}")
         if url:
             parts.append(f"URL: {url}")
+        if content_format and content_format != "html":
+            fmt_info = f"Format: {content_format}"
+            if content_format == "pdf" and isinstance(pages_extracted, int) and isinstance(page_count, int):
+                fmt_info += f" ({pages_extracted} of {page_count} pages extracted)"
+            elif content_format == "pdf" and isinstance(pages_extracted, int):
+                fmt_info += f" ({pages_extracted} pages extracted)"
+            parts.append(fmt_info)
         if summary:
             parts.append(f"Summary: {_clean_tool_text(summary, limit=300)}")
         if notice:
             parts.append(f"Note: {notice}")
         if diagnostic:
             parts.append(f"Fetch status: {diagnostic}")
+        if outline and isinstance(outline, list) and transcript_result.get("content_mode") == "clipped_text":
+            heading_lines = [f"  - {_clean_tool_text(str(h), limit=120)}" for h in outline[:30] if str(h).strip()]
+            if heading_lines:
+                parts.append("## Page Outline\n" + "\n".join(heading_lines))
         if body:
             parts.append(body)
         return "\n\n".join(parts).strip()
@@ -5026,10 +5087,14 @@ def run_agent_stream(
                         persisted_tool_results.append(storage_entry)
                     if tool_name in WEB_TOOL_NAMES and storage_entry:
                         try:
+                            # Use raw_content when available so the full (unclipped) page
+                            # text is indexed in tool memory and can be found later by
+                            # search_tool_memory or grep_fetched_content.
+                            memory_content = storage_entry.get("raw_content") or storage_entry.get("content", "")
                             upsert_tool_memory_result(
                                 tool_name,
                                 storage_entry.get("input_preview", ""),
-                                storage_entry.get("content", ""),
+                                memory_content,
                                 storage_entry.get("summary", ""),
                             )
                         except Exception as exc:

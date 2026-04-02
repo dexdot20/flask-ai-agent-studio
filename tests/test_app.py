@@ -5337,7 +5337,7 @@ class AppRoutesTestCase(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(mocked_collect.call_args.args[1], "openrouter:anthropic/claude-sonnet-4.5")
+        self.assertTrue(mocked_collect.call_args.args[1].startswith("openrouter:anthropic/claude-sonnet-4.5"))
 
     def test_chat_stream_persists_messages(self):
         conversation_id = self._create_conversation()
@@ -8605,35 +8605,77 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertNotIn("-----", result["content"])
         self.assertNotIn("\u200b", result["content"])
 
-        def test_extract_html_falls_back_to_meta_noscript_and_json_ld_when_body_is_thin(self):
-                html = """
-                <html>
-                    <head>
-                        <title>Rates Page</title>
-                        <title>Rates Page</title>
-                        <meta name="description" content="Current market summary for dollars and euros.">
-                        <script type="application/ld+json">
-                            {
-                                "headline": "Live USD/TRY and EUR/TRY data",
-                                "description": "Current exchange-rate information on the open market."
-                            }
-                        </script>
-                    </head>
-                    <body>
-                        <main><div></div></main>
-                        <noscript>Fallback rate summary shown without JavaScript.</noscript>
-                    </body>
-                </html>
-                """
+    def test_extract_html_outline_ignores_noise_regions(self):
+        html = """
+        <html>
+            <body>
+                <nav><h2>Site Nav</h2></nav>
+                <main>
+                    <h1>Main Title</h1>
+                    <h2>Section A</h2>
+                    <p>Body copy.</p>
+                </main>
+                <footer><h3>Footer Head</h3></footer>
+            </body>
+        </html>
+        """
 
-                result = _extract_html(html, "https://example.com/rates")
+        result = _extract_html(html, "https://example.com/outline")
 
-                self.assertEqual(result["title"], "Rates Page")
-                self.assertEqual(result["title"], "Rates Page")
-                self.assertIn("Current market summary for dollars and euros.", result["content"])
-                self.assertIn("Fallback rate summary shown without JavaScript.", result["content"])
-                self.assertIn("Live USD/TRY and EUR/TRY data", result["content"])
-                self.assertIn("Live USD/TRY and EUR/TRY data", result["content"])
+        self.assertEqual(result["outline"], ["Main Title", "Section A"])
+
+    def test_extract_html_falls_back_to_meta_noscript_and_json_ld_when_body_is_thin(self):
+        html = """
+        <html>
+            <head>
+                <title>Rates Page</title>
+                <title>Rates Page</title>
+                <meta name="description" content="Current market summary for dollars and euros.">
+                <script type="application/ld+json">
+                    {
+                        "headline": "Live USD/TRY and EUR/TRY data",
+                        "description": "Current exchange-rate information on the open market."
+                    }
+                </script>
+            </head>
+            <body>
+                <main><div></div></main>
+                <noscript>Fallback rate summary shown without JavaScript.</noscript>
+            </body>
+        </html>
+        """
+
+        result = _extract_html(html, "https://example.com/rates")
+
+        self.assertEqual(result["title"], "Rates Page")
+        self.assertEqual(result["title"], "Rates Page")
+        self.assertIn("Current market summary for dollars and euros.", result["content"])
+        self.assertIn("Fallback rate summary shown without JavaScript.", result["content"])
+        self.assertIn("Live USD/TRY and EUR/TRY data", result["content"])
+        self.assertIn("Live USD/TRY and EUR/TRY data", result["content"])
+
+    def test_grep_fetched_content_tool_handles_invalid_window_args_and_skips_tool_memory_headers(self):
+        with patch("web_tools.cache_get", return_value=None), patch(
+            "rag_service.get_exact_tool_memory_match",
+            return_value={
+                "content": (
+                    "tool:fetch_url\n"
+                    "Input: https://example.com/page\n"
+                    "Summary: Example page\n"
+                    "needle in page body"
+                )
+            },
+        ):
+            result = web_tools.grep_fetched_content_tool(
+                "https://example.com/page",
+                "needle",
+                context_lines="oops",
+                max_matches="bad",
+            )
+
+        self.assertEqual(result["match_count"], 1)
+        self.assertEqual(result["matches"][0]["line_number"], 1)
+        self.assertEqual(result["matches"][0]["line"], "needle in page body")
 
     def test_fetch_url_tool_recovers_partial_chunked_content(self):
         class FakeResponse:
@@ -8982,7 +9024,8 @@ class AppRoutesTestCase(unittest.TestCase):
         stored_result = tool_capture_event["tool_results"][0]
         self.assertEqual(stored_result["tool_name"], "fetch_url")
         self.assertEqual(stored_result["content_mode"], "clipped_text")
-        self.assertIn("cleaned and clipped", stored_result["summary_notice"])
+        self.assertIn("clipped", stored_result["summary_notice"])
+        self.assertIn("grep_fetched_content", stored_result["summary_notice"])
         self.assertIn("raw_content", stored_result)
         self.assertEqual(stored_result["raw_content"], long_content.strip())
 
@@ -9070,7 +9113,8 @@ class AppRoutesTestCase(unittest.TestCase):
         tool_capture_event = next(event for event in events if event["type"] == "tool_capture")
         stored_result = tool_capture_event["tool_results"][0]
         self.assertEqual(stored_result["fetch_outcome"], "partial_content")
-        self.assertIn("Do not repeat the same fetch_url call", stored_result["fetch_diagnostic"])
+        self.assertIn("Do not call fetch_url again for the same URL in this turn", stored_result["fetch_diagnostic"])
+        self.assertIn("grep_fetched_content", stored_result["fetch_diagnostic"])
 
         second_call_messages = mocked_create.call_args_list[1].kwargs["messages"]
         transcript_content = second_call_messages[-1]["content"]

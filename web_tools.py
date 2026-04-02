@@ -326,6 +326,15 @@ def _combine_distinct_text_blocks(blocks: list[str]) -> str:
     return "\n\n".join(combined)
 
 
+def _extract_html_outline(root) -> list[str]:
+    headings = []
+    for tag in root.find_all(["h1", "h2", "h3", "h4"]):
+        text = _clean_extracted_text(tag.get_text(separator=" "))
+        if text and len(headings) < 30:
+            headings.append(text[:120])
+    return headings
+
+
 def _extract_html(html: str, url: str) -> dict:
     soup = BeautifulSoup(html, "html.parser")
     title = soup.find("title") or ""
@@ -346,30 +355,38 @@ def _extract_html(html: str, url: str) -> dict:
         tag.decompose()
 
     content_root = soup.find("main") or soup.find("article") or soup.body or soup
+    outline = _extract_html_outline(content_root)
     primary_text = _clean_extracted_text(content_root.get_text(separator="\n"))
     text = primary_text
     if len(primary_text) < _THIN_CONTENT_MIN_CHARS:
         text = _combine_distinct_text_blocks([primary_text, noscript_text, meta_description, structured_text])
     if not text:
         text = _combine_distinct_text_blocks([meta_description, structured_text, noscript_text])
-    return {"url": url, "title": title, "content": _truncate_content(text), "content_format": "html"}
+    result = {"url": url, "title": title, "content": _truncate_content(text), "content_format": "html"}
+    if outline:
+        result["outline"] = outline
+    return result
 
 
 def _extract_pdf(data: bytes, url: str) -> dict:
     try:
         reader = PdfReader(BytesIO(data))
+        total_pages = len(reader.pages)
         pages = []
         for index, page in enumerate(reader.pages):
             if index >= 50:
                 pages.append("[More pages available, truncated]")
                 break
             pages.append(page.extract_text() or "")
+        pages_extracted = min(total_pages, 50)
         text = _clean_extracted_text("\n\n".join(page for page in pages if page.strip()))
         return {
             "url": url,
             "title": f"PDF: {url.rstrip('/').split('/')[-1]}",
             "content": _truncate_content(text),
             "content_format": "pdf",
+            "page_count": total_pages,
+            "pages_extracted": pages_extracted,
         }
     except Exception as exc:
         return {"url": url, "title": "", "content": "", "error": f"Could not read PDF: {exc}"}
@@ -763,3 +780,120 @@ def search_news_google_tool(queries: list, lang: str = "tr", when: str | None = 
             results.append({"error": str(exc), "query": raw_query})
 
     return results
+
+
+_GREP_CONTEXT_MAX_LINES = 5
+_GREP_MAX_MATCHES = 30
+
+
+def _coerce_grep_int(value, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
+
+
+def _strip_tool_memory_record_prefix(text: str) -> str:
+    lines = str(text or "").splitlines()
+    if not lines or not lines[0].startswith("tool:"):
+        return str(text or "")
+
+    start_index = 1
+    while start_index < len(lines) and lines[start_index].startswith(("Input:", "Summary:")):
+        start_index += 1
+
+    stripped = "\n".join(lines[start_index:]).lstrip()
+    return stripped or str(text or "")
+
+
+def grep_fetched_content_tool(
+    url: str,
+    pattern: str,
+    context_lines: int = 2,
+    max_matches: int = 20,
+) -> dict:
+    """Search for a pattern in the cached content of a previously fetched URL.
+
+    Looks up the raw page content from the fetch cache or tool memory, then
+    performs a case-insensitive regex search line-by-line and returns matching
+    lines with surrounding context.
+    """
+    url = str(url or "").strip()
+    pattern = str(pattern or "").strip()
+    if not url:
+        return {"error": "url is required", "url": ""}
+    if not pattern:
+        return {"error": "pattern is required", "url": url}
+
+    context_lines = _coerce_grep_int(context_lines, default=2, minimum=0, maximum=_GREP_CONTEXT_MAX_LINES)
+    max_matches = _coerce_grep_int(max_matches, default=20, minimum=1, maximum=_GREP_MAX_MATCHES)
+
+    # 1. Try the in-process fetch cache first (fastest, same session)
+    cache_key = f"fetch:{hashlib.md5(url.encode()).hexdigest()}"
+    cached = cache_get(cache_key)
+    if isinstance(cached, dict):
+        raw_text = cached.get("content") or ""
+    else:
+        raw_text = ""
+
+    # 2. Fall back to RAG tool memory (cross-turn, full raw_content preferred)
+    if not raw_text:
+        try:
+            from rag_service import get_exact_tool_memory_match  # lazy import – avoids circular deps
+            match = get_exact_tool_memory_match("fetch_url", url)
+            if isinstance(match, dict):
+                raw_text = _strip_tool_memory_record_prefix(match.get("content") or "")
+        except Exception:
+            raw_text = ""
+
+    if not raw_text:
+        return {
+            "error": (
+                "URL content not found in cache or tool memory. "
+                "Call fetch_url for this URL first, then use grep_fetched_content."
+            ),
+            "url": url,
+            "match_count": 0,
+            "matches": [],
+        }
+
+    # Compile the pattern
+    try:
+        compiled = re.compile(pattern, re.IGNORECASE)
+    except re.error as exc:
+        return {"error": f"Invalid regex pattern: {exc}", "url": url, "match_count": 0, "matches": []}
+
+    lines = raw_text.splitlines()
+    matches: list[dict] = []
+    for line_index, line in enumerate(lines):
+        if len(matches) >= max_matches:
+            break
+        if not compiled.search(line):
+            continue
+        before_start = max(0, line_index - context_lines)
+        after_end = min(len(lines), line_index + context_lines + 1)
+        matches.append(
+            {
+                "line_number": line_index + 1,
+                "line": line,
+                "context_before": lines[before_start:line_index],
+                "context_after": lines[line_index + 1 : after_end],
+            }
+        )
+
+    truncated = len(matches) >= max_matches and any(
+        compiled.search(line) for line in lines[matches[-1]["line_number"] :]
+    )
+    result: dict = {
+        "url": url,
+        "pattern": pattern,
+        "match_count": len(matches),
+        "matches": matches,
+    }
+    if truncated:
+        result["truncated"] = True
+        result["note"] = f"Results limited to {max_matches} matches. Refine the pattern or increase max_matches to see more."
+    if not matches:
+        result["note"] = "No matches found. The pattern may not appear in the fetched content, or the content was not cached."
+    return result

@@ -178,6 +178,7 @@ DEFAULT_ACTIVE_TOOL_NAMES = [
     "search_tool_memory",
     "search_web",
     "fetch_url",
+    "grep_fetched_content",
     "search_news_ddgs",
     "search_news_google",
     "create_canvas_document",

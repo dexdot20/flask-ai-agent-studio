@@ -654,8 +654,11 @@ TOOL_SPECS = [
     {
         "name": "fetch_url",
         "description": (
-            "Fetch and read the content of a specific web page. Returns cleaned text and metadata. "
-            "Use after search_web to read the full content of a relevant page."
+            "Fetch and read the content of a specific web page. Returns cleaned text, metadata, and a page outline. "
+            "Use after search_web to read the full content of a relevant page. "
+            "For very large pages the content may be clipped to fit the token budget; "
+            "when that happens the result includes an outline of the page sections and a note explaining how many characters were shown. "
+            "If you need to find a specific term or passage in a clipped page, use grep_fetched_content after this tool."
         ),
         "parameters": {
             "type": "object",
@@ -670,6 +673,63 @@ TOOL_SPECS = [
         "prompt": {
             "purpose": "Reads the cleaned content of a specific URL.",
             "inputs": {"url": "full http/https URL"},
+            "guidance": (
+                "Large pages are automatically clipped to stay within the token budget. "
+                "When content is clipped the result shows a Page Outline of the section headings. "
+                "Do not repeat the same URL in the same turn. "
+                "To locate specific text in a clipped page use grep_fetched_content. "
+                "To recall content from a previously fetched URL across turns use search_tool_memory."
+            ),
+        },
+    },
+    {
+        "name": "grep_fetched_content",
+        "description": (
+            "Search for a keyword, phrase, or regex pattern inside the content of a previously fetched URL. "
+            "Only works for URLs that were already fetched with fetch_url in this session or stored in tool memory. "
+            "Returns matching lines with surrounding context. "
+            "Use this instead of re-fetching the same URL when you need to find a specific value, code snippet, heading, or term."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The URL whose cached content to search (must have been fetched earlier with fetch_url).",
+                },
+                "pattern": {
+                    "type": "string",
+                    "description": "Keyword, phrase, or Python regex pattern to search for (case-insensitive).",
+                },
+                "context_lines": {
+                    "type": "integer",
+                    "description": "Number of lines of context to include before and after each match (0–5, default 2).",
+                    "minimum": 0,
+                    "maximum": 5,
+                },
+                "max_matches": {
+                    "type": "integer",
+                    "description": "Maximum number of matches to return (1–30, default 20).",
+                    "minimum": 1,
+                    "maximum": 30,
+                },
+            },
+            "required": ["url", "pattern"],
+        },
+        "prompt": {
+            "purpose": "Searches cached fetch_url content for a keyword, phrase, or regex.",
+            "inputs": {
+                "url": "URL that was previously fetched",
+                "pattern": "keyword or regex",
+                "context_lines": "0-5 lines of context (default 2)",
+                "max_matches": "1-30 max results (default 20)",
+            },
+            "guidance": (
+                "Only works for URLs already fetched in this session via fetch_url or stored in tool memory. "
+                "Call fetch_url first if the URL has not been fetched yet. "
+                "Use simple keywords for broad matches or anchored regex (e.g. r'price:\\s*\\d+') for precise values. "
+                "Prefer this over re-fetching the same URL to save tokens."
+            ),
         },
     },
     {
