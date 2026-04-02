@@ -278,6 +278,27 @@
             <div class="settings-page-section-card">
               <div class="settings-page-section-card__header">
                 <div>
+                  <span class="settings-section-kicker">Parallelism</span>
+                  <h3>Concurrent tool calls</h3>
+                </div>
+                <p>Cap how many parallel-safe tool calls can run at once. Lower limits reduce overload and usually make long sub-agent investigations more stable.</p>
+              </div>
+              <div class="settings-page-grid settings-page-grid--two">
+                <div>
+                  <label class="settings-label" for="max-parallel-tools-input">Parent model max parallel tools (1-12)</label>
+                  <input type="number" class="settings-number" id="max-parallel-tools-input" min="1" max="12" value="4" />
+                </div>
+                <div>
+                  <label class="settings-label" for="sub-agent-max-parallel-tools-input">Sub-agent max parallel tools (1-12)</label>
+                  <input type="number" class="settings-number" id="sub-agent-max-parallel-tools-input" min="1" max="12" value="2" />
+                </div>
+              </div>
+              <p class="settings-copy">Parallel-safe calls above the limit stay in the same assistant turn but queue instead of starting together.</p>
+            </div>
+
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
                   <span class="settings-section-kicker">Clarification</span>
                   <h3>Question limit</h3>
                 </div>

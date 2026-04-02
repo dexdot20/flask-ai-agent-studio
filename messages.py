@@ -9,7 +9,10 @@ from config import (
     CLARIFICATION_DEFAULT_MAX_QUESTIONS,
     CLARIFICATION_QUESTION_LIMIT_MAX,
     CLARIFICATION_QUESTION_LIMIT_MIN,
+    DEFAULT_MAX_PARALLEL_TOOLS,
     MAX_USER_PREFERENCES_LENGTH,
+    MAX_PARALLEL_TOOLS_MAX,
+    MAX_PARALLEL_TOOLS_MIN,
     RAG_ENABLED,
 )
 from db import extract_message_attachments, parse_message_metadata, parse_message_tool_calls
@@ -28,6 +31,7 @@ PARALLEL_SAFE_READ_ONLY_TOOL_NAMES = (
     # RAG / memory reads
     "search_knowledge_base",
     "search_tool_memory",
+    "read_scratchpad",
     # Workspace reads
     "read_file",
     "list_dir",
@@ -581,10 +585,19 @@ def _normalize_clarification_max_questions(value: int | None) -> int:
     return max(CLARIFICATION_QUESTION_LIMIT_MIN, min(CLARIFICATION_QUESTION_LIMIT_MAX, normalized))
 
 
+def _normalize_max_parallel_tools(value: int | None, default_value: int = DEFAULT_MAX_PARALLEL_TOOLS) -> int:
+    try:
+        normalized = int(value) if value is not None else int(default_value)
+    except (TypeError, ValueError):
+        normalized = int(default_value)
+    return max(MAX_PARALLEL_TOOLS_MIN, min(MAX_PARALLEL_TOOLS_MAX, normalized))
+
+
 def build_tool_call_contract(
     active_tool_names: list[str],
     canvas_documents=None,
     clarification_max_questions: int | None = None,
+    max_parallel_tools: int | None = None,
 ) -> dict | None:
     runtime_tool_names = resolve_runtime_tool_names(active_tool_names or [], canvas_documents=canvas_documents)
     if not runtime_tool_names:
@@ -598,6 +611,7 @@ def build_tool_call_contract(
 
     parallel_safe_in_use = [name for name in PARALLEL_SAFE_READ_ONLY_TOOL_NAMES if name in runtime_tool_names]
     if parallel_safe_in_use:
+        parallel_limit = _normalize_max_parallel_tools(max_parallel_tools)
         rules.append(
             "## Parallel and Batched Tool Calls\n"
             "Batching independent tool calls into one assistant turn reduces LLM round trips and saves tokens. "
@@ -610,7 +624,10 @@ def build_tool_call_contract(
             + ", ".join(parallel_safe_in_use)
             + ".\n"
             "Emitting multiple calls to these tools in one turn causes them to run at the same time — "
-            "use this whenever you need several independent lookups.\n\n"
+            "use this whenever you need several independent lookups.\n"
+            f"Current parallel cap for this turn: {parallel_limit}. "
+            f"If you emit more than {parallel_limit} parallel-safe call(s), only {parallel_limit} start immediately and the rest queue inside the same turn. "
+            "Keep the batch focused on the highest-value independent reads.\n\n"
             "**All other tools** run sequentially within a turn, but batching them still saves a full LLM "
             "round trip. Batch independent writes together when their inputs do not depend on each other "
             "(e.g. creating two unrelated files, updating two different canvas documents).\n\n"
@@ -693,15 +710,6 @@ def _build_runtime_volatile_parts(
 ) -> list[str]:
     volatile_parts: list[str] = []
 
-    normalized_tool_trace_context = str(tool_trace_context or "").strip()
-    if normalized_tool_trace_context:
-        volatile_parts.append("## Tool Execution History")
-        volatile_parts.append(
-            "*Use this as recent operational memory about which tools were already tried, what they returned, and which paths should not be repeated without a concrete reason.*\n"
-        )
-        volatile_parts.append(normalized_tool_trace_context)
-        volatile_parts.append("")
-
     tool_memory_payload = _build_tool_memory_payload(tool_memory_context, active_tool_names)
     if tool_memory_payload:
         volatile_parts.append("## Tool Memory")
@@ -776,6 +784,15 @@ def _build_runtime_volatile_parts(
             f"## Conversation Summaries\nCount: {summary_count}\n*Guidance: Summary-role messages compress earlier deleted conversation turns and should be treated as authoritative context.*"
         )
 
+    normalized_tool_trace_context = str(tool_trace_context or "").strip()
+    if normalized_tool_trace_context:
+        volatile_parts.append("## Tool Execution History")
+        volatile_parts.append(
+            "*Use this as recent operational memory about which tools were already tried, what they returned, and which paths should not be repeated without a concrete reason.*\n"
+        )
+        volatile_parts.append(normalized_tool_trace_context)
+        volatile_parts.append("")
+
     if include_time_context:
         volatile_parts.append(_build_current_time_context(now))
 
@@ -826,6 +843,7 @@ def build_runtime_system_message(
     canvas_prompt_max_lines: int | None = None,
     workspace_root: str | None = None,
     clarification_max_questions: int | None = None,
+    max_parallel_tools: int | None = None,
     include_time_context: bool = True,
     include_volatile_context: bool = True,
     summary_count: int = 0,
@@ -855,9 +873,12 @@ def build_runtime_system_message(
         parts.append("")
 
     # Scratchpad
-    if scratchpad_text or any(name in {"append_scratchpad", "replace_scratchpad"} for name in active_tool_names):
+    if scratchpad_text or any(name in {"append_scratchpad", "replace_scratchpad", "read_scratchpad"} for name in active_tool_names):
         parts.append("## Scratchpad (AI Persistent Memory)")
-        parts.append("*This section is your complete scratchpad — you can read it directly here without calling any tool.*\n")
+        parts.append(
+            "*This is the live persistent scratchpad for the current conversation. It is already visible in the prompt, so read it directly here first. "
+            "Use read_scratchpad only if you want a tool result for the current stored memory before editing it.*\n"
+        )
         if scratchpad_text:
             parts.append(scratchpad_text)
         else:
@@ -914,6 +935,7 @@ def build_runtime_system_message(
         active_tool_names,
         canvas_documents=canvas_documents,
         clarification_max_questions=clarification_max_questions,
+        max_parallel_tools=max_parallel_tools,
     )
     if contract:
         parts.append("## Tool Calling")
@@ -963,6 +985,7 @@ def prepend_runtime_context(
     canvas_prompt_max_lines: int | None = None,
     workspace_root: str | None = None,
     clarification_max_questions: int | None = None,
+    max_parallel_tools: int | None = None,
     current_context_injection: str | None = None,
     summary_count: int | None = None,
 ):
@@ -979,6 +1002,7 @@ def prepend_runtime_context(
         canvas_prompt_max_lines=canvas_prompt_max_lines,
         workspace_root=workspace_root,
         clarification_max_questions=clarification_max_questions,
+        max_parallel_tools=max_parallel_tools,
         include_time_context=False,
         include_volatile_context=False,
     )

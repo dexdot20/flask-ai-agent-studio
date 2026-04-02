@@ -219,12 +219,14 @@ class AppRoutesTestCase(unittest.TestCase):
         payload = response.get_json()
         self.assertEqual(payload["scratchpad"], "")
         self.assertEqual(payload["max_steps"], 5)
+        self.assertEqual(payload["max_parallel_tools"], 4)
         self.assertEqual(payload["clarification_max_questions"], 5)
         self.assertAlmostEqual(payload["temperature"], 0.7)
         self.assertEqual(payload["canvas_prompt_max_lines"], 800)
         self.assertEqual(payload["canvas_expand_max_lines"], 1600)
         self.assertEqual(payload["canvas_scroll_window_lines"], 200)
         self.assertEqual(payload["sub_agent_timeout_seconds"], 240)
+        self.assertEqual(payload["sub_agent_max_parallel_tools"], 2)
         self.assertEqual(payload["sub_agent_retry_attempts"], 2)
         self.assertEqual(payload["sub_agent_retry_delay_seconds"], 5)
         self.assertEqual(payload["rag_auto_inject"], bool(payload["features"]["rag_enabled"]))
@@ -283,6 +285,7 @@ class AppRoutesTestCase(unittest.TestCase):
             json={
                 "user_preferences": "Keep answers short.",
                 "max_steps": 3,
+                "max_parallel_tools": 6,
                 "temperature": 1.1,
                 "clarification_max_questions": 4,
                 "chat_summary_mode": "aggressive",
@@ -296,6 +299,7 @@ class AppRoutesTestCase(unittest.TestCase):
                 "canvas_expand_max_lines": 2200,
                 "canvas_scroll_window_lines": 150,
                 "sub_agent_timeout_seconds": 360,
+                "sub_agent_max_parallel_tools": 3,
                 "sub_agent_retry_attempts": 3,
                 "sub_agent_retry_delay_seconds": 7,
                 "custom_models": [
@@ -342,6 +346,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["user_preferences"], "Keep answers short.")
         self.assertEqual(payload["scratchpad"], "")
         self.assertEqual(payload["max_steps"], 3)
+        self.assertEqual(payload["max_parallel_tools"], 6)
         self.assertEqual(payload["clarification_max_questions"], 4)
         self.assertAlmostEqual(payload["temperature"], 1.1)
         self.assertEqual(payload["chat_summary_mode"], "aggressive")
@@ -355,6 +360,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["canvas_expand_max_lines"], 2200)
         self.assertEqual(payload["canvas_scroll_window_lines"], 150)
         self.assertEqual(payload["sub_agent_timeout_seconds"], 360)
+        self.assertEqual(payload["sub_agent_max_parallel_tools"], 3)
         self.assertEqual(payload["sub_agent_retry_attempts"], 3)
         self.assertEqual(payload["sub_agent_retry_delay_seconds"], 7)
         self.assertEqual(
@@ -523,6 +529,93 @@ class AppRoutesTestCase(unittest.TestCase):
                 "cache_control": {"type": "ephemeral"},
             },
         )
+
+    def test_apply_model_target_request_options_adds_gemini_cache_breakpoint(self):
+        request_kwargs = {
+            "messages": [
+                {"role": "system", "content": "Reference context. " * 1000},
+                {"role": "user", "content": "Summarize the stable prefix."},
+            ]
+        }
+        target = {
+            "record": {
+                "provider": model_registry.OPENROUTER_PROVIDER,
+                "api_model": "google/gemini-2.5-pro",
+            },
+            "extra_body": {"provider": {"sort": "throughput"}},
+        }
+
+        merged = model_registry.apply_model_target_request_options(request_kwargs, target)
+
+        self.assertEqual(merged["extra_body"], {"provider": {"sort": "throughput"}})
+        self.assertIsInstance(merged["messages"][0]["content"], list)
+        self.assertEqual(
+            merged["messages"][0]["content"][0]["cache_control"],
+            {"type": "ephemeral"},
+        )
+        self.assertEqual(merged["messages"][1]["content"], "Summarize the stable prefix.")
+
+    def test_apply_model_target_request_options_leaves_non_gemini_messages_unchanged(self):
+        request_kwargs = {
+            "messages": [
+                {"role": "system", "content": "Reference context. " * 300},
+                {"role": "user", "content": "Summarize the stable prefix."},
+            ]
+        }
+        target = {
+            "record": {
+                "provider": model_registry.OPENROUTER_PROVIDER,
+                "api_model": "anthropic/claude-sonnet-4.5",
+            },
+            "extra_body": {"cache_control": {"type": "ephemeral"}},
+        }
+
+        merged = model_registry.apply_model_target_request_options(request_kwargs, target)
+
+        self.assertEqual(merged["messages"][0]["content"], request_kwargs["messages"][0]["content"])
+        self.assertEqual(merged["extra_body"], {"cache_control": {"type": "ephemeral"}})
+
+    def test_apply_model_target_request_options_skips_small_block_form_gemini_prefix(self):
+        request_kwargs = {
+            "messages": [
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": "Short stable prefix."}],
+                },
+                {"role": "user", "content": "Summarize the stable prefix."},
+            ]
+        }
+        target = {
+            "record": {
+                "provider": model_registry.OPENROUTER_PROVIDER,
+                "api_model": "google/gemini-2.5-pro",
+            },
+            "extra_body": {"provider": {"sort": "throughput"}},
+        }
+
+        merged = model_registry.apply_model_target_request_options(request_kwargs, target)
+
+        self.assertEqual(merged["messages"][0]["content"], request_kwargs["messages"][0]["content"])
+
+    def test_apply_model_target_request_options_leaves_non_gemini_google_models_unchanged(self):
+        request_kwargs = {
+            "messages": [
+                {"role": "system", "content": "Reference context. " * 1000},
+                {"role": "user", "content": "Summarize the stable prefix."},
+            ]
+        }
+        target = {
+            "record": {
+                "provider": model_registry.OPENROUTER_PROVIDER,
+                "api_model": "google/gemma-3-27b-it",
+            },
+            "extra_body": {"provider": {"sort": "throughput"}},
+        }
+
+        merged = model_registry.apply_model_target_request_options(request_kwargs, target)
+
+        self.assertEqual(merged["messages"][0]["content"], request_kwargs["messages"][0]["content"])
+        self.assertEqual(merged["extra_body"], {"provider": {"sort": "throughput"}})
 
     def test_openrouter_client_uses_proxy_candidates_before_direct_fallback(self):
         attempts = []
@@ -1933,7 +2026,9 @@ class AppRoutesTestCase(unittest.TestCase):
 
     def test_active_tools_include_replace_scratchpad_for_existing_scratchpad_mode(self):
         settings = {"active_tools": json.dumps(["append_scratchpad", "search_web"]) }
-        self.assertIn("replace_scratchpad", get_active_tool_names(settings))
+        active_tools = get_active_tool_names(settings)
+        self.assertIn("replace_scratchpad", active_tools)
+        self.assertIn("read_scratchpad", active_tools)
 
     def test_active_tools_backfill_canvas_inspection_tools_for_legacy_canvas_edit_mode(self):
         settings = {"active_tools": json.dumps(["rewrite_canvas_document", "replace_canvas_lines"])}
@@ -2516,6 +2611,17 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("search_canvas_document", rules_text)
         self.assertIn("search_tool_memory", rules_text)
 
+    def test_build_tool_call_contract_mentions_parallel_limit(self):
+        contract = build_tool_call_contract([
+            "search_web",
+            "fetch_url",
+            "read_file",
+        ], max_parallel_tools=2)
+
+        rules_text = "\n".join(contract["rules"])
+        self.assertIn("Current parallel cap for this turn: 2", rules_text)
+        self.assertIn("only 2 start immediately", rules_text)
+
     def test_build_tool_call_contract_mentions_clarification_limit(self):
         contract = build_tool_call_contract(["ask_clarifying_question"], clarification_max_questions=3)
 
@@ -2670,6 +2776,32 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("## Current Date and Time", content)
         self.assertLess(content.index("## Conversation Summaries"), content.index("## Current Date and Time"))
         self.assertTrue(messages[2]["id"])
+
+    def test_runtime_system_message_places_stable_context_before_tool_history(self):
+        message = build_runtime_system_message(
+            active_tool_names=["search_knowledge_base", "search_tool_memory"],
+            tool_memory_context="Remembered result context.",
+            tool_trace_context="- fetch_url https://example.com -> cached result",
+            canvas_documents=[
+                {
+                    "id": "canvas-1",
+                    "title": "notes.md",
+                    "path": "notes.md",
+                    "format": "markdown",
+                    "content": "Reference block.\nStable canvas excerpt.",
+                }
+            ],
+            now=datetime(2026, 4, 2, 21, 43, tzinfo=timezone.utc),
+        )
+
+        content = message["content"]
+        self.assertIn("## Tool Memory", content)
+        self.assertIn("## Active Canvas Document", content)
+        self.assertIn("## Tool Execution History", content)
+        self.assertIn("## Current Date and Time", content)
+        self.assertLess(content.index("## Tool Memory"), content.index("## Tool Execution History"))
+        self.assertLess(content.index("## Active Canvas Document"), content.index("## Tool Execution History"))
+        self.assertLess(content.index("## Tool Execution History"), content.index("## Current Date and Time"))
 
     def test_runtime_system_message_includes_workspace_sandbox(self):
         message = build_runtime_system_message(
@@ -4214,9 +4346,13 @@ class AppRoutesTestCase(unittest.TestCase):
         html = self.client.get("/settings").get_data(as_text=True)
         self.assertIn("Tool step budget", html)
         self.assertIn("Tool step limit (1-50)", html)
+        self.assertIn("Parent model max parallel tools (1-12)", html)
+        self.assertIn('id="max-parallel-tools-input"', html)
+        self.assertIn('id="sub-agent-max-parallel-tools-input"', html)
         self.assertIn("Max clarification questions (1-25)", html)
         self.assertIn('id="clarification-max-questions-input"', html)
         self.assertIn('value="append_scratchpad"', html)
+        self.assertIn('value="read_scratchpad"', html)
         self.assertIn('value="ask_clarifying_question"', html)
         self.assertIn('value="sub_agent"', html)
         self.assertIn('id="scratchpad-list"', html)
@@ -4264,6 +4400,89 @@ class AppRoutesTestCase(unittest.TestCase):
         tool_result_event = next(event for event in events if event["type"] == "tool_result")
         self.assertEqual(tool_result_event["tool"], "append_scratchpad")
         self.assertEqual(tool_result_event["summary"], "Scratchpad updated")
+
+    def test_execute_tool_reads_current_scratchpad(self):
+        save_app_settings({"scratchpad": "Stable preference\nAnother note"})
+
+        result, summary = _execute_tool("read_scratchpad", {}, runtime_state={})
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["scratchpad"], "Stable preference\nAnother note")
+        self.assertEqual(result["note_count"], 2)
+        self.assertEqual(summary, "Scratchpad read")
+
+    def test_runtime_system_message_shows_empty_scratchpad_when_read_tool_is_active(self):
+        message = build_runtime_system_message(active_tool_names=["read_scratchpad"], scratchpad="")
+
+        content = message["content"]
+        self.assertIn("## Scratchpad (AI Persistent Memory)", content)
+        self.assertIn("read_scratchpad", content)
+        self.assertIn("(Empty)", content)
+        self.assertNotIn("### Memory Write Policy", content)
+
+    def test_run_agent_stream_caps_parallel_safe_tool_workers(self):
+        responses = [
+            iter(
+                [
+                    self._tool_call_chunk("search_web", {"queries": ["repo overview"]}, call_id="call-1", index=0),
+                    self._tool_call_chunk("fetch_url", {"url": "https://example.com"}, call_id="call-2", index=1),
+                    self._tool_call_chunk("read_file", {"path": "README.md"}, call_id="call-3", index=2),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=3, completion_tokens=3, total_tokens=6)),
+                ]
+            ),
+            iter(
+                [
+                    self._stream_chunk(content="Done."),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=1, total_tokens=3)),
+                ]
+            ),
+        ]
+        executor_limits = []
+
+        class FakeFuture:
+            def __init__(self, value):
+                self._value = value
+
+            def result(self):
+                return self._value
+
+        class FakeExecutor:
+            def __init__(self, max_workers):
+                executor_limits.append(max_workers)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def submit(self, fn, slot):
+                return FakeFuture(fn(slot))
+
+        def fake_execute(tool_name, tool_args, runtime_state=None):
+            del tool_args, runtime_state
+            return {"status": "ok", "tool": tool_name}, f"{tool_name} ok"
+
+        with patch("agent.client.chat.completions.create", side_effect=responses), patch(
+            "agent.ThreadPoolExecutor",
+            side_effect=lambda max_workers: FakeExecutor(max_workers),
+        ), patch("agent._validate_tool_arguments", return_value=None), patch(
+            "agent._execute_tool",
+            side_effect=fake_execute,
+        ):
+            events = list(
+                run_agent_stream(
+                    [{"role": "user", "content": "Inspect the repo."}],
+                    "deepseek-chat",
+                    2,
+                    ["search_web", "fetch_url", "read_file"],
+                    max_parallel_tools=2,
+                )
+            )
+
+        self.assertEqual(executor_limits, [2])
+        tool_results = [event for event in events if event["type"] == "tool_result"]
+        self.assertEqual([event["tool"] for event in tool_results], ["search_web", "fetch_url", "read_file"])
 
     def test_execute_tool_runs_sub_agent_with_filtered_read_only_tools(self):
         runtime_state = {
@@ -4326,6 +4545,41 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertTrue(runtime_state["sub_agent_traces"])
         self.assertEqual(runtime_state["sub_agent_traces"][0]["messages"][-1]["role"], "assistant")
         self.assertIn("Sub-agent completed", summary)
+
+    def test_execute_tool_scopes_sub_agent_to_parent_prompt_tools(self):
+        runtime_state = {
+            "agent_context": {
+                "model": "deepseek-chat",
+                "enabled_tool_names": ["sub_agent", "search_web", "read_file"],
+                "prompt_tool_names": ["sub_agent", "read_file"],
+                "conversation_handoff": "User: inspect the repo",
+                "sub_agent_depth": 0,
+            },
+            "canvas": create_canvas_runtime_state(),
+            "canvas_limits": {"expand_max_lines": 800, "scroll_window_lines": 200},
+            "workspace": {"root_path": None},
+        }
+
+        fake_child_events = iter(
+            [
+                {"type": "answer_delta", "text": "Scoped correctly."},
+                {"type": "done"},
+            ]
+        )
+
+        with patch("agent.run_agent_stream", return_value=fake_child_events) as mocked_run:
+            result, _ = _execute_tool(
+                "sub_agent",
+                {
+                    "task": "Inspect the README and summarize the setup steps.",
+                    "allowed_tools": ["search_web", "read_file"],
+                },
+                runtime_state,
+            )
+
+        self.assertEqual(mocked_run.call_args.args[3], ["read_file"])
+        self.assertEqual(mocked_run.call_args.kwargs["prompt_tool_names"], ["read_file"])
+        self.assertEqual(result["status"], "ok")
 
     def test_execute_tool_blocks_recursive_sub_agent_calls(self):
         result, summary = _execute_tool(
@@ -4402,6 +4656,39 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(live_updates[1]["entry"]["tool_trace"][0]["state"], "running")
         self.assertEqual(live_updates[-1]["entry"]["status"], "ok")
         self.assertEqual(live_updates[-1]["entry"]["tool_trace"][0]["state"], "done")
+
+    def test_run_sub_agent_stream_uses_configured_parallel_limit(self):
+        runtime_state = {
+            "agent_context": {
+                "model": "deepseek-chat",
+                "enabled_tool_names": ["sub_agent", "read_file"],
+                "sub_agent_depth": 0,
+            },
+            "canvas": create_canvas_runtime_state(),
+            "canvas_limits": {"expand_max_lines": 800, "scroll_window_lines": 200},
+            "workspace": {"root_path": None},
+        }
+        settings = {
+            "operation_model_preferences": {"sub_agent": ""},
+            "operation_model_fallback_preferences": {"sub_agent": []},
+            "sub_agent_max_parallel_tools": 1,
+        }
+        fake_child_events = iter(
+            [
+                {"type": "answer_delta", "text": "Summary ready."},
+                {"type": "done"},
+            ]
+        )
+
+        with patch("agent.get_app_settings", return_value=settings), patch(
+            "agent.run_agent_stream",
+            return_value=fake_child_events,
+        ) as mocked_run:
+            events = list(_run_sub_agent_stream({"task": "Inspect README.md"}, runtime_state))
+
+        self.assertEqual(mocked_run.call_args.kwargs["max_parallel_tools"], 1)
+        self.assertEqual(mocked_run.call_args.kwargs["prompt_tool_names"], ["read_file"])
+        self.assertEqual(events[-1]["entry"]["status"], "ok")
 
     def test_run_sub_agent_stream_preserves_full_task_when_short_label_is_truncated(self):
         runtime_state = {
@@ -4670,7 +4957,7 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertEqual([call.args[1] for call in mocked_run.call_args_list[:3]], [
             "deepseek-reasoner",
-            "openrouter:anthropic/claude-sonnet-4.5",
+            "openrouter:anthropic/claude-sonnet-4.5@@v=1;s=1",
             "deepseek-chat",
         ])
         self.assertEqual(mocked_run.call_count, 3)
@@ -4679,7 +4966,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(runtime_state["sub_agent_traces"][-1]["model"], "deepseek-chat")
         self.assertEqual(
             runtime_state["sub_agent_traces"][0]["fallback_note"],
-            "Continued on openrouter:anthropic/claude-sonnet-4.5 after model error.",
+            "Continued on openrouter:anthropic/claude-sonnet-4.5@@v=1;s=1 after model error.",
         )
 
     def test_build_sub_agent_messages_mentions_web_query_limit(self):
@@ -6721,6 +7008,59 @@ class AppRoutesTestCase(unittest.TestCase):
                 "reasoning": {"effort": "high"},
             },
         )
+
+    def test_run_agent_stream_adds_gemini_cache_breakpoint_to_request_messages(self):
+        responses = [
+            iter(
+                [
+                    self._stream_chunk(content="Final answer."),
+                    self._stream_chunk(
+                        usage=SimpleNamespace(
+                            prompt_tokens=1,
+                            completion_tokens=1,
+                            total_tokens=2,
+                        )
+                    ),
+                ]
+            )
+        ]
+        mock_create = Mock(side_effect=responses)
+        mock_client = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(
+                    create=mock_create
+                )
+            )
+        )
+
+        with patch("agent.get_app_settings", return_value={}), patch(
+            "agent.resolve_model_target",
+            return_value={
+                "record": {
+                    "provider": model_registry.OPENROUTER_PROVIDER,
+                    "api_model": "google/gemini-2.5-pro",
+                },
+                "client": mock_client,
+                "api_model": "google/gemini-2.5-pro",
+                "extra_body": {"provider": {"sort": "throughput"}},
+            },
+        ):
+            list(
+                run_agent_stream(
+                    [
+                        {"role": "system", "content": "Reference context. " * 1000},
+                        {"role": "user", "content": "Test"},
+                    ],
+                    "openrouter:google/gemini-2.5-pro",
+                    1,
+                    [],
+                )
+            )
+
+        first_message = mock_create.call_args.kwargs["messages"][0]
+        self.assertEqual(first_message["role"], "system")
+        self.assertIsInstance(first_message["content"], list)
+        self.assertEqual(first_message["content"][0]["cache_control"], {"type": "ephemeral"})
 
     def test_run_agent_stream_compacts_canvas_tool_call_history(self):
         large_content = "\n".join(f"value_{index} = {index}" for index in range(400))

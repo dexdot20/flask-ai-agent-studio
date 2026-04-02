@@ -52,9 +52,12 @@ from config import (
     AGENT_CONTEXT_COMPACTION_THRESHOLD,
     AGENT_TOOL_RESULT_TRANSCRIPT_MAX_CHARS,
     AGENT_TRACE_LOG_PATH,
+    DEFAULT_MAX_PARALLEL_TOOLS,
     FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS,
     FETCH_SUMMARY_MAX_CHARS,
     FETCH_SUMMARY_TOKEN_THRESHOLD,
+    MAX_PARALLEL_TOOLS_MAX,
+    MAX_PARALLEL_TOOLS_MIN,
     PROMPT_MAX_INPUT_TOKENS,
     RAG_SEARCH_DEFAULT_TOP_K,
     RAG_TOOL_RESULT_MAX_TEXT_CHARS,
@@ -73,11 +76,13 @@ from db import (
     get_clarification_max_questions,
     get_model_temperature,
     get_rag_source_types,
+    get_sub_agent_max_parallel_tools,
     get_sub_agent_retry_attempts,
     get_sub_agent_retry_delay_seconds,
     get_sub_agent_timeout_seconds,
     parse_message_tool_calls,
     read_image_asset_bytes,
+    normalize_scratchpad_text,
     replace_scratchpad,
 )
 from model_registry import (
@@ -174,6 +179,7 @@ PARALLEL_SAFE_TOOL_NAMES = WEB_TOOL_NAMES | {
     # RAG / memory reads
     "search_knowledge_base",
     "search_tool_memory",
+    "read_scratchpad",
     # Workspace reads
     "read_file",
     "list_dir",
@@ -187,6 +193,7 @@ PARALLEL_SAFE_TOOL_NAMES = WEB_TOOL_NAMES | {
 SUB_AGENT_ALLOWED_TOOL_NAMES = {
     "search_knowledge_base",
     "search_tool_memory",
+    "read_scratchpad",
     "search_web",
     "fetch_url",
     "search_news_ddgs",
@@ -839,10 +846,10 @@ def _build_sub_agent_canvas_handoff(runtime_state: dict) -> str:
     return _clean_tool_text("\n".join(lines), limit=1_500)
 
 
-def _resolve_sub_agent_tool_names(requested_tools, parent_enabled_tool_names: list[str]) -> list[str]:
+def _resolve_sub_agent_tool_names(requested_tools, parent_visible_tool_names: list[str]) -> list[str]:
     available = [
         name
-        for name in _normalize_tool_name_list(parent_enabled_tool_names)
+        for name in _normalize_tool_name_list(parent_visible_tool_names)
         if name in SUB_AGENT_ALLOWED_TOOL_NAMES
     ]
     if not isinstance(requested_tools, list):
@@ -1095,7 +1102,13 @@ def _build_sub_agent_artifacts(transcript_messages: list[dict], tool_results: li
     return artifacts[:SUB_AGENT_MAX_ARTIFACTS]
 
 
-def _build_sub_agent_messages(task: str, conversation_handoff: str, canvas_handoff: str, allowed_tools: list[str]) -> list[dict]:
+def _build_sub_agent_messages(
+    task: str,
+    conversation_handoff: str,
+    canvas_handoff: str,
+    allowed_tools: list[str],
+    max_parallel_tools: int | None = None,
+) -> list[dict]:
     parts = [
         "You are an advanced delegated helper agent for a larger AI assistant system.",
         "Complete the delegated task using only the tools that are exposed to you.",
@@ -1108,6 +1121,12 @@ def _build_sub_agent_messages(task: str, conversation_handoff: str, canvas_hando
     ]
     if allowed_tools:
         parts.append(f"Available read-only tools: {', '.join(allowed_tools)}.")
+    if max_parallel_tools is not None:
+        normalized_parallel_tools = max(MAX_PARALLEL_TOOLS_MIN, min(MAX_PARALLEL_TOOLS_MAX, int(max_parallel_tools or 0)))
+        parts.append(
+            f"At most {normalized_parallel_tools} tool call(s) can execute in parallel in one turn. "
+            f"If you need more independent reads than that, prioritize the best {normalized_parallel_tools} first and avoid low-value fan-out."
+        )
 
     user_parts = [f"Delegated task from the parent assistant:\n{_clean_tool_text(task, limit=2_000)}"]
     if conversation_handoff:
@@ -2637,6 +2656,18 @@ def _run_replace_scratchpad(tool_args: dict, runtime_state: dict):
     return replace_scratchpad(tool_args.get("new_content", ""))
 
 
+def _run_read_scratchpad(tool_args: dict, runtime_state: dict):
+    del tool_args, runtime_state
+    settings = get_app_settings()
+    scratchpad = normalize_scratchpad_text(settings.get("scratchpad", ""))
+    note_count = len([line for line in scratchpad.splitlines() if line.strip()]) if scratchpad else 0
+    return {
+        "status": "ok",
+        "scratchpad": scratchpad,
+        "note_count": note_count,
+    }, "Scratchpad read"
+
+
 def _run_ask_clarifying_question(tool_args: dict, runtime_state: dict):
     del runtime_state
     payload = _normalize_clarification_payload(tool_args)
@@ -2703,8 +2734,12 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
         error = "sub_agent requires a non-empty task."
         return {"status": "error", "error": error}, f"Failed: {error}"
 
-    parent_enabled_tools = _normalize_tool_name_list(agent_context.get("enabled_tool_names"))
-    child_tool_names = _resolve_sub_agent_tool_names(tool_args.get("allowed_tools"), parent_enabled_tools)
+    parent_visible_tools = _normalize_tool_name_list(
+        agent_context.get("prompt_tool_names")
+        if isinstance(agent_context.get("prompt_tool_names"), list)
+        else agent_context.get("enabled_tool_names")
+    )
+    child_tool_names = _resolve_sub_agent_tool_names(tool_args.get("allowed_tools"), parent_visible_tools)
     if not child_tool_names:
         error = "No eligible read-only tools are available for sub-agent delegation."
         return {"status": "error", "error": error}, f"Failed: {error}"
@@ -2713,6 +2748,7 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
     parent_model = str(agent_context.get("model") or "").strip()
     child_model_candidates = get_operation_model_candidates("sub_agent", settings, fallback_model_id=parent_model)
     child_max_steps = _coerce_int_range(tool_args.get("max_steps"), SUB_AGENT_DEFAULT_MAX_STEPS, 1, 8)
+    child_max_parallel_tools = get_sub_agent_max_parallel_tools(settings)
     timeout_seconds = _coerce_int_range(
         tool_args.get("timeout_seconds"),
         get_sub_agent_timeout_seconds(settings),
@@ -2725,7 +2761,13 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
 
     conversation_handoff = str(agent_context.get("conversation_handoff") or "").strip()
     canvas_handoff = _build_sub_agent_canvas_handoff(runtime_state)
-    child_messages = _build_sub_agent_messages(task, conversation_handoff, canvas_handoff, child_tool_names)
+    child_messages = _build_sub_agent_messages(
+        task,
+        conversation_handoff,
+        canvas_handoff,
+        child_tool_names,
+        max_parallel_tools=child_max_parallel_tools,
+    )
     resume_messages: list[dict] = []
     fallback_attempts: list[dict[str, str]] = []
     final_result: dict | None = None
@@ -2779,6 +2821,8 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
                     child_model,
                     child_max_steps,
                     child_tool_names,
+                    prompt_tool_names=child_tool_names,
+                    max_parallel_tools=child_max_parallel_tools,
                     temperature=get_model_temperature(settings),
                     fetch_url_token_threshold=get_fetch_url_token_threshold(settings),
                     fetch_url_clip_aggressiveness=get_fetch_url_clip_aggressiveness(settings),
@@ -3314,6 +3358,7 @@ def _run_clear_canvas(tool_args: dict, runtime_state: dict):
 _TOOL_EXECUTORS = {
     "append_scratchpad": _run_append_scratchpad,
     "replace_scratchpad": _run_replace_scratchpad,
+    "read_scratchpad": _run_read_scratchpad,
     "ask_clarifying_question": _run_ask_clarifying_question,
     "sub_agent": _run_sub_agent,
     "image_explain": _run_image_explain,
@@ -3841,12 +3886,21 @@ def _get_tool_step_limit(tool_name: str, max_steps: int = 5) -> int:
     return max(1, limit)
 
 
+def _normalize_parallel_tool_limit(value, default_value: int = DEFAULT_MAX_PARALLEL_TOOLS) -> int:
+    try:
+        limit = int(value) if value is not None else int(default_value)
+    except (TypeError, ValueError):
+        limit = int(default_value)
+    return max(MAX_PARALLEL_TOOLS_MIN, min(MAX_PARALLEL_TOOLS_MAX, limit))
+
+
 def run_agent_stream(
     api_messages: list,
     model: str,
     max_steps: int,
     enabled_tool_names: list[str],
     prompt_tool_names: list[str] | None = None,
+    max_parallel_tools: int | None = None,
     *,
     temperature: float = 0.7,
     fetch_url_token_threshold: int | None = None,
@@ -3883,6 +3937,13 @@ def run_agent_stream(
         "model_call_count": 0,
         "model_calls": [],
     }
+    normalized_enabled_tool_names = _normalize_tool_name_list(enabled_tool_names)
+    normalized_prompt_tool_names = [
+        name
+        for name in _normalize_tool_name_list(prompt_tool_names if prompt_tool_names is not None else enabled_tool_names)
+        if name in normalized_enabled_tool_names
+    ]
+    normalized_parallel_tool_limit = _normalize_parallel_tool_limit(max_parallel_tools)
     runtime_state = {
         "canvas": create_canvas_runtime_state(
             initial_canvas_documents,
@@ -3896,7 +3957,9 @@ def run_agent_stream(
     }
     runtime_state["agent_context"] = {
         "model": str(model or "").strip(),
-        "enabled_tool_names": _normalize_tool_name_list(enabled_tool_names),
+        "enabled_tool_names": normalized_enabled_tool_names,
+        "prompt_tool_names": normalized_prompt_tool_names,
+        "max_parallel_tools": normalized_parallel_tool_limit,
         "sub_agent_depth": _coerce_int_range((agent_context or {}).get("sub_agent_depth"), 0, 0, 8),
         "conversation_handoff": _build_sub_agent_conversation_handoff(messages),
     }
@@ -3939,6 +4002,8 @@ def run_agent_stream(
         model=model,
         max_steps=max_steps,
         enabled_tool_names=enabled_tool_names,
+        prompt_tool_names=normalized_prompt_tool_names,
+        max_parallel_tools=normalized_parallel_tool_limit,
         api_messages=_summarize_messages_for_log(messages),
         log_path=AGENT_TRACE_LOG_PATH,
     )
@@ -4706,7 +4771,7 @@ def run_agent_stream(
             parallel_slots = [s for s in pending_slots if s["tool_name"] in PARALLEL_SAFE_TOOL_NAMES]
             sequential_slots = [s for s in pending_slots if s["tool_name"] not in PARALLEL_SAFE_TOOL_NAMES]
 
-            if len(parallel_slots) > 1:
+            if len(parallel_slots) > 1 and normalized_parallel_tool_limit > 1:
                 def _run_slot(s):
                     try:
                         res, summ = _execute_tool(s["tool_name"], s["tool_args"], runtime_state=runtime_state)
@@ -4714,7 +4779,7 @@ def run_agent_stream(
                     except Exception as exc:
                         return {"ok": False, "error": str(exc)}
 
-                with ThreadPoolExecutor(max_workers=len(parallel_slots)) as executor:
+                with ThreadPoolExecutor(max_workers=min(normalized_parallel_tool_limit, len(parallel_slots))) as executor:
                     futures_list = [(executor.submit(_run_slot, s), s) for s in parallel_slots]
                 for future, s in futures_list:
                     s["exec_result"] = future.result()

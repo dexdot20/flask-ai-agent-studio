@@ -20,6 +20,7 @@ const scratchpadAddBtn = document.getElementById("scratchpad-add-btn");
 const scratchpadCountEl = document.getElementById("scratchpad-count");
 const scratchpadReadonlyNoteEl = document.getElementById("scratchpad-readonly-note");
 const maxStepsEl = document.getElementById("max-steps-input");
+const maxParallelToolsEl = document.getElementById("max-parallel-tools-input");
 const clarificationMaxQuestionsEl = document.getElementById("clarification-max-questions-input");
 const summaryModeEl = document.getElementById("summary-mode-select");
 const summaryTriggerEl = document.getElementById("summary-trigger-input");
@@ -34,6 +35,7 @@ const canvasPromptLinesEl = document.getElementById("canvas-prompt-lines-input")
 const canvasExpandLinesEl = document.getElementById("canvas-expand-lines-input");
 const canvasScrollLinesEl = document.getElementById("canvas-scroll-lines-input");
 const subAgentTimeoutEl = document.getElementById("sub-agent-timeout-input");
+const subAgentMaxParallelToolsEl = document.getElementById("sub-agent-max-parallel-tools-input");
 const subAgentRetryAttemptsEl = document.getElementById("sub-agent-retry-attempts-input");
 const subAgentRetryDelayEl = document.getElementById("sub-agent-retry-delay-input");
 const customModelNameEl = document.getElementById("custom-model-name-input");
@@ -1179,6 +1181,7 @@ function applySettingsToForm() {
   }
   if (temperatureEl) temperatureEl.value = String(appSettings.temperature ?? 0.7);
   if (maxStepsEl) maxStepsEl.value = String(appSettings.max_steps || 5);
+  if (maxParallelToolsEl) maxParallelToolsEl.value = String(appSettings.max_parallel_tools ?? 4);
   if (clarificationMaxQuestionsEl) clarificationMaxQuestionsEl.value = String(appSettings.clarification_max_questions || 5);
   if (summaryModeEl) summaryModeEl.value = appSettings.chat_summary_mode || "auto";
   if (summaryTriggerEl) summaryTriggerEl.value = String(appSettings.chat_summary_trigger_token_count || 80000);
@@ -1193,6 +1196,7 @@ function applySettingsToForm() {
   if (canvasExpandLinesEl) canvasExpandLinesEl.value = String(appSettings.canvas_expand_max_lines || 1600);
   if (canvasScrollLinesEl) canvasScrollLinesEl.value = String(appSettings.canvas_scroll_window_lines || 200);
   if (subAgentTimeoutEl) subAgentTimeoutEl.value = String(appSettings.sub_agent_timeout_seconds ?? 240);
+  if (subAgentMaxParallelToolsEl) subAgentMaxParallelToolsEl.value = String(appSettings.sub_agent_max_parallel_tools ?? 2);
   if (subAgentRetryAttemptsEl) subAgentRetryAttemptsEl.value = String(appSettings.sub_agent_retry_attempts ?? 2);
   if (subAgentRetryDelayEl) subAgentRetryDelayEl.value = String(appSettings.sub_agent_retry_delay_seconds ?? 5);
   applySelectedTools(appSettings.active_tools || []);
@@ -1275,6 +1279,7 @@ function applyServerSettingsData(data) {
   appSettings.user_preferences = data.user_preferences || "";
   appSettings.scratchpad = data.scratchpad || "";
   appSettings.max_steps = data.max_steps || 5;
+  appSettings.max_parallel_tools = data.max_parallel_tools ?? 4;
   appSettings.temperature = data.temperature ?? 0.7;
   appSettings.clarification_max_questions = data.clarification_max_questions || 5;
   appSettings.available_models = Array.isArray(data.available_models) ? data.available_models : [];
@@ -1301,6 +1306,7 @@ function applyServerSettingsData(data) {
   appSettings.canvas_expand_max_lines = data.canvas_expand_max_lines || 1600;
   appSettings.canvas_scroll_window_lines = data.canvas_scroll_window_lines || 200;
   appSettings.sub_agent_timeout_seconds = data.sub_agent_timeout_seconds ?? 240;
+  appSettings.sub_agent_max_parallel_tools = data.sub_agent_max_parallel_tools ?? 2;
   appSettings.sub_agent_retry_attempts = data.sub_agent_retry_attempts ?? 2;
   appSettings.sub_agent_retry_delay_seconds = data.sub_agent_retry_delay_seconds ?? 5;
   appSettings.active_tools = Array.isArray(data.active_tools) ? data.active_tools : [];
@@ -1340,6 +1346,7 @@ async function saveSettings() {
     user_preferences: preferencesEl?.value.trim() || "",
     temperature: readFloatSetting(temperatureEl, 0.7, { min: 0, max: 2 }),
     max_steps: readNumericSetting(maxStepsEl, 5, { allowZero: false }),
+    max_parallel_tools: readNumericSetting(maxParallelToolsEl, 4, { allowZero: false }),
     clarification_max_questions: readNumericSetting(clarificationMaxQuestionsEl, 5, { allowZero: false }),
     chat_summary_mode: summaryModeEl?.value || "auto",
     chat_summary_trigger_token_count: readNumericSetting(summaryTriggerEl, 80000, { allowZero: false }),
@@ -1354,6 +1361,7 @@ async function saveSettings() {
     canvas_expand_max_lines: readNumericSetting(canvasExpandLinesEl, 1600, { allowZero: false }),
     canvas_scroll_window_lines: readNumericSetting(canvasScrollLinesEl, 200, { allowZero: false }),
     sub_agent_timeout_seconds: readNumericSetting(subAgentTimeoutEl, 240, { allowZero: false }),
+    sub_agent_max_parallel_tools: readNumericSetting(subAgentMaxParallelToolsEl, 2, { allowZero: false }),
     sub_agent_retry_attempts: readNumericSetting(subAgentRetryAttemptsEl, 2),
     sub_agent_retry_delay_seconds: readNumericSetting(subAgentRetryDelayEl, 5),
     custom_models: draftCustomModels.map((model) => ({ ...model })),
@@ -1728,6 +1736,7 @@ function registerDirtyListeners() {
     markDirty();
   });
   maxStepsEl?.addEventListener("input", markDirty);
+  maxParallelToolsEl?.addEventListener("input", markDirty);
   clarificationMaxQuestionsEl?.addEventListener("input", markDirty);
   summaryModeEl?.addEventListener("change", markDirty);
   summaryTriggerEl?.addEventListener("input", markDirty);
@@ -1741,6 +1750,10 @@ function registerDirtyListeners() {
   canvasPromptLinesEl?.addEventListener("input", markDirty);
   canvasExpandLinesEl?.addEventListener("input", markDirty);
   canvasScrollLinesEl?.addEventListener("input", markDirty);
+  subAgentTimeoutEl?.addEventListener("input", markDirty);
+  subAgentMaxParallelToolsEl?.addEventListener("input", markDirty);
+  subAgentRetryAttemptsEl?.addEventListener("input", markDirty);
+  subAgentRetryDelayEl?.addEventListener("input", markDirty);
   summaryModelPreferenceEl?.addEventListener("change", markDirty);
   pruneModelPreferenceEl?.addEventListener("change", markDirty);
   fixTextModelPreferenceEl?.addEventListener("change", markDirty);

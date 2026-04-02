@@ -29,6 +29,7 @@ from config import (
     FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS,
     FETCH_SUMMARY_TOKEN_THRESHOLD,
     IMAGE_STORAGE_DIR,
+    DEFAULT_MAX_PARALLEL_TOOLS,
     PROMPT_MAX_INPUT_TOKENS,
     PROMPT_PREFLIGHT_SUMMARY_TOKEN_COUNT,
     PROMPT_RAG_MAX_TOKENS,
@@ -50,7 +51,10 @@ from config import (
     RAG_TOOL_RESULT_SUMMARY_MAX_CHARS,
     SUMMARY_RETRY_MIN_SOURCE_TOKENS,
     SUMMARY_SOURCE_TARGET_TOKENS,
+    MAX_PARALLEL_TOOLS_MAX,
+    MAX_PARALLEL_TOOLS_MIN,
     SUB_AGENT_DEFAULT_RETRY_ATTEMPTS,
+    SUB_AGENT_DEFAULT_MAX_PARALLEL_TOOLS,
     SUB_AGENT_DEFAULT_RETRY_DELAY_SECONDS,
     SUB_AGENT_DEFAULT_TIMEOUT_SECONDS,
     SUB_AGENT_RETRY_ATTEMPTS_MAX,
@@ -2211,8 +2215,9 @@ def get_active_tool_names(settings: dict | None = None) -> list[str]:
     if not VISION_ENABLED:
         names = [name for name in names if name != "image_explain"]
     if names:
-        if "append_scratchpad" in names:
+        if any(name in names for name in {"append_scratchpad", "replace_scratchpad"}):
             names = _ensure_tool("replace_scratchpad", names)
+            names = _ensure_tool("read_scratchpad", names)
         names = _ensure_canvas_inspection_tools(names)
         return names
     if source.get("active_tools") is None:
@@ -2221,8 +2226,9 @@ def get_active_tool_names(settings: dict | None = None) -> list[str]:
             names = [name for name in names if name != "search_knowledge_base"]
         if not VISION_ENABLED:
             names = [name for name in names if name != "image_explain"]
-        if "append_scratchpad" in names:
+        if any(name in names for name in {"append_scratchpad", "replace_scratchpad"}):
             names = _ensure_tool("replace_scratchpad", names)
+            names = _ensure_tool("read_scratchpad", names)
         names = _ensure_canvas_inspection_tools(names)
         return names
     return []
@@ -2394,6 +2400,26 @@ def get_sub_agent_retry_delay_seconds(settings: dict | None = None) -> int:
     except (TypeError, ValueError):
         value = SUB_AGENT_DEFAULT_RETRY_DELAY_SECONDS
     return max(SUB_AGENT_RETRY_DELAY_MIN_SECONDS, min(SUB_AGENT_RETRY_DELAY_MAX_SECONDS, value))
+
+
+def get_max_parallel_tools(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get("max_parallel_tools", DEFAULT_SETTINGS["max_parallel_tools"])
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        value = DEFAULT_MAX_PARALLEL_TOOLS
+    return max(MAX_PARALLEL_TOOLS_MIN, min(MAX_PARALLEL_TOOLS_MAX, value))
+
+
+def get_sub_agent_max_parallel_tools(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get("sub_agent_max_parallel_tools", DEFAULT_SETTINGS["sub_agent_max_parallel_tools"])
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        value = SUB_AGENT_DEFAULT_MAX_PARALLEL_TOOLS
+    return max(MAX_PARALLEL_TOOLS_MIN, min(MAX_PARALLEL_TOOLS_MAX, value))
 
 
 def get_prompt_max_input_tokens(settings: dict | None = None) -> int:

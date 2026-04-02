@@ -10,6 +10,8 @@ from config import (
     CLARIFICATION_QUESTION_LIMIT_MAX,
     CLARIFICATION_QUESTION_LIMIT_MIN,
     DEFAULT_SETTINGS,
+    MAX_PARALLEL_TOOLS_MAX,
+    MAX_PARALLEL_TOOLS_MIN,
     MAX_USER_PREFERENCES_LENGTH,
     RAG_CONTEXT_SIZE_PRESETS,
     RAG_ENABLED,
@@ -34,6 +36,7 @@ from db import (
     get_clarification_max_questions,
     get_fetch_url_clip_aggressiveness,
     get_fetch_url_token_threshold,
+    get_max_parallel_tools,
     get_model_temperature,
     get_proxy_enabled_operations,
     get_pruning_batch_size,
@@ -45,6 +48,7 @@ from db import (
     get_rag_sensitivity,
     get_summary_skip_first,
     get_summary_skip_last,
+    get_sub_agent_max_parallel_tools,
     get_sub_agent_retry_attempts,
     get_sub_agent_retry_delay_seconds,
     get_sub_agent_timeout_seconds,
@@ -167,7 +171,7 @@ PROXY_OPERATION_OPTIONS = [
 
 
 def _get_tool_permission_section_key(name: str) -> str:
-    if name in {"append_scratchpad", "replace_scratchpad", "ask_clarifying_question", "sub_agent", "image_explain", "search_knowledge_base", "search_tool_memory"}:
+    if name in {"append_scratchpad", "replace_scratchpad", "read_scratchpad", "ask_clarifying_question", "sub_agent", "image_explain", "search_knowledge_base", "search_tool_memory"}:
         return "assistant"
     if name in {"search_web", "fetch_url", "search_news_ddgs", "search_news_google"}:
         return "research"
@@ -231,6 +235,7 @@ def build_settings_payload() -> dict:
         "user_preferences": raw["user_preferences"],
         "scratchpad": raw.get("scratchpad", ""),
         "max_steps": int(raw.get("max_steps", DEFAULT_SETTINGS["max_steps"])),
+        "max_parallel_tools": get_max_parallel_tools(raw),
         "temperature": get_model_temperature(raw),
         "clarification_max_questions": get_clarification_max_questions(raw),
         "available_models": available_models,
@@ -251,6 +256,7 @@ def build_settings_payload() -> dict:
         "canvas_expand_max_lines": get_canvas_expand_max_lines(raw),
         "canvas_scroll_window_lines": get_canvas_scroll_window_lines(raw),
         "sub_agent_timeout_seconds": get_sub_agent_timeout_seconds(raw),
+        "sub_agent_max_parallel_tools": get_sub_agent_max_parallel_tools(raw),
         "sub_agent_retry_attempts": get_sub_agent_retry_attempts(raw),
         "sub_agent_retry_delay_seconds": get_sub_agent_retry_delay_seconds(raw),
         "chat_summary_mode": get_chat_summary_mode(raw),
@@ -310,6 +316,7 @@ def register_page_routes(app) -> None:
         data = request.get_json(silent=True) or {}
         user_preferences = data.get("user_preferences")
         max_steps_raw = data.get("max_steps")
+        max_parallel_tools_raw = data.get("max_parallel_tools")
         temperature_raw = data.get("temperature")
         clarification_max_questions_raw = data.get("clarification_max_questions")
         custom_models_raw = data.get("custom_models")
@@ -337,6 +344,7 @@ def register_page_routes(app) -> None:
         canvas_expand_max_lines_raw = data.get("canvas_expand_max_lines")
         canvas_scroll_window_lines_raw = data.get("canvas_scroll_window_lines")
         sub_agent_timeout_seconds_raw = data.get("sub_agent_timeout_seconds")
+        sub_agent_max_parallel_tools_raw = data.get("sub_agent_max_parallel_tools")
         sub_agent_retry_attempts_raw = data.get("sub_agent_retry_attempts")
         sub_agent_retry_delay_seconds_raw = data.get("sub_agent_retry_delay_seconds")
         scratchpad = data.get("scratchpad")
@@ -345,6 +353,7 @@ def register_page_routes(app) -> None:
             user_preferences is None
             and scratchpad is None
             and max_steps_raw is None
+            and max_parallel_tools_raw is None
             and temperature_raw is None
             and clarification_max_questions_raw is None
             and custom_models_raw is None
@@ -372,6 +381,7 @@ def register_page_routes(app) -> None:
             and canvas_expand_max_lines_raw is None
             and canvas_scroll_window_lines_raw is None
             and sub_agent_timeout_seconds_raw is None
+            and sub_agent_max_parallel_tools_raw is None
             and sub_agent_retry_attempts_raw is None
             and sub_agent_retry_delay_seconds_raw is None
         ):
@@ -400,6 +410,15 @@ def register_page_routes(app) -> None:
             if not (1 <= max_steps <= 50):
                 return jsonify({"error": "max_steps must be between 1 and 50."}), 400
             settings["max_steps"] = str(max_steps)
+
+        if max_parallel_tools_raw is not None:
+            try:
+                max_parallel_tools = int(max_parallel_tools_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "max_parallel_tools must be an integer."}), 400
+            if not (MAX_PARALLEL_TOOLS_MIN <= max_parallel_tools <= MAX_PARALLEL_TOOLS_MAX):
+                return jsonify({"error": f"max_parallel_tools must be between {MAX_PARALLEL_TOOLS_MIN} and {MAX_PARALLEL_TOOLS_MAX}."}), 400
+            settings["max_parallel_tools"] = str(max_parallel_tools)
 
         if temperature_raw is not None:
             try:
@@ -678,6 +697,15 @@ def register_page_routes(app) -> None:
             if not (SUB_AGENT_TIMEOUT_MIN_SECONDS <= sub_agent_timeout_seconds <= SUB_AGENT_TIMEOUT_MAX_SECONDS):
                 return jsonify({"error": f"sub_agent_timeout_seconds must be between {SUB_AGENT_TIMEOUT_MIN_SECONDS} and {SUB_AGENT_TIMEOUT_MAX_SECONDS}."}), 400
             settings["sub_agent_timeout_seconds"] = str(sub_agent_timeout_seconds)
+
+        if sub_agent_max_parallel_tools_raw is not None:
+            try:
+                sub_agent_max_parallel_tools = int(sub_agent_max_parallel_tools_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "sub_agent_max_parallel_tools must be an integer."}), 400
+            if not (MAX_PARALLEL_TOOLS_MIN <= sub_agent_max_parallel_tools <= MAX_PARALLEL_TOOLS_MAX):
+                return jsonify({"error": f"sub_agent_max_parallel_tools must be between {MAX_PARALLEL_TOOLS_MIN} and {MAX_PARALLEL_TOOLS_MAX}."}), 400
+            settings["sub_agent_max_parallel_tools"] = str(sub_agent_max_parallel_tools)
 
         if sub_agent_retry_attempts_raw is not None:
             try:

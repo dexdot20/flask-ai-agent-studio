@@ -357,6 +357,25 @@ TOOL_SPECS = [
         },
     },
     {
+        "name": "read_scratchpad",
+        "description": (
+            "Read the current persistent scratchpad content exactly as stored for this conversation. "
+            "Use this when you need to inspect the live scratchpad before editing it."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+        },
+        "prompt": {
+            "purpose": "Reads the current persistent scratchpad memory for inspection before editing.",
+            "inputs": {},
+            "guidance": (
+                "Use this when you need to verify or quote the current durable memory before appending or replacing it. "
+                "Prefer this before replace_scratchpad when you want to preserve existing facts."
+            ),
+        },
+    },
+    {
         "name": "ask_clarifying_question",
         "description": (
             "Ask the user one or more structured clarification questions and stop answering until they reply. "
@@ -450,6 +469,7 @@ TOOL_SPECS = [
         "name": "sub_agent",
         "description": (
             "Delegate a bounded research or inspection task to a helper sub-agent that can use only read-only tools. "
+            "The helper inherits only the read-only tools currently exposed to the parent assistant in this turn and can never widen that scope. "
             "Use it proactively when the task is genuinely multi-step, multi-tool, or context-heavy and would otherwise force a long inline tool chain — such as broad repo/web analysis, cross-file synthesis, or evidence gathering that needs a compact summary. "
             "Avoid it only when you can answer directly or with a single tool call; otherwise, prefer delegation over stretching the parent agent context. "
             "Do not use it for file mutations, user clarification, or recursive delegation."
@@ -495,6 +515,7 @@ TOOL_SPECS = [
                 "Use this when the investigation genuinely benefits from a separate bounded pass and would otherwise require several tool steps or repeated context stitching in the parent agent. "
                 "Do not let the token cost warning block delegation when the task is complex; the sub-agent exists for exactly those multi-tool cases. "
                 "Give the helper a concrete task, expected deliverable, and any important constraints. "
+                "Remember that the helper only receives the read-only tools currently exposed to the parent in this turn; delegation does not bypass prompt-time tool scoping. "
                 "Before calling this tool, rewrite the delegated task into concise English instructions for the helper, even if the user spoke Turkish or another language. "
                 "Use the user's original language only when the delegated task itself depends on that language, and otherwise expect the helper to work in English by default. "
                 "Keep it scoped: prefer one helper call over many, and do not delegate writes, clarifications, or recursive agent orchestration. "

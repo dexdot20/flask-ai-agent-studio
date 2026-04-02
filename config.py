@@ -117,6 +117,10 @@ SUB_AGENT_DEFAULT_RETRY_ATTEMPTS = 2
 SUB_AGENT_RETRY_DELAY_MIN_SECONDS = 0
 SUB_AGENT_RETRY_DELAY_MAX_SECONDS = 60
 SUB_AGENT_DEFAULT_RETRY_DELAY_SECONDS = 5
+MAX_PARALLEL_TOOLS_MIN = 1
+MAX_PARALLEL_TOOLS_MAX = 12
+DEFAULT_MAX_PARALLEL_TOOLS = 4
+SUB_AGENT_DEFAULT_MAX_PARALLEL_TOOLS = 2
 CLARIFICATION_QUESTION_LIMIT_MIN = 1
 CLARIFICATION_QUESTION_LIMIT_MAX = 25
 CLARIFICATION_DEFAULT_MAX_QUESTIONS = 5
@@ -166,6 +170,7 @@ SUMMARY_RETRY_MIN_SOURCE_TOKENS = max(500, min(SUMMARY_SOURCE_TARGET_TOKENS, _pa
 DEFAULT_ACTIVE_TOOL_NAMES = [
     "append_scratchpad",
     "replace_scratchpad",
+    "read_scratchpad",
     "ask_clarifying_question",
     "sub_agent",
     "image_explain",
@@ -286,11 +291,13 @@ DEFAULT_SETTINGS = {
     "user_preferences": "",
     "scratchpad": "",
     "max_steps": "5",
+    "max_parallel_tools": str(DEFAULT_MAX_PARALLEL_TOOLS),
     "temperature": "0.7",
     "clarification_max_questions": str(CLARIFICATION_DEFAULT_MAX_QUESTIONS),
     "sub_agent_timeout_seconds": str(SUB_AGENT_DEFAULT_TIMEOUT_SECONDS),
     "sub_agent_retry_attempts": str(SUB_AGENT_DEFAULT_RETRY_ATTEMPTS),
     "sub_agent_retry_delay_seconds": str(SUB_AGENT_DEFAULT_RETRY_DELAY_SECONDS),
+    "sub_agent_max_parallel_tools": str(SUB_AGENT_DEFAULT_MAX_PARALLEL_TOOLS),
     "custom_models": "[]",
     "visible_model_order": json.dumps(DEFAULT_VISIBLE_CHAT_MODEL_ORDER, ensure_ascii=False),
     "operation_model_preferences": json.dumps(DEFAULT_OPERATION_MODEL_PREFERENCES, ensure_ascii=False),

@@ -11,6 +11,7 @@ import httpx
 from dotenv import load_dotenv
 from openai import OpenAI
 from proxy_settings import PROXY_OPERATION_OPENROUTER
+from token_utils import estimate_text_tokens
 
 load_dotenv()
 
@@ -44,6 +45,8 @@ DEFAULT_OPERATION_MODEL_PREFERENCES = {key: "" for key in MODEL_OPERATION_KEYS}
 DEFAULT_OPERATION_MODEL_FALLBACK_PREFERENCES = {key: [] for key in MODEL_OPERATION_KEYS}
 _EMPTY_PRICING = {"input": 0.0, "input_cache_hit": 0.0, "output": 0.0}
 _OPENROUTER_PROVIDER_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9._/-]{0,199}$")
+_OPENROUTER_GEMINI_CACHE_BREAKPOINT_MIN_TOKENS_DEFAULT = 1028
+_OPENROUTER_GEMINI_CACHE_BREAKPOINT_MIN_TOKENS_PRO = 2048
 
 
 class _OpenRouterChatCompletionsProxy:
@@ -392,6 +395,92 @@ def normalize_openrouter_reasoning_preferences(mode_value: Any, effort_value: An
     if mode != OPENROUTER_REASONING_MODE_ENABLED:
         effort = ""
     return mode, effort
+
+
+def _openrouter_supports_top_level_prompt_cache(api_model: Any) -> bool:
+    normalized_api_model = str(api_model or "").strip().lower()
+    return normalized_api_model.startswith("anthropic/")
+
+
+def _openrouter_requires_explicit_cache_breakpoints(api_model: Any) -> bool:
+    normalized_api_model = str(api_model or "").strip().lower()
+    return normalized_api_model.startswith("google/gemini")
+
+
+def _openrouter_gemini_cache_min_tokens(api_model: Any) -> int:
+    normalized_api_model = str(api_model or "").strip().lower()
+    if "flash" in normalized_api_model:
+        return _OPENROUTER_GEMINI_CACHE_BREAKPOINT_MIN_TOKENS_DEFAULT
+    if "pro" in normalized_api_model:
+        return _OPENROUTER_GEMINI_CACHE_BREAKPOINT_MIN_TOKENS_PRO
+    return _OPENROUTER_GEMINI_CACHE_BREAKPOINT_MIN_TOKENS_DEFAULT
+
+
+def _with_openrouter_cache_breakpoint(content: Any, *, min_tokens: int) -> tuple[Any, bool]:
+    if isinstance(content, list):
+        normalized_blocks: list[dict[str, Any]] = []
+        last_text_index: int | None = None
+        text_parts: list[str] = []
+        for index, block in enumerate(content):
+            if not isinstance(block, dict):
+                return content, False
+            copied_block = dict(block)
+            if isinstance(copied_block.get("cache_control"), dict):
+                return content, False
+            text_value = str(copied_block.get("text") or "").strip()
+            if str(copied_block.get("type") or "").strip() == "text" and text_value:
+                last_text_index = index
+                text_parts.append(text_value)
+            normalized_blocks.append(copied_block)
+        if last_text_index is None or estimate_text_tokens("\n\n".join(text_parts)) < min_tokens:
+            return content, False
+        normalized_blocks[last_text_index]["cache_control"] = {"type": "ephemeral"}
+        return normalized_blocks, True
+
+    text = str(content or "").strip()
+    if not text or estimate_text_tokens(text) < min_tokens:
+        return content, False
+    return ([{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}], True)
+
+
+def _prepare_model_request_messages(messages: Any, record: dict[str, Any] | None) -> Any:
+    if not isinstance(messages, list) or not isinstance(record, dict):
+        return messages
+    if str(record.get("provider") or "").strip() != OPENROUTER_PROVIDER:
+        return messages
+
+    api_model = str(record.get("api_model") or "").strip()
+    if not _openrouter_requires_explicit_cache_breakpoints(api_model):
+        return messages
+
+    prepared_messages = list(messages)
+    cache_min_tokens = _openrouter_gemini_cache_min_tokens(api_model)
+    fallback_index: int | None = None
+    for index, message in enumerate(prepared_messages):
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "").strip().lower()
+        if fallback_index is None and role not in {"system", "developer"}:
+            fallback_index = index
+        if role not in {"system", "developer"}:
+            continue
+        updated_content, applied = _with_openrouter_cache_breakpoint(message.get("content"), min_tokens=cache_min_tokens)
+        if not applied:
+            continue
+        prepared_messages[index] = {**message, "content": updated_content}
+        return prepared_messages
+
+    if fallback_index is None or fallback_index >= len(prepared_messages):
+        return prepared_messages
+
+    fallback_message = prepared_messages[fallback_index]
+    if not isinstance(fallback_message, dict):
+        return prepared_messages
+    updated_content, applied = _with_openrouter_cache_breakpoint(fallback_message.get("content"), min_tokens=cache_min_tokens)
+    if not applied:
+        return prepared_messages
+    prepared_messages[fallback_index] = {**fallback_message, "content": updated_content}
+    return prepared_messages
 
 
 def canonicalize_model_id(value: Any) -> str:
@@ -758,9 +847,8 @@ def build_model_request_extra_body(record: dict[str, Any] | None) -> dict[str, A
 
     extra_body["provider"] = provider_options
 
-    # Automatic prompt caching for Anthropic Claude models via OpenRouter
     api_model = str(record.get("api_model") or "").strip()
-    if api_model.startswith("anthropic/"):
+    if _openrouter_supports_top_level_prompt_cache(api_model):
         extra_body["cache_control"] = {"type": "ephemeral"}
 
     reasoning_mode, reasoning_effort = normalize_openrouter_reasoning_preferences(
@@ -777,6 +865,10 @@ def build_model_request_extra_body(record: dict[str, Any] | None) -> dict[str, A
 
 def apply_model_target_request_options(request_kwargs: dict[str, Any], target: dict[str, Any] | None) -> dict[str, Any]:
     merged_request_kwargs = dict(request_kwargs)
+    record = target.get("record") if isinstance(target, dict) else None
+    prepared_messages = _prepare_model_request_messages(merged_request_kwargs.get("messages"), record)
+    if prepared_messages is not merged_request_kwargs.get("messages"):
+        merged_request_kwargs["messages"] = prepared_messages
     extra_body = target.get("extra_body") if isinstance(target, dict) else None
     if isinstance(extra_body, dict) and extra_body:
         existing_extra_body = merged_request_kwargs.get("extra_body")

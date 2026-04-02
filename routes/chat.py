@@ -55,6 +55,7 @@ from db import (
     get_db,
     get_fetch_url_clip_aggressiveness,
     get_fetch_url_token_threshold,
+    get_max_parallel_tools,
     get_model_temperature,
     get_pruning_batch_size,
     get_pruning_enabled,
@@ -1204,6 +1205,7 @@ def _build_budgeted_prompt_messages(
     tool_trace_context = _build_tool_trace_context(ordered_messages)
     user_profile_context = build_user_profile_system_context(max_tokens=500)
     runtime_tool_names = resolve_runtime_tool_names(active_tool_names, canvas_documents=canvas_documents)
+    max_parallel_tools = get_max_parallel_tools(settings)
     prompt_budget = max(2_000, get_prompt_max_input_tokens(settings) - get_prompt_response_token_reserve(settings))
     base_runtime_messages = prepend_runtime_context(
         [],
@@ -1219,6 +1221,7 @@ def _build_budgeted_prompt_messages(
         canvas_prompt_max_lines=canvas_prompt_max_lines,
         workspace_root=workspace_root,
         clarification_max_questions=get_clarification_max_questions(settings),
+        max_parallel_tools=max_parallel_tools,
     )
     base_system_tokens = _estimate_prompt_tokens(base_runtime_messages)
     history_budget = max(1_000, prompt_budget - base_system_tokens)
@@ -1304,6 +1307,7 @@ def _build_budgeted_prompt_messages(
         canvas_prompt_max_lines=canvas_prompt_max_lines,
         workspace_root=workspace_root,
         clarification_max_questions=get_clarification_max_questions(settings),
+        max_parallel_tools=max_parallel_tools,
         current_context_injection=current_context_injection,
         summary_count=len(selected_summaries),
     )
@@ -2361,6 +2365,7 @@ def register_chat_routes(app) -> None:
                 max_steps,
                 active_tool_names,
                 prompt_tool_names=runtime_tool_names,
+                max_parallel_tools=get_max_parallel_tools(settings),
                 temperature=temperature,
                 fetch_url_token_threshold=fetch_url_token_threshold,
                 fetch_url_clip_aggressiveness=fetch_url_clip_aggressiveness,
