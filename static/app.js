@@ -6546,6 +6546,10 @@ function appendClarificationPanel(group, metadata, options = {}) {
     state.textContent = "Waiting for a reply in this thread.";
     panel.appendChild(state);
     group.appendChild(panel);
+    const bubble = group.querySelector(".bubble");
+    if (bubble && !bubble.textContent.trim()) {
+      bubble.remove();
+    }
     return;
   }
 
@@ -6661,6 +6665,10 @@ function appendClarificationPanel(group, metadata, options = {}) {
 
   panel.appendChild(form);
   group.appendChild(panel);
+  const bubble = group.querySelector(".bubble");
+  if (bubble && !bubble.textContent.trim()) {
+    bubble.remove();
+  }
 }
 
 function createMessageGroup(role, text, metadata = null, options = {}) {
