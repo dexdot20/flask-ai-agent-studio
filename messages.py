@@ -910,10 +910,13 @@ def build_runtime_system_message(
     # Scratchpad
     if non_empty_scratchpad_sections or any(name in {"append_scratchpad", "replace_scratchpad", "read_scratchpad"} for name in active_tool_names):
         parts.append("## Scratchpad (AI Persistent Memory)")
-        parts.append(
-            "*This is the live persistent scratchpad for the assistant. It is already visible in the prompt, so read it directly here first. "
-            "Use read_scratchpad only if you want the structured stored memory as a tool result before editing it.*\n"
+        _scratchpad_intro = (
+            "*This is the live persistent scratchpad for the assistant. It is already visible in the prompt, so read it directly here first."
         )
+        if "read_scratchpad" in active_tool_names:
+            _scratchpad_intro += " Use read_scratchpad only if you want the structured stored memory as a tool result before editing it."
+        _scratchpad_intro += "*\n"
+        parts.append(_scratchpad_intro)
         if non_empty_scratchpad_sections:
             for section_id, section_content in non_empty_scratchpad_sections:
                 parts.append(f"### {SCRATCHPAD_SECTION_METADATA[section_id]['title']}")
@@ -978,6 +981,13 @@ def build_runtime_system_message(
     )
     if contract:
         parts.append("## Tool Calling")
+        callable_tools_line = (
+            "Callable tools this turn: "
+            + ", ".join(f"`{name}`" for name in active_tool_names)
+            + ". "
+            "These are the only tools you may invoke — do not attempt to call any tool not in this list.\n"
+        )
+        parts.append(callable_tools_line)
         parts.append(
             "Native function calling is enabled for this turn. Do not restate tool schemas or invent unavailable tools. "
             "Only call tools when they are truly needed; unnecessary calls waste tokens and context.\n"

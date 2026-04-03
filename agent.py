@@ -4379,6 +4379,18 @@ def run_agent_stream(
         for name in _normalize_tool_name_list(prompt_tool_names if prompt_tool_names is not None else enabled_tool_names)
         if name in normalized_enabled_tool_names
     ]
+    # Auto-ensure read_scratchpad is available whenever a scratchpad write tool is present.
+    # This mirrors the same guard in db.get_active_tool_names() and protects direct callers
+    # (e.g. tests) that pass only append_scratchpad/replace_scratchpad without read_scratchpad,
+    # which would otherwise cause the system-prompt to reference the tool but the API not to
+    # expose it, confusing the model's reasoning.
+    _SCRATCHPAD_WRITE_TOOLS = {"append_scratchpad", "replace_scratchpad"}
+    if any(name in _SCRATCHPAD_WRITE_TOOLS for name in normalized_enabled_tool_names):
+        if "read_scratchpad" not in normalized_enabled_tool_names:
+            normalized_enabled_tool_names.append("read_scratchpad")
+    if any(name in _SCRATCHPAD_WRITE_TOOLS for name in normalized_prompt_tool_names):
+        if "read_scratchpad" not in normalized_prompt_tool_names:
+            normalized_prompt_tool_names.append("read_scratchpad")
     normalized_parallel_tool_limit = _normalize_parallel_tool_limit(max_parallel_tools)
     runtime_state = {
         "canvas": create_canvas_runtime_state(
