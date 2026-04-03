@@ -62,6 +62,8 @@ from config import (
     RAG_SEARCH_DEFAULT_TOP_K,
     RAG_TOOL_RESULT_MAX_TEXT_CHARS,
     RAG_TOOL_RESULT_SUMMARY_MAX_CHARS,
+    SCRATCHPAD_SECTION_METADATA,
+    SCRATCHPAD_SECTION_ORDER,
     SUB_AGENT_DEFAULT_TIMEOUT_SECONDS,
     SUB_AGENT_TIMEOUT_MAX_SECONDS,
     SUB_AGENT_TIMEOUT_MIN_SECONDS,
@@ -70,8 +72,10 @@ from db import (
     MESSAGE_USAGE_BREAKDOWN_PROTECTED_KEYS,
     MESSAGE_USAGE_BREAKDOWN_REDUCTION_ORDER,
     append_to_scratchpad,
+    count_scratchpad_notes,
     get_fetch_url_clip_aggressiveness,
     get_fetch_url_token_threshold,
+    get_all_scratchpad_sections,
     get_app_settings,
     get_clarification_max_questions,
     get_model_temperature,
@@ -2520,6 +2524,8 @@ def _validate_tool_arguments(tool_name: str, tool_args: dict) -> str | None:
     if tool_name == "append_scratchpad" and "notes" not in tool_args and "note" in tool_args:
         legacy_note = tool_args.pop("note")
         tool_args["notes"] = [legacy_note]
+    if tool_name in {"append_scratchpad", "replace_scratchpad"} and "section" not in tool_args:
+        tool_args["section"] = "notes"
 
     schema = spec.get("parameters") or {}
     properties = schema.get("properties") or {}
@@ -2814,22 +2820,37 @@ def _get_canvas_runtime_state(runtime_state: dict) -> dict:
 def _run_append_scratchpad(tool_args: dict, runtime_state: dict):
     del runtime_state
     notes = tool_args.get("notes") or tool_args.get("note", "")
-    return append_to_scratchpad(notes)
+    section = tool_args.get("section") or "notes"
+    return append_to_scratchpad(notes, section=section)
 
 
 def _run_replace_scratchpad(tool_args: dict, runtime_state: dict):
     del runtime_state
-    return replace_scratchpad(tool_args.get("new_content", ""))
+    section = tool_args.get("section") or "notes"
+    return replace_scratchpad(tool_args.get("new_content", ""), section=section)
 
 
 def _run_read_scratchpad(tool_args: dict, runtime_state: dict):
     del tool_args, runtime_state
     settings = get_app_settings()
-    scratchpad = normalize_scratchpad_text(settings.get("scratchpad", ""))
-    note_count = len([line for line in scratchpad.splitlines() if line.strip()]) if scratchpad else 0
+    scratchpad_sections = get_all_scratchpad_sections(settings)
+    section_summaries = []
+    for section_id in SCRATCHPAD_SECTION_ORDER:
+        content = scratchpad_sections.get(section_id, "")
+        section_summaries.append(
+            {
+                "id": section_id,
+                "title": SCRATCHPAD_SECTION_METADATA[section_id]["title"],
+                "content": content,
+                "note_count": count_scratchpad_notes(content),
+            }
+        )
+    note_count = sum(section["note_count"] for section in section_summaries)
     return {
         "status": "ok",
-        "scratchpad": scratchpad,
+        "scratchpad": scratchpad_sections.get("notes", ""),
+        "scratchpad_sections": scratchpad_sections,
+        "sections": section_summaries,
         "note_count": note_count,
     }, "Scratchpad read"
 
@@ -3216,6 +3237,7 @@ def _run_search_knowledge_base(tool_args: dict, runtime_state: dict):
         category=tool_args.get("category"),
         top_k=tool_args.get("top_k", RAG_SEARCH_DEFAULT_TOP_K),
         allowed_source_types=get_rag_source_types(),
+        min_similarity=tool_args.get("min_similarity"),
     )
     return result, f"{result.get('count', 0)} knowledge chunks found"
 
@@ -3225,6 +3247,7 @@ def _run_search_tool_memory(tool_args: dict, runtime_state: dict):
     result = search_tool_memory(
         tool_args.get("query", ""),
         top_k=tool_args.get("top_k", RAG_SEARCH_DEFAULT_TOP_K),
+        min_similarity=tool_args.get("min_similarity"),
     )
     return result, f"{result.get('count', 0)} tool memory matches found"
 

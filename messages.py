@@ -14,6 +14,9 @@ from config import (
     MAX_PARALLEL_TOOLS_MAX,
     MAX_PARALLEL_TOOLS_MIN,
     RAG_ENABLED,
+    SCRATCHPAD_DEFAULT_SECTION,
+    SCRATCHPAD_SECTION_METADATA,
+    SCRATCHPAD_SECTION_ORDER,
 )
 from db import extract_message_attachments, parse_message_metadata, parse_message_tool_calls
 from tool_registry import build_canvas_decision_matrix, resolve_runtime_tool_names
@@ -49,6 +52,30 @@ DEPENDENT_TOOL_NAMES = (
     "search_knowledge_base",
     "search_tool_memory",
 )
+
+
+def _normalize_runtime_scratchpad_sections(
+    scratchpad_sections: dict | None = None,
+    scratchpad: str = "",
+) -> dict[str, str]:
+    normalized = {section_id: "" for section_id in SCRATCHPAD_SECTION_ORDER}
+    if isinstance(scratchpad_sections, dict):
+        for section_id in SCRATCHPAD_SECTION_ORDER:
+            normalized[section_id] = str(scratchpad_sections.get(section_id) or "").strip()
+
+    legacy_text = str(scratchpad or "").strip()
+    if legacy_text and not normalized[SCRATCHPAD_DEFAULT_SECTION]:
+        normalized[SCRATCHPAD_DEFAULT_SECTION] = legacy_text
+
+    return {section_id: str(normalized.get(section_id) or "").strip() for section_id in SCRATCHPAD_SECTION_ORDER}
+
+
+def _iter_non_empty_scratchpad_sections(scratchpad_sections: dict[str, str]) -> list[tuple[str, str]]:
+    return [
+        (section_id, str(scratchpad_sections.get(section_id) or "").strip())
+        for section_id in SCRATCHPAD_SECTION_ORDER
+        if str(scratchpad_sections.get(section_id) or "").strip()
+    ]
 
 
 def _build_image_policy_payload(active_tool_names: list[str]) -> dict | None:
@@ -841,6 +868,7 @@ def build_runtime_system_message(
     tool_memory_context=None,
     now=None,
     scratchpad="",
+    scratchpad_sections=None,
     canvas_documents=None,
     canvas_active_document_id: str | None = None,
     canvas_prompt_max_lines: int | None = None,
@@ -853,7 +881,11 @@ def build_runtime_system_message(
 ):
     now = (now or datetime.now().astimezone()).astimezone()
     preferences_text = (user_preferences or "").strip()[:MAX_USER_PREFERENCES_LENGTH]
-    scratchpad_text = (scratchpad or "").strip()
+    normalized_scratchpad_sections = _normalize_runtime_scratchpad_sections(
+        scratchpad_sections=scratchpad_sections,
+        scratchpad=scratchpad,
+    )
+    non_empty_scratchpad_sections = _iter_non_empty_scratchpad_sections(normalized_scratchpad_sections)
     active_tool_names = resolve_runtime_tool_names(active_tool_names or [], canvas_documents=canvas_documents)
     
     parts = [
@@ -876,24 +908,28 @@ def build_runtime_system_message(
         parts.append("")
 
     # Scratchpad
-    if scratchpad_text or any(name in {"append_scratchpad", "replace_scratchpad", "read_scratchpad"} for name in active_tool_names):
+    if non_empty_scratchpad_sections or any(name in {"append_scratchpad", "replace_scratchpad", "read_scratchpad"} for name in active_tool_names):
         parts.append("## Scratchpad (AI Persistent Memory)")
         parts.append(
-            "*This is the live persistent scratchpad for the current conversation. It is already visible in the prompt, so read it directly here first. "
-            "Use read_scratchpad only if you want a tool result for the current stored memory before editing it.*\n"
+            "*This is the live persistent scratchpad for the assistant. It is already visible in the prompt, so read it directly here first. "
+            "Use read_scratchpad only if you want the structured stored memory as a tool result before editing it.*\n"
         )
-        if scratchpad_text:
-            parts.append(scratchpad_text)
+        if non_empty_scratchpad_sections:
+            for section_id, section_content in non_empty_scratchpad_sections:
+                parts.append(f"### {SCRATCHPAD_SECTION_METADATA[section_id]['title']}")
+                parts.append(section_content)
+                parts.append("")
         else:
-            parts.append("(Empty)")
+            parts.append("(All sections empty)")
         if any(name in {"append_scratchpad", "replace_scratchpad"} for name in active_tool_names):
             parts.append(
                 "\n### Memory Write Policy\n"
                 "- **DO save**: Only durable, high-signal facts that are likely to change future answers or actions. Examples: stable user preferences, long-lived constraints, confirmed identity details, and recurring requirements.\n"
                 "- **DO NOT save**: One-off tasks, transient project state, raw tool outputs, web/search results, speculative inferences, broad summaries, or details already obvious from the current chat.\n"
                 "- **Before saving**: Ask whether this information will still matter in a future conversation and whether it is specific enough to be useful as a single short note. If not, do not save it.\n"
+                "- **Use the right section**: Preferences belong in User Preferences, reasoning patterns in User Profile & Mindset, durable takeaways in Lessons Learned, unresolved items in Open Problems, ongoing work in In-Progress Tasks, technical background in Domain Facts, and overflow facts in General Notes.\n"
                 "- **Web findings**: Do not turn search/news/URL results into scratchpad entries unless the result is clearly durable and the user would reasonably expect it to be remembered later. Never save them just because they were requested.\n"
-                "- **Style**: Each `notes` item must be one single short standalone fact. Never put multiple facts in one item. Call `append_scratchpad` once per batch of facts instead of once per fact."
+                "- **Style**: Each `notes` item must be one single short standalone fact. Never put multiple facts in one item. `append_scratchpad` appends to one section at a time, and `replace_scratchpad` rewrites one section at a time."
             )
         parts.append("")
 
@@ -983,6 +1019,7 @@ def prepend_runtime_context(
     tool_trace_context=None,
     tool_memory_context=None,
     scratchpad="",
+    scratchpad_sections=None,
     canvas_documents=None,
     canvas_active_document_id: str | None = None,
     canvas_prompt_max_lines: int | None = None,
@@ -1000,6 +1037,7 @@ def prepend_runtime_context(
         tool_trace_context=tool_trace_context,
         tool_memory_context=tool_memory_context,
         scratchpad=scratchpad,
+        scratchpad_sections=scratchpad_sections,
         canvas_documents=canvas_documents,
         canvas_active_document_id=canvas_active_document_id,
         canvas_prompt_max_lines=canvas_prompt_max_lines,

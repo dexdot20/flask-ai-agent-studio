@@ -4,6 +4,8 @@ from typing import Iterable
 
 from .chunker import Chunk, chunk_text_document, normalize_category
 
+MIN_RECORD_CONTENT_LENGTH = 30
+
 
 def chunks_from_text(
     text: str,
@@ -32,7 +34,7 @@ def chunks_from_records(
     for index, record in enumerate(records, start=1):
         role = str(record.get("role") or "unknown").strip() or "unknown"
         content = str(record.get("content") or "").strip()
-        if not content:
+        if not content or len(content) < MIN_RECORD_CONTENT_LENGTH:
             continue
         parts.append(f"[{index}] {role}: {content}")
     if not parts:

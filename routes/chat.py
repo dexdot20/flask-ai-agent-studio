@@ -47,6 +47,7 @@ from db import (
     delete_image_asset,
     find_summary_covering_message_id,
     get_active_tool_names,
+    get_all_scratchpad_sections,
     get_app_settings,
     get_clarification_max_questions,
     get_chat_summary_mode,
@@ -114,7 +115,7 @@ from ocr_service import preload_ocr_engine
 from project_workspace_service import create_workspace_runtime_state, get_workspace_root
 from rag import preload_embedder
 from rag_service import build_rag_auto_context, build_tool_memory_auto_context, conversation_rag_source_key
-from rag_service import sync_conversations_to_rag_safe
+from rag_service import sync_conversations_to_rag_background, sync_conversations_to_rag_safe
 from routes.request_utils import is_valid_model_id, normalize_model_id, parse_messages_payload, parse_optional_int
 from token_utils import estimate_text_tokens
 from tool_registry import resolve_runtime_tool_names
@@ -222,6 +223,15 @@ SUMMARY_FOCUS_STOPWORDS = {
     "with",
     "your",
 }
+
+
+def _schedule_rag_conversation_sync(conversation_id: int | None, *, force: bool = False) -> None:
+    if not RAG_ENABLED or conversation_id is None:
+        return
+    if current_app.testing:
+        sync_conversations_to_rag_safe(conversation_id=conversation_id, force=force)
+        return
+    sync_conversations_to_rag_background(current_app._get_current_object(), conversation_id=conversation_id, force=force)
 
 
 def _build_assistant_message_metadata(
@@ -1327,6 +1337,7 @@ def _build_budgeted_prompt_messages(
     ordered_messages = [message for message in canonical_messages if isinstance(message, dict)]
     tool_trace_context = _build_tool_trace_context(ordered_messages)
     user_profile_context = build_user_profile_system_context(max_tokens=500)
+    scratchpad_sections = get_all_scratchpad_sections(settings)
     runtime_tool_names = resolve_runtime_tool_names(active_tool_names, canvas_documents=canvas_documents)
     max_parallel_tools = get_max_parallel_tools(settings)
     prompt_budget = max(2_000, get_prompt_max_input_tokens(settings) - get_prompt_response_token_reserve(settings))
@@ -1338,7 +1349,7 @@ def _build_budgeted_prompt_messages(
         user_profile_context=user_profile_context,
         tool_trace_context=tool_trace_context,
         tool_memory_context=None,
-        scratchpad=settings.get("scratchpad", ""),
+        scratchpad_sections=scratchpad_sections,
         canvas_documents=canvas_documents,
         canvas_active_document_id=canvas_active_document_id,
         canvas_prompt_max_lines=canvas_prompt_max_lines,
@@ -1424,7 +1435,7 @@ def _build_budgeted_prompt_messages(
         user_profile_context=user_profile_context,
         tool_trace_context=trimmed_tool_trace,
         tool_memory_context=trimmed_tool_memory,
-        scratchpad=settings.get("scratchpad", ""),
+        scratchpad_sections=scratchpad_sections,
         canvas_documents=canvas_documents,
         canvas_active_document_id=canvas_active_document_id,
         canvas_prompt_max_lines=canvas_prompt_max_lines,
@@ -1916,6 +1927,7 @@ def maybe_create_conversation_summary(
 
 
 def _run_chat_post_response_tasks(
+    app_obj,
     conversation_id: int,
     model: str,
     settings: dict,
@@ -1939,7 +1951,7 @@ def _run_chat_post_response_tasks(
 
     if RAG_ENABLED and conversation_id:
         try:
-            sync_conversations_to_rag_safe(conversation_id=conversation_id)
+            sync_conversations_to_rag_background(app_obj, conversation_id=conversation_id)
         except Exception:
             LOGGER.exception("Background RAG sync failed for conversation_id=%s", conversation_id)
 
@@ -2399,7 +2411,7 @@ def register_chat_routes(app) -> None:
                         (conv_id,),
                     )
                 if RAG_ENABLED:
-                    sync_conversations_to_rag_safe(conversation_id=conv_id)
+                    _schedule_rag_conversation_sync(conversation_id=conv_id)
                 persisted_user_message_id = edited_message_id
             elif persisted_user_content or user_message_metadata:
                 with get_db() as conn:
@@ -2832,6 +2844,7 @@ def register_chat_routes(app) -> None:
                     if defer_post_response_tasks and not preflight_summary_applied:
                         POST_RESPONSE_EXECUTOR.submit(
                             _run_chat_post_response_tasks,
+                            app_obj,
                             conv_id,
                             model,
                             dict(settings),
@@ -2864,7 +2877,7 @@ def register_chat_routes(app) -> None:
 
                     if summary_outcome.get("applied"):
                         if RAG_ENABLED:
-                            sync_conversations_to_rag_safe(conversation_id=conv_id)
+                            _schedule_rag_conversation_sync(conversation_id=conv_id)
                         yield json.dumps(
                             {
                                 "type": "conversation_summary_applied",
@@ -2927,7 +2940,7 @@ def register_chat_routes(app) -> None:
                             ensure_ascii=False,
                         ) + "\n"
                         if RAG_ENABLED and conv_id:
-                            sync_conversations_to_rag_safe(conversation_id=conv_id)
+                            _schedule_rag_conversation_sync(conversation_id=conv_id)
 
                     _maybe_run_conversation_pruning(conv_id, settings)
 
@@ -3021,7 +3034,7 @@ def register_chat_routes(app) -> None:
                 (title, conv_id),
             )
         if RAG_ENABLED:
-            sync_conversations_to_rag_safe(conversation_id=conv_id)
+            _schedule_rag_conversation_sync(conversation_id=conv_id)
 
         return jsonify({"title": title})
 
@@ -3104,7 +3117,7 @@ def register_chat_routes(app) -> None:
 
         if outcome.get("applied"):
             if RAG_ENABLED:
-                sync_conversations_to_rag_safe(conversation_id=conv_id)
+                _schedule_rag_conversation_sync(conversation_id=conv_id)
             return jsonify({
                 "applied": True,
                 "summary_message_id": outcome.get("summary_message_id"),
@@ -3178,7 +3191,7 @@ def register_chat_routes(app) -> None:
             )
 
         if RAG_ENABLED:
-            sync_conversations_to_rag_safe(conversation_id=conv_id)
+            _schedule_rag_conversation_sync(conversation_id=conv_id)
 
         return jsonify(
             {

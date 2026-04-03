@@ -721,6 +721,11 @@ def register_conversation_routes(app) -> None:
             top_k = int(request.args.get("top_k") or RAG_SEARCH_DEFAULT_TOP_K)
         except (TypeError, ValueError):
             top_k = RAG_SEARCH_DEFAULT_TOP_K
+        try:
+            min_similarity = request.args.get("min_similarity")
+            min_similarity = float(min_similarity) if min_similarity not in (None, "") else None
+        except (TypeError, ValueError):
+            return jsonify({"error": "min_similarity must be a number between 0.0 and 1.0."}), 400
 
         selected_source_types, invalid_source_types = _parse_rag_source_type_filter(raw_source_types)
         if invalid_source_types:
@@ -737,6 +742,7 @@ def register_conversation_routes(app) -> None:
                     category=category,
                     top_k=top_k,
                     allowed_source_types=allowed_source_types,
+                    min_similarity=min_similarity,
                 )
             )
         except Exception as exc:

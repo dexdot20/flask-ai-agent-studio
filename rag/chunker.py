@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Iterable
 
 DEFAULT_CHUNK_SIZE = 1800
 DEFAULT_CHUNK_OVERLAP = 250
 MAX_METADATA_VALUE_LENGTH = 500
+_INVISIBLE_TEXT_RE = re.compile(r"[\u00ad\u200b-\u200f\u2028\u2029\ufeff]")
 
 
 @dataclass(slots=True)
@@ -40,6 +42,8 @@ def normalize_category(category: str | None) -> str:
 
 
 def _normalize_whitespace(text: str) -> str:
+    text = unicodedata.normalize("NFKC", str(text or ""))
+    text = _INVISIBLE_TEXT_RE.sub("", text)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
@@ -119,8 +123,8 @@ def split_text_into_chunks(
     return deduped
 
 
-def _build_chunk_id(source_name: str, source_type: str, category: str, chunk_index: int, text: str) -> str:
-    digest = hashlib.sha1(f"{source_name}|{source_type}|{category}|{chunk_index}|{text}".encode("utf-8")).hexdigest()
+def _build_chunk_id(source_name: str, source_type: str, category: str, text: str) -> str:
+    digest = hashlib.sha1(f"{source_name}|{source_type}|{category}|{text}".encode("utf-8")).hexdigest()
     return f"chunk-{digest}"
 
 
@@ -142,7 +146,7 @@ def chunk_text_document(
     base_metadata = dict(metadata or {})
     items: list[Chunk] = []
     for index, chunk_text in enumerate(chunks):
-        chunk_id = _build_chunk_id(source_name, source_type, normalized_category, index, chunk_text)
+        chunk_id = _build_chunk_id(source_name, source_type, normalized_category, chunk_text)
         items.append(
             Chunk(
                 id=chunk_id,

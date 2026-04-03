@@ -3,7 +3,14 @@ from __future__ import annotations
 import copy
 import json
 
-from config import CLARIFICATION_DEFAULT_MAX_QUESTIONS, CLARIFICATION_QUESTION_LIMIT_MAX, CLARIFICATION_QUESTION_LIMIT_MIN, RAG_ENABLED
+from config import (
+    CLARIFICATION_DEFAULT_MAX_QUESTIONS,
+    CLARIFICATION_QUESTION_LIMIT_MAX,
+    CLARIFICATION_QUESTION_LIMIT_MIN,
+    RAG_ENABLED,
+    SCRATCHPAD_SECTION_METADATA,
+    SCRATCHPAD_SECTION_ORDER,
+)
 
 CANVAS_DOCUMENT_TOOL_NAMES = {
     "expand_canvas_document",
@@ -27,6 +34,12 @@ WORKSPACE_TOOL_NAMES = {
     "write_project_tree",
     "validate_project_workspace",
 }
+
+SCRATCHPAD_SECTION_ENUM = list(SCRATCHPAD_SECTION_ORDER)
+SCRATCHPAD_SECTION_DESCRIPTION = "Section to update: " + "; ".join(
+    f"{section_id} = {SCRATCHPAD_SECTION_METADATA[section_id]['title']} ({SCRATCHPAD_SECTION_METADATA[section_id]['description']})"
+    for section_id in SCRATCHPAD_SECTION_ORDER
+)
 
 
 def build_canvas_decision_matrix(
@@ -109,13 +122,18 @@ TOOL_SPECS = [
     {
         "name": "append_scratchpad",
         "description": (
-            "Append one or more durable user-specific facts or preferences to the persistent scratchpad. "
+            "Append one or more durable facts to one section of the persistent scratchpad. "
             "Use this only for long-lived, high-signal information that will likely change future answers or actions. "
             "Do not store temporary task details, sensitive secrets, one-off requests, or speculative inferences."
         ),
         "parameters": {
             "type": "object",
             "properties": {
+                "section": {
+                    "type": "string",
+                    "enum": SCRATCHPAD_SECTION_ENUM,
+                    "description": SCRATCHPAD_SECTION_DESCRIPTION,
+                },
                 "notes": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -123,15 +141,19 @@ TOOL_SPECS = [
                     "minItems": 1,
                 }
             },
-            "required": ["notes"],
+            "required": ["section", "notes"],
         },
         "prompt": {
-            "purpose": "Saves one or more short durable user facts or preferences into persistent scratchpad memory only when they are likely to matter later.",
-            "inputs": {"notes": "list of single short durable memory lines — one fact per item"},
+            "purpose": "Saves one or more short durable memory lines into a specific scratchpad section only when they are likely to matter later.",
+            "inputs": {
+                "section": "target section id such as preferences, profile, lessons, tasks, problems, notes, or domain",
+                "notes": "list of single short durable memory lines — one fact per item",
+            },
             "guidance": (
                 "Use very sparingly. Save only durable user-specific facts, recurring constraints, or stable preferences that are likely to matter in future conversations. "
                 "Do not save temporary requests, current-task details, large summaries, tool outputs, web/search results, speculative guesses, or sensitive data. "
                 "If the information would not change future responses or behavior, do not store it. "
+                "Choose the section deliberately: preferences for stable style/language instructions, profile for reasoning patterns, lessons for takeaways, problems for unresolved issues, tasks for long-running work, domain for durable technical facts, and notes for anything durable that does not fit elsewhere. "
                 "Each item in `notes` must be a single short standalone fact. Never combine multiple facts into one item."
             ),
         },
@@ -139,25 +161,33 @@ TOOL_SPECS = [
     {
         "name": "replace_scratchpad",
         "description": (
-            "Completely replace the persistent scratchpad content. "
-            "Use this to rewrite, reorganize, or remove outdated durable user-specific facts. "
+            "Completely replace one section of the persistent scratchpad. "
+            "Use this to rewrite, reorganize, or remove outdated durable facts in a single section. "
             "Do not store temporary task details or speculative inferences."
         ),
         "parameters": {
             "type": "object",
             "properties": {
+                "section": {
+                    "type": "string",
+                    "enum": SCRATCHPAD_SECTION_ENUM,
+                    "description": SCRATCHPAD_SECTION_DESCRIPTION,
+                },
                 "new_content": {
                     "type": "string",
-                    "description": "The new content that will fully replace the existing scratchpad.",
+                    "description": "The new content that will fully replace the selected scratchpad section.",
                 }
             },
-            "required": ["new_content"],
+            "required": ["section", "new_content"],
         },
         "prompt": {
-            "purpose": "Completely rewrites the persistent scratchpad memory.",
-            "inputs": {"new_content": "the new complete scratchpad content"},
+            "purpose": "Completely rewrites one structured scratchpad section.",
+            "inputs": {
+                "section": "target section id",
+                "new_content": "the new complete content for that one section",
+            },
             "guidance": (
-                "Use carefully to prune or reorganize existing facts. Ensure you do not accidentally delete important existing preferences. "
+                "Use carefully to prune or reorganize existing facts in one section. Ensure you do not accidentally delete important existing preferences or lessons from that section. "
                 "Keep the final text compact and only include durable, high-signal facts. Prefer a short bulleted list over paragraphs."
             ),
         },
@@ -165,15 +195,15 @@ TOOL_SPECS = [
     {
         "name": "read_scratchpad",
         "description": (
-            "Read the current persistent scratchpad content exactly as stored for this conversation. "
-            "Use this when you need to inspect the live scratchpad before editing it."
+            "Read the current persistent scratchpad content across all sections exactly as stored. "
+            "Use this when you need to inspect the live structured scratchpad before editing it."
         ),
         "parameters": {
             "type": "object",
             "properties": {},
         },
         "prompt": {
-            "purpose": "Reads the current persistent scratchpad memory for inspection before editing.",
+            "purpose": "Reads the current structured scratchpad memory for inspection before editing.",
             "inputs": {},
             "guidance": (
                 "Use this when you need to verify or quote the current durable memory before appending or replacing it. "
@@ -372,8 +402,9 @@ TOOL_SPECS = [
         "name": "search_knowledge_base",
         "description": (
             "Search the internal knowledge base indexed with RAG. "
-            "Use this when the answer may exist in synced conversation history or stored tool outputs and you cannot answer reliably from the current context. "
-            "Optionally filter by category. Avoid repeating semantically overlapping searches when one good result set already answers the question; unnecessary searches waste tokens."
+            "Use this when the answer may exist in synced conversation history, stored tool outputs, or uploaded documents and you cannot answer reliably from the current context. "
+            "Optionally filter by category. Use this for conversation, tool_result, or uploaded_document content. For cross-conversation web research memory, use search_tool_memory instead. "
+            "Avoid repeating semantically overlapping searches when one good result set already answers the question; unnecessary searches waste tokens."
         ),
         "parameters": {
             "type": "object",
@@ -384,7 +415,7 @@ TOOL_SPECS = [
                 },
                 "category": {
                     "type": "string",
-                    "description": "Optional category filter: conversation or tool_result.",
+                    "description": "Optional category filter: conversation, tool_result, or uploaded_document. Do not pass tool_memory here; use search_tool_memory for web research memory.",
                 },
                 "top_k": {
                     "type": "integer",
@@ -392,13 +423,19 @@ TOOL_SPECS = [
                     "minimum": 1,
                     "maximum": 12,
                 },
+                "min_similarity": {
+                    "type": "number",
+                    "description": "Optional minimum similarity threshold between 0.0 and 1.0. Higher values trade recall for precision.",
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                },
             },
             "required": ["query"],
         },
         "prompt": {
             "purpose": "Searches the internal RAG knowledge base built from files, URLs, notes, and conversations.",
-            "inputs": {"query": "semantic search query", "category": "optional category", "top_k": "1-12 results"},
-            "guidance": "Use at most a few focused searches and synthesize from returned chunks instead of retrying near-duplicate queries. If the current context is already sufficient, do not search again; unnecessary searches waste tokens.",
+            "inputs": {"query": "semantic search query", "category": "optional category", "top_k": "1-12 results", "min_similarity": "optional threshold 0.0-1.0"},
+            "guidance": "Use category when the likely source type is clear, and use at most a few focused searches. Synthesize from returned chunks instead of retrying near-duplicate queries. If the current context is already sufficient, do not search again; unnecessary searches waste tokens.",
         },
     },
     {
@@ -406,7 +443,8 @@ TOOL_SPECS = [
         "description": (
             "Search past web tool results stored from previous conversations. "
             "Use this before making a new web request when you suspect the topic was already researched and the current context is not enough. "
-            "This searches remembered results from fetch_url, search_web, and news tools; unnecessary lookups waste tokens."
+            "This searches remembered results from fetch_url, search_web, and news tools across conversations. "
+            "Use search_knowledge_base instead for uploaded documents or conversation content. Unnecessary lookups waste tokens."
         ),
         "parameters": {
             "type": "object",
@@ -421,15 +459,22 @@ TOOL_SPECS = [
                     "minimum": 1,
                     "maximum": 10,
                 },
+                "min_similarity": {
+                    "type": "number",
+                    "description": "Optional minimum similarity threshold between 0.0 and 1.0. Higher values trade recall for precision.",
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                },
             },
             "required": ["query"],
         },
         "prompt": {
             "purpose": "Searches memory of past web searches, URL fetches, and news lookups.",
-            "inputs": {"query": "semantic search query", "top_k": "1-10 results"},
+            "inputs": {"query": "semantic search query", "top_k": "1-10 results", "min_similarity": "optional threshold 0.0-1.0"},
             "guidance": (
                 "Use before making a new web request if similar research may already exist and you cannot answer from the current context. "
-                "If high-similarity results already answer the question, reuse them instead of repeating the search. Unnecessary lookups waste tokens."
+                "If high-similarity results already answer the question, reuse them instead of repeating the search. "
+                "When the response includes expires_at_utc, treat older or near-expiry results more cautiously. Unnecessary lookups waste tokens."
             ),
         },
     },

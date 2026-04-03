@@ -53,7 +53,10 @@ def _get_category_collection(category: str | None):
     return get_collection(get_category_collection_name(category))
 
 
-def _iter_query_collections(category: str | None = None) -> list[tuple[Any, dict[str, Any] | None]]:
+def _iter_query_collections(
+    category: str | None = None,
+    source_type_hint: str | None = None,
+) -> list[tuple[Any, dict[str, Any] | None]]:
     collections: list[tuple[Any, dict[str, Any] | None]] = []
     seen_names: set[str] = set()
 
@@ -68,6 +71,12 @@ def _iter_query_collections(category: str | None = None) -> list[tuple[Any, dict
         normalized_category = normalize_category(category)
         add_collection(get_category_collection_name(normalized_category))
         add_collection(DEFAULT_COLLECTION_NAME, where={"category": normalized_category})
+        return collections
+
+    normalized_hint = normalize_category(source_type_hint) if source_type_hint else None
+    if normalized_hint in RAG_SUPPORTED_CATEGORIES:
+        add_collection(get_category_collection_name(normalized_hint))
+        add_collection(DEFAULT_COLLECTION_NAME, where={"category": normalized_hint})
         return collections
 
     add_collection(DEFAULT_COLLECTION_NAME)
@@ -189,7 +198,12 @@ def _is_expired_metadata(metadata: dict | None, now_ts: int | None = None) -> bo
     return expires_at_ts <= reference_now
 
 
-def query_chunks(query: str, top_k: int = 5, category: str | None = None) -> list[dict]:
+def query_chunks(
+    query: str,
+    top_k: int = 5,
+    category: str | None = None,
+    source_type_hint: str | None = None,
+) -> list[dict]:
     query = str(query or "").strip()
     if not query:
         return []
@@ -200,7 +214,7 @@ def query_chunks(query: str, top_k: int = 5, category: str | None = None) -> lis
 
     rows: list[dict] = []
     seen_ids: set[str] = set()
-    for collection, where in _iter_query_collections(category):
+    for collection, where in _iter_query_collections(category, source_type_hint=source_type_hint):
         for row in _query_collection_rows(collection, query_embedding, top_k=top_k, where=where):
             row_id = str(row.get("id") or "").strip()
             if row_id and row_id in seen_ids:

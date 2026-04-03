@@ -108,13 +108,15 @@ from messages import (
 from model_registry import get_operation_model, get_operation_model_candidates, resolve_model_target
 from project_workspace_service import create_workspace_runtime_state
 from prune_service import _build_pruning_messages, _estimate_pruning_target_tokens
-from rag import Chunk
+from rag import Chunk, chunk_text_document, chunks_from_records
 from rag.store import query_chunks, upsert_chunks
 from rag_service import (
+    ensure_supported_rag_sources,
     build_rag_auto_context,
     get_conversation_records_for_rag,
     get_exact_tool_memory_match,
     search_knowledge_base_tool,
+    search_tool_memory,
     upsert_tool_memory_result,
 )
 from routes.auth import AUTH_LAST_SEEN_KEY, AUTH_REMEMBER_KEY, AUTH_SESSION_KEY
@@ -125,6 +127,7 @@ from routes.chat import (
     _estimate_prompt_tokens,
     _is_failed_tool_summary,
     _persist_streaming_assistant_message,
+    _schedule_rag_conversation_sync,
     _select_recent_prompt_window,
     _select_summary_source_messages_by_token_budget,
     build_summary_prompt_messages,
@@ -1547,7 +1550,7 @@ class AppRoutesTestCase(unittest.TestCase):
             response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
-        chat_sync.assert_called_once_with(conversation_id=conversation_id)
+        chat_sync.assert_called_once_with(conversation_id=conversation_id, force=False)
 
     def test_get_conversation_records_for_rag_excludes_soft_deleted_messages(self):
         conversation_id = self._create_conversation()
@@ -2234,7 +2237,7 @@ class AppRoutesTestCase(unittest.TestCase):
 
         message = build_runtime_system_message(
             user_preferences="Keep answers short.",
-            scratchpad="The user is 22 years old.",
+            scratchpad_sections={"profile": "The user is 22 years old."},
             active_tool_names=[
                 "append_scratchpad",
                 "ask_clarifying_question",
@@ -2254,6 +2257,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("- Time: 21:40", content)
         self.assertIn("User Preferences\nKeep answers short.", content)
         self.assertIn("Scratchpad (AI Persistent Memory)", content)
+        self.assertIn("### User Profile & Mindset", content)
         self.assertIn("The user is 22 years old.", content)
         self.assertIn("Only durable, high-signal facts", content)
         self.assertIn("Web findings", content)
@@ -2434,10 +2438,67 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(kwargs["expires_at"], "1970-01-01 02:16:40")
         self.assertEqual(kwargs["metadata"]["expires_at_ts"], 8_200)
 
+    def test_upsert_tool_memory_result_sanitizes_html_entities(self):
+        with patch("rag_service.time.time", return_value=1_000), patch("rag_service.ingest_rag_chunks") as mocked_ingest:
+            mocked_ingest.return_value = {"ok": True}
+            upsert_tool_memory_result(
+                "fetch_url",
+                "https://example.com",
+                "Title &amp; Summary\u200b",
+                "brief summary",
+            )
+
+        _, kwargs = mocked_ingest.call_args
+        self.assertIn("Title & Summary", kwargs["chunks"][0].text)
+
+    def test_search_knowledge_base_tool_adds_context_metadata(self):
+        fake_hits = [
+            {
+                "id": "chunk-1",
+                "text": "sort docs",
+                "metadata": {
+                    "source_key": "src-1",
+                    "source_name": "doc-1",
+                    "source_type": "conversation",
+                    "category": "conversation",
+                    "chunk_index": 0,
+                    "indexed_at_ts": 2_000,
+                },
+                "similarity": 0.52,
+            }
+            ,
+            {
+                "id": "chunk-2",
+                "text": "sort docs tail",
+                "metadata": {
+                    "source_key": "src-1",
+                    "source_name": "doc-1",
+                    "source_type": "conversation",
+                    "category": "conversation",
+                    "chunk_index": 2,
+                    "indexed_at_ts": 2_000,
+                },
+                "similarity": 0.51,
+            }
+        ]
+
+        with patch("rag_service.ensure_supported_rag_sources"), patch("rag_service.rag_query_chunks", return_value=fake_hits), patch(
+            "rag_service.get_db"
+        ) as mocked_db, patch("rag_service.time.time", return_value=2_000):
+            mocked_db.return_value.__enter__.return_value.execute.return_value.fetchall.return_value = [
+                {"source_key": "src-1", "chunk_count": 3}
+            ]
+            result = search_knowledge_base_tool("python sort", top_k=5)
+
+        self.assertEqual(result["matches"][0]["total_chunks"], 3)
+        self.assertTrue(result["matches"][0]["has_more_context"])
+        self.assertFalse(result["matches"][1]["has_more_context"])
+
     def test_search_knowledge_base_tool_uses_query_expansion_and_dedupes_hits(self):
         original_query = "python liste sıralama nasıl yapılır"
 
-        def fake_query(query, top_k=5, category=None):
+        def fake_query(query, top_k=5, category=None, source_type_hint=None):
+            del source_type_hint
             if query == original_query:
                 return [
                     {
@@ -2468,6 +2529,72 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertGreaterEqual(mocked_query.call_count, 2)
         self.assertEqual(result["count"], 2)
         self.assertEqual([match["id"] for match in result["matches"]], ["chunk-1", "chunk-2"])
+
+    def test_search_tool_memory_supports_similarity_and_expiry_fields(self):
+        fake_hits = [
+            {
+                "id": "chunk-1",
+                "text": "cached result",
+                "metadata": {
+                    "source_key": "src-1",
+                    "source_name": "fetch_url: example",
+                    "source_type": "tool_memory",
+                    "category": "tool_memory",
+                    "chunk_index": 0,
+                    "indexed_at_ts": 2_000,
+                    "expires_at_ts": 2_800,
+                },
+                "similarity": 0.41,
+            }
+        ]
+
+        with patch("rag_service.ensure_supported_rag_sources"), patch("rag_service.rag_query_chunks", return_value=fake_hits), patch(
+            "rag_service.get_db"
+        ) as mocked_db, patch("rag_service.time.time", return_value=2_000):
+            mocked_db.return_value.__enter__.return_value.execute.return_value.fetchall.return_value = [
+                {"source_key": "src-1", "chunk_count": 2}
+            ]
+            result = search_tool_memory("cached result", top_k=5, min_similarity=0.4)
+
+        self.assertEqual(result["min_similarity"], 0.4)
+        self.assertEqual(result["matches"][0]["total_chunks"], 2)
+        self.assertEqual(result["matches"][0]["expires_at_utc"], "1970-01-01 00:46:40")
+        self.assertEqual(result["matches"][0]["expiry_warning"], "Expires within 1 hour")
+
+    def test_ensure_supported_rag_sources_uses_cooldown(self):
+        fake_conn = Mock()
+        fake_conn.execute.return_value.fetchall.return_value = []
+
+        with patch("rag_service._rag_sources_verified", True), patch("rag_service._rag_sources_last_verified_at", 100.0), patch(
+            "rag_service.time.time", return_value=120.0
+        ), patch("rag_service.get_db", return_value=Mock(__enter__=Mock(return_value=fake_conn), __exit__=Mock(return_value=False))), patch(
+            "rag_service.get_expired_rag_document_source_keys"
+        ) as mocked_expired:
+            removed = ensure_supported_rag_sources()
+
+        self.assertEqual(removed, 0)
+        mocked_expired.assert_called_once()
+
+    def test_chunk_text_document_normalizes_unicode_and_stable_ids(self):
+        first = chunk_text_document("Cafe\u0301\u200b", "doc", "conversation", "conversation")
+        second = chunk_text_document("Café", "doc", "conversation", "conversation")
+
+        self.assertEqual(first[0].text, "Café")
+        self.assertEqual(first[0].id, second[0].id)
+
+    def test_chunks_from_records_skips_short_noise_messages(self):
+        chunks = chunks_from_records(
+            [
+                {"role": "user", "content": "Tamam"},
+                {"role": "assistant", "content": "Bu yanıt indekslenmesi gereken kadar uzun ve anlamlıdır."},
+            ],
+            source_name="conversation:1:Test",
+            source_type="conversation",
+            category="conversation",
+        )
+
+        self.assertEqual(len(chunks), 1)
+        self.assertNotIn("Tamam", chunks[0].text)
 
     def test_build_rag_auto_context_respects_allowed_source_types(self):
         fake_hits = [
@@ -2606,6 +2733,47 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(mocked_search.call_args.kwargs["allowed_source_types"], ["conversation", "tool_memory"])
+
+    def test_rag_search_route_passes_min_similarity(self):
+        with patch("routes.conversations.search_knowledge_base_tool", return_value={"query": "memory", "count": 0, "matches": []}) as mocked_search:
+            response = self.client.get("/api/rag/search?q=memory&min_similarity=0.75")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(mocked_search.call_args.kwargs["min_similarity"], 0.75)
+
+    def test_rag_search_route_rejects_invalid_min_similarity(self):
+        response = self.client.get("/api/rag/search?q=memory&min_similarity=abc")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("min_similarity", response.get_json()["error"])
+
+    def test_schedule_rag_conversation_sync_runs_inline_in_testing(self):
+        with self.app.app_context():
+            with patch("routes.chat.sync_conversations_to_rag_safe") as mocked_safe, patch(
+                "routes.chat.sync_conversations_to_rag_background"
+            ) as mocked_background:
+                _schedule_rag_conversation_sync(321)
+
+        mocked_safe.assert_called_once_with(conversation_id=321, force=False)
+        mocked_background.assert_not_called()
+
+    def test_schedule_rag_conversation_sync_uses_background_executor_outside_testing(self):
+        previous_testing = self.app.config.get("TESTING", False)
+        self.app.config["TESTING"] = False
+
+        try:
+            with self.app.app_context():
+                with patch("routes.chat.sync_conversations_to_rag_safe") as mocked_safe, patch(
+                    "routes.chat.sync_conversations_to_rag_background"
+                ) as mocked_background:
+                    _schedule_rag_conversation_sync(321, force=True)
+
+            mocked_safe.assert_not_called()
+            mocked_background.assert_called_once()
+            self.assertEqual(mocked_background.call_args.kwargs["conversation_id"], 321)
+            self.assertTrue(mocked_background.call_args.kwargs["force"])
+        finally:
+            self.app.config["TESTING"] = previous_testing
 
     def test_build_runtime_system_message_formats_compact_auto_injected_rag_context(self):
         message = build_runtime_system_message(
@@ -2834,7 +3002,7 @@ class AppRoutesTestCase(unittest.TestCase):
             [{"role": "user", "content": "Hello"}],
             user_preferences="",
             active_tool_names=[],
-            scratchpad="Persistent note",
+            scratchpad_sections={"notes": "Persistent note"},
         )
 
         self.assertEqual(messages[0]["role"], "system")
@@ -2916,6 +3084,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
         self.assertEqual(payload["scratchpad"], "The user likes concise answers.")
+        self.assertEqual(payload["scratchpad_sections"]["notes"]["content"], "The user likes concise answers.")
         self.assertFalse(payload["features"]["scratchpad_admin_editing"])
 
     def test_settings_get_reports_scratchpad_admin_feature_flag(self):
@@ -4561,7 +4730,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn('value="sub_agent"', html)
         self.assertIn('id="scratchpad-list"', html)
         self.assertIn('id="scratchpad-add-btn"', html)
-        self.assertIn('Add, edit, or remove persistent notes here.', html)
+        self.assertIn('Capture lessons, user profile clues, open problems, ongoing tasks, preferences, domain facts, and general notes.', html)
         self.assertIn('id="summary-mode-select"', html)
         self.assertIn('id="summary-trigger-input"', html)
         self.assertIn('id="fetch-threshold-input"', html)
@@ -4582,7 +4751,7 @@ class AppRoutesTestCase(unittest.TestCase):
         responses = [
             iter(
                 [
-                    self._tool_call_chunk("append_scratchpad", {"notes": ["The user is 22 years old."]}),
+                    self._tool_call_chunk("append_scratchpad", {"section": "preferences", "notes": ["The user is 22 years old."]}),
                     self._stream_chunk(usage=SimpleNamespace(prompt_tokens=3, completion_tokens=3, total_tokens=6)),
                 ]
             ),
@@ -4600,18 +4769,19 @@ class AppRoutesTestCase(unittest.TestCase):
         ) as mocked_append:
             events = list(run_agent_stream([{"role": "user", "content": "Remember this"}], "deepseek-chat", 2, ["append_scratchpad"]))
 
-        self.assertTrue(mocked_append.called)
+        mocked_append.assert_called_once_with(["The user is 22 years old."], section="preferences")
         tool_result_event = next(event for event in events if event["type"] == "tool_result")
         self.assertEqual(tool_result_event["tool"], "append_scratchpad")
         self.assertEqual(tool_result_event["summary"], "Scratchpad updated")
 
     def test_execute_tool_reads_current_scratchpad(self):
-        save_app_settings({"scratchpad": "Stable preference\nAnother note"})
+        save_app_settings({"scratchpad_preferences": "Stable preference\nAnother note"})
 
         result, summary = _execute_tool("read_scratchpad", {}, runtime_state={})
 
         self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["scratchpad"], "Stable preference\nAnother note")
+        self.assertEqual(result["scratchpad_sections"]["preferences"], "Stable preference\nAnother note")
+        self.assertEqual(result["sections"][5]["title"], "User Preferences")
         self.assertEqual(result["note_count"], 2)
         self.assertEqual(summary, "Scratchpad read")
 
@@ -4621,7 +4791,7 @@ class AppRoutesTestCase(unittest.TestCase):
         content = message["content"]
         self.assertIn("## Scratchpad (AI Persistent Memory)", content)
         self.assertIn("read_scratchpad", content)
-        self.assertIn("(Empty)", content)
+        self.assertIn("(All sections empty)", content)
         self.assertNotIn("### Memory Write Policy", content)
 
     def test_run_agent_stream_caps_parallel_safe_tool_workers(self):

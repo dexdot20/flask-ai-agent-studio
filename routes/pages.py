@@ -16,6 +16,10 @@ from config import (
     RAG_CONTEXT_SIZE_PRESETS,
     RAG_ENABLED,
     RAG_SENSITIVITY_PRESETS,
+    SCRATCHPAD_DEFAULT_SECTION,
+    SCRATCHPAD_SECTION_METADATA,
+    SCRATCHPAD_SECTION_ORDER,
+    SCRATCHPAD_SECTION_SETTING_KEYS,
     SUB_AGENT_RETRY_ATTEMPTS_MAX,
     SUB_AGENT_RETRY_ATTEMPTS_MIN,
     SUB_AGENT_RETRY_DELAY_MAX_SECONDS,
@@ -26,7 +30,9 @@ from config import (
 )
 from routes.auth import is_login_pin_enabled
 from db import (
+    count_scratchpad_notes,
     get_active_tool_names,
+    get_all_scratchpad_sections,
     get_app_settings,
     get_canvas_expand_max_lines,
     get_canvas_prompt_max_lines,
@@ -234,6 +240,7 @@ def build_settings_payload() -> dict:
     return {
         "user_preferences": raw["user_preferences"],
         "scratchpad": raw.get("scratchpad", ""),
+        "scratchpad_sections": build_scratchpad_sections_payload(raw),
         "max_steps": int(raw.get("max_steps", DEFAULT_SETTINGS["max_steps"])),
         "max_parallel_tools": get_max_parallel_tools(raw),
         "temperature": get_model_temperature(raw),
@@ -269,6 +276,20 @@ def build_settings_payload() -> dict:
         "fetch_url_token_threshold": get_fetch_url_token_threshold(raw),
         "fetch_url_clip_aggressiveness": get_fetch_url_clip_aggressiveness(raw),
         "features": get_feature_flags(),
+    }
+
+
+def build_scratchpad_sections_payload(settings: dict) -> dict:
+    scratchpad_sections = get_all_scratchpad_sections(settings)
+    return {
+        section_id: {
+            "id": section_id,
+            "title": SCRATCHPAD_SECTION_METADATA[section_id]["title"],
+            "description": SCRATCHPAD_SECTION_METADATA[section_id]["description"],
+            "content": scratchpad_sections.get(section_id, ""),
+            "note_count": count_scratchpad_notes(scratchpad_sections.get(section_id, "")),
+        }
+        for section_id in SCRATCHPAD_SECTION_ORDER
     }
 
 
@@ -348,10 +369,12 @@ def register_page_routes(app) -> None:
         sub_agent_retry_attempts_raw = data.get("sub_agent_retry_attempts")
         sub_agent_retry_delay_seconds_raw = data.get("sub_agent_retry_delay_seconds")
         scratchpad = data.get("scratchpad")
+        scratchpad_sections_raw = data.get("scratchpad_sections")
 
         if (
             user_preferences is None
             and scratchpad is None
+            and scratchpad_sections_raw is None
             and max_steps_raw is None
             and max_parallel_tools_raw is None
             and temperature_raw is None
@@ -397,10 +420,22 @@ def register_page_routes(app) -> None:
         if scratchpad is not None:
             if not isinstance(scratchpad, str):
                 return jsonify({"error": "Invalid scratchpad."}), 400
-            try:
-                settings["scratchpad"] = normalize_scratchpad_text(scratchpad)
-            except ValueError as exc:
-                return jsonify({"error": str(exc)}), 400
+            settings[SCRATCHPAD_SECTION_SETTING_KEYS[SCRATCHPAD_DEFAULT_SECTION]] = normalize_scratchpad_text(scratchpad)
+
+        if scratchpad_sections_raw is not None:
+            if not isinstance(scratchpad_sections_raw, dict):
+                return jsonify({"error": "Invalid scratchpad sections."}), 400
+            unexpected_sections = [
+                section_id
+                for section_id in scratchpad_sections_raw
+                if section_id not in SCRATCHPAD_SECTION_SETTING_KEYS
+            ]
+            if unexpected_sections:
+                return jsonify({"error": f"Unknown scratchpad sections: {', '.join(sorted(unexpected_sections))}."}), 400
+            for section_id, content in scratchpad_sections_raw.items():
+                if not isinstance(content, str):
+                    return jsonify({"error": f"Invalid scratchpad section content for {section_id}."}), 400
+                settings[SCRATCHPAD_SECTION_SETTING_KEYS[section_id]] = normalize_scratchpad_text(content)
 
         if max_steps_raw is not None:
             try:

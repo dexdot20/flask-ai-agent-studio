@@ -5058,6 +5058,54 @@ kbd {
   gap: 10px;
 }
 
+.scratchpad-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.scratchpad-section__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.scratchpad-section__title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.scratchpad-section__title {
+  margin: 0;
+  font-size: 0.98rem;
+  color: var(--text-primary);
+}
+
+.scratchpad-section__description {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.scratchpad-section__count {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.scratchpad-list--section {
+  gap: 8px;
+}
+
 .scratchpad-empty-state {
   padding: 14px;
   border: 1px dashed rgba(255, 255, 255, 0.09);
@@ -5095,6 +5143,10 @@ kbd {
   justify-content: space-between;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.scratchpad-toolbar--section {
+  justify-content: flex-start;
 }
 
 .scratchpad-count {

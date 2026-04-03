@@ -118,6 +118,47 @@ const MODEL_PROVIDER_LABELS = {
   openrouter: "OpenRouter",
 };
 
+const DEFAULT_SCRATCHPAD_SECTION_ID = "notes";
+const DEFAULT_SCRATCHPAD_SECTION_ORDER = [
+  "lessons",
+  "profile",
+  "notes",
+  "problems",
+  "tasks",
+  "preferences",
+  "domain",
+];
+const DEFAULT_SCRATCHPAD_SECTION_META = {
+  lessons: {
+    title: "Lessons Learned",
+    description: "Reliable takeaways, postmortems, and patterns that should change future decisions.",
+  },
+  profile: {
+    title: "User Profile & Mindset",
+    description: "Durable clues about how the user thinks, decides, and frames problems.",
+  },
+  notes: {
+    title: "General Notes",
+    description: "Durable uncategorized context that does not fit the other sections.",
+  },
+  problems: {
+    title: "Open Problems",
+    description: "Unresolved issues, unknowns, or blockers worth revisiting later.",
+  },
+  tasks: {
+    title: "In-Progress Tasks",
+    description: "Longer-running workstreams the assistant should preserve continuity on.",
+  },
+  preferences: {
+    title: "User Preferences",
+    description: "Stable language, formatting, and collaboration preferences.",
+  },
+  domain: {
+    title: "Domain Facts",
+    description: "Durable facts about the user's stack, systems, or technical domain.",
+  },
+};
+
 const builtinModelCatalog = Array.isArray(appSettings.available_models)
   ? appSettings.available_models.filter((model) => !Boolean(model?.is_custom))
   : [];
@@ -196,6 +237,62 @@ function clearDirtyState() {
 
 function normalizeScratchpadNote(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function normalizeScratchpadNotesList(values) {
+  const notes = [];
+  const seen = new Set();
+  for (const value of Array.isArray(values) ? values : []) {
+    const note = normalizeScratchpadNote(value);
+    if (!note || seen.has(note)) {
+      continue;
+    }
+    seen.add(note);
+    notes.push(note);
+  }
+  return notes;
+}
+
+function splitScratchpadContent(value) {
+  return normalizeScratchpadNotesList(
+    String(value || "")
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n")
+      .split("\n")
+  );
+}
+
+function getScratchpadSectionPayloads() {
+  const serverSections = appSettings.scratchpad_sections && typeof appSettings.scratchpad_sections === "object"
+    ? appSettings.scratchpad_sections
+    : {};
+
+  return DEFAULT_SCRATCHPAD_SECTION_ORDER.map((sectionId) => {
+    const fallback = DEFAULT_SCRATCHPAD_SECTION_META[sectionId] || { title: sectionId, description: "" };
+    const serverSection = serverSections[sectionId] && typeof serverSections[sectionId] === "object"
+      ? serverSections[sectionId]
+      : {};
+    return {
+      id: sectionId,
+      title: String(serverSection.title || fallback.title || sectionId),
+      description: String(serverSection.description || fallback.description || ""),
+      content: String(serverSection.content || ""),
+      note_count: Number.isFinite(serverSection.note_count) ? serverSection.note_count : 0,
+    };
+  });
+}
+
+function getScratchpadSectionsFromSettings() {
+  const sections = {};
+  getScratchpadSectionPayloads().forEach((section) => {
+    sections[section.id] = splitScratchpadContent(section.content);
+  });
+
+  if (!Object.values(sections).some((notes) => notes.length)) {
+    sections[DEFAULT_SCRATCHPAD_SECTION_ID] = splitScratchpadContent(appSettings.scratchpad || "");
+  }
+
+  return sections;
 }
 
 function readNumericSetting(element, defaultValue, { allowZero = true } = {}) {
@@ -955,36 +1052,56 @@ function addCustomModelFromInputs() {
   setCustomModelStatus("OpenRouter model added. Save to apply.", "success");
 }
 
-function readScratchpadNotesFromList() {
+function flattenScratchpadSections(sectionMap) {
+  const flattened = [];
+  DEFAULT_SCRATCHPAD_SECTION_ORDER.forEach((sectionId) => {
+    const notes = Array.isArray(sectionMap?.[sectionId]) ? sectionMap[sectionId] : [];
+    flattened.push(...notes);
+  });
+  return flattened;
+}
+
+function readScratchpadNotesFromSection(sectionId) {
   if (!scratchpadListEl) {
+    return getScratchpadSectionsFromSettings()[sectionId] || [];
+  }
+
+  const sectionEl = scratchpadListEl.querySelector(`.scratchpad-section[data-section="${sectionId}"]`);
+  if (!sectionEl) {
     return [];
   }
 
-  const notes = [];
-  const seen = new Set();
-  for (const input of scratchpadListEl.querySelectorAll(".scratchpad-note-input")) {
-    const note = normalizeScratchpadNote(input.value);
-    if (!note || seen.has(note)) {
-      continue;
-    }
-    seen.add(note);
-    notes.push(note);
+  return normalizeScratchpadNotesList(
+    Array.from(sectionEl.querySelectorAll(".scratchpad-note-input"), (input) => input.value)
+  );
+}
+
+function readScratchpadSectionsFromList() {
+  const sections = {};
+  if (!scratchpadListEl) {
+    return getScratchpadSectionsFromSettings();
   }
 
-  return notes;
+  DEFAULT_SCRATCHPAD_SECTION_ORDER.forEach((sectionId) => {
+    sections[sectionId] = readScratchpadNotesFromSection(sectionId);
+  });
+  return sections;
+}
+
+function readScratchpadNotesFromList() {
+  return flattenScratchpadSections(readScratchpadSectionsFromList());
 }
 
 function getScratchpadNotesFromSettings() {
-  return String(appSettings.scratchpad || "")
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n")
-    .split("\n")
-    .map((line) => normalizeScratchpadNote(line))
-    .filter((line) => line.length > 0);
+  return flattenScratchpadSections(getScratchpadSectionsFromSettings());
+}
+
+function getVisibleScratchpadSections() {
+  return scratchpadListEl ? readScratchpadSectionsFromList() : getScratchpadSectionsFromSettings();
 }
 
 function getVisibleScratchpadNotes() {
-  return scratchpadListEl ? readScratchpadNotesFromList() : getScratchpadNotesFromSettings();
+  return flattenScratchpadSections(getVisibleScratchpadSections());
 }
 
 function updateScratchpadCount() {
@@ -995,31 +1112,45 @@ function updateScratchpadCount() {
   scratchpadCountEl.textContent = count === 1 ? "1 note" : `${count} notes`;
 }
 
-function setScratchpadEmptyState(message = "No scratchpad entries yet.") {
+function updateScratchpadSectionCount(sectionId) {
   if (!scratchpadListEl) {
     return;
   }
+  const countEl = scratchpadListEl.querySelector(`[data-scratchpad-section-count="${sectionId}"]`);
+  if (!countEl) {
+    return;
+  }
+  const count = readScratchpadNotesFromSection(sectionId).length;
+  countEl.textContent = count === 1 ? "1 note" : `${count} notes`;
+}
 
-  scratchpadListEl.replaceChildren();
+function createScratchpadEmptyState(message = "No notes in this section yet.") {
   const emptyState = document.createElement("div");
   emptyState.className = "scratchpad-empty-state";
   emptyState.textContent = message;
-  scratchpadListEl.append(emptyState);
-  updateScratchpadCount();
-  syncOverviewStats();
+  return emptyState;
 }
 
-function createScratchpadNoteRow(note = "") {
+function setScratchpadEmptyState(sectionListEl, message = "No notes in this section yet.") {
+  if (!sectionListEl) {
+    return;
+  }
+  sectionListEl.replaceChildren(createScratchpadEmptyState(message));
+}
+
+function createScratchpadNoteRow(sectionId, note = "") {
   const row = document.createElement("div");
   row.className = "scratchpad-note-row";
 
   const input = document.createElement("input");
   input.type = "text";
   input.className = "settings-text scratchpad-note-input";
+  input.dataset.section = sectionId;
   input.placeholder = "One durable note";
   input.value = note;
   input.addEventListener("input", () => {
     markDirty();
+    updateScratchpadSectionCount(sectionId);
     updateScratchpadCount();
     syncOverviewStats();
   });
@@ -1029,13 +1160,14 @@ function createScratchpadNoteRow(note = "") {
   removeBtn.className = "btn-ghost btn-ghost--danger scratchpad-note-remove";
   removeBtn.textContent = "Remove";
   removeBtn.addEventListener("click", () => {
+    const sectionListEl = row.closest("[data-scratchpad-section-list]");
     row.remove();
-    if (!scratchpadListEl || !scratchpadListEl.querySelector(".scratchpad-note-row")) {
-      setScratchpadEmptyState();
-    } else {
-      updateScratchpadCount();
-      syncOverviewStats();
+    if (sectionListEl && !sectionListEl.querySelector(".scratchpad-note-row")) {
+      setScratchpadEmptyState(sectionListEl);
     }
+    updateScratchpadSectionCount(sectionId);
+    updateScratchpadCount();
+    syncOverviewStats();
     markDirty();
   });
 
@@ -1050,42 +1182,108 @@ function createScratchpadReadonlyRow(note = "") {
   return row;
 }
 
-function renderScratchpadList(notes, { editable = true } = {}) {
+function renderScratchpadSectionList(sectionListEl, sectionId, notes, { editable = true } = {}) {
+  if (!sectionListEl) {
+    return;
+  }
+
+  sectionListEl.replaceChildren();
+  if (!Array.isArray(notes) || !notes.length) {
+    setScratchpadEmptyState(
+      sectionListEl,
+      editable ? "No notes in this section yet. Add one when it becomes useful." : "No notes stored in this section."
+    );
+    return;
+  }
+
+  notes.forEach((note) => {
+    sectionListEl.append(editable ? createScratchpadNoteRow(sectionId, note) : createScratchpadReadonlyRow(note));
+  });
+}
+
+function createScratchpadSectionCard(section, notes, { editable = true } = {}) {
+  const card = document.createElement("section");
+  card.className = "scratchpad-section";
+  card.dataset.section = section.id;
+
+  const header = document.createElement("div");
+  header.className = "scratchpad-section__header";
+
+  const titleGroup = document.createElement("div");
+  titleGroup.className = "scratchpad-section__title-group";
+
+  const title = document.createElement("h4");
+  title.className = "scratchpad-section__title";
+  title.textContent = section.title;
+
+  const description = document.createElement("p");
+  description.className = "scratchpad-section__description";
+  description.textContent = section.description;
+
+  const count = document.createElement("span");
+  count.className = "scratchpad-section__count";
+  count.dataset.scratchpadSectionCount = section.id;
+  count.textContent = notes.length === 1 ? "1 note" : `${notes.length} notes`;
+
+  titleGroup.append(title, description);
+  header.append(titleGroup, count);
+
+  const sectionListEl = document.createElement("div");
+  sectionListEl.className = "scratchpad-list scratchpad-list--section";
+  sectionListEl.dataset.scratchpadSectionList = section.id;
+  renderScratchpadSectionList(sectionListEl, section.id, notes, { editable });
+
+  const toolbar = document.createElement("div");
+  toolbar.className = "scratchpad-toolbar scratchpad-toolbar--section";
+  if (editable) {
+    const addBtn = document.createElement("button");
+    addBtn.type = "button";
+    addBtn.className = "btn-ghost scratchpad-section-add-btn";
+    addBtn.dataset.section = section.id;
+    addBtn.textContent = `Add to ${section.title}`;
+    addBtn.addEventListener("click", () => addScratchpadNote(section.id));
+    toolbar.append(addBtn);
+  }
+
+  card.append(header, sectionListEl, toolbar);
+  return card;
+}
+
+function renderScratchpad(editable = true) {
   if (!scratchpadListEl) {
     return;
   }
 
+  const sectionNotes = getScratchpadSectionsFromSettings();
   scratchpadListEl.replaceChildren();
-  if (!Array.isArray(notes) || !notes.length) {
-    setScratchpadEmptyState(editable ? "No scratchpad entries yet. Add a note to get started." : "No scratchpad entries stored yet.");
-    return;
-  }
-
-  for (const note of notes) {
-    scratchpadListEl.append(editable ? createScratchpadNoteRow(note) : createScratchpadReadonlyRow(note));
-  }
-
+  getScratchpadSectionPayloads().forEach((section) => {
+    const notes = Array.isArray(sectionNotes[section.id]) ? sectionNotes[section.id] : [];
+    scratchpadListEl.append(createScratchpadSectionCard(section, notes, { editable }));
+  });
   updateScratchpadCount();
   syncOverviewStats();
 }
 
-function renderScratchpad(editable = true) {
-  renderScratchpadList(getScratchpadNotesFromSettings(), { editable });
-}
-
-function addScratchpadNote(note = "") {
+function addScratchpadNote(sectionId = DEFAULT_SCRATCHPAD_SECTION_ID, note = "") {
   if (!scratchpadListEl) {
     return;
   }
 
-  const emptyState = scratchpadListEl.querySelector(".scratchpad-empty-state");
+  const sectionEl = scratchpadListEl.querySelector(`.scratchpad-section[data-section="${sectionId}"]`);
+  const sectionListEl = sectionEl?.querySelector("[data-scratchpad-section-list]");
+  if (!sectionListEl) {
+    return;
+  }
+
+  const emptyState = sectionListEl.querySelector(".scratchpad-empty-state");
   if (emptyState) {
     emptyState.remove();
   }
 
-  const row = createScratchpadNoteRow(note);
-  scratchpadListEl.append(row);
+  const row = createScratchpadNoteRow(sectionId, note);
+  sectionListEl.append(row);
   row.querySelector(".scratchpad-note-input")?.focus();
+  updateScratchpadSectionCount(sectionId);
   updateScratchpadCount();
   syncOverviewStats();
   markDirty();
@@ -1278,6 +1476,9 @@ function applyFeatureAvailability() {
 function applyServerSettingsData(data) {
   appSettings.user_preferences = data.user_preferences || "";
   appSettings.scratchpad = data.scratchpad || "";
+  appSettings.scratchpad_sections = data.scratchpad_sections && typeof data.scratchpad_sections === "object"
+    ? data.scratchpad_sections
+    : {};
   appSettings.max_steps = data.max_steps || 5;
   appSettings.max_parallel_tools = data.max_parallel_tools ?? 4;
   appSettings.temperature = data.temperature ?? 0.7;
@@ -1342,6 +1543,7 @@ async function refreshSettings() {
 }
 
 async function saveSettings() {
+  const scratchpadSections = readScratchpadSectionsFromList();
   const payload = {
     user_preferences: preferencesEl?.value.trim() || "",
     temperature: readFloatSetting(temperatureEl, 0.7, { min: 0, max: 2 }),
@@ -1376,7 +1578,11 @@ async function saveSettings() {
     rag_context_size: ragContextSizeEl?.value || "medium",
     rag_source_types: featureFlags.rag_enabled ? getSelectedRagSourceTypes() : [],
     tool_memory_auto_inject: featureFlags.rag_enabled ? Boolean(toolMemoryAutoInjectEl?.checked) : false,
-    scratchpad: readScratchpadNotesFromList().join("\n"),
+    scratchpad: (scratchpadSections[DEFAULT_SCRATCHPAD_SECTION_ID] || []).join("\n"),
+    scratchpad_sections: DEFAULT_SCRATCHPAD_SECTION_ORDER.reduce((acc, sectionId) => {
+      acc[sectionId] = (scratchpadSections[sectionId] || []).join("\n");
+      return acc;
+    }, {}),
   };
 
   saveButtons.forEach((button) => {

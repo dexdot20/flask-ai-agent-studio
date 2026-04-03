@@ -25,6 +25,9 @@ from config import (
     CLARIFICATION_QUESTION_LIMIT_MIN,
     DB_PATH,
     DEFAULT_SETTINGS,
+    SCRATCHPAD_DEFAULT_SECTION,
+    SCRATCHPAD_SECTION_ORDER,
+    SCRATCHPAD_SECTION_SETTING_KEYS,
     DOCUMENT_STORAGE_DIR,
     FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS,
     FETCH_SUMMARY_TOKEN_THRESHOLD,
@@ -2022,7 +2025,7 @@ def get_app_settings() -> dict:
     for row in rows:
         settings[row["key"]] = row["value"]
 
-    return settings
+    return _migrate_legacy_scratchpad_settings(settings)
 
 
 def get_proxy_enabled_operations(settings: dict | None = None) -> list[str]:
@@ -2046,15 +2049,78 @@ def normalize_scratchpad_text(value) -> str:
     return normalized
 
 
-def append_to_scratchpad(notes) -> tuple[dict, str]:
+def normalize_scratchpad_section_id(section: str | None) -> str:
+    normalized = str(section or "").strip().lower()
+    if normalized not in SCRATCHPAD_SECTION_SETTING_KEYS:
+        raise ValueError(f"Invalid scratchpad section: {section!r}")
+    return normalized
+
+
+def get_all_scratchpad_sections(settings: dict | None = None) -> dict[str, str]:
+    source = settings if settings is not None else get_app_settings()
+    return {
+        section_id: normalize_scratchpad_text(source.get(SCRATCHPAD_SECTION_SETTING_KEYS[section_id], ""))
+        for section_id in SCRATCHPAD_SECTION_ORDER
+    }
+
+
+def count_scratchpad_notes(value) -> int:
+    normalized = normalize_scratchpad_text(value)
+    return len(normalized.splitlines()) if normalized else 0
+
+
+def _normalize_app_setting_value(key: str, value):
+    if key == "scratchpad" or key in SCRATCHPAD_SECTION_SETTING_KEYS.values():
+        return normalize_scratchpad_text(value)
+    return value
+
+
+def _upsert_app_setting(conn, key: str, value) -> None:
+    conn.execute(
+        """INSERT INTO app_settings (key, value, updated_at)
+           VALUES (?, ?, datetime('now'))
+           ON CONFLICT(key) DO UPDATE SET
+               value = excluded.value,
+               updated_at = datetime('now')""",
+        (key, value),
+    )
+
+
+def _migrate_legacy_scratchpad_settings(settings: dict) -> dict:
+    legacy_value = normalize_scratchpad_text(settings.get("scratchpad", ""))
+    section_values = {
+        section_id: normalize_scratchpad_text(settings.get(section_key, ""))
+        for section_id, section_key in SCRATCHPAD_SECTION_SETTING_KEYS.items()
+    }
+    notes_key = SCRATCHPAD_SECTION_SETTING_KEYS[SCRATCHPAD_DEFAULT_SECTION]
+    notes_value = section_values.get(SCRATCHPAD_DEFAULT_SECTION, "")
+
+    if legacy_value and not notes_value:
+        section_values[SCRATCHPAD_DEFAULT_SECTION] = legacy_value
+        settings[notes_key] = legacy_value
+        settings["scratchpad"] = ""
+        with get_db() as conn:
+            _upsert_app_setting(conn, notes_key, legacy_value)
+            _upsert_app_setting(conn, "scratchpad", "")
+
+    for section_id, section_key in SCRATCHPAD_SECTION_SETTING_KEYS.items():
+        settings[section_key] = section_values.get(section_id, "")
+
+    settings["scratchpad"] = section_values.get(SCRATCHPAD_DEFAULT_SECTION, "")
+    return settings
+
+
+def append_to_scratchpad(notes, section: str = SCRATCHPAD_DEFAULT_SECTION) -> tuple[dict, str]:
     """Append one or more notes. `notes` may be a string or a list of strings."""
+    section_id = normalize_scratchpad_section_id(section)
+    section_key = SCRATCHPAD_SECTION_SETTING_KEYS[section_id]
     if isinstance(notes, str):
         note_list = [notes]
     else:
         note_list = list(notes or [])
 
     settings = get_app_settings()
-    current = normalize_scratchpad_text(settings.get("scratchpad", ""))
+    current = normalize_scratchpad_text(settings.get(section_key, ""))
     current_lines = current.splitlines() if current else []
     current_set = set(current_lines)
 
@@ -2077,46 +2143,53 @@ def append_to_scratchpad(notes) -> tuple[dict, str]:
         return {
             "status": "skipped",
             "reason": "duplicate_notes",
+            "section": section_id,
             "notes": skipped,
             "scratchpad": current,
+            "scratchpad_sections": get_all_scratchpad_sections(settings),
         }, "Scratchpad notes already exist"
 
     next_value = normalize_scratchpad_text("\n".join(current_lines))
-    settings["scratchpad"] = next_value
+    settings[section_key] = next_value
     save_app_settings(settings)
     return {
         "status": "appended",
+        "section": section_id,
         "notes": appended,
         "skipped": skipped,
         "scratchpad": next_value,
+        "scratchpad_sections": get_all_scratchpad_sections(settings),
     }, "Scratchpad updated"
 
 
-def replace_scratchpad(new_content) -> tuple[dict, str]:
+def replace_scratchpad(new_content, section: str = SCRATCHPAD_DEFAULT_SECTION) -> tuple[dict, str]:
+    section_id = normalize_scratchpad_section_id(section)
+    section_key = SCRATCHPAD_SECTION_SETTING_KEYS[section_id]
     normalized_content = normalize_scratchpad_text(new_content)
-    
+
     settings = get_app_settings()
-    settings["scratchpad"] = normalized_content
+    settings[section_key] = normalized_content
     save_app_settings(settings)
     return {
         "status": "replaced",
+        "section": section_id,
         "scratchpad": normalized_content,
+        "scratchpad_sections": get_all_scratchpad_sections(settings),
     }, "Scratchpad content replaced successfully"
 
 
 def save_app_settings(settings: dict) -> None:
+    normalized_settings = dict(settings or {})
+    has_section_keys = any(key in normalized_settings for key in SCRATCHPAD_SECTION_SETTING_KEYS.values())
+    if "scratchpad" in normalized_settings:
+        legacy_value = normalize_scratchpad_text(normalized_settings.pop("scratchpad"))
+        if not has_section_keys:
+            normalized_settings[SCRATCHPAD_SECTION_SETTING_KEYS[SCRATCHPAD_DEFAULT_SECTION]] = legacy_value
+        normalized_settings["scratchpad"] = ""
+
     with get_db() as conn:
-        for key, value in settings.items():
-            if key == "scratchpad":
-                value = normalize_scratchpad_text(value)
-            conn.execute(
-                """INSERT INTO app_settings (key, value, updated_at)
-                   VALUES (?, ?, datetime('now'))
-                   ON CONFLICT(key) DO UPDATE SET
-                       value = excluded.value,
-                       updated_at = datetime('now')""",
-                (key, value),
-            )
+        for key, value in normalized_settings.items():
+            _upsert_app_setting(conn, key, _normalize_app_setting_value(key, value))
 
 
 def cache_get(key: str):

@@ -211,6 +211,50 @@ PRIVATE_NETWORKS = [
 ]
 
 MAX_USER_PREFERENCES_LENGTH = 2000
+SCRATCHPAD_DEFAULT_SECTION = "notes"
+SCRATCHPAD_SECTION_ORDER = (
+    "lessons",
+    "profile",
+    "notes",
+    "problems",
+    "tasks",
+    "preferences",
+    "domain",
+)
+SCRATCHPAD_SECTION_METADATA = {
+    "lessons": {
+        "title": "Lessons Learned",
+        "description": "Reliable patterns, postmortems, and takeaways that should change future decisions.",
+    },
+    "profile": {
+        "title": "User Profile & Mindset",
+        "description": "Durable clues about how the user thinks, decides, and frames problems.",
+    },
+    "notes": {
+        "title": "General Notes",
+        "description": "Durable uncategorized context that does not fit the other sections.",
+    },
+    "problems": {
+        "title": "Open Problems",
+        "description": "Unresolved issues, unknowns, or blockers worth revisiting later.",
+    },
+    "tasks": {
+        "title": "In-Progress Tasks",
+        "description": "Longer-running workstreams the assistant should preserve continuity on.",
+    },
+    "preferences": {
+        "title": "User Preferences",
+        "description": "Stable language, formatting, and collaboration preferences.",
+    },
+    "domain": {
+        "title": "Domain Facts",
+        "description": "Durable facts about the user's stack, systems, or technical domain.",
+    },
+}
+SCRATCHPAD_SECTION_SETTING_KEYS = {
+    section_id: f"scratchpad_{section_id}"
+    for section_id in SCRATCHPAD_SECTION_ORDER
+}
 SCRATCHPAD_ADMIN_EDITING_ENABLED = _parse_bool_env("SCRATCHPAD_ADMIN_EDITING_ENABLED", False)
 RAG_ENABLED = _parse_bool_env("RAG_ENABLED", True)
 RAG_AUTO_INJECT_TOP_K = max(1, min(8, _parse_int_env("RAG_AUTO_INJECT_TOP_K", 3)))
@@ -218,7 +262,7 @@ RAG_SEARCH_DEFAULT_TOP_K = max(1, min(12, _parse_int_env("RAG_SEARCH_DEFAULT_TOP
 RAG_AUTO_INJECT_THRESHOLD = max(0.0, min(1.0, _parse_float_env("RAG_AUTO_INJECT_THRESHOLD", 0.50)))
 RAG_SEARCH_MIN_SIMILARITY = max(0.0, min(1.0, _parse_float_env("RAG_SEARCH_MIN_SIMILARITY", 0.35)))
 RAG_QUERY_EXPANSION_ENABLED = _parse_bool_env("RAG_QUERY_EXPANSION_ENABLED", True)
-RAG_QUERY_EXPANSION_MAX_VARIANTS = max(1, min(4, _parse_int_env("RAG_QUERY_EXPANSION_MAX_VARIANTS", 3)))
+RAG_QUERY_EXPANSION_MAX_VARIANTS = max(1, min(4, _parse_int_env("RAG_QUERY_EXPANSION_MAX_VARIANTS", 2)))
 RAG_TEMPORAL_DECAY_ALPHA = max(0.0, min(1.0, _parse_float_env("RAG_TEMPORAL_DECAY_ALPHA", 0.15)))
 RAG_TEMPORAL_DECAY_LAMBDA = max(0.0, min(1.0, _parse_float_env("RAG_TEMPORAL_DECAY_LAMBDA", 0.05)))
 RAG_SENSITIVITY_PRESETS = {
@@ -254,7 +298,7 @@ FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS = max(
     min(CONTENT_MAX_CHARS, _parse_int_env("FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS", 24_000)),
 )
 TOOL_MEMORY_TTL_DEFAULT_SECONDS = max(3_600, _parse_int_env("TOOL_MEMORY_TTL_DEFAULT_SECONDS", 604_800))
-TOOL_MEMORY_TTL_WEB_SECONDS = max(3_600, _parse_int_env("TOOL_MEMORY_TTL_WEB_SECONDS", 86_400))
+TOOL_MEMORY_TTL_WEB_SECONDS = max(3_600, _parse_int_env("TOOL_MEMORY_TTL_WEB_SECONDS", 43_200))
 TOOL_MEMORY_TTL_NEWS_SECONDS = max(1_800, _parse_int_env("TOOL_MEMORY_TTL_NEWS_SECONDS", 7_200))
 RAG_DISABLED_INGEST_ERROR = (
     "Manual RAG ingestion is disabled. RAG now only indexes conversation history and successful text-like tool results."
@@ -291,6 +335,13 @@ RAG_DEFAULT_CONTEXT_SIZE_PRESET = _nearest_preset_name(
 DEFAULT_SETTINGS = {
     "user_preferences": "",
     "scratchpad": "",
+    "scratchpad_lessons": "",
+    "scratchpad_profile": "",
+    "scratchpad_notes": "",
+    "scratchpad_problems": "",
+    "scratchpad_tasks": "",
+    "scratchpad_preferences": "",
+    "scratchpad_domain": "",
     "max_steps": "5",
     "max_parallel_tools": str(DEFAULT_MAX_PARALLEL_TOOLS),
     "temperature": "0.7",

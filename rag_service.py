@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+import html
 import hashlib
 import json
 import logging
@@ -8,6 +10,9 @@ import os
 import re
 import time
 from datetime import datetime, timezone
+from threading import Lock
+
+from flask import current_app, has_app_context
 
 from config import (
     RAG_DISABLED_FEATURE_ERROR,
@@ -56,6 +61,10 @@ from rag import (
 )
 
 _rag_sources_verified = False
+_rag_sources_last_verified_at = 0.0
+_RAG_SOURCES_VERIFY_COOLDOWN_SECS = 60.0
+_rag_background_executor = None
+_rag_background_executor_lock = Lock()
 CATEGORY_TOOL_MEMORY = RAG_SOURCE_TOOL_MEMORY
 DYNAMIC_RAG_CATEGORIES = {RAG_SOURCE_CONVERSATION, RAG_SOURCE_TOOL_MEMORY, RAG_SOURCE_TOOL_RESULT}
 AUTO_INJECT_EXCERPT_LIMIT = 560
@@ -74,6 +83,32 @@ def _clean_rag_text_block(text: str, limit: int | None = None) -> str:
     if limit and len(cleaned) > limit:
         return cleaned[:limit].rstrip() + "…"
     return cleaned
+
+
+def _sanitize_tool_result_text(text: str) -> str:
+    cleaned = html.unescape(str(text or ""))
+    cleaned = re.sub(r"[\u00ad\u200b-\u200f\u2028\u2029\ufeff]", "", cleaned)
+    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+    return _clean_rag_text_block(cleaned)
+
+
+def _resolve_background_app(app_obj=None):
+    if app_obj is not None:
+        return app_obj
+    if has_app_context():
+        return current_app._get_current_object()
+    raise RuntimeError("A Flask app object is required for background RAG work.")
+
+
+def _get_rag_background_executor() -> ThreadPoolExecutor:
+    global _rag_background_executor
+    if _rag_background_executor is not None:
+        return _rag_background_executor
+    with _rag_background_executor_lock:
+        if _rag_background_executor is not None:
+            return _rag_background_executor
+        _rag_background_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="rag-sync")
+        return _rag_background_executor
 
 
 def _normalize_allowed_source_types(
@@ -101,6 +136,22 @@ def _coerce_metadata_bool(metadata: dict | None, key: str, default: bool = True)
     if normalized in {"0", "false", "no", "off"}:
         return False
     return default
+
+
+def _coerce_optional_timestamp(value) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        normalized = int(value)
+        return normalized if normalized > 0 else None
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        normalized = int(float(text))
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized > 0 else None
 
 
 def normalize_rag_category(category: str | None, default: str | None = RAG_SOURCE_CONVERSATION) -> str | None:
@@ -154,7 +205,7 @@ def build_tool_result_record_content(entry: dict, index: int) -> str:
         parts.append(f"Content mode: {entry['content_mode']}")
     if entry.get("summary_notice"):
         parts.append(f"Note: {entry['summary_notice']}")
-    parts.append(entry["content"])
+    parts.append(_sanitize_tool_result_text(entry.get("content", "")))
     return "\n".join(parts)
 
 
@@ -272,9 +323,10 @@ def _fetch_rag_documents_db() -> list[dict]:
 
 def ensure_supported_rag_sources(force: bool = False) -> int:
     _require_rag_enabled()
-    global _rag_sources_verified
+    global _rag_sources_verified, _rag_sources_last_verified_at
+    now = time.time()
     removed = purge_expired_rag_documents()
-    if _rag_sources_verified and not force:
+    if _rag_sources_verified and not force and (now - _rag_sources_last_verified_at) < _RAG_SOURCES_VERIFY_COOLDOWN_SECS:
         return removed
 
     with get_db() as conn:
@@ -289,6 +341,7 @@ def ensure_supported_rag_sources(force: bool = False) -> int:
         removed_invalid += 1
 
     _rag_sources_verified = True
+    _rag_sources_last_verified_at = now
     return removed + removed_invalid
 
 
@@ -390,6 +443,83 @@ def _expand_query_variants(query: str) -> list[str]:
     return variants[:RAG_QUERY_EXPANSION_MAX_VARIANTS]
 
 
+def _coerce_similarity_threshold(min_similarity: float | int | str | None) -> float:
+    if min_similarity in (None, ""):
+        return RAG_SEARCH_MIN_SIMILARITY
+    try:
+        return max(0.0, min(1.0, float(min_similarity)))
+    except (TypeError, ValueError):
+        return RAG_SEARCH_MIN_SIMILARITY
+
+
+def _resolve_source_type_hint(
+    category: str | None,
+    allowed_source_types: set[str] | list[str] | tuple[str, ...] | None,
+) -> str | None:
+    if category or allowed_source_types is None:
+        return None
+    normalized_types = _normalize_allowed_source_types(allowed_source_types)
+    if not normalized_types or len(normalized_types) != 1:
+        return None
+    return next(iter(normalized_types))
+
+
+def _get_chunk_counts_for_source_keys(source_keys: list[str]) -> dict[str, int]:
+    cleaned_keys = [str(source_key or "").strip() for source_key in source_keys if str(source_key or "").strip()]
+    if not cleaned_keys:
+        return {}
+
+    placeholders = ", ".join("?" for _ in cleaned_keys)
+    with get_db() as conn:
+        rows = conn.execute(
+            f"SELECT source_key, chunk_count FROM rag_documents WHERE source_key IN ({placeholders})",
+            cleaned_keys,
+        ).fetchall()
+    return {str(row["source_key"] or "").strip(): int(row["chunk_count"] or 0) for row in rows}
+
+
+def _attach_match_context_metadata(matches: list[dict]) -> list[dict]:
+    chunk_counts = _get_chunk_counts_for_source_keys([match.get("source_key") for match in matches])
+    annotated_matches: list[dict] = []
+    for match in matches:
+        enriched = dict(match)
+        source_key = str(match.get("source_key") or "").strip()
+        total_chunks = chunk_counts.get(source_key)
+        if total_chunks:
+            enriched["total_chunks"] = total_chunks
+            chunk_index = match.get("chunk_index")
+            try:
+                normalized_chunk_index = int(chunk_index)
+            except (TypeError, ValueError):
+                normalized_chunk_index = None
+            enriched["has_more_context"] = bool(
+                normalized_chunk_index is not None and normalized_chunk_index < max(0, int(total_chunks) - 1)
+            )
+        annotated_matches.append(enriched)
+    return annotated_matches
+
+
+def _attach_tool_memory_expiry_warnings(matches: list[dict]) -> list[dict]:
+    warning_threshold = int(time.time()) + 3_600
+    annotated_matches: list[dict] = []
+    for match in matches:
+        enriched = dict(match)
+        expires_at_ts = match.get("_expires_at_ts")
+        if isinstance(expires_at_ts, int) and expires_at_ts <= warning_threshold:
+            enriched["expiry_warning"] = "Expires within 1 hour"
+        annotated_matches.append(enriched)
+    return annotated_matches
+
+
+def _finalize_match_payload(matches: list[dict]) -> list[dict]:
+    finalized_matches: list[dict] = []
+    for match in matches:
+        cleaned = dict(match)
+        cleaned.pop("_expires_at_ts", None)
+        finalized_matches.append(cleaned)
+    return finalized_matches
+
+
 def _coerce_hit_timestamp(metadata: dict | None) -> int | None:
     source = metadata if isinstance(metadata, dict) else {}
     for key in ("indexed_at_ts", "created_at_ts"):
@@ -453,12 +583,27 @@ def _dedupe_rag_hits(hits: list[dict]) -> list[dict]:
     return [deduped[key] for key in ordered_keys]
 
 
-def _query_rag_hits(query: str, top_k: int, category: str | None = None, *, expand_query: bool = True) -> list[dict]:
+def _query_rag_hits(
+    query: str,
+    top_k: int,
+    category: str | None = None,
+    *,
+    allowed_source_types: set[str] | list[str] | tuple[str, ...] | None = None,
+    expand_query: bool = True,
+) -> list[dict]:
     collected_hits: list[dict] = []
     normalized_query = re.sub(r"\s+", " ", str(query or "").strip())
     variants = _expand_query_variants(normalized_query) if expand_query else ([normalized_query] if normalized_query else [])
+    source_type_hint = _resolve_source_type_hint(category, allowed_source_types)
     for variant in variants:
-        collected_hits.extend(rag_query_chunks(variant, top_k=top_k, category=category))
+        collected_hits.extend(
+            rag_query_chunks(
+                variant,
+                top_k=top_k,
+                category=category,
+                source_type_hint=source_type_hint,
+            )
+        )
     return _dedupe_rag_hits(collected_hits)
 
 
@@ -469,7 +614,12 @@ def _query_auto_injected_rag_hits(
     allowed_source_types: set[str] | list[str] | tuple[str, ...] | None = None,
 ) -> list[dict]:
     normalized_top_k = max(1, int(top_k))
-    base_hits = _query_rag_hits(query, top_k=normalized_top_k, expand_query=False)
+    base_hits = _query_rag_hits(
+        query,
+        top_k=normalized_top_k,
+        allowed_source_types=allowed_source_types,
+        expand_query=False,
+    )
     base_matches = _normalize_rag_hits(
         query,
         base_hits,
@@ -485,7 +635,7 @@ def _query_auto_injected_rag_hits(
     )
     if strong_match_count >= (1 if normalized_top_k == 1 else 2):
         return base_hits
-    return _query_rag_hits(query, top_k=normalized_top_k)
+    return _query_rag_hits(query, top_k=normalized_top_k, allowed_source_types=allowed_source_types)
 
 
 def _compact_auto_injected_rag_match(match: dict) -> dict | None:
@@ -528,6 +678,7 @@ def _normalize_rag_hits(
             continue
         if auto_inject_only and not _coerce_metadata_bool(metadata, "auto_inject_enabled", default=True):
             continue
+        expires_at_ts = _coerce_optional_timestamp(metadata.get("expires_at_ts"))
         matches.append(
             {
                 "id": hit.get("id"),
@@ -536,6 +687,8 @@ def _normalize_rag_hits(
                 "source_type": source_type,
                 "category": normalize_rag_category(metadata.get("category"), default=source_type),
                 "chunk_index": metadata.get("chunk_index"),
+                "_expires_at_ts": expires_at_ts,
+                "expires_at_utc": _format_utc_timestamp(expires_at_ts),
                 "similarity": round(float(similarity), 4) if similarity is not None else None,
                 "text": _clip_rag_excerpt(hit.get("text", "")),
             }
@@ -549,6 +702,7 @@ def search_knowledge_base_tool(
     category: str | None = None,
     top_k: int = RAG_SEARCH_DEFAULT_TOP_K,
     allowed_source_types: set[str] | list[str] | tuple[str, ...] | None = None,
+    min_similarity: float | int | str | None = None,
 ) -> dict:
     _require_rag_enabled()
     query = str(query or "").strip()
@@ -557,16 +711,25 @@ def search_knowledge_base_tool(
 
     ensure_supported_rag_sources()
     normalized_category = normalize_rag_category(category, default=None) if category else None
-    hits = _query_rag_hits(query, top_k=top_k, category=normalized_category)
+    similarity_threshold = _coerce_similarity_threshold(min_similarity)
+    hits = _query_rag_hits(
+        query,
+        top_k=top_k,
+        category=normalized_category,
+        allowed_source_types=allowed_source_types,
+    )
     matches = _normalize_rag_hits(
         query,
         hits,
-        RAG_SEARCH_MIN_SIMILARITY,
+        similarity_threshold,
         allowed_source_types=allowed_source_types,
     )
+    matches = _attach_match_context_metadata(matches)
+    matches = _finalize_match_payload(matches)
     return {
         "query": query,
         "category": normalized_category,
+        "min_similarity": similarity_threshold,
         "count": len(matches[: max(1, int(top_k))]),
         "matches": matches[: max(1, int(top_k))],
     }
@@ -574,7 +737,7 @@ def search_knowledge_base_tool(
 
 def upsert_tool_memory_result(tool_name: str, args_preview: str, result_content: str, summary: str = "") -> dict | None:
     _require_rag_enabled()
-    cleaned_content = _clean_rag_text_block(result_content)
+    cleaned_content = _sanitize_tool_result_text(result_content)
     if not cleaned_content:
         return None
 
@@ -622,18 +785,27 @@ def upsert_tool_memory_result(tool_name: str, args_preview: str, result_content:
     )
 
 
-def search_tool_memory(query: str, top_k: int = RAG_SEARCH_DEFAULT_TOP_K) -> dict:
+def search_tool_memory(
+    query: str,
+    top_k: int = RAG_SEARCH_DEFAULT_TOP_K,
+    min_similarity: float | int | str | None = None,
+) -> dict:
     _require_rag_enabled()
     query = str(query or "").strip()
     if not query:
         return {"query": "", "count": 0, "matches": []}
 
     ensure_supported_rag_sources()
+    similarity_threshold = _coerce_similarity_threshold(min_similarity)
     hits = _query_rag_hits(query, top_k=top_k, category=CATEGORY_TOOL_MEMORY)
-    matches = _normalize_rag_hits(query, hits, RAG_SEARCH_MIN_SIMILARITY)
+    matches = _normalize_rag_hits(query, hits, similarity_threshold)
+    matches = _attach_match_context_metadata(matches)
+    matches = _attach_tool_memory_expiry_warnings(matches)
+    matches = _finalize_match_payload(matches)
     return {
         "query": query,
         "category": CATEGORY_TOOL_MEMORY,
+        "min_similarity": similarity_threshold,
         "count": len(matches[: max(1, int(top_k))]),
         "matches": matches[: max(1, int(top_k))],
     }
@@ -844,6 +1016,34 @@ def ingest_rag_chunks(
     }
 
 
+def ingest_rag_chunks_background(
+    app_obj,
+    source_key: str,
+    source_name: str,
+    source_type: str,
+    category: str,
+    chunks: list,
+    metadata: dict | None = None,
+    expires_at: str | None = None,
+):
+    _require_rag_enabled()
+    background_app = _resolve_background_app(app_obj)
+
+    def task():
+        with background_app.app_context():
+            return ingest_rag_chunks(
+                source_key=source_key,
+                source_name=source_name,
+                source_type=source_type,
+                category=category,
+                chunks=chunks,
+                metadata=metadata,
+                expires_at=expires_at,
+            )
+
+    return _get_rag_background_executor().submit(task)
+
+
 def get_conversation_records_for_rag(conversation_id: int | None = None) -> list[dict]:
     _require_rag_enabled()
     ensure_supported_rag_sources()
@@ -986,3 +1186,15 @@ def sync_conversations_to_rag_safe(conversation_id: int | None = None, force: bo
     except Exception:
         logger.exception("Automatic conversation sync failed", extra={"conversation_id": conversation_id, "force": force})
         return []
+
+
+def sync_conversations_to_rag_background(app_obj, conversation_id: int | None = None, force: bool = False):
+    if not RAG_ENABLED:
+        return None
+    background_app = _resolve_background_app(app_obj)
+
+    def task():
+        with background_app.app_context():
+            return sync_conversations_to_rag_safe(conversation_id=conversation_id, force=force)
+
+    return _get_rag_background_executor().submit(task)
