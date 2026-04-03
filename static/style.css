@@ -3255,14 +3255,16 @@ kbd {
 .canvas-editor {
   flex: 1;
   width: calc(100% - 32px);
+  min-height: max(24rem, 52vh);
+  box-sizing: border-box;
   margin: 14px 16px 16px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: rgba(7, 10, 18, 0.72);
   color: var(--text-primary);
-  padding: 18px;
+  padding: 20px;
   resize: none;
-  font: 0.86rem/1.7 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font: 0.94rem/1.8 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 .canvas-editor:focus {
@@ -3310,6 +3312,14 @@ kbd {
     border-right: none;
     border-bottom: 1px solid var(--border);
     max-height: 240px;
+  }
+
+  .canvas-editor {
+    min-height: 18rem;
+    width: calc(100% - 24px);
+    margin: 12px;
+    padding: 18px;
+    font-size: 0.9rem;
   }
 }
 

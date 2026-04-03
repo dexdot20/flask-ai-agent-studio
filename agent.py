@@ -146,6 +146,9 @@ CANVAS_STREAM_OPEN_TOOL_NAMES = {
     "create_canvas_document",
     "rewrite_canvas_document",
     "expand_canvas_document",
+    "replace_canvas_lines",
+    "insert_canvas_lines",
+    "delete_canvas_lines",
 }
 CANVAS_STREAM_CONTENT_TOOL_NAMES = {
     "create_canvas_document",

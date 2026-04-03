@@ -126,6 +126,8 @@ let isFixing = false;
 let currentConvId = null;
 let currentConvTitle = "New Chat";
 let activeAbortController = null;
+let activeAssistantStreamingBubble = null;
+let activeAssistantStreamingHasVisibleAnswer = false;
 let selectedImageFiles = [];
 let selectedDocumentFiles = [];
 let pendingDocumentCanvasOpen = null;
@@ -143,7 +145,7 @@ let lastCanvasTriggerEl = null;
 let lastCanvasConfirmTriggerEl = null;
 let lastExportTriggerEl = null;
 let lastSummaryTriggerEl = null;
-let streamingCanvasPreview = null;
+let streamingCanvasPreviews = new Map();
 let pendingCanvasPreviewTimer = 0;
 let lastCanvasStructureSignature = "";
 let latestSummaryStatus = null;
@@ -466,7 +468,8 @@ const sanitizer = globalThis.DOMPurify || null;
 const highlighter = globalThis.hljs || null;
 const SIDEBAR_STORAGE_KEY = "chatbot.sidebarOpen";
 const CLARIFICATION_DRAFT_STORAGE_PREFIX = "chatbot.clarificationDraft";
-const CANVAS_STREAMING_PREVIEW_TOOLS = new Set(["create_canvas_document", "rewrite_canvas_document"]);
+const CANVAS_STREAMING_PREVIEW_TOOLS = new Set(["create_canvas_document", "rewrite_canvas_document", "replace_canvas_lines", "insert_canvas_lines", "delete_canvas_lines"]);
+const CANVAS_EDIT_PREVIEW_TOOLS = new Set(["replace_canvas_lines", "insert_canvas_lines", "delete_canvas_lines"]);
 
 function isCanvasStreamingPreviewTool(toolName) {
   return CANVAS_STREAMING_PREVIEW_TOOLS.has(String(toolName || "").trim());
@@ -1284,7 +1287,7 @@ function getCanvasDocumentCollection(entries = history) {
 }
 
 function resetStreamingCanvasPreview() {
-  streamingCanvasPreview = null;
+  streamingCanvasPreviews.clear();
   if (pendingCanvasPreviewTimer) {
     globalThis.clearTimeout(pendingCanvasPreviewTimer);
     pendingCanvasPreviewTimer = 0;
@@ -1298,12 +1301,11 @@ function buildStreamingCanvasPreviewDocument(toolName, previewKey = "", snapshot
   const allDocuments = getCanvasDocumentCollection(history);
   const activeDocument = getActiveCanvasDocument(history);
 
-  // For rewrite operations, prefer the document explicitly identified in the
-  // snapshot (via document_id or document_path) over the generic active doc.
-  // This ensures the streaming preview tracks the correct file whenever the AI
-  // targets a non-active document for rewriting.
+  // For rewrite and edit operations (replace/insert/delete lines), prefer the
+  // document explicitly identified in the snapshot over the generic active doc.
+  const needsTargetDoc = normalizedToolName === "rewrite_canvas_document" || CANVAS_EDIT_PREVIEW_TOOLS.has(normalizedToolName);
   let targetDocument = activeDocument;
-  if (normalizedToolName === "rewrite_canvas_document") {
+  if (needsTargetDoc) {
     const snapshotDocId = String(snapshotData.document_id || "").trim();
     const snapshotDocPath = String(snapshotData.document_path || "").trim();
     if (snapshotDocId) {
@@ -1314,67 +1316,69 @@ function buildStreamingCanvasPreviewDocument(toolName, previewKey = "", snapshot
   }
 
   const isRewritePreview = normalizedToolName === "rewrite_canvas_document" && targetDocument;
+  const isEditPreview = CANVAS_EDIT_PREVIEW_TOOLS.has(normalizedToolName) && targetDocument;
+  const baseDocument = (isRewritePreview || isEditPreview) ? targetDocument : null;
   const normalized = normalizeStreamingCanvasPreviewDocument({
-    id: isRewritePreview ? targetDocument.id : `streaming-canvas-preview-${normalizedPreviewKey}`,
-    title: String(snapshotData.title || (isRewritePreview ? targetDocument.title : "Canvas draft")).trim() || "Canvas draft",
-    path: String(snapshotData.path || (isRewritePreview ? targetDocument.path : "")).trim(),
-    role: String(snapshotData.role || (isRewritePreview ? targetDocument.role : "note")).trim(),
-    summary: isRewritePreview ? String(targetDocument.summary || "") : "",
-    format: String(snapshotData.format || (isRewritePreview ? targetDocument.format : "markdown")).trim() || "markdown",
-    language: String(snapshotData.language || (isRewritePreview ? targetDocument.language : "")).trim(),
-    content: "",
-    source_message_id: isRewritePreview ? targetDocument.source_message_id : null,
+    id: baseDocument ? baseDocument.id : `streaming-canvas-preview-${normalizedPreviewKey}`,
+    title: String(snapshotData.title || (baseDocument ? baseDocument.title : "Canvas draft")).trim() || "Canvas draft",
+    path: String(snapshotData.path || (baseDocument ? baseDocument.path : "")).trim(),
+    role: String(snapshotData.role || (baseDocument ? baseDocument.role : "note")).trim(),
+    summary: baseDocument ? String(baseDocument.summary || "") : "",
+    format: String(snapshotData.format || (baseDocument ? baseDocument.format : "markdown")).trim() || "markdown",
+    language: String(snapshotData.language || (baseDocument ? baseDocument.language : "")).trim(),
+    content: isEditPreview ? String(targetDocument.content || "") : "",
+    source_message_id: baseDocument ? baseDocument.source_message_id : null,
   });
   return normalized ? { ...normalized, isStreamingPreview: true, tool: normalizedToolName, previewKey: normalizedPreviewKey } : null;
 }
 
-function applyStreamingCanvasPreviewSnapshot(snapshot = {}) {
-  if (!streamingCanvasPreview || !snapshot || typeof snapshot !== "object") {
+function applyStreamingCanvasPreviewSnapshot(previewDoc, snapshot = {}) {
+  if (!previewDoc || !snapshot || typeof snapshot !== "object") {
     return false;
   }
   let changed = false;
   if (typeof snapshot.title === "string" && snapshot.title.trim()) {
     const nextTitle = snapshot.title.trim();
-    if (nextTitle !== streamingCanvasPreview.title) {
-      streamingCanvasPreview.title = nextTitle;
+    if (nextTitle !== previewDoc.title) {
+      previewDoc.title = nextTitle;
       changed = true;
     }
   }
   if (typeof snapshot.path === "string") {
     const nextPath = snapshot.path.trim().replace(/\\/g, "/");
-    if (nextPath && nextPath !== streamingCanvasPreview.path) {
-      streamingCanvasPreview.path = nextPath;
+    if (nextPath && nextPath !== previewDoc.path) {
+      previewDoc.path = nextPath;
       changed = true;
     }
   }
   if (typeof snapshot.role === "string") {
     const nextRole = snapshot.role.trim().toLowerCase();
-    if (nextRole && nextRole !== streamingCanvasPreview.role) {
-      streamingCanvasPreview.role = nextRole;
+    if (nextRole && nextRole !== previewDoc.role) {
+      previewDoc.role = nextRole;
       changed = true;
     }
   }
   if (typeof snapshot.format === "string") {
     const normalizedFormat = snapshot.format.trim().toLowerCase();
     const nextFormat = normalizedFormat === "code" ? "code" : "markdown";
-    if (nextFormat !== streamingCanvasPreview.format) {
-      streamingCanvasPreview.format = nextFormat;
+    if (nextFormat !== previewDoc.format) {
+      previewDoc.format = nextFormat;
       changed = true;
     }
   }
   if (typeof snapshot.language === "string") {
     const nextLanguage = snapshot.language.trim().toLowerCase();
-    if (nextLanguage && nextLanguage !== streamingCanvasPreview.language) {
-      streamingCanvasPreview.language = nextLanguage;
+    if (nextLanguage && nextLanguage !== previewDoc.language) {
+      previewDoc.language = nextLanguage;
       changed = true;
     }
   }
 
-  const normalizedPreview = normalizeStreamingCanvasPreviewDocument(streamingCanvasPreview);
+  const normalizedPreview = normalizeStreamingCanvasPreviewDocument(previewDoc);
   if (normalizedPreview) {
     ["title", "path", "role", "format", "language", "summary"].forEach((key) => {
-      if (normalizedPreview[key] !== streamingCanvasPreview[key]) {
-        streamingCanvasPreview[key] = normalizedPreview[key];
+      if (normalizedPreview[key] !== previewDoc[key]) {
+        previewDoc[key] = normalizedPreview[key];
         changed = true;
       }
     });
@@ -1389,41 +1393,46 @@ function ensureStreamingCanvasPreview(toolName, previewKey = "", snapshot = {}) 
   if (!normalizedToolName) {
     return null;
   }
-  const isNewPreview = (
-    !streamingCanvasPreview
-    || streamingCanvasPreview.tool !== normalizedToolName
-    || streamingCanvasPreview.previewKey !== normalizedPreviewKey
-  );
+  const existing = streamingCanvasPreviews.get(normalizedPreviewKey);
+  const isNewPreview = !existing || existing.tool !== normalizedToolName;
+  let preview = existing;
   if (isNewPreview) {
-    streamingCanvasPreview = buildStreamingCanvasPreviewDocument(normalizedToolName, normalizedPreviewKey, snapshot);
+    preview = buildStreamingCanvasPreviewDocument(normalizedToolName, normalizedPreviewKey, snapshot);
+    if (preview) {
+      streamingCanvasPreviews.set(normalizedPreviewKey, preview);
+    }
   }
-  if (!streamingCanvasPreview) {
+  if (!preview) {
     return null;
   }
-  applyStreamingCanvasPreviewSnapshot(snapshot);
+  applyStreamingCanvasPreviewSnapshot(preview, snapshot);
   // Only switch the active view to the streaming preview when a new streaming
   // operation starts. If the user has manually selected a different document
   // during an ongoing stream, do not force the view back to the preview.
-  if (isNewPreview || activeCanvasDocumentId === streamingCanvasPreview.id) {
-    activeCanvasDocumentId = streamingCanvasPreview.id;
+  if (isNewPreview || activeCanvasDocumentId === preview.id) {
+    activeCanvasDocumentId = preview.id;
   }
-  return streamingCanvasPreview;
+  return preview;
 }
 
 function getCanvasRenderableDocuments(entries = history) {
   const documents = getCanvasDocumentCollection(entries);
-  if (!streamingCanvasPreview?.id) {
+  if (!streamingCanvasPreviews.size) {
     return documents;
   }
-  const previewIndex = documents.findIndex((document) => document.id === streamingCanvasPreview.id);
-  if (previewIndex >= 0) {
-    return [
-      ...documents.slice(0, previewIndex),
-      streamingCanvasPreview,
-      ...documents.slice(previewIndex + 1),
-    ];
+  let result = [...documents];
+  for (const preview of streamingCanvasPreviews.values()) {
+    if (!preview?.id) {
+      continue;
+    }
+    const previewIndex = result.findIndex((document) => document.id === preview.id);
+    if (previewIndex >= 0) {
+      result = [...result.slice(0, previewIndex), preview, ...result.slice(previewIndex + 1)];
+    } else {
+      result = [...result, preview];
+    }
   }
-  return [...documents, streamingCanvasPreview];
+  return result;
 }
 
 function buildCanvasStructureSignature(documents, visibleDocuments = documents) {
@@ -4223,6 +4232,9 @@ function createAssistantStreamingGroup() {
   asstBubble.className = "bubble thinking cursor";
   asstBubble.textContent = "Working...";
 
+  activeAssistantStreamingBubble = asstBubble;
+  activeAssistantStreamingHasVisibleAnswer = false;
+
   asstGroup.appendChild(metaRow);
   asstGroup.appendChild(stepLog);
   asstGroup.appendChild(asstBubble);
@@ -4230,6 +4242,21 @@ function createAssistantStreamingGroup() {
   scrollToBottom();
 
   return { asstGroup, stepLog, asstBubble };
+}
+
+function clearEmptyAssistantStreamingBubble() {
+  if (!activeAssistantStreamingBubble || activeAssistantStreamingHasVisibleAnswer) {
+    return false;
+  }
+
+  activeAssistantStreamingBubble.remove();
+  activeAssistantStreamingBubble = null;
+  return true;
+}
+
+function resetAssistantStreamingBubbleState() {
+  activeAssistantStreamingBubble = null;
+  activeAssistantStreamingHasVisibleAnswer = false;
 }
 
 function finalizeAssistantStreamingGroup(asstGroup, stepLog, metadata) {
@@ -5544,6 +5571,8 @@ cancelBtn.addEventListener("click", () => {
   if (activeAbortController) {
     activeAbortController.abort();
   }
+  clearEmptyAssistantStreamingBubble();
+  scrollToBottom();
 });
 
 editBannerCancelBtn.addEventListener("click", () => {
@@ -6956,6 +6985,9 @@ async function sendMessage(options = {}) {
 
       visibleAnswer = fullAnswer.slice(0, visibleAnswer.length + stepSize);
       renderBubbleWithCursor(asstBubble, visibleAnswer);
+      if (String(visibleAnswer || "").trim()) {
+        activeAssistantStreamingHasVisibleAnswer = true;
+      }
       scrollToBottom();
       if (visibleAnswer.length < fullAnswer.length) {
         scheduleAnswerRender();
@@ -6971,6 +7003,9 @@ async function sendMessage(options = {}) {
 
     visibleAnswer = fullAnswer;
     renderBubbleWithCursor(asstBubble, visibleAnswer);
+    if (String(visibleAnswer || "").trim()) {
+      activeAssistantStreamingHasVisibleAnswer = true;
+    }
   };
 
   try {
@@ -7227,6 +7262,7 @@ async function sendMessage(options = {}) {
         }
         rawAnswer = syncedAnswer;
         fullAnswer = rawAnswer;
+        activeAssistantStreamingHasVisibleAnswer = true;
         flushAnswerRender();
         asstBubble.classList.remove("thinking");
         asstBubble.classList.remove("cursor");
@@ -7235,11 +7271,17 @@ async function sendMessage(options = {}) {
       } else if (event.type === "answer_delta") {
         rawAnswer += event.text || "";
         fullAnswer = rawAnswer;
+        if (String(fullAnswer || "").trim()) {
+          activeAssistantStreamingHasVisibleAnswer = true;
+        }
         scheduleAnswerRender();
       } else if (event.type === "clarification_request") {
         pendingClarification = event.clarification && typeof event.clarification === "object" ? event.clarification : null;
         rawAnswer = String(event.text || "").trim();
         fullAnswer = rawAnswer;
+        if (String(fullAnswer || "").trim()) {
+          activeAssistantStreamingHasVisibleAnswer = true;
+        }
         asstBubble.classList.remove("thinking");
         asstBubble.classList.remove("cursor");
         if (fullAnswer) {
@@ -7279,7 +7321,8 @@ async function sendMessage(options = {}) {
         } else {
           renderCanvasPanel();
         }
-        setCanvasStatus("Preparing canvas...", "muted");
+        const isEditTool = CANVAS_EDIT_PREVIEW_TOOLS.has(String(event.tool || "").trim());
+        setCanvasStatus(isEditTool ? "Updating canvas..." : "Preparing canvas...", "muted");
       } else if (event.type === "canvas_content_delta") {
         if (!isCanvasStreamingPreviewTool(event.tool)) {
           return;
@@ -7441,6 +7484,7 @@ async function sendMessage(options = {}) {
       flushAnswerRender();
     }
     pendingDocumentCanvasOpen = null;
+    clearEmptyAssistantStreamingBubble();
     if (fullAnswer.trim() || rawReasoning.trim()) {
       finalizeAssistantBubble(asstBubble, fullAnswer);
 
@@ -7486,6 +7530,7 @@ async function sendMessage(options = {}) {
   } finally {
     activeAbortController = null;
     setStreaming(false);
+    resetAssistantStreamingBubbleState();
     refreshEditBanner();
     inputEl.focus();
   }
