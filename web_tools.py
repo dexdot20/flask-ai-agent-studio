@@ -357,14 +357,19 @@ def _extract_html(html: str, url: str) -> dict:
     content_root = soup.find("main") or soup.find("article") or soup.body or soup
     outline = _extract_html_outline(content_root)
     primary_text = _clean_extracted_text(content_root.get_text(separator="\n"))
-    text = primary_text
+    reusable_summary = _combine_distinct_text_blocks([meta_description, structured_text])
+    text = _combine_distinct_text_blocks([reusable_summary, primary_text]) if reusable_summary else primary_text
     if len(primary_text) < _THIN_CONTENT_MIN_CHARS:
-        text = _combine_distinct_text_blocks([primary_text, noscript_text, meta_description, structured_text])
+        text = _combine_distinct_text_blocks([reusable_summary, primary_text, noscript_text])
     if not text:
-        text = _combine_distinct_text_blocks([meta_description, structured_text, noscript_text])
+        text = _combine_distinct_text_blocks([reusable_summary, noscript_text])
     result = {"url": url, "title": title, "content": _truncate_content(text), "content_format": "html"}
     if outline:
         result["outline"] = outline
+    if meta_description:
+        result["meta_description"] = meta_description
+    if structured_text:
+        result["structured_data"] = structured_text
     return result
 
 

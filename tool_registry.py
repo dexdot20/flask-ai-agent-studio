@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 import json
-import re
 
 from config import CLARIFICATION_DEFAULT_MAX_QUESTIONS, CLARIFICATION_QUESTION_LIMIT_MAX, CLARIFICATION_QUESTION_LIMIT_MIN, RAG_ENABLED
 
@@ -18,18 +17,6 @@ CANVAS_DOCUMENT_TOOL_NAMES = {
     "clear_canvas",
 }
 
-WEB_SEARCH_TOOL_NAMES = {
-    "search_web",
-    "fetch_url",
-    "search_news_ddgs",
-    "search_news_google",
-}
-
-NEWS_TOOL_NAMES = {
-    "search_news_ddgs",
-    "search_news_google",
-}
-
 WORKSPACE_TOOL_NAMES = {
     "create_directory",
     "create_file",
@@ -40,187 +27,6 @@ WORKSPACE_TOOL_NAMES = {
     "write_project_tree",
     "validate_project_workspace",
 }
-
-FILE_REFERENCE_RE = re.compile(
-    r"\b[\w./-]+\.(?:py|js|ts|tsx|jsx|json|md|txt|html|css|scss|yaml|yml|toml|ini|cfg|sh|sql|csv)\b",
-    re.IGNORECASE,
-)
-URL_REFERENCE_RE = re.compile(r"https?://|www\.", re.IGNORECASE)
-
-WORKSPACE_INTENT_HINTS = (
-    "code",
-    "repo",
-    "repository",
-    "project",
-    "workspace",
-    "file",
-    "files",
-    "folder",
-    "directory",
-    "path",
-    "implement",
-    "implementation",
-    "fix",
-    "debug",
-    "refactor",
-    "edit",
-    "update",
-    "create",
-    "write",
-    "read",
-    "test",
-    "tests",
-    "module",
-    "class",
-    "function",
-    "bug",
-    "patch",
-    "readme",
-    "stacktrace",
-    "kod",
-    "repo",
-    "proje",
-    "dosya",
-    "dosyalar",
-    "klas",
-    "dizin",
-    "yol",
-    "uygula",
-    "incele",
-    "duzelt",
-    "düzelt",
-    "duzenle",
-    "düzenle",
-    "guncelle",
-    "güncelle",
-    "olustur",
-    "oluştur",
-    "yaz",
-    "oku",
-    "test",
-    "fonksiyon",
-    "sinif",
-    "sınıf",
-    "modul",
-    "modül",
-)
-
-WEB_INTENT_HINTS = (
-    "http://",
-    "https://",
-    "www.",
-    "web",
-    "internet",
-    "browser",
-    "site",
-    "website",
-    "url",
-    "link",
-    "search web",
-    "search the web",
-    "browse",
-    "google",
-    "bing",
-    "duckduckgo",
-    "ddg",
-    "webde",
-    "internette",
-)
-
-NEWS_INTENT_HINTS = (
-    "news",
-    "headline",
-    "headlines",
-    "latest",
-    "current events",
-    "today",
-    "breaking",
-    "guncel",
-    "güncel",
-    "haber",
-    "son durum",
-    "son haber",
-)
-
-CANVAS_CREATION_INTENT_HINTS = (
-    "canvas",
-    "draft",
-    "artifact",
-    "document",
-    "doc",
-    "outline",
-    "report",
-    "spec",
-    "notes",
-    "taslak",
-    "dokuman",
-    "doküman",
-    "belge",
-    "rapor",
-    "not",
-)
-
-
-def _normalize_intent_text(text: str | None) -> str:
-    return " ".join(str(text or "").strip().lower().split())
-
-
-def _contains_intent_hint(text: str, hints: tuple[str, ...]) -> bool:
-    tokens = set(re.findall(r"[a-z0-9_]+", text))
-    for hint in hints:
-        normalized_hint = str(hint or "").strip().lower()
-        if not normalized_hint:
-            continue
-        if " " in normalized_hint or "://" in normalized_hint or "." in normalized_hint or "/" in normalized_hint:
-            if normalized_hint in text:
-                return True
-            continue
-        if normalized_hint in tokens:
-            return True
-        if len(normalized_hint) >= 5 and any(token.startswith(normalized_hint) for token in tokens):
-            return True
-    return False
-
-
-def _should_enable_workspace_tools(
-    normalized_text: str,
-    *,
-    workspace_root: str | None = None,
-    has_canvas_documents: bool = False,
-) -> bool:
-    if has_canvas_documents:
-        return True
-    if not workspace_root:
-        return False
-    if not normalized_text:
-        return False
-    if FILE_REFERENCE_RE.search(normalized_text):
-        return True
-    if "/" in normalized_text or "\\" in normalized_text:
-        return True
-    return _contains_intent_hint(normalized_text, WORKSPACE_INTENT_HINTS)
-
-
-def _should_enable_web_tools(normalized_text: str) -> bool:
-    if not normalized_text:
-        return False
-    if URL_REFERENCE_RE.search(normalized_text):
-        return True
-    return _contains_intent_hint(normalized_text, WEB_INTENT_HINTS)
-
-
-def _should_enable_news_tools(normalized_text: str) -> bool:
-    if not normalized_text:
-        return False
-    return _contains_intent_hint(normalized_text, NEWS_INTENT_HINTS)
-
-
-def _should_enable_canvas_creation(normalized_text: str, *, has_canvas_documents: bool = False) -> bool:
-    if has_canvas_documents:
-        return True
-    if not normalized_text:
-        return False
-    return _contains_intent_hint(normalized_text, CANVAS_CREATION_INTENT_HINTS)
 
 
 def build_canvas_decision_matrix(
@@ -468,7 +274,7 @@ TOOL_SPECS = [
     {
         "name": "sub_agent",
         "description": (
-            "Delegate a bounded research or inspection task to a helper sub-agent that can use only read-only tools. "
+            "Delegate a bounded research or inspection task to a helper sub-agent that can use only read-only tools, including exposed web search and URL fetch tools. "
             "The helper inherits only the read-only tools currently exposed to the parent assistant in this turn and can never widen that scope. "
             "Use it proactively when the task is genuinely multi-step, multi-tool, or context-heavy and would otherwise force a long inline tool chain — such as broad repo/web analysis, cross-file synthesis, or evidence gathering that needs a compact summary. "
             "Avoid it only when you can answer directly or with a single tool call; otherwise, prefer delegation over stretching the parent agent context. "
@@ -515,7 +321,8 @@ TOOL_SPECS = [
                 "Use this when the investigation genuinely benefits from a separate bounded pass and would otherwise require several tool steps or repeated context stitching in the parent agent. "
                 "Do not let the token cost warning block delegation when the task is complex; the sub-agent exists for exactly those multi-tool cases. "
                 "Give the helper a concrete task, expected deliverable, and any important constraints. "
-                "Remember that the helper only receives the read-only tools currently exposed to the parent in this turn; delegation does not bypass prompt-time tool scoping. "
+                "Remember that the helper only receives the read-only tools currently exposed to the parent in this turn; that set can include search_web, search_news_ddgs, search_news_google, fetch_url, read_file, list_dir, search_files, search_knowledge_base, search_tool_memory, read_scratchpad, and canvas inspection tools. "
+                "Delegation does not bypass prompt-time tool scoping, and read-only does not mean offline-only. "
                 "Before calling this tool, rewrite the delegated task into concise English instructions for the helper, even if the user spoke Turkish or another language. "
                 "Use the user's original language only when the delegated task itself depends on that language, and otherwise expect the helper to work in English by default. "
                 "Keep it scoped: prefer one helper call over many, and do not delegate writes, clarifications, or recursive agent orchestration. "
@@ -1513,43 +1320,25 @@ def resolve_runtime_tool_names(
     active_tool_names: list[str],
     canvas_documents: list[dict] | None = None,
     *,
-    user_message: str | None = None,
     workspace_root: str | None = None,
 ) -> list[str]:
+    """Return the subset of active_tool_names that are available given current runtime state.
+
+    Only hard precondition gates apply:
+    - Canvas document editing tools require an existing canvas document.
+    - Workspace file tools require a configured workspace_root.
+    Everything else (web search, canvas creation, etc.) is always included.
+    """
     names = list(active_tool_names or [])
     if not names:
         return []
 
-    if user_message is None and workspace_root is None:
-        if canvas_documents:
-            return names
-        return [name for name in names if name not in CANVAS_DOCUMENT_TOOL_NAMES]
-
-    normalized_text = _normalize_intent_text(user_message)
     has_canvas_documents = bool(canvas_documents)
-    enable_workspace_tools = _should_enable_workspace_tools(
-        normalized_text,
-        workspace_root=workspace_root,
-        has_canvas_documents=has_canvas_documents,
-    )
-    enable_web_tools = _should_enable_web_tools(normalized_text)
-    enable_news_tools = _should_enable_news_tools(normalized_text)
-    enable_canvas_creation = _should_enable_canvas_creation(
-        normalized_text,
-        has_canvas_documents=has_canvas_documents,
-    )
-
     runtime_names: list[str] = []
     for name in names:
         if name in CANVAS_DOCUMENT_TOOL_NAMES and not has_canvas_documents:
             continue
-        if name == "create_canvas_document" and not enable_canvas_creation:
-            continue
-        if name in WORKSPACE_TOOL_NAMES and not enable_workspace_tools:
-            continue
-        if name in NEWS_TOOL_NAMES and not enable_news_tools:
-            continue
-        if name in WEB_SEARCH_TOOL_NAMES and name not in NEWS_TOOL_NAMES and not enable_web_tools:
+        if name in WORKSPACE_TOOL_NAMES and not workspace_root:
             continue
         runtime_names.append(name)
     return runtime_names

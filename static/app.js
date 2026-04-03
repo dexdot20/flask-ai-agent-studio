@@ -2567,6 +2567,22 @@ function renderBubbleMarkdown(bubbleEl, text) {
   bubbleEl.innerHTML = renderMarkdown(text);
 }
 
+function finalizeAssistantBubble(asstBubble, text) {
+  if (!asstBubble) {
+    return;
+  }
+
+  const normalizedText = String(text || "").trim();
+  if (!normalizedText) {
+    asstBubble.remove();
+    return;
+  }
+
+  asstBubble.classList.remove("thinking");
+  asstBubble.classList.remove("cursor");
+  renderBubbleMarkdown(asstBubble, normalizedText);
+}
+
 const INPUT_BREAKDOWN_ORDER = [
   "core_instructions",
   "tool_specs",
@@ -6705,7 +6721,7 @@ function createMessageGroup(role, text, metadata = null, options = {}) {
     } else {
       bubble.textContent = displayText;
     }
-    if (!(role === "assistant" && !displayText && pendingClarification)) {
+    if (displayText) {
       group.appendChild(bubble);
     }
   }
@@ -7389,8 +7405,7 @@ async function sendMessage(options = {}) {
       flushAnswerRender();
     }
     pendingDocumentCanvasOpen = null;
-    asstBubble.classList.remove("cursor");
-    renderBubbleMarkdown(asstBubble, fullAnswer);
+    finalizeAssistantBubble(asstBubble, fullAnswer);
     const assistantEntry = {
       id: null,
       role: "assistant",
@@ -7427,8 +7442,7 @@ async function sendMessage(options = {}) {
     }
     pendingDocumentCanvasOpen = null;
     if (fullAnswer.trim() || rawReasoning.trim()) {
-      asstBubble.classList.remove("cursor");
-      renderBubbleMarkdown(asstBubble, fullAnswer);
+      finalizeAssistantBubble(asstBubble, fullAnswer);
 
       const assistantEntry = {
         id: null,

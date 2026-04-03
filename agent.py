@@ -762,6 +762,31 @@ def _truncate_preview_text(text: str, limit: int | None = None) -> str:
     return cleaned
 
 
+def _build_recovery_hint_for_tool(tool_name: str, tool_args: dict | None = None) -> str:
+    normalized_tool_name = str(tool_name or "").strip()
+    normalized_tool_args = tool_args if isinstance(tool_args, dict) else {}
+
+    if normalized_tool_name == "fetch_url":
+        url = _clean_tool_text(normalized_tool_args.get("url") or "", limit=160)
+        if url:
+            return (
+                f"If exact wording is needed, call grep_fetched_content with {url} and a keyword or regex, "
+                "or search_tool_memory with the same URL."
+            )
+        return "If exact wording is needed, call grep_fetched_content with the same URL and a keyword or regex."
+    if normalized_tool_name in {"search_web", "search_news_ddgs", "search_news_google"}:
+        return "If exact wording is needed, fetch a specific returned URL or rerun the search with a narrower query."
+    if normalized_tool_name == "search_knowledge_base":
+        return "Repeat search_knowledge_base with the same query if you need the exact retrieved excerpts again."
+    if normalized_tool_name == "search_tool_memory":
+        return "Repeat search_tool_memory with the same query if you need the original remembered excerpt again."
+    if normalized_tool_name == "read_file":
+        return "Read the same file again if exact source lines are needed."
+    if normalized_tool_name in {"expand_canvas_document", "scroll_canvas_document", "search_canvas_document"}:
+        return "Reopen the same canvas document or search it again if you need the exact omitted lines."
+    return ""
+
+
 def _coerce_int_range(value, default: int, minimum: int, maximum: int) -> int:
     try:
         normalized = int(value)
@@ -1163,12 +1188,12 @@ def _build_sub_agent_messages(
 ) -> list[dict]:
     parts = [
         "You are an advanced delegated helper agent for a larger AI assistant system.",
-        "Complete the delegated task using only the tools that are exposed to you.",
+        "Complete the delegated task using only the tools that are exposed to you. Read-only still includes web search and URL fetch tools when they are available.",
         "You must not ask the user clarifying questions, mutate files, mutate canvas documents, or delegate to another sub-agent.",
         "Treat the delegated task and handoff as direct instructions from the parent assistant.",
         "If any task or handoff text is not in English, first rewrite it into clear English working notes for yourself, then continue in English.",
         "Use English for tool planning, reasoning, status updates, and the final answer unless told otherwise.",
-        "When using search tools like search_web or search_news, batch queries between 1 and 5 items per list and split broader searches into multiple calls.",
+        "When using read-only search tools like search_web or search_news, batch queries between 1 and 5 items per list and split broader searches into multiple calls.",
         "Synthesize your findings and return a concise, definitive final answer that directly helps the parent assistant continue."
     ]
     if allowed_tools:
@@ -1361,6 +1386,7 @@ def _count_exchange_blocks(messages: list[dict]) -> int:
 def _compact_exchange_to_message(block: dict) -> dict:
     tool_previews: list[str] = []
     result_parts: list[str] = []
+    recovery_hints: list[str] = []
     assistant_intent = ""
     for message in block.get("messages") or []:
         role = str(message.get("role") or "").strip()
@@ -1370,6 +1396,13 @@ def _compact_exchange_to_message(block: dict) -> dict:
                 preview = _extract_compaction_tool_call_preview(tool_call)
                 if preview and preview not in tool_previews:
                     tool_previews.append(preview)
+                function = tool_call.get("function") or {}
+                raw_arguments = function.get("arguments")
+                parsed_arguments = _parse_json_like_value(raw_arguments)
+                arguments = parsed_arguments if isinstance(parsed_arguments, dict) else {}
+                recovery_hint = _build_recovery_hint_for_tool(function.get("name") or "", arguments)
+                if recovery_hint and recovery_hint not in recovery_hints:
+                    recovery_hints.append(recovery_hint)
         elif role == "tool" or _is_tool_execution_result_message(message):
             content = _extract_compaction_tool_result_preview(message)
             if content:
@@ -1382,6 +1415,8 @@ def _compact_exchange_to_message(block: dict) -> dict:
         parts.append("Actions:\n- " + "\n- ".join(tool_previews[:4]))
     if result_parts:
         parts.append("Outcomes:\n- " + "\n- ".join(result_parts[:3]))
+    if recovery_hints:
+        parts.append("Recovery:\n- " + "\n- ".join(recovery_hints[:2]))
     return {"role": "user", "content": "\n".join(parts)}
 
 
@@ -1573,8 +1608,17 @@ def _prepare_fetch_result_for_model(
 
     content = _clean_tool_text(result.get("content") or "")
     prepared = dict(result)
+    meta_description = _clean_tool_text(result.get("meta_description") or "", limit=400)
+    structured_data = _clean_tool_text(result.get("structured_data") or "", limit=1_200)
+    recovery_hint = _build_recovery_hint_for_tool("fetch_url", {"url": result.get("url")})
     prepared["cleanup_applied"] = True
     prepared["content_token_estimate"] = _estimate_text_tokens(content)
+    if meta_description:
+        prepared["meta_description"] = meta_description
+    if structured_data:
+        prepared["structured_data"] = structured_data
+    if recovery_hint:
+        prepared["recovery_hint"] = recovery_hint
     prepared.update(_build_fetch_diagnostic_fields(prepared))
     if not content or prepared.get("error"):
         return prepared
@@ -1600,12 +1644,60 @@ def _prepare_fetch_result_for_model(
         f"Content was clipped: showing {clipped_char_count:,} of {raw_char_count:,} characters "
         f"({clipped_pct}% of the page, approximately {token_estimate:,} tokens). "
         "The leading portion is preserved. "
-        "To find specific text in the full page, use grep_fetched_content with this URL and a keyword or regex pattern. "
-        "To search semantically across past fetched pages, use search_tool_memory with this URL or a related query."
+        f"{recovery_hint or 'Use grep_fetched_content for exact text and search_tool_memory for semantic recall.'}"
     )
     prepared["content_token_estimate"] = token_estimate
     prepared["raw_content_available"] = True
     return prepared
+
+
+def _build_fetch_tool_message_content(tool_args: dict, summary: str, transcript_result: dict) -> str:
+    parts = []
+    title = _clean_tool_text(transcript_result.get("title") or "", limit=160)
+    url = _clean_tool_text(transcript_result.get("url") or tool_args.get("url") or "", limit=200)
+    notice = _clean_tool_text(transcript_result.get("summary_notice") or "", limit=500)
+    diagnostic = _clean_tool_text(transcript_result.get("fetch_diagnostic") or "", limit=280)
+    content_format = str(transcript_result.get("content_format") or "").strip()
+    outline = transcript_result.get("outline")
+    meta_description = _clean_tool_text(transcript_result.get("meta_description") or "", limit=260)
+    structured_data = _clean_tool_text(transcript_result.get("structured_data") or "", limit=700)
+    recovery_hint = _clean_tool_text(transcript_result.get("recovery_hint") or "", limit=280)
+    budget_notice = _clean_tool_text(transcript_result.get("budget_notice") or "", limit=220)
+    pages_extracted = transcript_result.get("pages_extracted")
+    page_count = transcript_result.get("page_count")
+    body = _clean_tool_text(transcript_result.get("content") or "", limit=FETCH_SUMMARY_MAX_CHARS)
+    if title:
+        parts.append(f"Title: {title}")
+    if url:
+        parts.append(f"URL: {url}")
+    if content_format and content_format != "html":
+        fmt_info = f"Format: {content_format}"
+        if content_format == "pdf" and isinstance(pages_extracted, int) and isinstance(page_count, int):
+            fmt_info += f" ({pages_extracted} of {page_count} pages extracted)"
+        elif content_format == "pdf" and isinstance(pages_extracted, int):
+            fmt_info += f" ({pages_extracted} pages extracted)"
+        parts.append(fmt_info)
+    if summary:
+        parts.append(f"Summary: {_clean_tool_text(summary, limit=300)}")
+    if notice:
+        parts.append(f"Note: {notice}")
+    if diagnostic:
+        parts.append(f"Fetch status: {diagnostic}")
+    if meta_description:
+        parts.append(f"Description: {meta_description}")
+    if structured_data:
+        parts.append("Structured data:\n" + structured_data)
+    if budget_notice:
+        parts.append(f"Budget note: {budget_notice}")
+    if recovery_hint:
+        parts.append(f"Recovery: {recovery_hint}")
+    if outline and isinstance(outline, list) and transcript_result.get("content_mode") in {"clipped_text", "budget_compact", "budget_brief"}:
+        heading_lines = [f"  - {_clean_tool_text(str(h), limit=120)}" for h in outline[:30] if str(h).strip()]
+        if heading_lines:
+            parts.append("## Page Outline\n" + "\n".join(heading_lines))
+    if body:
+        parts.append(body)
+    return "\n\n".join(parts).strip()
 
 
 def _prepare_tool_result_for_transcript(
@@ -2573,6 +2665,17 @@ def _build_tool_execution_result_message(transcript_results: list[dict]) -> dict
         if summary:
             line += f": {summary}"
         parts.append(line)
+        if tool_name == "fetch_url":
+            result_payload = item.get("result") if isinstance(item.get("result"), dict) else {}
+            recovery_hint = _clean_tool_text(
+                result_payload.get("recovery_hint") or _build_recovery_hint_for_tool(tool_name, item.get("arguments")),
+                limit=220,
+            )
+            summary_notice = _clean_tool_text(result_payload.get("summary_notice") or "", limit=220)
+            if summary_notice and result_payload.get("content_mode") in {"clipped_text", "budget_compact", "budget_brief"}:
+                parts.append(f"  Recovery: {summary_notice}")
+            elif recovery_hint and result_payload.get("content_mode") in {"clipped_text", "budget_compact", "budget_brief"}:
+                parts.append(f"  Recovery: {recovery_hint}")
 
     return {"role": "system", "content": "\n".join(parts)}
 
@@ -3570,40 +3673,7 @@ def _build_compact_tool_message_content(
 ) -> str:
     del result
     if tool_name == "fetch_url" and isinstance(transcript_result, dict):
-        parts = []
-        title = _clean_tool_text(transcript_result.get("title") or "", limit=160)
-        url = _clean_tool_text(transcript_result.get("url") or tool_args.get("url") or "", limit=200)
-        notice = _clean_tool_text(transcript_result.get("summary_notice") or "", limit=500)
-        diagnostic = _clean_tool_text(transcript_result.get("fetch_diagnostic") or "", limit=280)
-        content_format = str(transcript_result.get("content_format") or "").strip()
-        outline = transcript_result.get("outline")
-        pages_extracted = transcript_result.get("pages_extracted")
-        page_count = transcript_result.get("page_count")
-        body = _clean_tool_text(transcript_result.get("content") or "", limit=FETCH_SUMMARY_MAX_CHARS)
-        if title:
-            parts.append(f"Title: {title}")
-        if url:
-            parts.append(f"URL: {url}")
-        if content_format and content_format != "html":
-            fmt_info = f"Format: {content_format}"
-            if content_format == "pdf" and isinstance(pages_extracted, int) and isinstance(page_count, int):
-                fmt_info += f" ({pages_extracted} of {page_count} pages extracted)"
-            elif content_format == "pdf" and isinstance(pages_extracted, int):
-                fmt_info += f" ({pages_extracted} pages extracted)"
-            parts.append(fmt_info)
-        if summary:
-            parts.append(f"Summary: {_clean_tool_text(summary, limit=300)}")
-        if notice:
-            parts.append(f"Note: {notice}")
-        if diagnostic:
-            parts.append(f"Fetch status: {diagnostic}")
-        if outline and isinstance(outline, list) and transcript_result.get("content_mode") == "clipped_text":
-            heading_lines = [f"  - {_clean_tool_text(str(h), limit=120)}" for h in outline[:30] if str(h).strip()]
-            if heading_lines:
-                parts.append("## Page Outline\n" + "\n".join(heading_lines))
-        if body:
-            parts.append(body)
-        return "\n\n".join(parts).strip()
+        return _build_fetch_tool_message_content(tool_args, summary, transcript_result)
 
     if isinstance(transcript_result, str):
         if len(transcript_result) <= RAG_TOOL_RESULT_MAX_TEXT_CHARS:
@@ -3624,40 +3694,7 @@ def _build_compact_tool_message_content(
             return content
 
     if tool_name == "fetch_url" and isinstance(transcript_result, dict):
-        parts = []
-        title = _clean_tool_text(transcript_result.get("title") or "", limit=160)
-        url = _clean_tool_text(transcript_result.get("url") or tool_args.get("url") or "", limit=200)
-        notice = _clean_tool_text(transcript_result.get("summary_notice") or "", limit=500)
-        diagnostic = _clean_tool_text(transcript_result.get("fetch_diagnostic") or "", limit=280)
-        content_format = str(transcript_result.get("content_format") or "").strip()
-        outline = transcript_result.get("outline")
-        pages_extracted = transcript_result.get("pages_extracted")
-        page_count = transcript_result.get("page_count")
-        body = _clean_tool_text(transcript_result.get("content") or "", limit=FETCH_SUMMARY_MAX_CHARS)
-        if title:
-            parts.append(f"Title: {title}")
-        if url:
-            parts.append(f"URL: {url}")
-        if content_format and content_format != "html":
-            fmt_info = f"Format: {content_format}"
-            if content_format == "pdf" and isinstance(pages_extracted, int) and isinstance(page_count, int):
-                fmt_info += f" ({pages_extracted} of {page_count} pages extracted)"
-            elif content_format == "pdf" and isinstance(pages_extracted, int):
-                fmt_info += f" ({pages_extracted} pages extracted)"
-            parts.append(fmt_info)
-        if summary:
-            parts.append(f"Summary: {_clean_tool_text(summary, limit=300)}")
-        if notice:
-            parts.append(f"Note: {notice}")
-        if diagnostic:
-            parts.append(f"Fetch status: {diagnostic}")
-        if outline and isinstance(outline, list) and transcript_result.get("content_mode") == "clipped_text":
-            heading_lines = [f"  - {_clean_tool_text(str(h), limit=120)}" for h in outline[:30] if str(h).strip()]
-            if heading_lines:
-                parts.append("## Page Outline\n" + "\n".join(heading_lines))
-        if body:
-            parts.append(body)
-        return "\n\n".join(parts).strip()
+        return _build_fetch_tool_message_content(tool_args, summary, transcript_result)
 
     if isinstance(transcript_result, str):
         return _clean_tool_text(transcript_result, limit=RAG_TOOL_RESULT_MAX_TEXT_CHARS)
@@ -3707,6 +3744,9 @@ def _build_tool_result_storage_entry(tool_name: str, tool_args: dict, result, su
             url = str(result.get("url") or tool_args.get("url") or "").strip()
             summary_notice = str(display_result.get("summary_notice") or "").strip()
             fetch_diagnostic = str(display_result.get("fetch_diagnostic") or "").strip()
+            meta_description = _clean_tool_text(display_result.get("meta_description") or "", limit=240)
+            structured_data = _clean_tool_text(display_result.get("structured_data") or "", limit=500)
+            recovery_hint = _clean_tool_text(display_result.get("recovery_hint") or "", limit=240)
             if title:
                 parts.append(f"Title: {title}")
             if url:
@@ -3715,6 +3755,12 @@ def _build_tool_result_storage_entry(tool_name: str, tool_args: dict, result, su
                 parts.append(f"Note: {summary_notice}")
             if fetch_diagnostic:
                 parts.append(f"Fetch status: {fetch_diagnostic}")
+            if meta_description:
+                parts.append(f"Description: {meta_description}")
+            if structured_data:
+                parts.append("Structured data:\n" + structured_data)
+            if recovery_hint:
+                parts.append(f"Recovery: {recovery_hint}")
             if display_content:
                 parts.append(display_content)
             text = "\n\n".join(parts)
@@ -3743,6 +3789,9 @@ def _build_tool_result_storage_entry(tool_name: str, tool_args: dict, result, su
         display_content = _clean_tool_text(display_result.get("content") or "", limit=FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS)
         content_mode = str(display_result.get("content_mode") or "").strip()
         summary_notice = _clean_tool_text(display_result.get("summary_notice") or "", limit=300)
+        recovery_hint = _clean_tool_text(display_result.get("recovery_hint") or "", limit=240)
+        meta_description = _clean_tool_text(display_result.get("meta_description") or "", limit=240)
+        structured_data = _clean_tool_text(display_result.get("structured_data") or "", limit=500)
         token_estimate = display_result.get("content_token_estimate")
         fetch_outcome = _clean_tool_text(display_result.get("fetch_outcome") or "", limit=80)
         fetch_diagnostic = _clean_tool_text(display_result.get("fetch_diagnostic") or "", limit=500)
@@ -3753,6 +3802,12 @@ def _build_tool_result_storage_entry(tool_name: str, tool_args: dict, result, su
             entry["content_mode"] = content_mode
         if summary_notice:
             entry["summary_notice"] = summary_notice
+        if recovery_hint:
+            entry["recovery_hint"] = recovery_hint
+        if meta_description:
+            entry["meta_description"] = meta_description
+        if structured_data:
+            entry["structured_data"] = structured_data
         if fetch_outcome:
             entry["fetch_outcome"] = fetch_outcome
         if fetch_diagnostic:
@@ -3764,6 +3819,250 @@ def _build_tool_result_storage_entry(tool_name: str, tool_args: dict, result, su
         if isinstance(content_char_count, int) and content_char_count >= 0:
             entry["content_char_count"] = content_char_count
     return entry
+
+
+def _copy_tool_output_entry(entry: dict) -> dict:
+    copied = dict(entry)
+    if isinstance(entry.get("tool_args"), dict):
+        copied["tool_args"] = dict(entry["tool_args"])
+    if isinstance(entry.get("storage_entry"), dict):
+        copied["storage_entry"] = dict(entry["storage_entry"])
+    transcript_result = entry.get("transcript_result")
+    if isinstance(transcript_result, dict):
+        copied["transcript_result"] = dict(transcript_result)
+    elif isinstance(transcript_result, list):
+        copied["transcript_result"] = list(transcript_result)
+    return copied
+
+
+def _build_budget_compacted_transcript_result(entry: dict, char_limit: int, ultra_compact: bool = False):
+    tool_name = str(entry.get("tool_name") or "").strip()
+    tool_args = entry.get("tool_args") if isinstance(entry.get("tool_args"), dict) else {}
+    transcript_result = entry.get("transcript_result")
+    result = entry.get("result")
+    summary = _clean_tool_text(entry.get("summary") or "", limit=120 if ultra_compact else 200)
+    recovery_hint = _clean_tool_text(_build_recovery_hint_for_tool(tool_name, tool_args), limit=220)
+
+    if tool_name == "fetch_url" and isinstance(result, dict):
+        source_result = transcript_result if isinstance(transcript_result, dict) else result
+        compacted = {
+            "url": source_result.get("url") or result.get("url") or tool_args.get("url") or "",
+            "title": source_result.get("title") or result.get("title") or "",
+            "content_format": source_result.get("content_format") or result.get("content_format") or "html",
+            "content": _clean_tool_text(
+                source_result.get("content") or result.get("content") or "",
+                limit=max(80, char_limit),
+            ),
+            "content_mode": "budget_brief" if ultra_compact else "budget_compact",
+            "summary_notice": _clean_tool_text(source_result.get("summary_notice") or "", limit=260),
+            "fetch_diagnostic": _clean_tool_text(source_result.get("fetch_diagnostic") or "", limit=260),
+            "budget_notice": "Prompt budget required extra compaction for this tool result.",
+        }
+        meta_description = _clean_tool_text(
+            source_result.get("meta_description") or result.get("meta_description") or "",
+            limit=220,
+        )
+        structured_data = _clean_tool_text(
+            source_result.get("structured_data") or result.get("structured_data") or "",
+            limit=320 if ultra_compact else 520,
+        )
+        outline = source_result.get("outline") if isinstance(source_result.get("outline"), list) else None
+        if meta_description:
+            compacted["meta_description"] = meta_description
+        if structured_data and not ultra_compact:
+            compacted["structured_data"] = structured_data
+        if outline and not ultra_compact:
+            compacted["outline"] = outline[:8]
+        if recovery_hint:
+            compacted["recovery_hint"] = recovery_hint
+        return compacted
+
+    serialized = transcript_result if isinstance(transcript_result, str) else _serialize_tool_message_content(
+        transcript_result if transcript_result is not None else result
+    )
+    parts = []
+    if summary:
+        parts.append(f"Summary: {summary}")
+    parts.append("Prompt-budget compacted result.")
+    if recovery_hint:
+        parts.append(f"Recovery: {recovery_hint}")
+    excerpt = _clean_tool_text(serialized, limit=max(80, char_limit))
+    if excerpt and excerpt != summary:
+        parts.append(f"{'Brief' if ultra_compact else 'Excerpt'}: {excerpt}")
+    if not parts:
+        return _clean_tool_text(serialized, limit=max(80, char_limit))
+    return "\n\n".join(parts).strip()
+
+
+def _build_budget_compacted_execution_error(entry: dict, char_limit: int, ultra_compact: bool = False) -> str:
+    tool_name = str(entry.get("tool_name") or "").strip()
+    tool_args = entry.get("tool_args") if isinstance(entry.get("tool_args"), dict) else {}
+    error_text = _clean_tool_text(entry.get("execution_error") or "", limit=max(80, min(char_limit, 140 if ultra_compact else 240)))
+    recovery_hint = _clean_tool_text(_build_recovery_hint_for_tool(tool_name, tool_args), limit=180 if ultra_compact else 220)
+
+    parts = []
+    if error_text:
+        parts.append(error_text)
+    if recovery_hint:
+        parts.append(f"Recovery: {recovery_hint}")
+    if not parts:
+        parts.append("Tool execution failed.")
+    return "\n".join(parts).strip()
+
+
+def _render_tool_output_entries(tool_output_entries: list[dict]) -> tuple[list[dict], list[dict], dict | None]:
+    tool_messages: list[dict] = []
+    transcript_results: list[dict] = []
+
+    for entry in tool_output_entries:
+        tool_name = str(entry.get("tool_name") or "unknown").strip() or "unknown"
+        tool_args = entry.get("tool_args") if isinstance(entry.get("tool_args"), dict) else {}
+        call_id = str(entry.get("call_id") or "").strip()
+        summary = str(entry.get("summary") or "").strip()
+        cached = entry.get("cached") is True
+        execution_error = str(entry.get("execution_error") or "").strip()
+
+        if execution_error:
+            tool_messages.append(
+                {
+                    "id": call_id,
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": _serialize_tool_message_content({"ok": False, "error": execution_error}),
+                }
+            )
+            transcript_item = {
+                "tool_name": tool_name,
+                "arguments": tool_args,
+                "ok": False,
+                "error": execution_error,
+            }
+            summary = str(entry.get("summary") or "").strip()
+            if summary:
+                transcript_item["summary"] = summary
+            if cached:
+                transcript_item["cached"] = True
+            transcript_results.append(transcript_item)
+            continue
+
+        transcript_result = entry.get("transcript_result")
+        tool_messages.append(
+            {
+                "id": call_id,
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": _build_compact_tool_message_content(
+                    tool_name,
+                    tool_args,
+                    entry.get("result"),
+                    summary,
+                    transcript_result=transcript_result,
+                    storage_entry=entry.get("storage_entry") if isinstance(entry.get("storage_entry"), dict) else None,
+                ),
+            }
+        )
+        transcript_item = {
+            "tool_name": tool_name,
+            "arguments": tool_args,
+            "ok": bool(entry.get("ok", True)),
+            "summary": summary,
+            "result": transcript_result,
+        }
+        if cached:
+            transcript_item["cached"] = True
+        if entry.get("compacted_for_budget") is True:
+            transcript_item["compacted_for_budget"] = True
+        transcript_results.append(transcript_item)
+
+    return tool_messages, transcript_results, _build_tool_execution_result_message(transcript_results)
+
+
+def _apply_tool_output_budget(
+    base_messages: list[dict],
+    tool_output_entries: list[dict],
+    fetch_url_token_threshold: int | None = None,
+    fetch_url_clip_aggressiveness: int | None = None,
+) -> tuple[list[dict], list[dict], dict | None, bool]:
+    if not tool_output_entries:
+        return [], [], None, False
+
+    soft_limit = max(1, int(PROMPT_MAX_INPUT_TOKENS * AGENT_CONTEXT_COMPACTION_THRESHOLD))
+
+    def _estimate_total_tokens(tool_messages: list[dict], tool_execution_result_message: dict | None) -> int:
+        candidate_messages = [*base_messages, *tool_messages]
+        if tool_execution_result_message is not None:
+            candidate_messages.append(tool_execution_result_message)
+        return _estimate_messages_tokens(candidate_messages)
+
+    full_tool_messages, full_transcript_results, full_tool_execution_result_message = _render_tool_output_entries(tool_output_entries)
+    if _estimate_total_tokens(full_tool_messages, full_tool_execution_result_message) <= soft_limit:
+        return full_tool_messages, full_transcript_results, full_tool_execution_result_message, False
+
+    available_tokens = max(120, soft_limit - _estimate_messages_tokens(base_messages))
+    successful_entries = [entry for entry in tool_output_entries if not str(entry.get("execution_error") or "").strip()]
+
+    per_entry_tokens = max(40, available_tokens // max(1, len(successful_entries)))
+    compact_char_limit = max(160, min(900, per_entry_tokens * 4))
+    fetch_char_limit = max(240, min(FETCH_SUMMARY_MAX_CHARS, per_entry_tokens * 5))
+    base_threshold = _normalize_fetch_token_threshold(fetch_url_token_threshold)
+    base_aggressiveness = _normalize_fetch_clip_aggressiveness(fetch_url_clip_aggressiveness)
+
+    compacted_entries: list[dict] = []
+    for original_entry in tool_output_entries:
+        entry = _copy_tool_output_entry(original_entry)
+        if str(entry.get("execution_error") or "").strip():
+            entry["execution_error"] = _build_budget_compacted_execution_error(entry, compact_char_limit)
+            entry["summary"] = entry["execution_error"]
+            entry["compacted_for_budget"] = True
+            compacted_entries.append(entry)
+            continue
+
+        if str(entry.get("tool_name") or "").strip() == "fetch_url" and isinstance(entry.get("result"), dict):
+            dynamic_threshold = max(80, min(base_threshold, max(80, per_entry_tokens * 2)))
+            entry["transcript_result"] = _prepare_tool_result_for_transcript(
+                "fetch_url",
+                entry.get("result"),
+                fetch_url_token_threshold=dynamic_threshold,
+                fetch_url_clip_aggressiveness=min(100, base_aggressiveness + 25),
+            )
+            fetch_rendered = _build_fetch_tool_message_content(
+                entry.get("tool_args") if isinstance(entry.get("tool_args"), dict) else {},
+                str(entry.get("summary") or ""),
+                entry["transcript_result"] if isinstance(entry.get("transcript_result"), dict) else {},
+            )
+            if len(fetch_rendered) > max(360, fetch_char_limit):
+                entry["transcript_result"] = _build_budget_compacted_transcript_result(entry, fetch_char_limit)
+        else:
+            entry["transcript_result"] = _build_budget_compacted_transcript_result(entry, compact_char_limit)
+
+        entry["compacted_for_budget"] = True
+        compacted_entries.append(entry)
+
+    compact_tool_messages, compact_transcript_results, compact_tool_execution_result_message = _render_tool_output_entries(compacted_entries)
+    if _estimate_total_tokens(compact_tool_messages, compact_tool_execution_result_message) <= soft_limit:
+        return compact_tool_messages, compact_transcript_results, compact_tool_execution_result_message, True
+
+    ultra_entries: list[dict] = []
+    for original_entry in tool_output_entries:
+        entry = _copy_tool_output_entry(original_entry)
+        if str(entry.get("execution_error") or "").strip():
+            entry["execution_error"] = _build_budget_compacted_execution_error(entry, 160, ultra_compact=True)
+            entry["summary"] = entry["execution_error"]
+            entry["compacted_for_budget"] = True
+            ultra_entries.append(entry)
+            continue
+
+        entry["summary"] = _clean_tool_text(entry.get("summary") or "", limit=120)
+        entry["transcript_result"] = _build_budget_compacted_transcript_result(
+            entry,
+            200 if str(entry.get("tool_name") or "").strip() == "fetch_url" else 140,
+            ultra_compact=True,
+        )
+        entry["compacted_for_budget"] = True
+        ultra_entries.append(entry)
+
+    ultra_tool_messages, ultra_transcript_results, ultra_tool_execution_result_message = _render_tool_output_entries(ultra_entries)
+    return ultra_tool_messages, ultra_transcript_results, ultra_tool_execution_result_message, True
 
 
 def _lookup_cross_turn_tool_memory(tool_name: str, tool_args: dict) -> tuple[object, str] | None:
@@ -4776,6 +5075,7 @@ def run_agent_stream(
             pending_answer_separator = True
         transcript_results = []
         tool_messages = []
+        tool_output_entries = []
 
         # ---- Phase 1: validate, pre-check, build execution slots (sequential) ----
         slots = []
@@ -4985,6 +5285,15 @@ def run_agent_stream(
                     }
                 )
                 transcript_results.append({"tool_name": tool_name, "arguments": tool_args, "ok": False, "error": error})
+                tool_output_entries.append(
+                    {
+                        "tool_name": tool_name,
+                        "tool_args": tool_args,
+                        "call_id": call_id,
+                        "execution_error": error,
+                        "ok": False,
+                    }
+                )
 
             elif kind == "session_cache_hit":
                 result = slot["result"]
@@ -5024,6 +5333,19 @@ def run_agent_stream(
                         "cached": True,
                     }
                 )
+                tool_output_entries.append(
+                    {
+                        "tool_name": tool_name,
+                        "tool_args": tool_args,
+                        "call_id": call_id,
+                        "result": result,
+                        "summary": f"{summary} (cached)",
+                        "transcript_result": transcript_result,
+                        "storage_entry": storage_entry,
+                        "cached": True,
+                        "ok": not (tool_name == "fetch_url" and isinstance(result, dict) and result.get("error")),
+                    }
+                )
 
             elif kind == "memory_cache_hit":
                 result = slot["result"]
@@ -5059,6 +5381,18 @@ def run_agent_stream(
                         "summary": f"{summary} (cached)",
                         "result": transcript_result,
                         "cached": True,
+                    }
+                )
+                tool_output_entries.append(
+                    {
+                        "tool_name": tool_name,
+                        "tool_args": tool_args,
+                        "call_id": call_id,
+                        "result": result,
+                        "summary": f"{summary} (cached)",
+                        "transcript_result": transcript_result,
+                        "cached": True,
+                        "ok": True,
                     }
                 )
 
@@ -5148,6 +5482,18 @@ def run_agent_stream(
                             "result": transcript_result,
                         }
                     )
+                    tool_output_entries.append(
+                        {
+                            "tool_name": tool_name,
+                            "tool_args": tool_args,
+                            "call_id": call_id,
+                            "result": result,
+                            "summary": summary,
+                            "transcript_result": transcript_result,
+                            "storage_entry": storage_entry,
+                            "ok": not (tool_name == "fetch_url" and isinstance(result, dict) and result.get("error")),
+                        }
+                    )
                     if tool_name in CANVAS_MUTATION_TOOL_NAMES:
                         canvas_modified = True
                     clarification_event = _extract_clarification_event(result)
@@ -5197,6 +5543,32 @@ def run_agent_stream(
                             "error": error,
                         }
                     )
+                    tool_output_entries.append(
+                        {
+                            "tool_name": tool_name,
+                            "tool_args": tool_args,
+                            "call_id": call_id,
+                            "execution_error": error,
+                            "ok": False,
+                        }
+                    )
+
+        tool_execution_result_message = _build_tool_execution_result_message(transcript_results)
+        if tool_output_entries:
+            tool_messages, transcript_results, tool_execution_result_message, tool_results_budget_compacted = _apply_tool_output_budget(
+                messages,
+                tool_output_entries,
+                fetch_url_token_threshold=fetch_url_token_threshold,
+                fetch_url_clip_aggressiveness=fetch_url_clip_aggressiveness,
+            )
+            if tool_results_budget_compacted:
+                _trace_agent_event(
+                    "tool_results_budget_compacted",
+                    trace_id=trace_id,
+                    step=step,
+                    tool_count=len(tool_output_entries),
+                    estimated_total_tokens=_estimate_messages_tokens([*messages, *tool_messages]),
+                )
 
         _trace_agent_event(
             "tool_transcript_appended",
@@ -5210,7 +5582,6 @@ def run_agent_stream(
             "messages": [assistant_tool_call_message, *tool_messages],
         }
         messages.extend(tool_messages)
-        tool_execution_result_message = _build_tool_execution_result_message(transcript_results)
         if tool_execution_result_message is not None:
             messages.append(tool_execution_result_message)
 

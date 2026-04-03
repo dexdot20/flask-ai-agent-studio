@@ -170,6 +170,58 @@ SUMMARY_MAX_OUTPUT_CHARS = 2_200
 SUMMARY_MAX_BULLETS = 10
 SUMMARY_TOOL_TRACE_LIMIT = 8
 OMITTED_TOOL_OUTPUT_TEXT = "[Tool output omitted from older history to save context budget.]"
+SUMMARY_FOCUS_STOPWORDS = {
+    "about",
+    "after",
+    "again",
+    "also",
+    "and",
+    "are",
+    "been",
+    "before",
+    "bunu",
+    "buna",
+    "bunun",
+    "bir",
+    "bu",
+    "can",
+    "daha",
+    "de",
+    "detay",
+    "details",
+    "for",
+    "from",
+    "gibi",
+    "gore",
+    "göre",
+    "have",
+    "help",
+    "ile",
+    "icin",
+    "için",
+    "ilgili",
+    "into",
+    "kadar",
+    "kendi",
+    "need",
+    "olan",
+    "olarak",
+    "olanı",
+    "only",
+    "please",
+    "should",
+    "that",
+    "their",
+    "them",
+    "there",
+    "they",
+    "this",
+    "use",
+    "using",
+    "ve",
+    "with",
+    "your",
+}
 
 
 def _build_assistant_message_metadata(
@@ -547,6 +599,61 @@ def _build_summary_tool_outcomes(source_messages: list[dict]) -> list[str]:
     return outcomes
 
 
+def _extract_summary_continuation_focus(canonical_messages: list[dict]) -> str:
+    for message in reversed(canonical_messages):
+        if not isinstance(message, dict):
+            continue
+        if _get_message_role(message) != "user":
+            continue
+        content = re.sub(r"\s+", " ", str(message.get("content") or "")).strip()
+        if content:
+            return content[:400]
+    return ""
+
+
+def _tokenize_summary_focus(text: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[^\W_]+", str(text or "").lower(), flags=re.UNICODE)
+        if len(token) > 2 and token not in SUMMARY_FOCUS_STOPWORDS
+    }
+
+
+def _score_summary_message_priority(message: dict, focus_terms: set[str]) -> float:
+    normalized_content = re.sub(r"\s+", " ", str(message.get("content") or "")).strip()
+    if not normalized_content:
+        return 0.0
+
+    role = _get_message_role(message)
+    score = 0.0
+    message_terms = {
+        token
+        for token in re.findall(r"[^\W_]+", normalized_content.lower(), flags=re.UNICODE)
+        if len(token) > 2 and token not in SUMMARY_FOCUS_STOPWORDS
+    }
+    overlap = len(focus_terms.intersection(message_terms)) if focus_terms else 0
+    if overlap:
+        score += overlap * 4.0
+
+    if role == "user":
+        score += 2.0
+    elif role == "assistant":
+        score += 1.25
+    elif role == "tool":
+        score += 1.0
+
+    if "?" in normalized_content:
+        score += 1.5
+    if re.search(r"\b(todo|next|need|must|should|blocked|issue|problem|decision|agreed|constraint|fix|implement|plan)\b", normalized_content.lower()):
+        score += 1.0
+
+    metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else None
+    if extract_message_tool_results(metadata):
+        score += 1.5
+
+    return score
+
+
 def _build_tool_trace_context(canonical_messages: list[dict], max_entries: int = SUMMARY_TOOL_TRACE_LIMIT) -> str | None:
     trace_entries: list[dict] = []
     for message in reversed(canonical_messages):
@@ -763,7 +870,11 @@ def _expand_summary_source_messages(
     return filtered_messages
 
 
-def _build_summary_prompt_payload(source_messages: list[dict], user_preferences: str) -> tuple[list[dict], dict]:
+def _build_summary_prompt_payload(
+    source_messages: list[dict],
+    user_preferences: str,
+    continuation_focus: str = "",
+) -> tuple[list[dict], dict]:
     instruction = (
         "You are compressing earlier conversation history for later reuse. "
         "Analyze the dominant language of the conversation and write the summary in that language.\n\n"
@@ -780,6 +891,13 @@ def _build_summary_prompt_payload(source_messages: list[dict], user_preferences:
     user_pref_text = (user_preferences or "").strip()
     if user_pref_text:
         instruction += f"\n\nUser preferences for context:\n{user_pref_text}"
+    normalized_focus = re.sub(r"\s+", " ", str(continuation_focus or "")).strip()
+    if normalized_focus:
+        instruction += (
+            "\n\nCurrent continuation focus:\n"
+            f"{normalized_focus[:400]}\n"
+            "Prioritize older facts, decisions, constraints, unresolved questions, and tool findings that are most likely to matter for continuing this exact request."
+        )
 
     prompt_source_messages: list[dict] = []
     empty_message_count = 0
@@ -860,11 +978,16 @@ def _build_summary_prompt_payload(source_messages: list[dict], user_preferences:
         "skipped_error_message_count": skipped_error_message_count,
         "merged_assistant_message_count": merged_assistant_message_count,
         "tool_outcome_count": len(tool_outcomes),
+        "continuation_focus_used": bool(normalized_focus),
     }
 
 
-def build_summary_prompt_messages(source_messages: list[dict], user_preferences: str) -> list[dict]:
-    prompt_messages, _ = _build_summary_prompt_payload(source_messages, user_preferences)
+def build_summary_prompt_messages(source_messages: list[dict], user_preferences: str, continuation_focus: str = "") -> list[dict]:
+    prompt_messages, _ = _build_summary_prompt_payload(
+        source_messages,
+        user_preferences,
+        continuation_focus=continuation_focus,
+    )
     return prompt_messages
 
 
@@ -1335,23 +1458,71 @@ def _select_summary_source_messages_by_token_budget(
     source_messages: list[dict],
     target_tokens: int,
     user_preferences: str,
+    continuation_focus: str = "",
 ) -> list[dict]:
     if not source_messages:
         return []
     if target_tokens <= 0:
         return list(source_messages)
 
+    ordered_source_messages = [message for message in source_messages if isinstance(message, dict)]
+    focus_terms = _tokenize_summary_focus(continuation_focus)
+
+    def _build_window(start_index: int) -> list[dict]:
+        selected: list[dict] = []
+        for message in ordered_source_messages[start_index:]:
+            candidate_source_messages = [*selected, message]
+            expanded_candidate_messages = _expand_summary_source_messages(
+                canonical_messages,
+                candidate_source_messages,
+                ordered_source_messages,
+            )
+            prompt_messages, _ = _build_summary_prompt_payload(
+                expanded_candidate_messages,
+                user_preferences,
+                continuation_focus=continuation_focus,
+            )
+            if selected and _estimate_prompt_tokens(prompt_messages) > target_tokens:
+                break
+            selected.append(message)
+        return selected
+
+    if focus_terms:
+        best_window: list[dict] = []
+        best_score: tuple[float, int, int] | None = None
+        for start_index in range(len(ordered_source_messages)):
+            candidate_window = _build_window(start_index)
+            if not candidate_window:
+                continue
+            priority_score = sum(_score_summary_message_priority(message, focus_terms) for message in candidate_window)
+            if priority_score <= 0:
+                continue
+            score = (
+                priority_score + min(len(candidate_window), 8) * 0.1,
+                start_index,
+                len(candidate_window),
+            )
+            if best_score is None or score > best_score:
+                best_score = score
+                best_window = candidate_window
+        if best_window:
+            return best_window
+
     selected: list[dict] = []
-    for message in source_messages:
+    for message in ordered_source_messages:
         if not isinstance(message, dict):
             continue
         candidate_source_messages = [*selected, message]
         expanded_candidate_messages = _expand_summary_source_messages(
             canonical_messages,
             candidate_source_messages,
-            source_messages,
+            ordered_source_messages,
         )
-        prompt_messages, _ = _build_summary_prompt_payload(expanded_candidate_messages, user_preferences)
+        prompt_messages, _ = _build_summary_prompt_payload(
+            expanded_candidate_messages,
+            user_preferences,
+            continuation_focus=continuation_focus,
+        )
         if selected and _estimate_prompt_tokens(prompt_messages) > target_tokens:
             break
         selected.append(message)
@@ -1402,7 +1573,11 @@ def _get_summary_message_level(message: dict) -> int:
     return max(1, level)
 
 
-def _select_hierarchical_summary_source_messages(canonical_messages: list[dict], settings: dict) -> list[dict]:
+def _select_hierarchical_summary_source_messages(
+    canonical_messages: list[dict],
+    settings: dict,
+    continuation_focus: str = "",
+) -> list[dict]:
     summary_messages = [
         message
         for message in canonical_messages
@@ -1424,6 +1599,7 @@ def _select_hierarchical_summary_source_messages(canonical_messages: list[dict],
         candidate_summaries,
         target_tokens=get_summary_source_target_tokens(settings),
         user_preferences=settings.get("user_preferences", ""),
+        continuation_focus=continuation_focus,
     )
 
 
@@ -1444,6 +1620,7 @@ def maybe_create_conversation_summary(
     exclude_message_ids: set[int] | None = None,
     force: bool = False,
     bypass_mode: bool = False,
+    continuation_focus: str = "",
 ) -> dict:
     summary_lock = _get_summary_lock(conversation_id)
     if not summary_lock.acquire(blocking=False):
@@ -1462,6 +1639,11 @@ def maybe_create_conversation_summary(
         trigger_token_count = _get_effective_summary_trigger_token_count(settings)
         checked_at = datetime.now().astimezone().isoformat(timespec="seconds")
         token_breakdown = _get_summary_token_breakdown(canonical_messages)
+        resolved_continuation_focus = re.sub(
+            r"\s+",
+            " ",
+            str(continuation_focus or _extract_summary_continuation_focus(canonical_messages) or ""),
+        ).strip()[:400]
 
         def build_outcome(**extra) -> dict:
             return {
@@ -1520,9 +1702,14 @@ def maybe_create_conversation_summary(
                 all_candidates,
                 target_tokens=attempt_token_target,
                 user_preferences=settings.get("user_preferences", ""),
+                continuation_focus=resolved_continuation_focus,
             )
             if not candidate_source_messages:
-                candidate_source_messages = _select_hierarchical_summary_source_messages(canonical_messages, settings)
+                candidate_source_messages = _select_hierarchical_summary_source_messages(
+                    canonical_messages,
+                    settings,
+                    continuation_focus=resolved_continuation_focus,
+                )
                 if candidate_source_messages:
                     summary_source_kind = "summary_history"
             raw_source_message_count = len(candidate_source_messages)
@@ -1545,7 +1732,11 @@ def maybe_create_conversation_summary(
                 )
 
             summary_source_messages = _expand_summary_source_messages(canonical_messages, source_messages, all_candidates)
-            prompt_messages, prompt_stats = _build_summary_prompt_payload(summary_source_messages, settings.get("user_preferences", ""))
+            prompt_messages, prompt_stats = _build_summary_prompt_payload(
+                summary_source_messages,
+                settings.get("user_preferences", ""),
+                continuation_focus=resolved_continuation_focus,
+            )
             if prompt_stats["prompt_message_count"] == 0:
                 return build_outcome(
                     applied=False,
@@ -2318,7 +2509,6 @@ def register_chat_routes(app) -> None:
         runtime_tool_names = resolve_runtime_tool_names(
             active_tool_names,
             canvas_documents=initial_canvas_documents,
-            user_message=rag_query_text or (latest_user_message or {}).get("content"),
             workspace_root=workspace_root,
         )
         api_messages, prompt_budget_stats, current_context_injection = _build_budgeted_prompt_messages(
@@ -2909,6 +3099,7 @@ def register_chat_routes(app) -> None:
             exclude_message_ids=exclude_ids or None,
             force=force,
             bypass_mode=force,
+            continuation_focus=summary_focus,
         )
 
         if outcome.get("applied"):

@@ -18,6 +18,7 @@ from model_registry import (
     get_provider_client,
     resolve_model_target,
 )
+from token_utils import estimate_text_tokens
 
 PRUNABLE_ROLES = {"user", "assistant"}
 PRUNING_MODEL = DEFAULT_CHAT_MODEL
@@ -28,6 +29,8 @@ PRUNING_SYSTEM_PROMPT = (
     "When you encounter those sections, keep those sections verbatim and only trim truly redundant surrounding prose.\n"
     "Return only the refined message text without conversational filler or markdown artifacts."
 )
+PRUNING_TARGET_REDUCTION_RATIO = 0.65
+PRUNING_MIN_TARGET_TOKENS = 80
 
 
 def _extract_response_text(response: Any) -> str:
@@ -47,7 +50,19 @@ def _extract_response_text(response: Any) -> str:
     return str(content or "").strip()
 
 
-def _build_pruning_messages(content: str) -> list[dict[str, str]]:
+def _estimate_pruning_target_tokens(content: str) -> int:
+    estimated_tokens = estimate_text_tokens(content)
+    if estimated_tokens <= 0:
+        return 1
+
+    target_tokens = max(1, int(estimated_tokens * PRUNING_TARGET_REDUCTION_RATIO))
+    if estimated_tokens < PRUNING_MIN_TARGET_TOKENS:
+        return min(estimated_tokens, target_tokens)
+    return max(PRUNING_MIN_TARGET_TOKENS, target_tokens)
+
+
+def _build_pruning_messages(content: str, target_tokens: int | None = None) -> list[dict[str, str]]:
+    normalized_target_tokens = max(1, int(target_tokens or _estimate_pruning_target_tokens(content)))
     return [
         {"role": "system", "content": PRUNING_SYSTEM_PROMPT},
         {
@@ -55,7 +70,8 @@ def _build_pruning_messages(content: str) -> list[dict[str, str]]:
             "content": (
                 "Preserve the message's core idea, critical details, and technical accuracy; only reduce unnecessary repetition, "
                 "indirect phrasing, and filler. Code blocks, logs, JSON, tables, numbers, commands, URLs, and other sensitive "
-                "technical data must be kept verbatim; do not rewrite, summarize, or delete those sections.\n\n"
+                "technical data must be kept verbatim; do not rewrite, summarize, or delete those sections. "
+                f"Aim for roughly {normalized_target_tokens} tokens while keeping the message faithful and readable.\n\n"
                 f"Mesaj:\n{content}"
             ),
         },
@@ -113,6 +129,7 @@ def prune_message(message_id: int) -> dict:
 
     original_content = str(message.get("content") or "")
     metadata = parse_message_metadata(message.get("metadata"))
+    target_tokens = _estimate_pruning_target_tokens(original_content)
 
     settings = get_app_settings()
     pruning_model = get_operation_model("prune", settings, fallback_model_id=PRUNING_MODEL)
@@ -121,7 +138,7 @@ def prune_message(message_id: int) -> dict:
     request_kwargs = apply_model_target_request_options(
         {
             "model": target["api_model"],
-            "messages": _build_pruning_messages(original_content),
+            "messages": _build_pruning_messages(original_content, target_tokens=target_tokens),
         },
         target,
     )
@@ -146,7 +163,14 @@ def prune_conversation_batch(conversation_id: int, batch_size: int) -> int:
     with get_db() as conn:
         rows = get_conversation_message_rows(conn, normalized_conversation_id)
         messages = [message_row_to_dict(row) for row in rows]
-        candidate_ids = [message["id"] for message in messages if is_prunable_message(message)][:normalized_batch_size]
+        candidate_ids = [
+            message["id"]
+            for message in sorted(
+                (message for message in messages if is_prunable_message(message)),
+                key=lambda message: estimate_text_tokens(str(message.get("content") or "")),
+                reverse=True,
+            )[:normalized_batch_size]
+        ]
 
     pruned_count = 0
     for message_id in candidate_ids:

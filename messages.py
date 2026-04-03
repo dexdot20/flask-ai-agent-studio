@@ -466,7 +466,10 @@ def _build_canvas_workspace_summary(canvas_payload: dict) -> list[str]:
     visible_line_end = int(canvas_payload.get("visible_line_end") or 0)
     if total_lines and visible_line_end:
         if visible_line_end >= total_lines:
-            lines.append(f"- Canvas view status: full document visible ({visible_line_end}/{total_lines} lines)")
+            lines.append(
+                f"- Canvas view status: full document visible ({visible_line_end}/{total_lines} lines)"
+            )
+            lines.append("- Canvas visibility note: the entire document is already in view; do not expand it just to see more of this same file.")
         else:
             lines.append(f"- Canvas view status: truncated excerpt ({visible_line_end}/{total_lines} lines visible)")
     else:
@@ -771,7 +774,7 @@ def _build_runtime_volatile_parts(
         else:
             volatile_parts.append(
                 "- Guidance: The active canvas document is fully visible in the current excerpt. "
-                "You do not need expand_canvas_document or scroll_canvas_document before editing unless the active document changes. "
+                "Canvas is already fully visible, so you do not need expand_canvas_document or scroll_canvas_document just to see more of this same document. "
                 "Use visible line numbers directly and never guess line numbers outside the excerpt."
             )
         if canvas_payload["visible_lines"]:

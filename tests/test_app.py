@@ -18,14 +18,17 @@ from werkzeug.datastructures import MultiDict
 import web_tools
 import ocr_service
 import model_registry
+import prune_service
 from docx import Document
 from proxy_settings import DEFAULT_PROXY_ENABLED_OPERATIONS, PROXY_OPERATION_FETCH_URL
 from agent import (
     CONTEXT_OVERFLOW_RECOVERY_ERROR_TEXT,
     FINAL_ANSWER_ERROR_TEXT,
     FINAL_ANSWER_MISSING_TEXT,
+    _apply_tool_output_budget,
     _build_sub_agent_messages,
     _build_compact_tool_message_content,
+    _build_tool_execution_result_message,
     _build_streaming_canvas_tool_preview,
     _estimate_input_breakdown,
     _estimate_message_breakdown,
@@ -104,7 +107,7 @@ from messages import (
 )
 from model_registry import get_operation_model, get_operation_model_candidates, resolve_model_target
 from project_workspace_service import create_workspace_runtime_state
-from prune_service import _build_pruning_messages
+from prune_service import _build_pruning_messages, _estimate_pruning_target_tokens
 from rag import Chunk
 from rag.store import query_chunks, upsert_chunks
 from rag_service import (
@@ -1194,6 +1197,23 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["visible_line_end"], 10)
         self.assertTrue(payload["is_truncated"])
 
+        small_document = normalize_canvas_document(
+            {
+                "id": "doc-2",
+                "title": "Small file",
+                "format": "code",
+                "language": "python",
+                "content": "line 1\nline 2\nline 3",
+            }
+        )
+
+        full_payload = _build_canvas_prompt_payload([small_document], max_lines=10)
+
+        self.assertIsNotNone(full_payload)
+        self.assertEqual(len(full_payload["visible_lines"]), 3)
+        self.assertEqual(full_payload["visible_line_end"], 3)
+        self.assertFalse(full_payload["is_truncated"])
+
     def test_scroll_canvas_document_returns_window_flags(self):
         content = "\n".join(f"line {index}" for index in range(1, 101))
         runtime_state = create_canvas_runtime_state(
@@ -1907,6 +1927,50 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("JSON", user_prompt)
         self.assertIn("URLs", user_prompt)
         self.assertIn("must be kept verbatim", user_prompt)
+
+    def test_pruning_prompt_includes_target_token_hint(self):
+        prompt_messages = _build_pruning_messages("Tekrarlı ayrıntı " * 80, target_tokens=123)
+
+        self.assertIn("roughly 123 tokens", prompt_messages[1]["content"])
+
+    def test_pruning_target_tokens_do_not_expand_short_messages(self):
+        short_message = "Kısa not"
+        target_tokens = _estimate_pruning_target_tokens(short_message)
+
+        self.assertGreaterEqual(target_tokens, 1)
+        self.assertLessEqual(target_tokens, estimate_text_tokens(short_message))
+
+    def test_prune_conversation_batch_prioritizes_largest_messages(self):
+        conversation_id = self._create_conversation()
+        with get_db() as conn:
+            small_id = insert_message(conn, conversation_id, "user", "Kısa mesaj")
+            large_id = insert_message(conn, conversation_id, "assistant", "Büyük mesaj " * 120)
+            medium_id = insert_message(conn, conversation_id, "user", "Orta mesaj " * 40)
+
+        pruned_ids = []
+
+        def fake_prune_message(message_id):
+            pruned_ids.append(message_id)
+            return {"id": message_id}
+
+        with patch("prune_service.prune_message", side_effect=fake_prune_message):
+            pruned_count = prune_service.prune_conversation_batch(conversation_id, 2)
+
+        self.assertEqual(pruned_count, 2)
+        self.assertEqual(pruned_ids, [large_id, medium_id])
+        self.assertNotIn(small_id, pruned_ids)
+
+    def test_is_prunable_message_allows_plain_assistant_messages(self):
+        self.assertTrue(prune_service.is_prunable_message({"role": "assistant", "content": "Detaylı ama araçsız yanıt"}))
+        self.assertFalse(
+            prune_service.is_prunable_message(
+                {
+                    "role": "assistant",
+                    "content": "Araç çağrısı içerir",
+                    "tool_calls": [{"id": "call-1"}],
+                }
+            )
+        )
 
     def test_background_post_response_pruning_runs_when_threshold_exceeded(self):
         fake_events = iter(
@@ -2707,6 +2771,8 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("- Path: src/app.py", content)
         self.assertIn("- Role: source", content)
         self.assertIn("- Active document id: canvas-1", content)
+        self.assertIn("- Canvas view status: full document visible (3/3 lines)", content)
+        self.assertIn("Canvas is already fully visible", content)
         self.assertIn("In project mode, prefer document_path for targeting", content)
         self.assertIn("## Canvas Decision Matrix", content)
         self.assertIn("Prefer document_path", content)
@@ -4042,7 +4108,10 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertGreater(breakdown["canvas"], estimate_text_tokens(content))
         self.assertLessEqual(breakdown.get("core_instructions", 0), 2)
 
-    def test_resolve_runtime_tool_names_prunes_web_and_workspace_tools_for_plain_chat(self):
+    def test_resolve_runtime_tool_names_without_user_message_always_includes_web_tools(self):
+        # When user_message is not provided (the main chat path), intent filtering is
+        # skipped and all active tools except canvas-document tools (no canvas present)
+        # are always sent to the model.
         runtime_names = resolve_runtime_tool_names(
             [
                 "append_scratchpad",
@@ -4052,13 +4121,16 @@ class AppRoutesTestCase(unittest.TestCase):
                 "read_file",
                 "create_canvas_document",
             ],
-            user_message="Merhaba, nasılsın?",
             workspace_root="/tmp/workspace",
         )
 
-        self.assertEqual(runtime_names, ["append_scratchpad"])
+        self.assertEqual(
+            runtime_names,
+            ["append_scratchpad", "search_web", "fetch_url", "search_news_ddgs", "read_file", "create_canvas_document"],
+        )
 
-    def test_resolve_runtime_tool_names_keeps_workspace_tools_for_code_requests(self):
+    def test_resolve_runtime_tool_names_without_user_message_excludes_workspace_tools_when_no_root(self):
+        # Workspace tools are excluded when workspace_root is not set, regardless of message.
         runtime_names = resolve_runtime_tool_names(
             [
                 "read_file",
@@ -4067,29 +4139,9 @@ class AppRoutesTestCase(unittest.TestCase):
                 "search_web",
                 "create_canvas_document",
             ],
-            user_message="Projede app.py dosyasini inceleyip hatayi duzelt.",
-            workspace_root="/tmp/workspace",
         )
 
-        self.assertEqual(runtime_names, ["read_file", "list_dir", "create_file"])
-
-    def test_resolve_runtime_tool_names_keeps_web_tools_for_live_web_requests(self):
-        runtime_names = resolve_runtime_tool_names(
-            [
-                "search_web",
-                "fetch_url",
-                "search_news_ddgs",
-                "search_news_google",
-                "read_file",
-            ],
-            user_message="Bugun icin guncel haberleri webde ara ve linkleri getir.",
-            workspace_root="/tmp/workspace",
-        )
-
-        self.assertEqual(
-            runtime_names,
-            ["search_web", "fetch_url", "search_news_ddgs", "search_news_google"],
-        )
+        self.assertEqual(runtime_names, ["search_web", "create_canvas_document"])
 
     def test_resolve_runtime_tool_names_keeps_canvas_tools_when_canvas_documents_exist(self):
         runtime_names = resolve_runtime_tool_names(
@@ -4107,8 +4159,6 @@ class AppRoutesTestCase(unittest.TestCase):
                     "content": "hello",
                 }
             ],
-            user_message="Merhaba",
-            workspace_root="/tmp/workspace",
         )
 
         self.assertEqual(
@@ -5046,8 +5096,16 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertIn("Use English for tool planning", messages[0]["content"])
         self.assertIn("rewrite it into clear English working notes", messages[0]["content"])
+        self.assertIn("Read-only still includes web search and URL fetch tools", messages[0]["content"])
         self.assertIn("1 and 5 items", messages[0]["content"])
         self.assertIn("split broader searches into multiple calls", messages[0]["content"])
+
+    def test_sub_agent_tool_spec_mentions_exposed_web_search_tools(self):
+        spec = TOOL_SPEC_BY_NAME["sub_agent"]
+
+        self.assertIn("web search and URL fetch tools", spec["description"])
+        self.assertIn("search_web", spec["prompt"]["guidance"])
+        self.assertIn("read-only does not mean offline-only", spec["prompt"]["guidance"])
 
     def test_run_agent_stream_emits_clarification_request_and_stops(self):
         responses = [
@@ -7820,6 +7878,33 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("Outcomes:", compacted_summary)
         self.assertIn("Web results", compacted_summary)
 
+    def test_try_compact_messages_includes_recovery_hints(self):
+        messages = [
+            {"role": "system", "content": "sys"},
+            {
+                "role": "assistant",
+                "content": "I should fetch the page before answering.",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "fetch_url", "arguments": '{"url": "https://example.com/docs"}'},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "content": "Title: Docs\n\nLarge response body",
+            },
+        ]
+
+        compacted = _try_compact_messages(messages, budget=80, keep_recent=0)
+
+        self.assertIsNotNone(compacted)
+        self.assertIn("Recovery:", compacted[1]["content"])
+        self.assertIn("grep_fetched_content", compacted[1]["content"])
+
     def test_prepare_tool_result_for_transcript_clips_large_non_fetch_payloads(self):
         result = _prepare_tool_result_for_transcript("search_web", {"items": ["x" * 30000]})
         rendered = _build_compact_tool_message_content("search_web", {}, {"ignored": True}, "summary", transcript_result=result)
@@ -7857,6 +7942,107 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertLess(len(result["content_preview"]), 450)
         self.assertTrue(result["content_truncated"])
         self.assertEqual(result["document_id"], "canvas-1")
+
+    def test_apply_tool_output_budget_compacts_large_results_before_next_turn(self):
+        base_messages = [{"role": "user", "content": "Summarize the fetched docs."}]
+        long_fetch_result = {
+            "url": "https://example.com/docs",
+            "title": "Docs",
+            "content": "Important documentation details. " * 200,
+            "meta_description": "Short docs description.",
+            "structured_data": "headline: Docs headline\ntext: Important structured summary",
+            "status": 200,
+            "content_format": "html",
+            "cleanup_applied": True,
+        }
+        fetch_transcript = _prepare_tool_result_for_transcript(
+            "fetch_url",
+            long_fetch_result,
+            fetch_url_token_threshold=10_000,
+        )
+        entries = [
+            {
+                "tool_name": "fetch_url",
+                "tool_args": {"url": "https://example.com/docs"},
+                "call_id": "call-1",
+                "result": long_fetch_result,
+                "summary": "Page content extracted: Docs",
+                "transcript_result": fetch_transcript,
+                "ok": True,
+            },
+            {
+                "tool_name": "read_file",
+                "tool_args": {"path": "README.md"},
+                "call_id": "call-2",
+                "result": "A" * 4000,
+                "summary": "File read: README.md",
+                "transcript_result": "A" * 4000,
+                "ok": True,
+            },
+        ]
+
+        with patch("agent.PROMPT_MAX_INPUT_TOKENS", 400), patch("agent.AGENT_CONTEXT_COMPACTION_THRESHOLD", 0.5):
+            tool_messages, transcript_results, tool_execution_result_message, compacted = _apply_tool_output_budget(
+                base_messages,
+                entries,
+                fetch_url_token_threshold=10_000,
+                fetch_url_clip_aggressiveness=20,
+            )
+
+        self.assertTrue(compacted)
+        self.assertEqual(len(tool_messages), 2)
+        self.assertEqual(len(transcript_results), 2)
+        self.assertIn("Budget note:", tool_messages[0]["content"])
+        self.assertIn("Prompt-budget compacted result.", tool_messages[1]["content"])
+        self.assertIsNotNone(tool_execution_result_message)
+        self.assertIn("Recovery:", tool_execution_result_message["content"])
+
+    def test_apply_tool_output_budget_compacts_error_results_without_successes(self):
+        base_messages = [{"role": "user", "content": "Summarize the failure."}]
+        long_error = "Traceback: " + ("failed step; " * 300)
+        entries = [
+            {
+                "tool_name": "read_file",
+                "tool_args": {"path": "README.md"},
+                "call_id": "call-1",
+                "execution_error": long_error,
+                "ok": False,
+            }
+        ]
+
+        with patch("agent.PROMPT_MAX_INPUT_TOKENS", 120), patch("agent.AGENT_CONTEXT_COMPACTION_THRESHOLD", 0.5):
+            tool_messages, transcript_results, tool_execution_result_message, compacted = _apply_tool_output_budget(
+                base_messages,
+                entries,
+            )
+
+        self.assertTrue(compacted)
+        self.assertEqual(len(tool_messages), 1)
+        self.assertLess(len(tool_messages[0]["content"]), len(long_error))
+        self.assertIn("Recovery:", tool_messages[0]["content"])
+        self.assertEqual(transcript_results[0]["tool_name"], "read_file")
+        self.assertIn("summary", transcript_results[0])
+        self.assertIsNone(tool_execution_result_message)
+
+    def test_build_tool_execution_result_message_surfaces_fetch_recovery_for_clipped_results(self):
+        message = _build_tool_execution_result_message(
+            [
+                {
+                    "tool_name": "fetch_url",
+                    "arguments": {"url": "https://example.com/docs"},
+                    "ok": True,
+                    "summary": "Page content extracted: Docs",
+                    "result": {
+                        "content_mode": "clipped_text",
+                        "summary_notice": "Content was clipped and grep_fetched_content should be used for exact text.",
+                    },
+                }
+            ]
+        )
+
+        self.assertIsNotNone(message)
+        self.assertIn("Recovery:", message["content"])
+        self.assertIn("grep_fetched_content", message["content"])
 
     def test_run_agent_stream_deduplicates_missing_final_answer_instruction(self):
         responses = [
@@ -8654,6 +8840,34 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("Live USD/TRY and EUR/TRY data", result["content"])
         self.assertIn("Live USD/TRY and EUR/TRY data", result["content"])
 
+    def test_extract_html_surfaces_structured_metadata_even_when_body_is_long(self):
+        html = """
+        <html>
+            <head>
+                <title>Reference Docs</title>
+                <meta name="description" content="High-level explanation of the API surface.">
+                <script type="application/ld+json">
+                    {
+                        "headline": "Reference Docs headline",
+                        "description": "Structured API summary for search engines."
+                    }
+                </script>
+            </head>
+            <body>
+                <main>
+                    <h1>Reference Docs</h1>
+                    <p>""" + ("Detailed implementation text. " * 30) + """</p>
+                </main>
+            </body>
+        </html>
+        """
+
+        result = _extract_html(html, "https://example.com/reference")
+
+        self.assertEqual(result["meta_description"], "High-level explanation of the API surface.")
+        self.assertIn("Reference Docs headline", result["structured_data"])
+        self.assertIn("High-level explanation of the API surface.", result["content"])
+
     def test_grep_fetched_content_tool_handles_invalid_window_args_and_skips_tool_memory_headers(self):
         with patch("web_tools.cache_get", return_value=None), patch(
             "rag_service.get_exact_tool_memory_match",
@@ -9029,11 +9243,43 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("raw_content", stored_result)
         self.assertEqual(stored_result["raw_content"], long_content.strip())
 
+        self.assertIn("recovery_hint", stored_result)
+        self.assertIn("grep_fetched_content", stored_result["recovery_hint"])
+
         second_call_messages = mocked_create.call_args_list[1].kwargs["messages"]
         transcript_content = second_call_messages[-1]["content"]
         self.assertIn("TOOL EXECUTION RESULTS", transcript_content)
         self.assertIn("fetch_url", transcript_content)
         self.assertIn("OK", transcript_content)
+
+    def test_select_summary_source_messages_prioritizes_continuation_focus(self):
+        canonical_messages = [
+            {"id": 1, "position": 1, "role": "user", "content": "Gardening soil tips and irrigation details. " * 8},
+            {"id": 2, "position": 2, "role": "assistant", "content": "More gardening notes and fertilizer reminders. " * 8},
+            {"id": 3, "position": 3, "role": "user", "content": "Gemini cache breakpoints and prompt caching constraints. " * 8},
+            {"id": 4, "position": 4, "role": "assistant", "content": "Use explicit cache breakpoints for Gemini requests. " * 8},
+        ]
+
+        selected = _select_summary_source_messages_by_token_budget(
+            canonical_messages,
+            canonical_messages,
+            target_tokens=120,
+            user_preferences="",
+            continuation_focus="Need help with Gemini cache breakpoints and prompt caching.",
+        )
+
+        self.assertTrue(selected)
+        self.assertTrue(any("Gemini cache breakpoints" in message["content"] for message in selected))
+
+    def test_build_summary_prompt_messages_includes_continuation_focus(self):
+        prompt_messages = build_summary_prompt_messages(
+            [{"role": "user", "content": "Earlier context"}],
+            "",
+            continuation_focus="Current task is prompt caching for Gemini.",
+        )
+
+        self.assertIn("Current continuation focus", prompt_messages[0]["content"])
+        self.assertIn("prompt caching for Gemini", prompt_messages[0]["content"])
 
     def test_run_agent_stream_marks_fetch_failures_clearly_in_transcript(self):
         responses = [
