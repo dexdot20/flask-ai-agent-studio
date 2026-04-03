@@ -120,6 +120,8 @@ CONTEXT_OVERFLOW_RECOVERY_ERROR_TEXT = (
     "Try starting a new conversation, disabling RAG or large canvas content, or reducing the request size."
 )
 MISSING_FINAL_ANSWER_MARKER = "[INSTRUCTION: MISSING FINAL ANSWER"
+CLARIFICATION_RETRY_MARKER = "[INSTRUCTION: CLARIFICATION TOOL REQUIRED"
+CLARIFICATION_TOOL_REPAIR_MARKER = "[INSTRUCTION: CLARIFICATION TOOL REPAIR"
 TOOL_EXECUTION_RESULTS_MARKER = "[TOOL EXECUTION RESULTS]"
 REASONING_REPLAY_MARKER = "[AGENT REASONING CONTEXT]"
 MAX_REASONING_REPLAY_ENTRIES = 2
@@ -762,6 +764,35 @@ def _clean_tool_text(text: str, limit: int | None = None) -> str:
     return cleaned
 
 
+def _sanitize_clarification_text(text: str, limit: int | None = None) -> str:
+    cleaned = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not cleaned:
+        return ""
+    cleaned = re.sub(r"<\|(im_start|im_end|assistant|user|system|tool|endoftext)\|>", " ", cleaned, flags=re.IGNORECASE)
+    while cleaned.startswith("<|") and cleaned.endswith("|>") and len(cleaned) > 4:
+        cleaned = cleaned[2:-2].strip()
+    cleaned = re.sub(r"^\s*<\|\s*[\"']?\s*", "", cleaned)
+    cleaned = re.sub(r"\s*[\"']?\s*\|>\s*$", "", cleaned)
+    cleaned = cleaned.replace("```", " ").replace("`", " ")
+    cleaned = re.sub(r"^\s*[*\-•–]+\s*", "", cleaned)
+    cleaned = re.sub(r"^\s*\d+[\.)]\s*", "", cleaned)
+    cleaned = re.sub(r"^\s*(?:Q|A|Question|Answer)\s*[:：]\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"^\s*<\|\s*[\"']?\s*", "", cleaned)
+    cleaned = re.sub(r"\s*[\"']?\s*\|>\s*$", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    cleaned = cleaned.strip().strip("\"'").strip()
+    if limit and len(cleaned) > limit:
+        return cleaned[:limit].rstrip() + "…"
+    return cleaned
+
+
+def _sanitize_clarification_id(value: str, index: int) -> str:
+    cleaned = _sanitize_clarification_text(value, limit=80).casefold()
+    cleaned = re.sub(r"[^a-z0-9_]+", "_", cleaned)
+    cleaned = re.sub(r"_+", "_", cleaned).strip("_")
+    return cleaned or f"question_{index}"
+
+
 def _truncate_preview_text(text: str, limit: int | None = None) -> str:
     cleaned = str(text or "").strip()
     if limit and len(cleaned) > limit:
@@ -1251,6 +1282,74 @@ def _append_sub_agent_trace(runtime_state: dict, entry: dict) -> None:
 
 def _has_missing_final_answer_instruction(messages: list[dict]) -> bool:
     return any(MISSING_FINAL_ANSWER_MARKER in str(message.get("content") or "") for message in messages)
+
+
+def _has_clarification_retry_instruction(messages: list[dict]) -> bool:
+    return any(CLARIFICATION_RETRY_MARKER in str(message.get("content") or "") for message in messages)
+
+
+def _has_clarification_tool_repair_instruction(messages: list[dict]) -> bool:
+    return any(CLARIFICATION_TOOL_REPAIR_MARKER in str(message.get("content") or "") for message in messages)
+
+
+def _get_latest_user_message_text(messages: list[dict]) -> str:
+    for message in reversed(messages):
+        if str(message.get("role") or "").strip() != "user":
+            continue
+        content = str(message.get("content") or "").strip()
+        if content:
+            return content
+    return ""
+
+
+def _user_requested_questions_first(messages: list[dict]) -> bool:
+    latest_user_text = _get_latest_user_message_text(messages)
+    if not latest_user_text:
+        return False
+    patterns = (
+        r"\bask(?: me)?(?: a few| some)? questions? first\b",
+        r"\bbefore (?:you )?answer(?:ing)?[, ]+ask\b",
+        r"\bstart by asking\b",
+        r"\bönce (?:birkaç |bazi |bazı )?soru(?:lar)? sor\b",
+        r"\bcevaplamadan önce soru sor\b",
+        r"\bsorular(?:ı|ini|ını)? önce sor\b",
+        r"\bsoru sorarak ilerle\b",
+    )
+    normalized = latest_user_text.casefold()
+    return any(re.search(pattern, normalized, re.IGNORECASE) for pattern in patterns)
+
+
+def _assistant_text_suggests_skipped_clarification(content_text: str, reasoning_text: str) -> bool:
+    combined = "\n".join(part for part in (content_text, reasoning_text) if str(part or "").strip()).casefold()
+    if not combined:
+        return False
+    indicators = (
+        "prepared questions",
+        "i prepared questions",
+        "need a few details",
+        "need a few more details",
+        "before i answer, i need",
+        "i have a few questions",
+        "clarify before",
+        "soruları hazırladım",
+        "birkaç soru",
+        "netleştirmek için",
+        "önce birkaç soru",
+    )
+    return any(indicator in combined for indicator in indicators)
+
+
+def _should_retry_for_skipped_clarification(
+    messages: list[dict],
+    content_text: str,
+    reasoning_text: str,
+    prompt_tool_names: list[str],
+) -> bool:
+    if "ask_clarifying_question" not in set(prompt_tool_names or []):
+        return False
+    if _has_clarification_retry_instruction(messages):
+        return False
+    return _user_requested_questions_first(messages) or _assistant_text_suggests_skipped_clarification(content_text, reasoning_text)
 
 
 def _is_tool_execution_result_message(message: dict) -> bool:
@@ -2652,6 +2751,38 @@ def _build_missing_final_answer_instruction() -> dict:
     }
 
 
+def _build_clarification_retry_instruction() -> dict:
+    return {
+        "role": "system",
+        "content": (
+            "[INSTRUCTION: CLARIFICATION TOOL REQUIRED — RETRY]\n\n"
+            "The previous turn returned plain assistant text without the required ask_clarifying_question tool call.\n"
+            "Retry now.\n"
+            "If you need clarification, or if the user asked you to ask questions first, emit exactly one ask_clarifying_question tool call and no assistant prose.\n"
+            "Put every question only inside the tool arguments.\n"
+            "Do not say that you prepared questions unless you emit the tool call.\n"
+            "Do not place the questions in reasoning_content."
+        ),
+    }
+
+
+def _build_clarification_tool_repair_instruction(error: str) -> dict:
+    cleaned_error = _clean_tool_text(error or "", limit=220)
+    return {
+        "role": "system",
+        "content": (
+            "[INSTRUCTION: CLARIFICATION TOOL REPAIR — RETRY]\n\n"
+            "The previous ask_clarifying_question tool call was malformed and could not be executed.\n"
+            f"Validation error: {cleaned_error or 'invalid clarification payload'}\n"
+            "Retry now with exactly one ask_clarifying_question tool call and no assistant prose.\n"
+            "Return a valid JSON object with optional intro, optional submit_label, and a non-empty questions array.\n"
+            "Each question must be an object with id, label, and input_type.\n"
+            "For single_select or multi_select, provide a non-empty options array of {label, value} objects.\n"
+            "Use plain UI text only; no markdown bullets, Q:/A: prefixes, code fences, or <|...|> wrappers."
+        ),
+    }
+
+
 def _build_tool_execution_result_message(transcript_results: list[dict]) -> dict | None:
     if not transcript_results:
         return None
@@ -2694,8 +2825,14 @@ def _normalize_clarification_question(raw_question: dict, index: int) -> dict | 
     if not isinstance(raw_question, dict):
         return None
 
-    question_id = str(raw_question.get("id") or raw_question.get("key") or f"question_{index}").strip()[:80]
-    label = str(raw_question.get("label") or raw_question.get("question") or raw_question.get("prompt") or "").strip()
+    question_id = _sanitize_clarification_id(
+        str(raw_question.get("id") or raw_question.get("key") or f"question_{index}"),
+        index,
+    )
+    label = _sanitize_clarification_text(
+        str(raw_question.get("label") or raw_question.get("question") or raw_question.get("prompt") or ""),
+        limit=240,
+    )
 
     input_type_aliases = {
         "": "",
@@ -2725,7 +2862,7 @@ def _normalize_clarification_question(raw_question: dict, index: int) -> dict | 
         "required": raw_question.get("required") is not False,
     }
 
-    placeholder = str(raw_question.get("placeholder") or "").strip()
+    placeholder = _sanitize_clarification_text(str(raw_question.get("placeholder") or ""), limit=200)
     if placeholder:
         normalized["placeholder"] = placeholder[:200]
 
@@ -2737,13 +2874,13 @@ def _normalize_clarification_question(raw_question: dict, index: int) -> dict | 
     normalized_options = []
     for option in raw_options[:10]:
         if isinstance(option, str):
-            label_text = option.strip()
+            label_text = _sanitize_clarification_text(option, limit=120)
             value_text = label_text
             description = ""
         elif isinstance(option, dict):
-            label_text = str(option.get("label") or option.get("value") or "").strip()
-            value_text = str(option.get("value") or option.get("label") or "").strip()
-            description = str(option.get("description") or "").strip()
+            label_text = _sanitize_clarification_text(str(option.get("label") or option.get("value") or ""), limit=120)
+            value_text = _sanitize_clarification_text(str(option.get("value") or option.get("label") or ""), limit=120)
+            description = _sanitize_clarification_text(str(option.get("description") or ""), limit=200)
         else:
             continue
         if not label_text or not value_text:
@@ -2799,10 +2936,10 @@ def _normalize_clarification_payload(tool_args: dict) -> dict:
         raise ValueError("ask_clarifying_question requires at least one valid question.")
 
     payload = {"questions": questions}
-    intro = str(tool_args.get("intro") or "").strip()
+    intro = _sanitize_clarification_text(str(tool_args.get("intro") or ""), limit=300)
     if intro:
         payload["intro"] = intro[:300]
-    submit_label = str(tool_args.get("submit_label") or "").strip()
+    submit_label = _sanitize_clarification_text(str(tool_args.get("submit_label") or ""), limit=80)
     if submit_label:
         payload["submit_label"] = submit_label[:80]
     return payload
@@ -4861,11 +4998,11 @@ def run_agent_stream(
                                         }
                     if content_delta:
                         content_parts.append(content_delta)
-                        if not turn_tools and not buffer_answer:
+                        if buffer_answer:
+                            buffered_content_deltas.append(content_delta)
+                        elif not turn_tools:
                             for event in emit_answer(content_delta):
                                 yield event
-                        elif not turn_tools and buffer_answer:
-                            buffered_content_deltas.append(content_delta)
                         elif content_streaming_live:
                             for event in emit_answer(content_delta):
                                 yield event
@@ -4905,7 +5042,7 @@ def run_agent_stream(
                 tool_call_error,
             )
             finalize_call_usage()
-            if buffered_content_deltas and not tool_calls and not tool_call_error:
+            if buffered_content_deltas and not buffer_answer and not tool_calls and not tool_call_error:
                 for pending_delta in buffered_content_deltas:
                     for event in emit_answer(pending_delta):
                         yield event
@@ -4964,6 +5101,7 @@ def run_agent_stream(
         try:
             turn_result = yield from stream_model_turn(
                 turn_messages,
+                buffer_answer=("ask_clarifying_question" in normalized_prompt_tool_names),
                 call_type="agent_step",
                 retry_reason=step_retry_reason,
             )
@@ -5029,6 +5167,23 @@ def run_agent_stream(
         )
 
         if not tool_calls:
+            if content_text and _should_retry_for_skipped_clarification(
+                messages,
+                content_text,
+                reasoning_text,
+                normalized_prompt_tool_names,
+            ):
+                _trace_agent_event(
+                    "clarification_tool_retry_requested",
+                    trace_id=trace_id,
+                    step=step,
+                    content_excerpt=content_text,
+                    reasoning_excerpt=reasoning_text,
+                )
+                messages.append(_build_clarification_retry_instruction())
+                pending_step_retry_reason = "clarification_tool_retry"
+                step -= 1
+                continue
             if content_text:
                 _trace_agent_event("final_answer_received", trace_id=trace_id, step=step, content_excerpt=content_text)
                 if not answer_started:
@@ -5105,6 +5260,7 @@ def run_agent_stream(
         transcript_results = []
         tool_messages = []
         tool_output_entries = []
+        clarification_repair_error: str | None = None
 
         # ---- Phase 1: validate, pre-check, build execution slots (sequential) ----
         slots = []
@@ -5304,6 +5460,8 @@ def run_agent_stream(
 
             if kind == "error":
                 error = slot["error"]
+                if tool_name == "ask_clarifying_question" and clarification_repair_error is None:
+                    clarification_repair_error = error
                 yield {"type": "tool_error", "step": step, "tool": tool_name, "error": error, "call_id": call_id}
                 tool_messages.append(
                     {
@@ -5546,6 +5704,8 @@ def run_agent_stream(
                         return
                 else:
                     error = exec_result["error"]
+                    if tool_name == "ask_clarifying_question" and clarification_repair_error is None:
+                        clarification_repair_error = error
                     _append_working_state_blocker(working_state, tool_name, error)
                     _trace_agent_event(
                         "tool_call_failed",
@@ -5613,6 +5773,17 @@ def run_agent_stream(
         messages.extend(tool_messages)
         if tool_execution_result_message is not None:
             messages.append(tool_execution_result_message)
+        if clarification_repair_error and not _has_clarification_tool_repair_instruction(messages):
+            messages.append(_build_clarification_tool_repair_instruction(clarification_repair_error))
+            _trace_agent_event(
+                "clarification_tool_repair_requested",
+                trace_id=trace_id,
+                step=step,
+                error=clarification_repair_error,
+            )
+            pending_step_retry_reason = "clarification_tool_repair"
+            step -= 1
+            continue
 
     if fatal_api_error is not None:
         if not answer_started:

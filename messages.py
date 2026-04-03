@@ -23,7 +23,7 @@ from tool_registry import build_canvas_decision_matrix, resolve_runtime_tool_nam
 
 SUMMARY_LABEL = "Conversation summary (generated from deleted messages):"
 CANVAS_PROMPT_MAX_CHARS = 20_000
-CANVAS_PROMPT_MAX_LINES = 400
+CANVAS_PROMPT_MAX_LINES = 100
 PARALLEL_SAFE_READ_ONLY_TOOL_NAMES = (
     # Web / fetch
     "search_web",
@@ -101,9 +101,12 @@ def _build_clarification_policy_payload(active_tool_names: list[str], clarificat
         "tool": "ask_clarifying_question",
         "guidance": (
             "If a good answer depends on missing requirements, ask for clarification instead of guessing. "
-            "If the user explicitly asks you to ask questions first, use this tool rather than asking inline. "
+            "If the user explicitly asks you to ask questions first, you MUST emit an actual ask_clarifying_question tool call — "
+            "outlining questions in your reasoning/thinking without emitting the call is not sufficient. "
+            "Do not say that you prepared questions in assistant text unless you emitted the tool call in that same turn. "
             f"Ask only the minimum number of questions needed, ask at most {limit} question(s) in one call, "
-            "use a simple Q:/A: format, and wait for the user's reply before continuing."
+            "use plain structured UI fields only, avoid Q:/A: prefixes, markdown bullets, XML/tag wrappers, code fences, or tokens like <| and |>, "
+            "and wait for the user's reply before continuing."
         ),
     }
 
@@ -474,17 +477,15 @@ def _build_canvas_prompt_payload(
 def _build_canvas_workspace_summary(canvas_payload: dict) -> list[str]:
     manifest = canvas_payload.get("manifest") if isinstance(canvas_payload.get("manifest"), dict) else {}
     active_document = canvas_payload.get("active_document") if isinstance(canvas_payload.get("active_document"), dict) else {}
+    if int(canvas_payload.get("document_count") or 0) <= 1 and (canvas_payload.get("mode") or "document") != "project":
+        return []
+
     lines = ["## Canvas Workspace Summary"]
     lines.append(f"- Working mode: {canvas_payload.get('mode') or 'document'}")
-    lines.append(f"- Document count: {canvas_payload.get('document_count') or 0}")
 
     project_name = str(manifest.get("project_name") or "").strip()
     if project_name:
         lines.append(f"- Project label: {project_name}")
-
-    target_type = str(manifest.get("target_type") or "").strip()
-    if target_type:
-        lines.append(f"- Target type: {target_type}")
 
     active_label = str(active_document.get("path") or active_document.get("title") or active_document.get("id") or "Canvas").strip()
     lines.append(f"- Active file: {active_label}")
@@ -502,40 +503,17 @@ def _build_canvas_workspace_summary(canvas_payload: dict) -> list[str]:
     else:
         lines.append("- Canvas view status: unknown")
 
-    validation_status = str(manifest.get("last_validation_status") or "ok").strip() or "ok"
-    lines.append(f"- Validation status: {validation_status}")
-
-    open_issues = [str(issue).strip() for issue in (manifest.get("open_issues") or []) if str(issue).strip()]
-    if open_issues:
-        lines.append(f"- Open issues: {'; '.join(open_issues[:4])}")
-    else:
-        lines.append("- Open issues: none")
-
-    file_list = manifest.get("file_list") if isinstance(manifest.get("file_list"), list) else []
-    if file_list:
-        lines.append("- Files in scope:")
-        for entry in file_list[:8]:
-            label = str(entry.get("path") or entry.get("title") or entry.get("id") or "Canvas").strip() or "Canvas"
-            summary_parts = []
-            if entry.get("active"):
-                summary_parts.append("active")
-            if entry.get("role"):
-                summary_parts.append(str(entry["role"]))
-            if entry.get("language"):
-                summary_parts.append(str(entry["language"]))
-            summary_parts.append(f"{int(entry.get('line_count') or 0)} lines")
-            summary = str(entry.get("summary") or "").strip()
-            suffix = f" | {summary}" if summary else ""
-            lines.append(f"  - {label} ({', '.join(summary_parts)}){suffix}")
-        if len(file_list) > 8:
-            lines.append(f"  - ... {len(file_list) - 8} more files omitted from this summary.")
-
-    relationship_map = canvas_payload.get("relationship_map") if isinstance(canvas_payload.get("relationship_map"), dict) else {}
-    for key, label in (("imports", "Shared imports"), ("exports", "Shared exports"), ("dependencies", "Shared dependencies")):
-        values = relationship_map.get(key) if isinstance(relationship_map.get(key), list) else []
-        compact_values = [str(value).strip() for value in values if str(value).strip()][:8]
-        if compact_values:
-            lines.append(f"- {label}: {', '.join(compact_values)}")
+    other_documents = canvas_payload.get("other_documents") if isinstance(canvas_payload.get("other_documents"), list) else []
+    other_labels = [
+        str(entry.get("path") or entry.get("title") or entry.get("id") or "Canvas").strip()
+        for entry in other_documents
+        if str(entry.get("path") or entry.get("title") or entry.get("id") or "").strip()
+    ]
+    if other_labels:
+        shown_labels = other_labels[:4]
+        lines.append(f"- Other documents: {', '.join(shown_labels)}")
+        if len(other_labels) > len(shown_labels):
+            lines.append(f"- Additional documents omitted: {len(other_labels) - len(shown_labels)}")
 
     lines.append("")
     return lines
@@ -623,38 +601,79 @@ def _normalize_max_parallel_tools(value: int | None, default_value: int = DEFAUL
     return max(MAX_PARALLEL_TOOLS_MIN, min(MAX_PARALLEL_TOOLS_MAX, normalized))
 
 
+def _normalize_tool_name_list(values) -> list[str]:
+    normalized: list[str] = []
+    for raw_value in values or []:
+        name = str(raw_value or "").strip()
+        if name and name not in normalized:
+            normalized.append(name)
+    return normalized
+
+
+def _format_tool_name_list(values: list[str]) -> str:
+    normalized = _normalize_tool_name_list(values)
+    if not normalized:
+        return "none"
+    return ", ".join(f"`{name}`" for name in normalized)
+
+
+def _build_active_tools_context(active_tool_names: list[str]) -> list[str]:
+    normalized_tool_names = _normalize_tool_name_list(active_tool_names)
+    if not normalized_tool_names:
+        return []
+
+    parallel_safe_tool_names = [
+        name for name in normalized_tool_names if name in PARALLEL_SAFE_READ_ONLY_TOOL_NAMES
+    ]
+    sequential_tool_names = [
+        name for name in normalized_tool_names if name not in PARALLEL_SAFE_READ_ONLY_TOOL_NAMES
+    ]
+
+    lines = [
+        "## Active Tools This Turn",
+        "*These are the exact tools callable in this turn after runtime gating. Do not attempt to call tools outside this list.*\n",
+        f"- Callable tools: {_format_tool_name_list(normalized_tool_names)}",
+    ]
+    if parallel_safe_tool_names:
+        lines.append(f"- Parallel-safe read tools: {_format_tool_name_list(parallel_safe_tool_names)}")
+    else:
+        lines.append("- Parallel-safe read tools: none")
+    if sequential_tool_names:
+        lines.append(f"- Sequential-only tools: {_format_tool_name_list(sequential_tool_names)}")
+    lines.append("")
+    return lines
+
+
 def build_tool_call_contract(
     active_tool_names: list[str],
-    canvas_documents=None,
     clarification_max_questions: int | None = None,
     max_parallel_tools: int | None = None,
 ) -> dict | None:
-    runtime_tool_names = resolve_runtime_tool_names(active_tool_names or [], canvas_documents=canvas_documents)
-    if not runtime_tool_names:
+    normalized_tool_names = _normalize_tool_name_list(active_tool_names)
+    if not normalized_tool_names:
         return None
     rules = [
         "Call a tool only when it is strictly required to fulfill the user's request. If you can answer definitively from the current context, do not call a tool.",
-        "Unnecessary tool calls waste compute and context. Do not use tools for trivial checks, repetition, or mere curiosity.",
+        "Use only the tools listed in the Active Tools section for this turn. Do not invent unavailable tools.",
         "If you do need a tool, call it via native function calling. Never write tool JSON or schema representations in your regular text response.",
-        "Use only the tools exposed by the API for this turn. Your capabilities are strictly defined by the tools explicitly provided in the API tooling interface for this turn.",
+        "Unnecessary tool calls waste compute and context. Do not use tools for trivial checks, repetition, or mere curiosity.",
     ]
 
-    parallel_safe_in_use = [name for name in PARALLEL_SAFE_READ_ONLY_TOOL_NAMES if name in runtime_tool_names]
+    batching_sections = []
+    parallel_safe_in_use = [name for name in normalized_tool_names if name in PARALLEL_SAFE_READ_ONLY_TOOL_NAMES]
     if parallel_safe_in_use:
         parallel_limit = _normalize_max_parallel_tools(max_parallel_tools)
-        rules.append(
-            "## Parallel and Batched Tool Calls\n"
+        batching_sections.append(
+            "Batch independent tool calls into one assistant turn when their inputs do not depend on each other. "
+            "See the Active Tools section for the exact parallel-safe tools available in this turn.\n\n"
             "Batching independent tool calls into one assistant turn reduces LLM round trips and saves tokens. "
             "Prefer this pattern aggressively, even for simple edits and straightforward repo work.\n\n"
             "**GATHER → REASON → ACT** — the core pattern:\n"
             "  1. Issue ALL independent reads in one turn (gather phase).\n"
             "  2. Reason over all returned results together.\n"
             "  3. Issue writes / mutations based on what you learned.\n\n"
-            "**Concurrently executed (I/O runs in parallel):** "
-            + ", ".join(parallel_safe_in_use)
-            + ".\n"
-            "Emitting multiple calls to these tools in one turn causes them to run at the same time — "
-            "use this whenever you need several independent lookups.\n"
+            "Parallel-safe tools can run at the same time inside one assistant turn. "
+            "Use that aggressively for independent lookups.\n"
             f"Current parallel cap for this turn: {parallel_limit}. "
             f"If you emit more than {parallel_limit} parallel-safe call(s), only {parallel_limit} start immediately and the rest queue inside the same turn. "
             "Keep the batch focused on the highest-value independent reads.\n\n"
@@ -673,21 +692,28 @@ def build_tool_call_contract(
             "  - Any case where tool B needs the output of tool A as its input."
         )
 
-    if any(name in runtime_tool_names for name in DEPENDENT_TOOL_NAMES):
-        rules.append(
-            "search_knowledge_base and search_tool_memory may be batched freely with other independent reads "
+    if any(name in normalized_tool_names for name in DEPENDENT_TOOL_NAMES):
+        batching_sections.append(
+            "**Dependency guard:** search_knowledge_base and search_tool_memory may be batched freely with other independent reads "
             "(they run concurrently), but must not be batched with any tool call whose input depends on their output."
         )
 
-    if "ask_clarifying_question" in runtime_tool_names:
+    if "ask_clarifying_question" in normalized_tool_names:
         limit = _normalize_clarification_max_questions(clarification_max_questions)
         rules.append(
             "ask_clarifying_question must be the only tool call in its assistant turn. "
             "Put the actual questions only in the tool arguments, not in the assistant text. "
+            "Your reasoning or thinking process is NOT a substitute for the tool call — "
+            "you must emit the function call even if you already outlined the questions in your thinking. "
+            "Do not say that you prepared questions unless you emitted the tool call in that same turn. "
+            "Each question label and option label must be plain UI text only: no Q:/A: prefixes, markdown bullets, XML/tag wrappers, or <|...|> markers. "
             f"Ask at most {limit} question(s) per call and keep the assistant-visible reply short and brief."
         )
 
-    return {"rules": rules}
+    return {
+        "rules": rules,
+        "batching_guidance": "\n\n".join(section.strip() for section in batching_sections if section.strip()),
+    }
 
 
 def _round_time_for_cache(now: datetime, window_minutes: int = 5) -> datetime:
@@ -770,22 +796,21 @@ def _build_runtime_volatile_parts(
         max_lines=canvas_prompt_max_lines or CANVAS_PROMPT_MAX_LINES,
     )
     if canvas_payload:
-        volatile_parts.extend(_build_canvas_workspace_summary(canvas_payload))
+        workspace_summary_lines = _build_canvas_workspace_summary(canvas_payload)
+        if workspace_summary_lines:
+            volatile_parts.extend(workspace_summary_lines)
         active_document = canvas_payload["active_document"]
         volatile_parts.append("## Active Canvas Document")
-        volatile_parts.append(f"- Working mode: {canvas_payload['mode']}")
-        volatile_parts.append(f"- Document count: {canvas_payload['document_count']}")
         volatile_parts.append(f"- Active document id: {active_document['id']}")
-        volatile_parts.append(f"- Title: {active_document['title']}")
         if active_document.get("path"):
             volatile_parts.append(f"- Path: {active_document['path']}")
+        elif active_document.get("title"):
+            volatile_parts.append(f"- Title: {active_document['title']}")
         if active_document.get("role"):
             volatile_parts.append(f"- Role: {active_document['role']}")
         volatile_parts.append(f"- Format: {active_document['format']}")
         if active_document.get("language"):
             volatile_parts.append(f"- Language: {active_document['language']}")
-        if active_document.get("summary"):
-            volatile_parts.append(f"- Summary: {active_document['summary']}")
         volatile_parts.append(f"- Total lines: {canvas_payload['total_lines']}")
         volatile_parts.append(
             f"- Visible lines in prompt: 1-{canvas_payload['visible_line_end']}"
@@ -803,6 +828,10 @@ def _build_runtime_volatile_parts(
                 "- Guidance: The active canvas document is fully visible in the current excerpt. "
                 "Canvas is already fully visible, so you do not need expand_canvas_document or scroll_canvas_document just to see more of this same document. "
                 "Use visible line numbers directly and never guess line numbers outside the excerpt."
+            )
+        if canvas_payload["mode"] == "project":
+            volatile_parts.append(
+                "- In project mode, prefer document_path for targeting, even when you do not know the document_id yet."
             )
         if canvas_payload["visible_lines"]:
             volatile_parts.append("```text\n" + "\n".join(canvas_payload["visible_lines"]) + "\n```\n")
@@ -823,6 +852,10 @@ def _build_runtime_volatile_parts(
         volatile_parts.append(normalized_tool_trace_context)
         volatile_parts.append("")
 
+    active_tools_context = _build_active_tools_context(active_tool_names)
+    if active_tools_context:
+        volatile_parts.extend(active_tools_context)
+
     if include_time_context:
         volatile_parts.append(_build_current_time_context(now))
 
@@ -838,11 +871,16 @@ def build_runtime_context_injection(
     canvas_documents=None,
     canvas_active_document_id: str | None = None,
     canvas_prompt_max_lines: int | None = None,
+    workspace_root: str | None = None,
     summary_count: int = 0,
     include_time_context: bool = True,
 ) -> str:
     normalized_now = (now or datetime.now().astimezone()).astimezone()
-    resolved_tool_names = resolve_runtime_tool_names(active_tool_names or [], canvas_documents=canvas_documents)
+    resolved_tool_names = resolve_runtime_tool_names(
+        _normalize_tool_name_list(active_tool_names),
+        canvas_documents=canvas_documents,
+        workspace_root=workspace_root,
+    )
     return "\n".join(
         _build_runtime_volatile_parts(
             active_tool_names=resolved_tool_names,
@@ -886,7 +924,12 @@ def build_runtime_system_message(
         scratchpad=scratchpad,
     )
     non_empty_scratchpad_sections = _iter_non_empty_scratchpad_sections(normalized_scratchpad_sections)
-    active_tool_names = resolve_runtime_tool_names(active_tool_names or [], canvas_documents=canvas_documents)
+    configured_tool_names = _normalize_tool_name_list(active_tool_names)
+    runtime_tool_names = resolve_runtime_tool_names(
+        configured_tool_names,
+        canvas_documents=canvas_documents,
+        workspace_root=workspace_root,
+    )
     
     parts = [
         "You are an advanced, capable, and helpful AI assistant.",
@@ -908,12 +951,12 @@ def build_runtime_system_message(
         parts.append("")
 
     # Scratchpad
-    if non_empty_scratchpad_sections or any(name in {"append_scratchpad", "replace_scratchpad", "read_scratchpad"} for name in active_tool_names):
+    if non_empty_scratchpad_sections or any(name in {"append_scratchpad", "replace_scratchpad", "read_scratchpad"} for name in runtime_tool_names):
         parts.append("## Scratchpad (AI Persistent Memory)")
         _scratchpad_intro = (
             "*This is the live persistent scratchpad for the assistant. It is already visible in the prompt, so read it directly here first."
         )
-        if "read_scratchpad" in active_tool_names:
+        if "read_scratchpad" in runtime_tool_names:
             _scratchpad_intro += " Use read_scratchpad only if you want the structured stored memory as a tool result before editing it."
         _scratchpad_intro += "*\n"
         parts.append(_scratchpad_intro)
@@ -924,7 +967,7 @@ def build_runtime_system_message(
                 parts.append("")
         else:
             parts.append("(All sections empty)")
-        if any(name in {"append_scratchpad", "replace_scratchpad"} for name in active_tool_names):
+        if any(name in {"append_scratchpad", "replace_scratchpad"} for name in runtime_tool_names):
             parts.append(
                 "\n### Memory Write Policy\n"
                 "- **DO save**: Only durable, high-signal facts that are likely to change future answers or actions. Examples: stable user preferences, long-lived constraints, confirmed identity details, and recurring requirements.\n"
@@ -936,15 +979,36 @@ def build_runtime_system_message(
             )
         parts.append("")
 
+    contract = build_tool_call_contract(
+        runtime_tool_names,
+        clarification_max_questions=clarification_max_questions,
+        max_parallel_tools=max_parallel_tools,
+    )
+    if contract:
+        parts.append("## Tool Calling")
+        parts.append(
+            "Native function calling is enabled for this turn. Use the Active Tools section later in this prompt for the exact callable set in this turn. "
+            "Do not restate tool schemas in regular text.\n"
+        )
+        for rule in contract["rules"]:
+            parts.append(f"- {rule}")
+        parts.append("")
+
+        batching_guidance = str(contract.get("batching_guidance") or "").strip()
+        if batching_guidance:
+            parts.append("## Batching Strategy")
+            parts.append(batching_guidance)
+            parts.append("")
+
     # Policies
     policies = []
-    clarification_policy = _build_clarification_policy_payload(active_tool_names, clarification_max_questions)
+    clarification_policy = _build_clarification_policy_payload(runtime_tool_names, clarification_max_questions)
     if clarification_policy:
         policies.append(f"**Clarification**: {clarification_policy['guidance']}")
-    image_policy = _build_image_policy_payload(active_tool_names)
+    image_policy = _build_image_policy_payload(runtime_tool_names)
     if image_policy:
         policies.append(f"**Image Follow-up**: {image_policy['guidance']}")
-    
+
     if policies:
         parts.append("## Important Policies\n" + "\n".join(f"- {p}" for p in policies) + "\n")
 
@@ -955,51 +1019,14 @@ def build_runtime_system_message(
         parts.append("- Scope: All workspace file tools must stay inside this root.")
         parts.append("- Safety: If a batch write tool returns needs_confirmation, wait for explicit user approval before re-running with confirm=true.\n")
 
-    canvas_payload = _build_canvas_prompt_payload(
-        canvas_documents,
-        active_document_id=canvas_active_document_id,
-        max_lines=canvas_prompt_max_lines or CANVAS_PROMPT_MAX_LINES,
-    )
-    canvas_editing_guidance = _build_canvas_editing_guidance(active_tool_names, canvas_payload)
+    canvas_editing_guidance = _build_canvas_editing_guidance(runtime_tool_names)
     if canvas_editing_guidance:
         parts.extend(canvas_editing_guidance)
-
-    canvas_decision_matrix = _build_canvas_decision_matrix_rows(active_tool_names, canvas_payload)
-    if canvas_decision_matrix:
-        parts.append("## Canvas Decision Matrix")
-        parts.append("| Situation | Preferred tool | Notes |")
-        parts.append("| --- | --- | --- |")
-        for row in canvas_decision_matrix:
-            parts.append(f"| {row['situation']} | {row['tool']} | {row['notes']} |")
-        parts.append("")
-
-    contract = build_tool_call_contract(
-        active_tool_names,
-        canvas_documents=canvas_documents,
-        clarification_max_questions=clarification_max_questions,
-        max_parallel_tools=max_parallel_tools,
-    )
-    if contract:
-        parts.append("## Tool Calling")
-        callable_tools_line = (
-            "Callable tools this turn: "
-            + ", ".join(f"`{name}`" for name in active_tool_names)
-            + ". "
-            "These are the only tools you may invoke — do not attempt to call any tool not in this list.\n"
-        )
-        parts.append(callable_tools_line)
-        parts.append(
-            "Native function calling is enabled for this turn. Do not restate tool schemas or invent unavailable tools. "
-            "Only call tools when they are truly needed; unnecessary calls waste tokens and context.\n"
-        )
-        for rule in contract["rules"]:
-            parts.append(f"- {rule}")
-        parts.append("")
 
     if include_volatile_context:
         parts.extend(
             _build_runtime_volatile_parts(
-                active_tool_names=active_tool_names,
+                active_tool_names=runtime_tool_names,
                 retrieved_context=retrieved_context,
                 tool_trace_context=tool_trace_context,
                 tool_memory_context=tool_memory_context,
@@ -1070,6 +1097,7 @@ def prepend_runtime_context(
             canvas_documents=canvas_documents,
             canvas_active_document_id=canvas_active_document_id,
             canvas_prompt_max_lines=canvas_prompt_max_lines,
+            workspace_root=workspace_root,
             summary_count=normalized_summary_count,
             include_time_context=True,
         )

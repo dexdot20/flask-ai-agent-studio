@@ -230,7 +230,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["max_parallel_tools"], 4)
         self.assertEqual(payload["clarification_max_questions"], 5)
         self.assertAlmostEqual(payload["temperature"], 0.7)
-        self.assertEqual(payload["canvas_prompt_max_lines"], 800)
+        self.assertEqual(payload["canvas_prompt_max_lines"], 100)
         self.assertEqual(payload["canvas_expand_max_lines"], 1600)
         self.assertEqual(payload["canvas_scroll_window_lines"], 200)
         self.assertEqual(payload["sub_agent_timeout_seconds"], 240)
@@ -1390,7 +1390,8 @@ class AppRoutesTestCase(unittest.TestCase):
             canvas_prompt_max_lines=20,
         )
 
-        self.assertIn("full document visible", message["content"])
+        self.assertIn("fully visible in the current excerpt", message["content"])
+        self.assertIn("Canvas is already fully visible", message["content"])
         self.assertNotIn("If this excerpt is truncated", message["content"])
 
     def test_extract_partial_json_string_value_handles_partial_escapes(self):
@@ -2281,6 +2282,7 @@ class AppRoutesTestCase(unittest.TestCase):
 
         content = message["content"]
         self.assertLess(content.index("## Tool Calling"), content.index("## Tool Execution History"))
+        self.assertLess(content.index("## Tool Calling"), content.index("## Active Tools This Turn"))
         self.assertLess(content.index("## Tool Calling"), content.index("## Tool Memory"))
         self.assertLess(content.index("## Tool Calling"), content.index("## Knowledge Base"))
 
@@ -2817,7 +2819,14 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("Do not rewrite the whole document when only part needs to change", content)
         self.assertIn("If you do not know the document_id, use the document_path", content)
         self.assertIn("## Tool Calling", content)
+        self.assertIn("## Active Tools This Turn", content)
         self.assertIn("Native function calling is enabled for this turn.", content)
+        active_tools_start = content.index("## Active Tools This Turn")
+        active_tools_end = content.index("## Current Date and Time", active_tools_start)
+        active_tools_block = content[active_tools_start:active_tools_end]
+        self.assertIn("Callable tools: `create_canvas_document`", active_tools_block)
+        self.assertNotIn("replace_canvas_lines", active_tools_block)
+        self.assertNotIn("rewrite_canvas_document", active_tools_block)
         self.assertNotIn("## Active Canvas Document", content)
         self.assertNotIn("Available Tools", content)
 
@@ -2840,7 +2849,6 @@ class AppRoutesTestCase(unittest.TestCase):
         )
 
         content = message["content"]
-        self.assertIn("## Canvas Workspace Summary", content)
         self.assertIn("## Active Canvas Document", content)
         self.assertIn("- Language: python", content)
         self.assertIn("1: print('hello')", content)
@@ -2848,12 +2856,13 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("## Canvas Editing Guidance", content)
         self.assertIn("Multiple canvas tool calls in one answer are fine", content)
         self.assertIn("If you do not know the document_id, use the document_path", content)
-        self.assertIn("## Canvas Decision Matrix", content)
-        self.assertIn("| Situation | Preferred tool | Notes |", content)
+        self.assertIn("## Active Tools This Turn", content)
+        self.assertNotIn("## Canvas Workspace Summary", content)
+        self.assertNotIn("## Canvas Decision Matrix", content)
         self.assertIn("create_canvas_document", content)
         self.assertNotIn("## Canvas Workflow", content)
         self.assertIn("## Tool Calling", content)
-        self.assertIn("Use only the tools exposed by the API for this turn", content)
+        self.assertIn("Use only the tools listed in the Active Tools section for this turn", content)
 
     def test_build_tool_call_contract_mentions_parallel_and_dependent_tools(self):
         contract = build_tool_call_contract([
@@ -2865,10 +2874,11 @@ class AppRoutesTestCase(unittest.TestCase):
         ])
 
         rules_text = "\n".join(contract["rules"])
-        self.assertIn("Concurrently executed (I/O runs in parallel)", rules_text)
-        self.assertIn("search_web, fetch_url, image_explain", rules_text)
-        self.assertIn("search_canvas_document", rules_text)
-        self.assertIn("search_tool_memory", rules_text)
+        batching_guidance = contract["batching_guidance"]
+        self.assertIn("Use only the tools listed in the Active Tools section", rules_text)
+        self.assertIn("See the Active Tools section for the exact parallel-safe tools", batching_guidance)
+        self.assertIn("Current parallel cap for this turn", batching_guidance)
+        self.assertIn("search_knowledge_base and search_tool_memory may be batched freely", batching_guidance)
 
     def test_build_tool_call_contract_mentions_parallel_limit(self):
         contract = build_tool_call_contract([
@@ -2877,9 +2887,9 @@ class AppRoutesTestCase(unittest.TestCase):
             "read_file",
         ], max_parallel_tools=2)
 
-        rules_text = "\n".join(contract["rules"])
-        self.assertIn("Current parallel cap for this turn: 2", rules_text)
-        self.assertIn("only 2 start immediately", rules_text)
+        batching_guidance = contract["batching_guidance"]
+        self.assertIn("Current parallel cap for this turn: 2", batching_guidance)
+        self.assertIn("only 2 start immediately", batching_guidance)
 
     def test_build_tool_call_contract_mentions_clarification_limit(self):
         contract = build_tool_call_contract(["ask_clarifying_question"], clarification_max_questions=3)
@@ -2887,6 +2897,8 @@ class AppRoutesTestCase(unittest.TestCase):
         rules_text = "\n".join(contract["rules"])
         self.assertIn("Ask at most 3 question(s) per call", rules_text)
         self.assertIn("Put the actual questions only in the tool arguments", rules_text)
+        self.assertIn("Do not say that you prepared questions", rules_text)
+        self.assertIn("plain UI text only", rules_text)
         self.assertIn("assistant-visible reply short and brief", rules_text)
 
     def test_runtime_system_message_includes_canvas_workspace_summary(self):
@@ -2931,19 +2943,20 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("- Working mode: project", content)
         self.assertIn("- Project label: demo-app", content)
         self.assertIn("- Active file: src/app.py", content)
-        self.assertIn("- Validation status: ok", content)
-        self.assertIn("- Files in scope:", content)
-        self.assertIn("src/app.py (active, source, python, 3 lines)", content)
-        self.assertIn("src/config.py (config, python, 1 lines)", content)
-        self.assertIn("- Shared imports: config", content)
+        self.assertIn("- Other documents: src/config.py", content)
         self.assertIn("- Path: src/app.py", content)
         self.assertIn("- Role: source", content)
         self.assertIn("- Active document id: canvas-1", content)
         self.assertIn("- Canvas view status: full document visible (3/3 lines)", content)
+        self.assertIn("- Total lines: 3", content)
         self.assertIn("Canvas is already fully visible", content)
         self.assertIn("In project mode, prefer document_path for targeting", content)
-        self.assertIn("## Canvas Decision Matrix", content)
-        self.assertIn("Prefer document_path", content)
+        self.assertIn("## Active Tools This Turn", content)
+        self.assertIn("document_path", content)
+        self.assertNotIn("- Validation status:", content)
+        self.assertNotIn("- Files in scope:", content)
+        self.assertNotIn("- Shared imports:", content)
+        self.assertNotIn("## Canvas Decision Matrix", content)
         self.assertNotIn("## Canvas Project Manifest", content)
         self.assertNotIn("## Canvas Relationship Map", content)
         self.assertNotIn("## Other Canvas Documents", content)
@@ -3480,7 +3493,7 @@ class AppRoutesTestCase(unittest.TestCase):
                 },
             )
 
-    def test_execute_clarification_tool_respects_max_question_setting_and_qa_format(self):
+    def test_execute_clarification_tool_respects_max_question_setting(self):
         with patch("agent.get_clarification_max_questions", return_value=2):
             result, summary = _execute_tool(
                 "ask_clarifying_question",
@@ -3500,6 +3513,53 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(result["text"], "")
         self.assertEqual(result["clarification"]["intro"], "Before I answer, I need a few details.")
         self.assertEqual(result["clarification"]["questions"][0]["label"], "Which scope?")
+
+    def test_execute_clarification_tool_sanitizes_wrapped_labels_and_options(self):
+        result, summary = _execute_tool(
+            "ask_clarifying_question",
+            {
+                "intro": '<|"Önce bunu netleştirelim:"|>',
+                "submit_label": '```Devam```',
+                "questions": [
+                    {
+                        "id": '<|career-focus|>',
+                        "label": '* Q: <|"Önerdiğim 3 yoldan hangileri sana daha cazip geliyor?"|>',
+                        "input_type": "multi_select",
+                        "options": [
+                            {'label': '<|"Akademik Nörobilim Araştırmacısı"|>', 'value': '<|academic_track|>'},
+                            '* <|"Klinik Araştırma + Akademik Hibrit"|>',
+                        ],
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(summary, "Awaiting user clarification")
+        clarification = result["clarification"]
+        self.assertEqual(clarification["intro"], "Önce bunu netleştirelim:")
+        self.assertEqual(clarification["submit_label"], "Devam")
+        self.assertEqual(clarification["questions"][0]["id"], "career_focus")
+        self.assertEqual(
+            clarification["questions"][0]["label"],
+            "Önerdiğim 3 yoldan hangileri sana daha cazip geliyor?",
+        )
+        self.assertEqual(clarification["questions"][0]["options"][0]["label"], "Akademik Nörobilim Araştırmacısı")
+        self.assertEqual(clarification["questions"][0]["options"][0]["value"], "academic_track")
+        self.assertEqual(clarification["questions"][0]["options"][1]["label"], "Klinik Araştırma + Akademik Hibrit")
+        self.assertEqual(clarification["questions"][0]["options"][1]["value"], "Klinik Araştırma + Akademik Hibrit")
+
+    def test_clarification_prompt_guidance_avoids_inline_qa_format(self):
+        message = build_runtime_system_message(
+            active_tool_names=["ask_clarifying_question"],
+        )
+
+        self.assertIn("plain structured UI fields only", message["content"])
+        self.assertIn("avoid Q:/A: prefixes", message["content"])
+        self.assertNotIn("use a simple Q:/A: format", message["content"])
+
+        spec = TOOL_SPEC_BY_NAME["ask_clarifying_question"]
+        self.assertIn("plain UI text only", spec["prompt"]["guidance"])
+        self.assertIn("<| and |>", spec["prompt"]["guidance"])
 
     def test_execute_clarification_tool_dedupes_question_ids(self):
         result, summary = _execute_tool(
@@ -5401,6 +5461,108 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(clarification_event["clarification"]["intro"], "Before I answer, I need two details.")
         self.assertEqual(clarification_event["clarification"]["questions"][0]["id"], "scope")
         self.assertFalse(any(event["type"] == "answer_delta" for event in events))
+        self.assertEqual(events[-1]["type"], "done")
+
+    def test_run_agent_stream_retries_when_clarification_tool_is_skipped_in_plain_text(self):
+        responses = [
+            iter(
+                [
+                    self._stream_chunk(reasoning="Önce birkaç soru sormalıyım."),
+                    self._stream_chunk(content="Soruları hazırladım."),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=5, completion_tokens=3, total_tokens=8)),
+                ]
+            ),
+            iter(
+                [
+                    self._tool_call_chunk(
+                        "ask_clarifying_question",
+                        {
+                            "intro": "Before I answer, I need two details.",
+                            "questions": [
+                                {"id": "goal", "label": "What is the main goal?", "input_type": "text"},
+                                {"id": "constraints", "label": "Any constraints I should respect?", "input_type": "text", "required": False},
+                            ],
+                        },
+                    ),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=4, completion_tokens=4, total_tokens=8)),
+                ]
+            ),
+        ]
+
+        with patch("agent.client.chat.completions.create", side_effect=responses):
+            events = list(
+                run_agent_stream(
+                    [{"role": "user", "content": "Önce sorular sor, sonra cevaba geç."}],
+                    "deepseek-chat",
+                    2,
+                    ["ask_clarifying_question"],
+                )
+            )
+
+        clarification_event = next(event for event in events if event["type"] == "clarification_request")
+        usage_event = next(event for event in events if event["type"] == "usage")
+        self.assertEqual(clarification_event["clarification"]["questions"][0]["id"], "goal")
+        self.assertFalse(any(event["type"] == "answer_delta" and "Soruları hazırladım." in event["text"] for event in events))
+        self.assertEqual(usage_event["model_call_count"], 2)
+        self.assertEqual(usage_event["model_calls"][1]["retry_reason"], "clarification_tool_retry")
+        self.assertEqual(events[-1]["type"], "done")
+
+    def test_run_agent_stream_repairs_invalid_clarification_tool_payload_once(self):
+        responses = [
+            iter(
+                [
+                    self._tool_call_chunk(
+                        "ask_clarifying_question",
+                        {
+                            "questions": [
+                                {"id": "scope", "label": "Which scope?", "input_type": "single_select"},
+                            ],
+                        },
+                    ),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=5, completion_tokens=3, total_tokens=8)),
+                ]
+            ),
+            iter(
+                [
+                    self._tool_call_chunk(
+                        "ask_clarifying_question",
+                        {
+                            "intro": "Before I answer, I need one detail.",
+                            "questions": [
+                                {
+                                    "id": "scope",
+                                    "label": "Which scope?",
+                                    "input_type": "single_select",
+                                    "options": [
+                                        {"label": "Only this repo", "value": "repo"},
+                                        {"label": "General guidance", "value": "general"},
+                                    ],
+                                }
+                            ],
+                        },
+                    ),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=4, completion_tokens=4, total_tokens=8)),
+                ]
+            ),
+        ]
+
+        with patch("agent.client.chat.completions.create", side_effect=responses):
+            events = list(
+                run_agent_stream(
+                    [{"role": "user", "content": "Ask me questions first."}],
+                    "deepseek-chat",
+                    2,
+                    ["ask_clarifying_question"],
+                )
+            )
+
+        clarification_event = next(event for event in events if event["type"] == "clarification_request")
+        usage_event = next(event for event in events if event["type"] == "usage")
+        tool_errors = [event for event in events if event["type"] == "tool_error" and event["tool"] == "ask_clarifying_question"]
+        self.assertTrue(tool_errors)
+        self.assertEqual(clarification_event["clarification"]["questions"][0]["options"][0]["value"], "repo")
+        self.assertEqual(usage_event["model_call_count"], 2)
+        self.assertEqual(usage_event["model_calls"][1]["retry_reason"], "clarification_tool_repair")
         self.assertEqual(events[-1]["type"], "done")
 
     def test_active_tool_normalization_filters_invalid_entries(self):

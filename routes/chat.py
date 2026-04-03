@@ -1338,13 +1338,12 @@ def _build_budgeted_prompt_messages(
     tool_trace_context = _build_tool_trace_context(ordered_messages)
     user_profile_context = build_user_profile_system_context(max_tokens=500)
     scratchpad_sections = get_all_scratchpad_sections(settings)
-    runtime_tool_names = resolve_runtime_tool_names(active_tool_names, canvas_documents=canvas_documents)
     max_parallel_tools = get_max_parallel_tools(settings)
     prompt_budget = max(2_000, get_prompt_max_input_tokens(settings) - get_prompt_response_token_reserve(settings))
     base_runtime_messages = prepend_runtime_context(
         [],
         settings["user_preferences"],
-        runtime_tool_names,
+        active_tool_names,
         retrieved_context=None,
         user_profile_context=user_profile_context,
         tool_trace_context=tool_trace_context,
@@ -1416,13 +1415,14 @@ def _build_budgeted_prompt_messages(
     )
 
     current_context_injection = build_runtime_context_injection(
-        active_tool_names=runtime_tool_names,
+        active_tool_names=active_tool_names,
         retrieved_context=rag_context,
         tool_trace_context=trimmed_tool_trace,
         tool_memory_context=trimmed_tool_memory,
         canvas_documents=canvas_documents,
         canvas_active_document_id=canvas_active_document_id,
         canvas_prompt_max_lines=canvas_prompt_max_lines,
+        workspace_root=workspace_root,
         summary_count=len(selected_summaries),
         include_time_context=True,
     )
@@ -1430,7 +1430,7 @@ def _build_budgeted_prompt_messages(
     api_messages = prepend_runtime_context(
         prompt_history_api,
         settings["user_preferences"],
-        runtime_tool_names,
+        active_tool_names,
         retrieved_context=rag_context,
         user_profile_context=user_profile_context,
         tool_trace_context=trimmed_tool_trace,
@@ -2518,15 +2518,10 @@ def register_chat_routes(app) -> None:
                 )
             initial_canvas_documents = get_canvas_runtime_documents(pre_created_canvas_state)
             initial_canvas_active_document_id = get_canvas_runtime_active_document_id(pre_created_canvas_state)
-        runtime_tool_names = resolve_runtime_tool_names(
-            active_tool_names,
-            canvas_documents=initial_canvas_documents,
-            workspace_root=workspace_root,
-        )
         api_messages, prompt_budget_stats, current_context_injection = _build_budgeted_prompt_messages(
             canonical_messages,
             settings,
-            runtime_tool_names,
+            active_tool_names,
             retrieved_context,
             tool_memory_context,
             canvas_documents=initial_canvas_documents,
@@ -2561,6 +2556,11 @@ def register_chat_routes(app) -> None:
             persisted_assistant_message_id = None
             summary_future = None
             stream_aborted = False
+            runtime_tool_names = resolve_runtime_tool_names(
+                active_tool_names,
+                canvas_documents=initial_canvas_documents,
+                workspace_root=workspace_root,
+            )
             agent_stream = run_agent_stream(
                 api_messages,
                 model,

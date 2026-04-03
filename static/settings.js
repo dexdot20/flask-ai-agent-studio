@@ -1390,7 +1390,7 @@ function applySettingsToForm() {
   if (pruningBatchSizeEl) pruningBatchSizeEl.value = String(appSettings.pruning_batch_size || 10);
   if (fetchThresholdEl) fetchThresholdEl.value = String(appSettings.fetch_url_token_threshold || 3500);
   if (fetchAggressivenessEl) fetchAggressivenessEl.value = String(appSettings.fetch_url_clip_aggressiveness || 50);
-  if (canvasPromptLinesEl) canvasPromptLinesEl.value = String(appSettings.canvas_prompt_max_lines || 800);
+  if (canvasPromptLinesEl) canvasPromptLinesEl.value = String(appSettings.canvas_prompt_max_lines || 100);
   if (canvasExpandLinesEl) canvasExpandLinesEl.value = String(appSettings.canvas_expand_max_lines || 1600);
   if (canvasScrollLinesEl) canvasScrollLinesEl.value = String(appSettings.canvas_scroll_window_lines || 200);
   if (subAgentTimeoutEl) subAgentTimeoutEl.value = String(appSettings.sub_agent_timeout_seconds ?? 240);
@@ -1503,7 +1503,7 @@ function applyServerSettingsData(data) {
   appSettings.pruning_batch_size = data.pruning_batch_size || 10;
   appSettings.fetch_url_token_threshold = data.fetch_url_token_threshold || 3500;
   appSettings.fetch_url_clip_aggressiveness = data.fetch_url_clip_aggressiveness ?? 50;
-  appSettings.canvas_prompt_max_lines = data.canvas_prompt_max_lines || 800;
+  appSettings.canvas_prompt_max_lines = data.canvas_prompt_max_lines || 100;
   appSettings.canvas_expand_max_lines = data.canvas_expand_max_lines || 1600;
   appSettings.canvas_scroll_window_lines = data.canvas_scroll_window_lines || 200;
   appSettings.sub_agent_timeout_seconds = data.sub_agent_timeout_seconds ?? 240;
@@ -1559,7 +1559,7 @@ async function saveSettings() {
     pruning_batch_size: readNumericSetting(pruningBatchSizeEl, 10, { allowZero: false }),
     fetch_url_token_threshold: readNumericSetting(fetchThresholdEl, 3500, { allowZero: false }),
     fetch_url_clip_aggressiveness: readNumericSetting(fetchAggressivenessEl, 50),
-    canvas_prompt_max_lines: readNumericSetting(canvasPromptLinesEl, 800, { allowZero: false }),
+    canvas_prompt_max_lines: readNumericSetting(canvasPromptLinesEl, 100, { allowZero: false }),
     canvas_expand_max_lines: readNumericSetting(canvasExpandLinesEl, 1600, { allowZero: false }),
     canvas_scroll_window_lines: readNumericSetting(canvasScrollLinesEl, 200, { allowZero: false }),
     sub_agent_timeout_seconds: readNumericSetting(subAgentTimeoutEl, 240, { allowZero: false }),

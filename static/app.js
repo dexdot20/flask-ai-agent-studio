@@ -1716,7 +1716,7 @@ function updateCanvasActiveDocumentDisplay(renderState) {
   const languageLabel = activeDocument.language ? ` · ${activeDocument.language}` : "";
   canvasSubtitle.textContent = `${modeLabel} · ${visibleDocuments.length}/${documents.length} files · ${detailLabel} · ${activeDocument.line_count} lines${roleLabel}${languageLabel}`;
   renderCanvasMetaBar(renderState);
-  const promptLineLimit = Number(appSettings.canvas_prompt_max_lines || 800);
+  const promptLineLimit = Number(appSettings.canvas_prompt_max_lines || 100);
   const expandLineLimit = Number(appSettings.canvas_expand_max_lines || 1600);
   if (Number.isFinite(activeDocument.line_count) && activeDocument.line_count > promptLineLimit) {
     const hasExpandedRoom = activeDocument.line_count > expandLineLimit;

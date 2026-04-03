@@ -297,7 +297,8 @@ TOOL_SPECS = [
                 "Keep the assistant-visible reply short and brief, and let the UI render the questions. "
                 "When you call this tool, it must be the only tool call in that assistant message and you must wait for the user's reply before answering. "
                 "Prefer single_select or multi_select when the likely answers are known, keep question ids short and unique, and use required=false for optional follow-ups. "
-                "Each questions item must be an object with id, label, and input_type; example: {\"id\":\"scope\",\"label\":\"Which scope?\",\"input_type\":\"text\"}."
+                "Each questions item must be an object with id, label, and input_type; example: {\"id\":\"scope\",\"label\":\"Which scope?\",\"input_type\":\"text\"}. "
+                "Use plain UI text only for intro, labels, placeholders, and options. Do not include Q:/A: prefixes, markdown bullets, XML/tag wrappers, code fences, or markers like <| and |>."
             ),
         },
     },
