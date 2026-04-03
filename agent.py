@@ -1339,6 +1339,28 @@ def _assistant_text_suggests_skipped_clarification(content_text: str, reasoning_
     return any(indicator in combined for indicator in indicators)
 
 
+def _conversation_has_clarification_tool_call(messages: list[dict]) -> bool:
+    """Return True if ask_clarifying_question was already called in this conversation."""
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        tool_calls = message.get("tool_calls")
+        if not isinstance(tool_calls, list):
+            continue
+        for tc in tool_calls:
+            if not isinstance(tc, dict):
+                continue
+            func = tc.get("function")
+            name = str(
+                (func.get("name") if isinstance(func, dict) else None)
+                or tc.get("name")
+                or ""
+            )
+            if name == "ask_clarifying_question":
+                return True
+    return False
+
+
 def _should_retry_for_skipped_clarification(
     messages: list[dict],
     content_text: str,
@@ -1349,7 +1371,50 @@ def _should_retry_for_skipped_clarification(
         return False
     if _has_clarification_retry_instruction(messages):
         return False
+    # Don't retry when the user is responding to questions that were already asked
+    if _conversation_has_clarification_tool_call(messages):
+        return False
     return _user_requested_questions_first(messages) or _assistant_text_suggests_skipped_clarification(content_text, reasoning_text)
+
+
+def _build_retry_tool_choice(retry_reason: str | None, prompt_tool_names: list[str] | None):
+    if "ask_clarifying_question" not in set(prompt_tool_names or []):
+        return None
+
+    normalized_reason = str(retry_reason or "").strip().lower()
+    if normalized_reason not in {"clarification_tool_retry", "clarification_tool_repair"}:
+        return None
+
+    return {
+        "type": "function",
+        "function": {
+            "name": "ask_clarifying_question",
+        },
+    }
+
+
+def _is_openrouter_unsupported_tool_choice_error(error: Exception | str, request_kwargs: dict, target: dict | None) -> bool:
+    if not isinstance(request_kwargs.get("tool_choice"), dict):
+        return False
+    record = target.get("record") if isinstance(target, dict) else None
+    if str((record or {}).get("provider") or "").strip() != OPENROUTER_PROVIDER:
+        return False
+
+    normalized_error = str(error or "").strip().lower()
+    if not normalized_error:
+        return False
+    return (
+        "tool_choice" in normalized_error
+        and "no endpoints found" in normalized_error
+        and "support the provided" in normalized_error
+    )
+
+
+def _build_openrouter_tool_choice_fallback_request(request_kwargs: dict) -> dict:
+    fallback_request_kwargs = dict(request_kwargs)
+    fallback_request_kwargs["tool_choice"] = "auto"
+    fallback_request_kwargs.pop("parallel_tool_calls", None)
+    return fallback_request_kwargs
 
 
 def _is_tool_execution_result_message(message: dict) -> bool:
@@ -4835,13 +4900,35 @@ def run_agent_stream(
             )
             if turn_tools:
                 request_kwargs["tools"] = turn_tools
-                request_kwargs["tool_choice"] = "auto"
+                forced_tool_choice = _build_retry_tool_choice(retry_reason, prompt_enabled_tool_names)
+                request_kwargs["tool_choice"] = forced_tool_choice or "auto"
+                if forced_tool_choice is not None:
+                    request_kwargs["parallel_tool_calls"] = False
         request_kwargs = apply_model_target_request_options(request_kwargs, model_target)
         cache_estimate_context = build_openrouter_cache_estimate_context(
             request_kwargs.get("messages"),
             model_target.get("record") if isinstance(model_target, dict) else None,
         )
-        response = model_target["client"].chat.completions.create(**request_kwargs)
+        try:
+            response = model_target["client"].chat.completions.create(**request_kwargs)
+        except Exception as exc:
+            if not _is_openrouter_unsupported_tool_choice_error(exc, request_kwargs, model_target):
+                raise
+            fallback_request_kwargs = _build_openrouter_tool_choice_fallback_request(request_kwargs)
+            _trace_agent_event(
+                "openrouter_tool_choice_fallback",
+                trace_id=trace_id,
+                step=step,
+                retry_reason=retry_reason,
+                error=str(exc),
+                original_tool_choice=request_kwargs.get("tool_choice"),
+            )
+            request_kwargs = fallback_request_kwargs
+            cache_estimate_context = build_openrouter_cache_estimate_context(
+                request_kwargs.get("messages"),
+                model_target.get("record") if isinstance(model_target, dict) else None,
+            )
+            response = model_target["client"].chat.completions.create(**request_kwargs)
 
         def finalize_call_usage() -> tuple[dict[str, int], int, int]:
             nonlocal provider_usage
@@ -5186,6 +5273,23 @@ def run_agent_stream(
                 continue
             if content_text:
                 _trace_agent_event("final_answer_received", trace_id=trace_id, step=step, content_excerpt=content_text)
+                if (
+                    not answer_started
+                    and "ask_clarifying_question" in set(normalized_prompt_tool_names)
+                    and _has_clarification_retry_instruction(messages)
+                    and _assistant_text_suggests_skipped_clarification(content_text, reasoning_text)
+                    and not _has_missing_final_answer_instruction(messages)
+                ):
+                    _trace_agent_event(
+                        "clarification_retry_failed_missing_answer",
+                        trace_id=trace_id,
+                        step=step,
+                        content_excerpt=content_text,
+                    )
+                    messages.append(_build_missing_final_answer_instruction())
+                    pending_step_retry_reason = "missing_final_answer"
+                    step -= 1
+                    continue
                 if not answer_started:
                     for event in emit_answer(content_text):
                         yield event

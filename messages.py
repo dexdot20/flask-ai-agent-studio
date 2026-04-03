@@ -24,6 +24,8 @@ from tool_registry import build_canvas_decision_matrix, resolve_runtime_tool_nam
 SUMMARY_LABEL = "Conversation summary (generated from deleted messages):"
 CANVAS_PROMPT_MAX_CHARS = 20_000
 CANVAS_PROMPT_MAX_LINES = 100
+CANVAS_PROMPT_CODE_LINE_MAX_CHARS = 180
+CANVAS_PROMPT_TEXT_LINE_MAX_CHARS = 100
 PARALLEL_SAFE_READ_ONLY_TOOL_NAMES = (
     # Web / fetch
     "search_web",
@@ -236,6 +238,14 @@ def _normalize_canvas_document_name(value: str | None) -> str:
     return os.path.basename(str(value or "").strip()).casefold()
 
 
+def _normalize_canvas_document_stem(value: str | None) -> str:
+    normalized_name = _normalize_canvas_document_name(value)
+    if not normalized_name:
+        return ""
+    stem, _separator, _suffix = normalized_name.rpartition(".")
+    return stem or normalized_name
+
+
 def _extract_document_context_body(context_block: str | None) -> str:
     normalized = str(context_block or "").strip()
     if not normalized:
@@ -259,6 +269,8 @@ def _build_canvas_document_lookup(canvas_documents) -> dict[str, list[str]]:
         for candidate in (
             _normalize_canvas_document_name(document.get("title")),
             _normalize_canvas_document_name(document.get("path")),
+            _normalize_canvas_document_stem(document.get("title")),
+            _normalize_canvas_document_stem(document.get("path")),
         ):
             if not candidate:
                 continue
@@ -266,15 +278,29 @@ def _build_canvas_document_lookup(canvas_documents) -> dict[str, list[str]]:
     return lookup
 
 
+def _clip_canvas_preview_line(line: str, *, format_name: str | None = None) -> tuple[str, bool]:
+    normalized_format = str(format_name or "").strip().lower()
+    max_chars = CANVAS_PROMPT_CODE_LINE_MAX_CHARS if normalized_format == "code" else CANVAS_PROMPT_TEXT_LINE_MAX_CHARS
+    if len(line) <= max_chars:
+        return line, False
+    return line[: max_chars - 2].rstrip() + "..", True
+
+
 def _document_attachment_is_represented_in_canvas(attachment: dict, canvas_document_lookup: dict[str, list[str]]) -> bool:
     if not canvas_document_lookup:
         return False
 
-    normalized_name = _normalize_canvas_document_name(attachment.get("file_name"))
-    if not normalized_name:
+    candidate_names = [
+        _normalize_canvas_document_name(attachment.get("file_name")),
+        _normalize_canvas_document_stem(attachment.get("file_name")),
+    ]
+    candidate_names = [name for name in candidate_names if name]
+    if not candidate_names:
         return False
 
-    candidate_contents = canvas_document_lookup.get(normalized_name) or []
+    candidate_contents: list[str] = []
+    for candidate_name in candidate_names:
+        candidate_contents.extend(canvas_document_lookup.get(candidate_name) or [])
     if not candidate_contents:
         return False
 
@@ -443,18 +469,25 @@ def _build_canvas_prompt_payload(
     all_lines = content.split("\n") if content else []
     visible_lines = []
     visible_char_count = 0
+    clipped_line_count = 0
+    line_format = str(active_document.get("format") or "").strip().lower()
 
     for index, line in enumerate(all_lines, start=1):
-        numbered_line = f"{index}: {line}"
+        preview_line, line_was_clipped = _clip_canvas_preview_line(line, format_name=line_format)
+        numbered_line = f"{index}: {preview_line}"
         extra_chars = len(numbered_line) + (1 if visible_lines else 0)
         if visible_lines and (len(visible_lines) >= max_lines or visible_char_count + extra_chars > max_chars):
             break
         if not visible_lines and extra_chars > max_chars:
             visible_lines.append(numbered_line[:max_chars])
             visible_char_count = len(visible_lines[0])
+            if line_was_clipped:
+                clipped_line_count += 1
             break
         visible_lines.append(numbered_line)
         visible_char_count += extra_chars
+        if line_was_clipped:
+            clipped_line_count += 1
 
     return {
         "mode": (manifest or {}).get("mode") or "document",
@@ -468,6 +501,7 @@ def _build_canvas_prompt_payload(
             if entry.get("id") != active_document.get("id")
         ],
         "visible_lines": visible_lines,
+        "clipped_line_count": clipped_line_count,
         "is_truncated": len(visible_lines) < len(all_lines),
         "visible_line_end": len(visible_lines),
         "total_lines": int(active_document.get("line_count") or len(all_lines)),
@@ -665,37 +699,16 @@ def build_tool_call_contract(
         parallel_limit = _normalize_max_parallel_tools(max_parallel_tools)
         batching_sections.append(
             "Batch independent tool calls into one assistant turn when their inputs do not depend on each other. "
-            "See the Active Tools section for the exact parallel-safe tools available in this turn.\n\n"
-            "Batching independent tool calls into one assistant turn reduces LLM round trips and saves tokens. "
-            "Prefer this pattern aggressively, even for simple edits and straightforward repo work.\n\n"
-            "**GATHER → REASON → ACT** — the core pattern:\n"
-            "  1. Issue ALL independent reads in one turn (gather phase).\n"
-            "  2. Reason over all returned results together.\n"
-            "  3. Issue writes / mutations based on what you learned.\n\n"
-            "Parallel-safe tools can run at the same time inside one assistant turn. "
-            "Use that aggressively for independent lookups.\n"
-            f"Current parallel cap for this turn: {parallel_limit}. "
-            f"If you emit more than {parallel_limit} parallel-safe call(s), only {parallel_limit} start immediately and the rest queue inside the same turn. "
-            "Keep the batch focused on the highest-value independent reads.\n\n"
-            "**All other tools** run sequentially within a turn, but batching them still saves a full LLM "
-            "round trip. Batch independent writes together when their inputs do not depend on each other "
-            "(e.g. creating two unrelated files, updating two different canvas documents).\n\n"
-            "**Examples of correct batching:**\n"
-            "  - Read three files at once: emit read_file × 3 in one turn.\n"
-            "  - Explore a directory and search for a keyword simultaneously: list_dir + search_files in one turn.\n"
-            "  - Search a large canvas and inspect a workspace file simultaneously: search_canvas_document + read_file in one turn.\n"
-            "  - Search the web and the knowledge base for the same topic simultaneously: search_web + search_knowledge_base in one turn.\n"
-            "  - Write two independent new files in one turn: create_file × 2.\n\n"
-            "**When NOT to batch (data dependency requires two turns):**\n"
-            "  - fetch_url X → then parse X's result to decide the next tool call.\n"
-            "  - search_knowledge_base → then use the returned chunk IDs to call another tool.\n"
-            "  - Any case where tool B needs the output of tool A as its input."
+            "GATHER → REASON → ACT: issue all independent reads in one turn, reason over all results together, then act.\n"
+            f"Parallel-safe tools (see Active Tools) run concurrently; cap is {parallel_limit} per turn. "
+            "Sequential tools can also be batched in one turn to save an LLM round-trip. "
+            "Only split into separate turns when tool B genuinely needs the output of tool A."
         )
 
     if any(name in normalized_tool_names for name in DEPENDENT_TOOL_NAMES):
         batching_sections.append(
-            "**Dependency guard:** search_knowledge_base and search_tool_memory may be batched freely with other independent reads "
-            "(they run concurrently), but must not be batched with any tool call whose input depends on their output."
+            "**Dependency guard:** search_knowledge_base and search_tool_memory can be batched with other independent reads, "
+            "but not with any tool that depends on their output."
         )
 
     if "ask_clarifying_question" in normalized_tool_names:
@@ -816,6 +829,10 @@ def _build_runtime_volatile_parts(
             f"- Visible lines in prompt: 1-{canvas_payload['visible_line_end']}"
             + (" (truncated excerpt)" if canvas_payload["is_truncated"] else "")
         )
+        if int(canvas_payload.get("clipped_line_count") or 0) > 0:
+            volatile_parts.append(
+                f"- Preview compaction: {int(canvas_payload.get('clipped_line_count') or 0)} long line(s) were clipped for token efficiency; use scroll_canvas_document or expand_canvas_document if exact full line text matters."
+            )
         if canvas_payload["is_truncated"]:
             volatile_parts.append(
                 "- Guidance: This canvas excerpt is truncated. Use visible line numbers for line-level canvas edits. "
@@ -1019,9 +1036,12 @@ def build_runtime_system_message(
         parts.append("- Scope: All workspace file tools must stay inside this root.")
         parts.append("- Safety: If a batch write tool returns needs_confirmation, wait for explicit user approval before re-running with confirm=true.\n")
 
-    canvas_editing_guidance = _build_canvas_editing_guidance(runtime_tool_names)
-    if canvas_editing_guidance:
-        parts.extend(canvas_editing_guidance)
+    # Canvas editing guidance: only inject when canvas documents exist.
+    # Without documents, the guidance is irrelevant (create_canvas_document spec is self-describing).
+    if canvas_documents:
+        canvas_editing_guidance = _build_canvas_editing_guidance(runtime_tool_names)
+        if canvas_editing_guidance:
+            parts.extend(canvas_editing_guidance)
 
     if include_volatile_context:
         parts.extend(

@@ -1235,6 +1235,26 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(full_payload["visible_line_end"], 3)
         self.assertFalse(full_payload["is_truncated"])
 
+    def test_build_canvas_prompt_payload_clips_long_markdown_lines(self):
+        long_line = "A" * 220
+        document = normalize_canvas_document(
+            {
+                "id": "doc-1",
+                "title": "report.md",
+                "format": "markdown",
+                "language": "markdown",
+                "content": f"{long_line}\nshort line",
+            }
+        )
+
+        payload = _build_canvas_prompt_payload([document], max_lines=10)
+
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["clipped_line_count"], 1)
+        self.assertTrue(payload["visible_lines"][0].startswith("1: "))
+        self.assertTrue(payload["visible_lines"][0].endswith(".."))
+        self.assertLess(len(payload["visible_lines"][0]), len(f"1: {long_line}"))
+
     def test_scroll_canvas_document_returns_window_flags(self):
         content = "\n".join(f"line {index}" for index in range(1, 101))
         runtime_state = create_canvas_runtime_state(
@@ -2894,9 +2914,9 @@ class AppRoutesTestCase(unittest.TestCase):
         rules_text = "\n".join(contract["rules"])
         batching_guidance = contract["batching_guidance"]
         self.assertIn("Use only the tools listed in the Active Tools section", rules_text)
-        self.assertIn("See the Active Tools section for the exact parallel-safe tools", batching_guidance)
-        self.assertIn("Current parallel cap for this turn", batching_guidance)
-        self.assertIn("search_knowledge_base and search_tool_memory may be batched freely", batching_guidance)
+        self.assertIn("Batch independent tool calls into one assistant turn", batching_guidance)
+        self.assertIn("GATHER", batching_guidance)
+        self.assertIn("search_knowledge_base and search_tool_memory can be batched", batching_guidance)
 
     def test_build_tool_call_contract_mentions_parallel_limit(self):
         contract = build_tool_call_contract([
@@ -2906,8 +2926,7 @@ class AppRoutesTestCase(unittest.TestCase):
         ], max_parallel_tools=2)
 
         batching_guidance = contract["batching_guidance"]
-        self.assertIn("Current parallel cap for this turn: 2", batching_guidance)
-        self.assertIn("only 2 start immediately", batching_guidance)
+        self.assertIn("cap is 2 per turn", batching_guidance)
 
     def test_build_tool_call_contract_mentions_clarification_limit(self):
         contract = build_tool_call_contract(["ask_clarifying_question"], clarification_max_questions=3)
@@ -2978,6 +2997,28 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertNotIn("## Canvas Project Manifest", content)
         self.assertNotIn("## Canvas Relationship Map", content)
         self.assertNotIn("## Other Canvas Documents", content)
+
+    def test_runtime_system_message_mentions_canvas_preview_compaction(self):
+        message = build_runtime_system_message(
+            active_tool_names=[
+                "create_canvas_document",
+                "rewrite_canvas_document",
+                "replace_canvas_lines",
+            ],
+            canvas_documents=[
+                {
+                    "id": "canvas-1",
+                    "title": "report.md",
+                    "format": "markdown",
+                    "language": "markdown",
+                    "content": ("A" * 220) + "\nshort line",
+                }
+            ],
+        )
+
+        content = message["content"]
+        self.assertIn("Preview compaction: 1 long line(s) were clipped for token efficiency", content)
+        self.assertIn("scroll_canvas_document or expand_canvas_document", content)
 
     def test_canvas_tool_specs_prefer_smallest_valid_edit(self):
         rewrite_guidance = TOOL_SPEC_BY_NAME["rewrite_canvas_document"]["prompt"]["guidance"]
@@ -3374,6 +3415,32 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("Use the document in canvas.", content)
         self.assertNotIn("[Uploaded document: notes.txt]", content)
         self.assertNotIn("Project notes", content)
+
+    def test_build_user_message_for_model_omits_document_context_for_extensionless_canvas_title(self):
+        content = build_user_message_for_model(
+            "Use the document in canvas.",
+            {
+                "attachments": [
+                    {
+                        "kind": "document",
+                        "file_id": "file_123",
+                        "file_name": "notes.txt",
+                        "file_context_block": "[Uploaded document: notes.txt]\n\nProject notes\nLine two",
+                    }
+                ]
+            },
+            canvas_documents=[
+                {
+                    "id": "doc-1",
+                    "title": "notes",
+                    "content": "# notes.txt\n\nProject notes\nLine two",
+                    "format": "markdown",
+                    "language": "markdown",
+                }
+            ],
+        )
+
+        self.assertEqual(content, "Use the document in canvas.")
 
     def test_image_explain_tool_spec_requires_image_and_conversation_ids(self):
         spec = TOOL_SPEC_BY_NAME["image_explain"]
@@ -5509,7 +5576,7 @@ class AppRoutesTestCase(unittest.TestCase):
             ),
         ]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses):
+        with patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create:
             events = list(
                 run_agent_stream(
                     [{"role": "user", "content": "Önce sorular sor, sonra cevaba geç."}],
@@ -5525,6 +5592,12 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertFalse(any(event["type"] == "answer_delta" and "Soruları hazırladım." in event["text"] for event in events))
         self.assertEqual(usage_event["model_call_count"], 2)
         self.assertEqual(usage_event["model_calls"][1]["retry_reason"], "clarification_tool_retry")
+        self.assertEqual(mocked_create.call_args_list[0].kwargs["tool_choice"], "auto")
+        self.assertEqual(
+            mocked_create.call_args_list[1].kwargs["tool_choice"],
+            {"type": "function", "function": {"name": "ask_clarifying_question"}},
+        )
+        self.assertFalse(mocked_create.call_args_list[1].kwargs["parallel_tool_calls"])
         self.assertEqual(events[-1]["type"], "done")
 
     def test_run_agent_stream_repairs_invalid_clarification_tool_payload_once(self):
@@ -5566,7 +5639,7 @@ class AppRoutesTestCase(unittest.TestCase):
             ),
         ]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses):
+        with patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create:
             events = list(
                 run_agent_stream(
                     [{"role": "user", "content": "Ask me questions first."}],
@@ -5583,6 +5656,79 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(clarification_event["clarification"]["questions"][0]["options"][0]["value"], "repo")
         self.assertEqual(usage_event["model_call_count"], 2)
         self.assertEqual(usage_event["model_calls"][1]["retry_reason"], "clarification_tool_repair")
+        self.assertEqual(
+            mocked_create.call_args_list[1].kwargs["tool_choice"],
+            {"type": "function", "function": {"name": "ask_clarifying_question"}},
+        )
+        self.assertFalse(mocked_create.call_args_list[1].kwargs["parallel_tool_calls"])
+        self.assertEqual(events[-1]["type"], "done")
+
+    def test_run_agent_stream_falls_back_when_openrouter_provider_rejects_forced_tool_choice(self):
+        responses = [
+            iter(
+                [
+                    self._stream_chunk_openrouter(reasoning="Önce birkaç soru sormalıyım."),
+                    self._stream_chunk_openrouter(content="Soruları hazırladım."),
+                    self._stream_chunk_openrouter(usage=SimpleNamespace(prompt_tokens=5, completion_tokens=3, total_tokens=8)),
+                ]
+            ),
+            RuntimeError(
+                "Error code: 404 - {'error': {'message': 'No endpoints found that support the provided tool_choice value.', 'code': 404}}"
+            ),
+            iter(
+                [
+                    self._tool_call_chunk(
+                        "ask_clarifying_question",
+                        {
+                            "intro": "Before I answer, I need two details.",
+                            "questions": [
+                                {"id": "goal", "label": "What is the main goal?", "input_type": "text"},
+                                {"id": "constraints", "label": "Any constraints I should respect?", "input_type": "text", "required": False},
+                            ],
+                        },
+                    ),
+                    self._stream_chunk_openrouter(usage=SimpleNamespace(prompt_tokens=4, completion_tokens=4, total_tokens=8)),
+                ]
+            ),
+        ]
+
+        mock_create = Mock(side_effect=responses)
+        mock_client = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(
+                    create=mock_create
+                )
+            )
+        )
+
+        with patch("agent.get_app_settings", return_value={}), patch(
+            "agent.resolve_model_target",
+            return_value={
+                "record": {"provider": model_registry.OPENROUTER_PROVIDER},
+                "client": mock_client,
+                "api_model": "anthropic/claude-sonnet-4.5",
+                "extra_body": {"provider": {"only": ["deepinfra/turbo"], "allow_fallbacks": False}},
+            },
+        ):
+            events = list(
+                run_agent_stream(
+                    [{"role": "user", "content": "Önce sorular sor, sonra cevaba geç."}],
+                    "openrouter:anthropic/claude-sonnet-4.5",
+                    2,
+                    ["ask_clarifying_question"],
+                )
+            )
+
+        clarification_event = next(event for event in events if event["type"] == "clarification_request")
+        self.assertEqual(clarification_event["clarification"]["questions"][0]["id"], "goal")
+        self.assertEqual(mock_create.call_args_list[1].kwargs["tool_choice"], {"type": "function", "function": {"name": "ask_clarifying_question"}})
+        self.assertFalse(mock_create.call_args_list[1].kwargs["parallel_tool_calls"])
+        self.assertEqual(mock_create.call_args_list[2].kwargs["tool_choice"], "auto")
+        self.assertNotIn("parallel_tool_calls", mock_create.call_args_list[2].kwargs)
+        self.assertEqual(
+            mock_create.call_args_list[2].kwargs["extra_body"],
+            {"provider": {"only": ["deepinfra/turbo"], "allow_fallbacks": False}},
+        )
         self.assertEqual(events[-1]["type"], "done")
 
     def test_active_tool_normalization_filters_invalid_entries(self):
