@@ -486,6 +486,24 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("@@r=disabled", custom_models[0]["id"])
         self.assertIn("@@r=enabled:xhigh", custom_models[1]["id"])
 
+    def test_settings_patch_rejects_invalid_openrouter_provider_slug(self):
+        response = self.client.patch(
+            "/api/settings",
+            json={
+                "custom_models": [
+                    {
+                        "name": "Claude Sonnet 4.5",
+                        "api_model": "anthropic/claude-sonnet-4.5",
+                        "provider_slug": "Invalid Provider!",
+                        "supports_tools": True,
+                    }
+                ]
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("provider_slug", response.get_json()["error"])
+
     def test_resolve_model_target_builds_openrouter_provider_and_reasoning_overrides(self):
         settings = {
             "custom_models": [
@@ -4799,6 +4817,8 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn('id="rag-context-size-select"', html)
         self.assertIn('id="rag-sensitivity-hint"', html)
         self.assertIn('id="sub-agent-model-preference-select"', html)
+        self.assertIn('id="custom-model-routing-mode-select"', html)
+        self.assertIn("Pin a specific provider", html)
         self.assertIn('id="custom-model-provider-slug-input"', html)
         self.assertIn('id="custom-model-reasoning-mode-select"', html)
         self.assertIn('id="custom-model-reasoning-effort-select"', html)

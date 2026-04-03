@@ -40,6 +40,8 @@ const subAgentRetryAttemptsEl = document.getElementById("sub-agent-retry-attempt
 const subAgentRetryDelayEl = document.getElementById("sub-agent-retry-delay-input");
 const customModelNameEl = document.getElementById("custom-model-name-input");
 const customModelApiModelEl = document.getElementById("custom-model-api-model-input");
+const customModelRoutingModeEl = document.getElementById("custom-model-routing-mode-select");
+const customModelProviderFieldEl = document.getElementById("custom-model-provider-field");
 const customModelProviderSlugEl = document.getElementById("custom-model-provider-slug-input");
 const customModelReasoningModeEl = document.getElementById("custom-model-reasoning-mode-select");
 const customModelReasoningEffortEl = document.getElementById("custom-model-reasoning-effort-select");
@@ -553,6 +555,43 @@ function syncCustomModelReasoningControls() {
   customModelReasoningEffortEl.disabled = customModelReasoningModeEl.value !== "enabled";
 }
 
+function syncCustomModelProviderControls() {
+  const routingMode = customModelRoutingModeEl?.value || "auto";
+  const specificProviderEnabled = routingMode === "specific";
+
+  if (customModelProviderFieldEl) {
+    customModelProviderFieldEl.hidden = !specificProviderEnabled;
+  }
+  if (customModelProviderSlugEl) {
+    customModelProviderSlugEl.disabled = !specificProviderEnabled;
+  }
+}
+
+function readCustomModelProviderSlug() {
+  const routingMode = customModelRoutingModeEl?.value || "auto";
+  if (routingMode !== "specific") {
+    return { providerSlug: "", error: "" };
+  }
+
+  const rawProviderSlug = String(customModelProviderSlugEl?.value || "").trim();
+  if (!rawProviderSlug) {
+    return {
+      providerSlug: "",
+      error: "Choose a provider slug or switch routing back to automatic.",
+    };
+  }
+
+  const providerSlug = normalizeOpenRouterProviderSlug(rawProviderSlug);
+  if (!providerSlug) {
+    return {
+      providerSlug: "",
+      error: "Provider slug is invalid. Use a value like anthropic, azure, or deepinfra/turbo.",
+    };
+  }
+
+  return { providerSlug, error: "" };
+}
+
 function getDraftAvailableModels() {
   return [...builtinModelCatalog, ...draftCustomModels].map((model) => ({ ...model }));
 }
@@ -992,6 +1031,7 @@ function renderModelManagementPanels({ preferVisibleId = "", operationPreference
 function resetCustomModelForm() {
   if (customModelNameEl) customModelNameEl.value = "";
   if (customModelApiModelEl) customModelApiModelEl.value = "";
+  if (customModelRoutingModeEl) customModelRoutingModeEl.value = "auto";
   if (customModelProviderSlugEl) customModelProviderSlugEl.value = "";
   if (customModelReasoningModeEl) customModelReasoningModeEl.value = "default";
   if (customModelReasoningEffortEl) customModelReasoningEffortEl.value = "";
@@ -999,11 +1039,12 @@ function resetCustomModelForm() {
   if (customModelSupportsVisionEl) customModelSupportsVisionEl.checked = false;
   if (customModelSupportsStructuredEl) customModelSupportsStructuredEl.checked = false;
   syncCustomModelReasoningControls();
+  syncCustomModelProviderControls();
 }
 
 function addCustomModelFromInputs() {
   const apiModel = normalizeOpenRouterApiModel(customModelApiModelEl?.value || "");
-  const providerSlug = normalizeOpenRouterProviderSlug(customModelProviderSlugEl?.value || "");
+  const providerSelection = readCustomModelProviderSlug();
   const reasoning = normalizeOpenRouterReasoningConfig(
     customModelReasoningModeEl?.value || "default",
     customModelReasoningEffortEl?.value || ""
@@ -1012,6 +1053,12 @@ function addCustomModelFromInputs() {
     setCustomModelStatus("OpenRouter model id is required.", "error");
     return;
   }
+  if (providerSelection.error) {
+    setCustomModelStatus(providerSelection.error, "error");
+    return;
+  }
+
+  const providerSlug = providerSelection.providerSlug;
 
   const modelId = buildOpenRouterModelId(apiModel, {
     reasoning_mode: reasoning.mode,
@@ -1425,6 +1472,7 @@ function applySettingsToForm() {
   });
   setCustomModelStatus("No pending model changes", "muted");
   syncCustomModelReasoningControls();
+  syncCustomModelProviderControls();
   updateRagSensitivityHint();
   if (scratchpadListEl || scratchpadAddBtn || scratchpadCountEl) {
     renderScratchpad(true);
@@ -1995,6 +2043,7 @@ function registerDirtyListeners() {
 scratchpadAddBtn?.addEventListener("click", () => addScratchpadNote());
 addCustomModelBtn?.addEventListener("click", addCustomModelFromInputs);
 customModelReasoningModeEl?.addEventListener("change", syncCustomModelReasoningControls);
+customModelRoutingModeEl?.addEventListener("change", syncCustomModelProviderControls);
 summaryModelFallbackAddBtn?.addEventListener("click", () => addOperationFallbackRow("summarize"));
 pruneModelFallbackAddBtn?.addEventListener("click", () => addOperationFallbackRow("prune"));
 fixTextModelFallbackAddBtn?.addEventListener("click", () => addOperationFallbackRow("fix_text"));

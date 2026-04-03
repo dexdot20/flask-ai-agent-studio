@@ -70,13 +70,14 @@ from model_registry import (
     get_all_models,
     get_chat_capable_models,
     get_default_chat_model_id,
-        get_model_record,
+    get_model_record,
     get_operation_model_fallback_preferences,
     get_operation_model_preferences,
     get_visible_chat_models,
     normalize_custom_model_definition,
     normalize_custom_models,
     normalize_image_processing_method,
+    normalize_openrouter_provider_slug,
     normalize_operation_model_fallback_preferences,
     normalize_operation_model_preferences,
     normalize_visible_model_order,
@@ -480,6 +481,22 @@ def register_page_routes(app) -> None:
             normalized_custom_models = []
             seen_custom_model_ids: set[str] = set()
             for entry in custom_models_raw:
+                if not isinstance(entry, dict):
+                    return jsonify({"error": "Each custom model must be an object."}), 400
+
+                raw_provider_slug = entry.get("provider_slug")
+                if raw_provider_slug is None:
+                    raw_provider_slug = entry.get("openrouter_provider")
+                if str(raw_provider_slug or "").strip() and not normalize_openrouter_provider_slug(raw_provider_slug):
+                    return jsonify(
+                        {
+                            "error": (
+                                "custom_models contains an invalid provider_slug. "
+                                "Use an OpenRouter provider slug such as anthropic or deepinfra/turbo."
+                            )
+                        }
+                    ), 400
+
                 definition = normalize_custom_model_definition(entry)
                 if not definition:
                     return jsonify({"error": "Each custom model must include a valid OpenRouter model id."}), 400

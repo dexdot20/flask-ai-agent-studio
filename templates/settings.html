@@ -109,8 +109,16 @@
                 <input id="custom-model-name-input" class="settings-text" type="text" placeholder="Example: Claude Sonnet 4.5" />
                 <label class="settings-label" for="custom-model-api-model-input">OpenRouter model id</label>
                 <input id="custom-model-api-model-input" class="settings-text" type="text" placeholder="anthropic/claude-sonnet-4.5" />
-                <label class="settings-label" for="custom-model-provider-slug-input">Provider slug (optional)</label>
-                <input id="custom-model-provider-slug-input" class="settings-text" type="text" placeholder="anthropic or deepinfra/turbo" />
+                <label class="settings-label" for="custom-model-routing-mode-select">Provider routing</label>
+                <select id="custom-model-routing-mode-select">
+                  <option value="auto">Automatic OpenRouter routing</option>
+                  <option value="specific">Pin a specific provider</option>
+                </select>
+                <div id="custom-model-provider-field" hidden>
+                  <label class="settings-label" for="custom-model-provider-slug-input">Provider slug</label>
+                  <input id="custom-model-provider-slug-input" class="settings-text" type="text" placeholder="anthropic, azure, deepinfra/turbo" />
+                  <p class="settings-copy">Use the exact OpenRouter provider slug from the model page. Examples: anthropic, azure, deepinfra/turbo.</p>
+                </div>
                 <label class="settings-label" for="custom-model-reasoning-mode-select">Reasoning</label>
                 <select id="custom-model-reasoning-mode-select">
                   <option value="default">Use model default</option>
@@ -126,7 +134,7 @@
                   <option value="high">High</option>
                   <option value="xhigh">X-High</option>
                 </select>
-                <p class="settings-copy">Leave the provider slug blank to keep OpenRouter routing automatic. When reasoning is enabled, the selected effort is sent through OpenRouter's reasoning controls when the model supports it.</p>
+                <p class="settings-copy">Automatic routing keeps OpenRouter load balancing enabled. When reasoning is enabled, the selected effort is sent through OpenRouter's reasoning controls when the model supports it.</p>
                 <label class="tool-toggle"><input type="checkbox" id="custom-model-supports-tools-toggle" checked /> <span>Supports tool calling and can appear in the chat model selector</span></label>
                 <label class="tool-toggle"><input type="checkbox" id="custom-model-supports-vision-toggle" /> <span>Supports image input for visual analysis</span></label>
                 <label class="tool-toggle"><input type="checkbox" id="custom-model-supports-structured-toggle" /> <span>Supports structured outputs for strict JSON responses</span></label>
