@@ -15,6 +15,7 @@ from config import (
     CACHE_TTL_HOURS,
     CANVAS_EXPAND_DEFAULT_MAX_LINES,
     CANVAS_PROMPT_DEFAULT_MAX_LINES,
+    CANVAS_PROMPT_DEFAULT_MAX_TOKENS,
     CANVAS_SCROLL_WINDOW_LINES,
     CHAT_SUMMARY_ALLOWED_MODES,
     CHAT_SUMMARY_MODE,
@@ -2427,6 +2428,16 @@ def get_canvas_prompt_max_lines(settings: dict | None = None) -> int:
     except (TypeError, ValueError):
         value = CANVAS_PROMPT_DEFAULT_MAX_LINES
     return max(100, min(3_000, value))
+
+
+def get_canvas_prompt_max_tokens(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get("canvas_prompt_max_tokens", DEFAULT_SETTINGS["canvas_prompt_max_tokens"])
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        value = CANVAS_PROMPT_DEFAULT_MAX_TOKENS
+    return max(500, min(20_000, value))
 
 
 def get_canvas_expand_max_lines(settings: dict | None = None) -> int:

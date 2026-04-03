@@ -24,6 +24,7 @@ from tool_registry import build_canvas_decision_matrix, resolve_runtime_tool_nam
 SUMMARY_LABEL = "Conversation summary (generated from deleted messages):"
 CANVAS_PROMPT_MAX_CHARS = 20_000
 CANVAS_PROMPT_MAX_LINES = 100
+CANVAS_PROMPT_MAX_TOKENS = 2_000
 CANVAS_PROMPT_CODE_LINE_MAX_CHARS = 180
 CANVAS_PROMPT_TEXT_LINE_MAX_CHARS = 100
 PARALLEL_SAFE_READ_ONLY_TOOL_NAMES = (
@@ -92,7 +93,7 @@ def _build_image_policy_payload(active_tool_names: list[str]) -> dict | None:
 def _make_generated_message_id(prefix: str, index: int) -> str:
     normalized_prefix = str(prefix or "message").strip() or "message"
     normalized_index = max(0, int(index or 0))
-    return f"{normalized_prefix}-{normalized_index}"
+    return f"msg-{normalized_prefix}-{normalized_index}"
 
 
 def _build_clarification_policy_payload(active_tool_names: list[str], clarification_max_questions: int | None = None) -> dict | None:
@@ -217,21 +218,13 @@ def _get_api_message_id(
 ) -> str:
     message_id = str(message.get("id") or "").strip()
     if message_id:
-        return message_id[:120]
+        if message_id.startswith("msg"):
+            return message_id[:120]
+        return f"msg-{message_id[:116]}"
 
-    if role == "assistant":
-        assistant_tool_calls = tool_calls if tool_calls is not None else parse_message_tool_calls(message.get("tool_calls"))
-        if assistant_tool_calls:
-            first_tool_call_id = str(assistant_tool_calls[0].get("id") or "").strip()
-            if first_tool_call_id:
-                return first_tool_call_id[:120]
-
-    if role == "tool":
-        tool_call_id = str(message.get("tool_call_id") or "").strip()
-        if tool_call_id:
-            return tool_call_id[:120]
-
-    return fallback_id
+    if fallback_id.startswith("msg"):
+        return fallback_id[:120]
+    return f"msg-{fallback_id[:116]}"
 
 
 def _normalize_canvas_document_name(value: str | None) -> str:
@@ -397,7 +390,6 @@ def build_api_messages(messages: list[dict], *, canvas_documents: list[dict] | N
             if context_injection:
                 api_messages.append(
                     {
-                        "id": _make_generated_message_id("message", len(api_messages)),
                         "role": "system",
                         "content": context_injection,
                     }
@@ -415,23 +407,12 @@ def build_api_messages(messages: list[dict], *, canvas_documents: list[dict] | N
             "content": content,
         }
 
-        message_id = _get_api_message_id(
-            message,
-            role,
-            fallback_id=_make_generated_message_id("message", len(api_messages)),
-            tool_calls=tool_calls,
-        )
-        if message_id:
-            api_message["id"] = message_id
-
         if role == "assistant":
             if tool_calls:
                 api_message["tool_calls"] = tool_calls
         elif role == "tool":
             tool_call_id = str(message.get("tool_call_id") or "").strip()
             if tool_call_id:
-                if "id" not in api_message:
-                    api_message["id"] = tool_call_id
                 api_message["tool_call_id"] = tool_call_id
 
         api_messages.append(api_message)
@@ -444,6 +425,7 @@ def _build_canvas_prompt_payload(
     *,
     max_lines: int = CANVAS_PROMPT_MAX_LINES,
     max_chars: int | None = None,
+    max_tokens: int = CANVAS_PROMPT_MAX_TOKENS,
 ) -> dict | None:
     documents = extract_canvas_documents({"canvas_documents": canvas_documents or []})
     if not documents:
@@ -488,6 +470,26 @@ def _build_canvas_prompt_payload(
         visible_char_count += extra_chars
         if line_was_clipped:
             clipped_line_count += 1
+
+    # Content-size trim using UTF-8 byte budget as a language-agnostic proxy for
+    # token cost. tiktoken (cl100k_base) severely underestimates actual provider
+    # token counts for non-ASCII content: Turkish/Arabic/CJK text can tokenise
+    # at 3-4x the rate of ASCII on DeepSeek and similar models. Byte counts
+    # scale proportionally with this density (Turkish chars are 2 bytes each,
+    # CJK chars are 3 bytes), making bytes a much safer budget metric.
+    # Budget: max_tokens * 2  (1 token ≈ 2 UTF-8 bytes conservatively; this is
+    # accurate for ASCII-heavy docs and safely limits Unicode-heavy ones).
+    if max_tokens > 0 and len(visible_lines) > 1:
+        byte_budget = max_tokens * 2
+        if len("\n".join(visible_lines).encode("utf-8")) > byte_budget:
+            lo, hi = 1, len(visible_lines) - 1
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                if len("\n".join(visible_lines[:mid]).encode("utf-8")) <= byte_budget:
+                    lo = mid
+                else:
+                    hi = mid - 1
+            visible_lines = visible_lines[:lo]
 
     return {
         "mode": (manifest or {}).get("mode") or "document",
@@ -774,6 +776,7 @@ def _build_runtime_volatile_parts(
     canvas_documents=None,
     canvas_active_document_id: str | None = None,
     canvas_prompt_max_lines: int | None = None,
+    canvas_prompt_max_tokens: int | None = None,
     summary_count: int = 0,
     include_time_context: bool = True,
 ) -> list[str]:
@@ -807,6 +810,7 @@ def _build_runtime_volatile_parts(
         canvas_documents,
         active_document_id=canvas_active_document_id,
         max_lines=canvas_prompt_max_lines or CANVAS_PROMPT_MAX_LINES,
+        max_tokens=canvas_prompt_max_tokens if canvas_prompt_max_tokens is not None else CANVAS_PROMPT_MAX_TOKENS,
     )
     if canvas_payload:
         workspace_summary_lines = _build_canvas_workspace_summary(canvas_payload)
@@ -888,6 +892,7 @@ def build_runtime_context_injection(
     canvas_documents=None,
     canvas_active_document_id: str | None = None,
     canvas_prompt_max_lines: int | None = None,
+    canvas_prompt_max_tokens: int | None = None,
     workspace_root: str | None = None,
     summary_count: int = 0,
     include_time_context: bool = True,
@@ -908,6 +913,7 @@ def build_runtime_context_injection(
             canvas_documents=canvas_documents,
             canvas_active_document_id=canvas_active_document_id,
             canvas_prompt_max_lines=canvas_prompt_max_lines,
+            canvas_prompt_max_tokens=canvas_prompt_max_tokens,
             summary_count=summary_count,
             include_time_context=include_time_context,
         )
@@ -927,6 +933,7 @@ def build_runtime_system_message(
     canvas_documents=None,
     canvas_active_document_id: str | None = None,
     canvas_prompt_max_lines: int | None = None,
+    canvas_prompt_max_tokens: int | None = None,
     workspace_root: str | None = None,
     clarification_max_questions: int | None = None,
     max_parallel_tools: int | None = None,
@@ -1054,6 +1061,7 @@ def build_runtime_system_message(
                 canvas_documents=canvas_documents,
                 canvas_active_document_id=canvas_active_document_id,
                 canvas_prompt_max_lines=canvas_prompt_max_lines,
+                canvas_prompt_max_tokens=canvas_prompt_max_tokens,
                 summary_count=summary_count,
                 include_time_context=include_time_context,
             )
@@ -1080,6 +1088,7 @@ def prepend_runtime_context(
     canvas_documents=None,
     canvas_active_document_id: str | None = None,
     canvas_prompt_max_lines: int | None = None,
+    canvas_prompt_max_tokens: int | None = None,
     workspace_root: str | None = None,
     clarification_max_questions: int | None = None,
     max_parallel_tools: int | None = None,
@@ -1098,13 +1107,13 @@ def prepend_runtime_context(
         canvas_documents=canvas_documents,
         canvas_active_document_id=canvas_active_document_id,
         canvas_prompt_max_lines=canvas_prompt_max_lines,
+        canvas_prompt_max_tokens=canvas_prompt_max_tokens,
         workspace_root=workspace_root,
         clarification_max_questions=clarification_max_questions,
         max_parallel_tools=max_parallel_tools,
         include_time_context=False,
         include_volatile_context=False,
     )
-    runtime_message["id"] = _make_generated_message_id("runtime", 0)
 
     normalized_summary_count = summary_count if summary_count is not None else _count_summary_messages(messages)
     injection_content = str(current_context_injection or "").strip()
@@ -1117,6 +1126,7 @@ def prepend_runtime_context(
             canvas_documents=canvas_documents,
             canvas_active_document_id=canvas_active_document_id,
             canvas_prompt_max_lines=canvas_prompt_max_lines,
+            canvas_prompt_max_tokens=canvas_prompt_max_tokens,
             workspace_root=workspace_root,
             summary_count=normalized_summary_count,
             include_time_context=True,
@@ -1135,7 +1145,6 @@ def prepend_runtime_context(
         runtime_message,
         *messages[:insertion_index],
         {
-            "id": _make_generated_message_id("runtime", 1),
             "role": "system",
             "content": injection_content,
         },

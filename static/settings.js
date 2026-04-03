@@ -32,6 +32,7 @@ const pruningBatchSizeEl = document.getElementById("pruning-batch-size-input");
 const fetchThresholdEl = document.getElementById("fetch-threshold-input");
 const fetchAggressivenessEl = document.getElementById("fetch-aggressiveness-input");
 const canvasPromptLinesEl = document.getElementById("canvas-prompt-lines-input");
+const canvasPromptTokensEl = document.getElementById("canvas-prompt-tokens-input");
 const canvasExpandLinesEl = document.getElementById("canvas-expand-lines-input");
 const canvasScrollLinesEl = document.getElementById("canvas-scroll-lines-input");
 const subAgentTimeoutEl = document.getElementById("sub-agent-timeout-input");
@@ -1438,6 +1439,7 @@ function applySettingsToForm() {
   if (fetchThresholdEl) fetchThresholdEl.value = String(appSettings.fetch_url_token_threshold || 3500);
   if (fetchAggressivenessEl) fetchAggressivenessEl.value = String(appSettings.fetch_url_clip_aggressiveness || 50);
   if (canvasPromptLinesEl) canvasPromptLinesEl.value = String(appSettings.canvas_prompt_max_lines || 100);
+  if (canvasPromptTokensEl) canvasPromptTokensEl.value = String(appSettings.canvas_prompt_max_tokens || 2000);
   if (canvasExpandLinesEl) canvasExpandLinesEl.value = String(appSettings.canvas_expand_max_lines || 1600);
   if (canvasScrollLinesEl) canvasScrollLinesEl.value = String(appSettings.canvas_scroll_window_lines || 200);
   if (subAgentTimeoutEl) subAgentTimeoutEl.value = String(appSettings.sub_agent_timeout_seconds ?? 240);
@@ -1552,6 +1554,7 @@ function applyServerSettingsData(data) {
   appSettings.fetch_url_token_threshold = data.fetch_url_token_threshold || 3500;
   appSettings.fetch_url_clip_aggressiveness = data.fetch_url_clip_aggressiveness ?? 50;
   appSettings.canvas_prompt_max_lines = data.canvas_prompt_max_lines || 100;
+  appSettings.canvas_prompt_max_tokens = data.canvas_prompt_max_tokens || 2000;
   appSettings.canvas_expand_max_lines = data.canvas_expand_max_lines || 1600;
   appSettings.canvas_scroll_window_lines = data.canvas_scroll_window_lines || 200;
   appSettings.sub_agent_timeout_seconds = data.sub_agent_timeout_seconds ?? 240;
@@ -1608,6 +1611,7 @@ async function saveSettings() {
     fetch_url_token_threshold: readNumericSetting(fetchThresholdEl, 3500, { allowZero: false }),
     fetch_url_clip_aggressiveness: readNumericSetting(fetchAggressivenessEl, 50),
     canvas_prompt_max_lines: readNumericSetting(canvasPromptLinesEl, 100, { allowZero: false }),
+    canvas_prompt_max_tokens: readNumericSetting(canvasPromptTokensEl, 2000, { allowZero: false }),
     canvas_expand_max_lines: readNumericSetting(canvasExpandLinesEl, 1600, { allowZero: false }),
     canvas_scroll_window_lines: readNumericSetting(canvasScrollLinesEl, 200, { allowZero: false }),
     sub_agent_timeout_seconds: readNumericSetting(subAgentTimeoutEl, 240, { allowZero: false }),
@@ -2002,6 +2006,7 @@ function registerDirtyListeners() {
   fetchThresholdEl?.addEventListener("input", markDirty);
   fetchAggressivenessEl?.addEventListener("input", markDirty);
   canvasPromptLinesEl?.addEventListener("input", markDirty);
+  canvasPromptTokensEl?.addEventListener("input", markDirty);
   canvasExpandLinesEl?.addEventListener("input", markDirty);
   canvasScrollLinesEl?.addEventListener("input", markDirty);
   subAgentTimeoutEl?.addEventListener("input", markDirty);

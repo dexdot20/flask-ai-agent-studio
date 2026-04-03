@@ -35,6 +35,7 @@ from db import (
     build_user_profile_system_context,
     get_canvas_expand_max_lines,
     get_canvas_prompt_max_lines,
+    get_canvas_prompt_max_tokens,
     get_canvas_scroll_window_lines,
     count_visible_message_tokens,
     create_file_asset,
@@ -1332,6 +1333,7 @@ def _build_budgeted_prompt_messages(
     canvas_documents: list[dict] | None = None,
     canvas_active_document_id: str | None = None,
     canvas_prompt_max_lines: int | None = None,
+    canvas_prompt_max_tokens: int | None = None,
     workspace_root: str | None = None,
 ) -> tuple[list[dict], dict, str | None]:
     ordered_messages = [message for message in canonical_messages if isinstance(message, dict)]
@@ -1352,6 +1354,7 @@ def _build_budgeted_prompt_messages(
         canvas_documents=canvas_documents,
         canvas_active_document_id=canvas_active_document_id,
         canvas_prompt_max_lines=canvas_prompt_max_lines,
+        canvas_prompt_max_tokens=canvas_prompt_max_tokens,
         workspace_root=workspace_root,
         clarification_max_questions=get_clarification_max_questions(settings),
         max_parallel_tools=max_parallel_tools,
@@ -1422,6 +1425,7 @@ def _build_budgeted_prompt_messages(
         canvas_documents=canvas_documents,
         canvas_active_document_id=canvas_active_document_id,
         canvas_prompt_max_lines=canvas_prompt_max_lines,
+        canvas_prompt_max_tokens=canvas_prompt_max_tokens,
         workspace_root=workspace_root,
         summary_count=len(selected_summaries),
         include_time_context=True,
@@ -2527,6 +2531,7 @@ def register_chat_routes(app) -> None:
             canvas_documents=initial_canvas_documents,
             canvas_active_document_id=initial_canvas_active_document_id,
             canvas_prompt_max_lines=get_canvas_prompt_max_lines(settings),
+            canvas_prompt_max_tokens=get_canvas_prompt_max_tokens(settings),
             workspace_root=workspace_root,
         )
         if persisted_user_message_id is not None and current_context_injection:

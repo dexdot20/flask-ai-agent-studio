@@ -372,6 +372,11 @@
                 <p class="settings-copy">Injected automatically into each turn for the active canvas document.</p>
               </div>
               <div>
+                <label class="settings-label" for="canvas-prompt-tokens-input">Prompt token budget (500-20000)</label>
+                <input type="number" class="settings-number" id="canvas-prompt-tokens-input" min="500" max="20000" value="2000" />
+                <p class="settings-copy">Hard cap on canvas visible-content tokens per turn. Reduce for Unicode-heavy documents (Turkish, Arabic, CJK) that tokenise at a higher rate than ASCII.</p>
+              </div>
+              <div>
                 <label class="settings-label" for="canvas-expand-lines-input">Expand max lines (100-4000)</label>
                 <input type="number" class="settings-number" id="canvas-expand-lines-input" min="100" max="4000" value="1600" />
                 <p class="settings-copy">Used when the assistant calls the larger canvas expansion tool.</p>

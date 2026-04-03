@@ -26,17 +26,32 @@ def _resolve_device() -> str:
 
     try:
         import torch
-    except Exception as exc:
+    except Exception:
         if requested:
-            raise RuntimeError("BGE_M3_DEVICE is set to CUDA, but torch could not be imported.") from exc
+            logging.warning(
+                "BGE_M3_DEVICE=%s was requested, but torch could not be imported; falling back to CPU.",
+                requested,
+            )
         return "cpu"
 
     if not torch.cuda.is_available():
         if requested:
-            raise RuntimeError("BGE_M3_DEVICE is set to CUDA, but no CUDA-capable GPU was detected.")
+            logging.warning(
+                "BGE_M3_DEVICE=%s was requested, but no CUDA-capable GPU was detected; falling back to CPU.",
+                requested,
+            )
         return "cpu"
 
     return requested or "cuda"
+
+
+def _is_missing_dependency_error(exc: Exception) -> bool:
+    if isinstance(exc, ImportError):
+        return True
+    if isinstance(exc.__cause__, ImportError):
+        return True
+    message = str(exc).strip().lower()
+    return "dependencies are missing" in message
 
 
 def get_embedder():
@@ -87,7 +102,12 @@ def get_embedder():
 def preload_embedder() -> None:
     if not _parse_bool_env("BGE_M3_PRELOAD", True):
         return
-    get_embedder()
+    try:
+        get_embedder()
+    except RuntimeError as exc:
+        if not _is_missing_dependency_error(exc):
+            raise
+        logging.warning("BGE-M3 preload skipped: %s", exc)
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:

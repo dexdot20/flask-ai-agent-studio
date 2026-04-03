@@ -212,7 +212,7 @@ pip install -r requirements-dev.txt
 
 RAG can now fall back to CPU-only embedding, while local vision remains CUDA-only in this codebase and OCR can run without the Qwen vision model.
 
-- RAG embeddings work on CPU or CUDA; set `BGE_M3_DEVICE=cpu` for a CPU-only path or leave it on auto to use CUDA when available.
+- RAG embeddings work on CPU or CUDA; set `BGE_M3_DEVICE=cpu` for a CPU-only path, leave it on auto to use CUDA when available, and explicit CUDA requests fall back to CPU with a warning if the CUDA stack is unavailable.
 - Local OCR can run in OCR-only mode with EasyOCR or PaddleOCR.
 - Local Qwen2.5-VL vision inference requires CUDA and a local model directory.
 - There is no CPU fallback in the current codebase for local Qwen vision.
@@ -315,7 +315,7 @@ At least one provider key is required.
 | --- | --- | --- |
 | `RAG_ENABLED` | `true` | Enables RAG endpoints, sync, and retrieval |
 | `BGE_M3_MODEL_PATH` | `BAAI/bge-m3` | Embedding model name or local path |
-| `BGE_M3_DEVICE` | `auto` | Device used by the embedder in this codebase; `cpu` and `cpu:0` force CPU-only mode, while auto prefers CUDA when available |
+| `BGE_M3_DEVICE` | `auto` | Device used by the embedder in this codebase; `cpu` and `cpu:0` force CPU-only mode, while auto prefers CUDA when available and explicit CUDA requests fall back to CPU if the CUDA stack is unavailable |
 | `BGE_M3_LOCAL_FILES_ONLY` | `false` | Load the embedding model only from local files |
 | `BGE_M3_TRUST_REMOTE_CODE` | `false` | Allow Sentence Transformers remote code |
 | `BGE_M3_BATCH_SIZE` | `32` | Embedding batch size |

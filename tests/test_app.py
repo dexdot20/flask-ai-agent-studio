@@ -3078,9 +3078,9 @@ class AppRoutesTestCase(unittest.TestCase):
         )
 
         self.assertEqual(messages[0]["role"], "system")
-        self.assertTrue(messages[0]["id"])
+        self.assertNotIn("id", messages[0])
         self.assertEqual(messages[1]["role"], "system")
-        self.assertTrue(messages[1]["id"])
+        self.assertNotIn("id", messages[1])
 
         stable_content = messages[0]["content"]
         content = messages[1]["content"]
@@ -3108,7 +3108,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("## Conversation Summaries", content)
         self.assertIn("## Current Date and Time", content)
         self.assertLess(content.index("## Conversation Summaries"), content.index("## Current Date and Time"))
-        self.assertTrue(messages[2]["id"])
+        self.assertNotIn("id", messages[2])
 
     def test_runtime_system_message_places_stable_context_before_tool_history(self):
         message = build_runtime_system_message(
@@ -3633,6 +3633,31 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(clarification["questions"][0]["options"][1]["label"], "Klinik Araştırma + Akademik Hibrit")
         self.assertEqual(clarification["questions"][0]["options"][1]["value"], "Klinik Araştırma + Akademik Hibrit")
 
+    def test_execute_clarification_tool_preserves_numbered_financial_option_labels(self):
+        result, summary = _execute_tool(
+            "ask_clarifying_question",
+            {
+                "questions": [
+                    {
+                        "id": "income",
+                        "label": "Yüksek finansal getiri ile kastettiğin net aylık nedir?",
+                        "input_type": "single_select",
+                        "options": [
+                            {"label": "1.000+ TL", "value": "1000_plus"},
+                            {"label": "2.000+ TL", "value": "2000_plus"},
+                            {"label": "3.000+ TL", "value": "3000_plus"},
+                        ],
+                    }
+                ]
+            },
+        )
+
+        clarification = result["clarification"]
+        self.assertEqual(summary, "Awaiting user clarification")
+        self.assertEqual(clarification["questions"][0]["options"][0]["label"], "1.000+ TL")
+        self.assertEqual(clarification["questions"][0]["options"][1]["label"], "2.000+ TL")
+        self.assertEqual(clarification["questions"][0]["options"][2]["label"], "3.000+ TL")
+
     def test_clarification_prompt_guidance_avoids_inline_qa_format(self):
         message = build_runtime_system_message(
             active_tool_names=["ask_clarifying_question"],
@@ -3855,7 +3880,7 @@ class AppRoutesTestCase(unittest.TestCase):
         ):
             self.assertEqual(embedder._resolve_device(), "cpu")
 
-    def test_resolve_device_raises_clear_error_when_cuda_is_requested_without_torch(self):
+    def test_resolve_device_falls_back_to_cpu_when_cuda_is_requested_without_torch(self):
         from rag import embedder
 
         original_import = __import__
@@ -3867,9 +3892,24 @@ class AppRoutesTestCase(unittest.TestCase):
 
         with patch.dict(os.environ, {"BGE_M3_DEVICE": "cuda"}, clear=False), patch(
             "builtins.__import__", side_effect=guarded_import
-        ):
-            with self.assertRaisesRegex(RuntimeError, "torch could not be imported"):
-                embedder._resolve_device()
+        ), patch.object(embedder.logging, "warning") as mock_warning:
+            self.assertEqual(embedder._resolve_device(), "cpu")
+            mock_warning.assert_called_once()
+            self.assertIn("falling back to CPU", mock_warning.call_args.args[0])
+
+    def test_preload_embedder_skips_missing_dependencies_without_raising(self):
+        from rag import embedder
+
+        with patch.object(
+            embedder,
+            "get_embedder",
+            side_effect=RuntimeError(
+                "BGE-M3 dependencies are missing. Install sentence-transformers and torch before using RAG."
+            ),
+        ), patch.object(embedder.logging, "warning") as mock_warning:
+            embedder.preload_embedder()
+            mock_warning.assert_called_once()
+            self.assertIn("BGE-M3 preload skipped", mock_warning.call_args.args[0])
 
     def test_canvas_tools_create_and_edit_document_in_runtime_state(self):
         runtime_state = {}
@@ -8010,6 +8050,36 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(api_messages[1]["tool_calls"][0]["function"]["name"], "search_web")
         self.assertEqual(api_messages[2]["tool_call_id"], "call-1")
 
+    def test_build_api_messages_drops_outbound_message_ids_for_provider(self):
+        normalized = normalize_chat_messages(
+            [
+                {"role": "user", "content": "Hello", "id": 318},
+                {
+                    "role": "assistant",
+                    "content": "I am searching.",
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {
+                                "name": "search_web",
+                                "arguments": '{"queries":["hello"]}',
+                            },
+                        }
+                    ],
+                    "id": 319,
+                },
+                {"role": "tool", "content": "{}", "tool_call_id": "call-1", "id": 320},
+            ]
+        )
+
+        api_messages = build_api_messages(normalized)
+
+        self.assertNotIn("id", api_messages[0])
+        self.assertNotIn("id", api_messages[1])
+        self.assertNotIn("id", api_messages[2])
+        self.assertEqual(api_messages[2]["tool_call_id"], "call-1")
+
     def test_build_api_messages_adds_ids_for_tool_protocol_messages(self):
         messages = [
             {"role": "user", "content": "Hello"},
@@ -8032,8 +8102,9 @@ class AppRoutesTestCase(unittest.TestCase):
 
         api_messages = build_api_messages(messages)
 
-        self.assertEqual(api_messages[1]["id"], "call-1")
-        self.assertEqual(api_messages[2]["id"], "call-1")
+        self.assertNotIn("id", api_messages[1])
+        self.assertNotIn("id", api_messages[2])
+        self.assertEqual(api_messages[2]["tool_call_id"], "call-1")
 
     def test_build_api_messages_maps_summary_role_to_assistant_context(self):
         normalized = normalize_chat_messages(
@@ -8067,10 +8138,10 @@ class AppRoutesTestCase(unittest.TestCase):
         api_messages = build_api_messages(normalized)
 
         self.assertEqual(api_messages[0]["role"], "system")
-        self.assertTrue(api_messages[0]["id"])
+        self.assertNotIn("id", api_messages[0])
         self.assertIn("## Current Date and Time", api_messages[0]["content"])
         self.assertEqual(api_messages[1]["role"], "user")
-        self.assertTrue(api_messages[1]["id"])
+        self.assertNotIn("id", api_messages[1])
         self.assertEqual(api_messages[1]["content"], "Hello")
 
     def test_build_api_messages_preserves_context_injection_history_for_cache_prefixes(self):
@@ -8111,16 +8182,16 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(len(system_messages), 2)
         self.assertEqual(api_messages[0]["role"], "system")
         self.assertIn("21:35", api_messages[0]["content"])
-        self.assertTrue(api_messages[0]["id"])
+        self.assertNotIn("id", api_messages[0])
         self.assertEqual(api_messages[1]["role"], "user")
-        self.assertTrue(api_messages[1]["id"])
+        self.assertNotIn("id", api_messages[1])
         self.assertEqual(api_messages[2]["role"], "assistant")
-        self.assertTrue(api_messages[2]["id"])
+        self.assertNotIn("id", api_messages[2])
         self.assertEqual(api_messages[3]["role"], "system")
-        self.assertTrue(api_messages[3]["id"])
+        self.assertNotIn("id", api_messages[3])
         self.assertIn("21:40", api_messages[3]["content"])
         self.assertEqual(api_messages[4]["role"], "user")
-        self.assertTrue(api_messages[4]["id"])
+        self.assertNotIn("id", api_messages[4])
 
     def test_patch_user_message_clears_stale_context_injection_but_keeps_attachments(self):
         conversation_id = self._create_conversation()
