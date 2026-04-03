@@ -3350,6 +3350,88 @@ class AppRoutesTestCase(unittest.TestCase):
             ["scope", "scope_2", "question_3"],
         )
 
+    def test_run_agent_stream_allows_clarification_with_other_tool_calls(self):
+        responses = [
+            iter(
+                [
+                    SimpleNamespace(
+                        choices=[
+                            SimpleNamespace(
+                                delta=SimpleNamespace(
+                                    reasoning_content="I should clarify scope and gather one quick result first.",
+                                    content="",
+                                    tool_calls=[
+                                        {
+                                            "index": 0,
+                                            "id": "call-1",
+                                            "function": {
+                                                "name": "search_web",
+                                                "arguments": json.dumps({"queries": ["clarification context"]}, ensure_ascii=False),
+                                            },
+                                        },
+                                        {
+                                            "index": 1,
+                                            "id": "call-2",
+                                            "function": {
+                                                "name": "ask_clarifying_question",
+                                                "arguments": json.dumps(
+                                                    {
+                                                        "questions": [
+                                                            {"id": "scope", "label": "Which scope?", "input_type": "text"},
+                                                        ]
+                                                    },
+                                                    ensure_ascii=False,
+                                                ),
+                                            },
+                                        },
+                                    ],
+                                )
+                            )
+                        ]
+                    ),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=3, completion_tokens=3, total_tokens=6)),
+                ]
+            ),
+        ]
+
+        with patch("agent.client.chat.completions.create", side_effect=responses), patch(
+            "agent.search_web_tool",
+            return_value=[{"title": "Stub", "url": "https://example.com", "snippet": "Snippet"}],
+        ):
+            events = list(
+                run_agent_stream(
+                    [{"role": "user", "content": "Need help deciding scope"}],
+                    "deepseek-chat",
+                    2,
+                    ["search_web", "ask_clarifying_question"],
+                )
+            )
+
+        self.assertNotIn(
+            "ask_clarifying_question must be the only tool call in a single assistant turn.",
+            [event.get("error") for event in events if event["type"] == "tool_error"],
+        )
+        self.assertTrue(
+            any(
+                event["type"] == "tool_result"
+                and event["tool"] == "search_web"
+                and event["call_id"] == "call-1"
+                and event["summary"] == "1 web results found"
+                for event in events
+            )
+        )
+        self.assertTrue(
+            any(
+                event["type"] == "tool_result"
+                and event["tool"] == "ask_clarifying_question"
+                and event["call_id"] == "call-2"
+                and event["summary"] == "Awaiting user clarification"
+                for event in events
+            )
+        )
+        self.assertTrue(any(event["type"] == "clarification_request" for event in events))
+        self.assertFalse(any(event["type"] == "tool_error" for event in events))
+
     def test_extract_pending_clarification_uses_configured_question_limit(self):
         metadata = {
             "pending_clarification": {

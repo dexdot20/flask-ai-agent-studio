@@ -4993,15 +4993,6 @@ def run_agent_stream(
             content_excerpt=content_text,
         )
 
-        if tool_calls and any(call["name"] == "ask_clarifying_question" for call in tool_calls) and len(tool_calls) > 1:
-            yield {
-                "type": "tool_error",
-                "step": step,
-                "tool": "ask_clarifying_question",
-                "error": "ask_clarifying_question must be the only tool call in a single assistant turn.",
-            }
-            break
-
         if not tool_calls:
             if content_text:
                 _trace_agent_event("final_answer_received", trace_id=trace_id, step=step, content_excerpt=content_text)
