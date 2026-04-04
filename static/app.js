@@ -4094,6 +4094,7 @@ function clearPendingDeleteMessage(options = {}) {
     activeDeleteMessageAbortController = null;
   }
   pendingDeleteMessageId = null;
+  deletingMessageId = null;
   if (options.render !== false) {
     renderConversationHistory({ preserveScroll });
   }
@@ -4150,6 +4151,7 @@ async function deleteConversationMessage(messageId) {
     showToast("Message deleted.", "success");
   } catch (error) {
     deletingMessageId = null;
+    pendingDeleteMessageId = null;
     activeDeleteMessageAbortController = null;
     renderConversationHistory({ preserveScroll: true });
     if (error.name !== "AbortError") {
@@ -4614,8 +4616,13 @@ function applyPersistedMessageIds(persistedIds, assistantEntry) {
   }
 }
 
-function updateStats(usage) {
-  tokenTurns.push(normalizeUsagePayload(usage));
+function updateStats(usage, { replaceLast = false } = {}) {
+  const normalizedUsage = normalizeUsagePayload(usage);
+  if (replaceLast && tokenTurns.length) {
+    tokenTurns[tokenTurns.length - 1] = normalizedUsage;
+  } else {
+    tokenTurns.push(normalizedUsage);
+  }
   renderTokenStats();
 }
 
@@ -5506,6 +5513,7 @@ async function openConversation(id) {
     return;
   }
 
+  clearPendingDeleteMessage({ render: false });
   resetTokenStats();
   history = [];
   latestSummaryStatus = null;
@@ -5542,6 +5550,7 @@ async function deleteConversation(id) {
 }
 
 function startNewChat() {
+  clearPendingDeleteMessage({ render: false });
   conversationRefreshGeneration += 1;
   pendingConversationRefreshTimers.forEach((timerId) => window.clearTimeout(timerId));
   pendingConversationRefreshTimers.clear();
@@ -7329,6 +7338,7 @@ async function sendMessage(options = {}) {
   let rawReasoning = "";
   let fullAnswer = "";
   let latestUsage = null;
+  let hasLiveUsageTurn = false;
   let assistantToolResults = [];
   let assistantToolTrace = [];
   let assistantSubAgentTraces = [];
@@ -7677,7 +7687,8 @@ async function sendMessage(options = {}) {
         scrollToBottom();
       } else if (event.type === "usage") {
         latestUsage = normalizeUsagePayload(event);
-        updateStats(latestUsage);
+        updateStats(latestUsage, { replaceLast: hasLiveUsageTurn });
+        hasLiveUsageTurn = true;
       } else if (event.type === "assistant_tool_results") {
         assistantToolResults = Array.isArray(event.tool_results) ? event.tool_results : [];
         updateAssistantFetchBadge(asstGroup, { tool_results: assistantToolResults });

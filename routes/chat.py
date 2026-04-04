@@ -2575,6 +2575,7 @@ def register_chat_routes(app) -> None:
             persisted_assistant_message_id = None
             summary_future = None
             stream_aborted = False
+            last_persisted_response_length = 0
             runtime_tool_names = resolve_runtime_tool_names(
                 active_tool_names,
                 canvas_documents=initial_canvas_documents,
@@ -2599,7 +2600,7 @@ def register_chat_routes(app) -> None:
             )
 
             def persist_assistant_snapshot() -> None:
-                nonlocal persisted_assistant_message_id
+                nonlocal persisted_assistant_message_id, last_persisted_response_length
                 persisted_assistant_message_id = _persist_streaming_assistant_message(
                     conv_id,
                     persisted_assistant_message_id,
@@ -2614,6 +2615,7 @@ def register_chat_routes(app) -> None:
                     tool_trace_entries=tool_trace_entries,
                     pending_clarification=pending_clarification,
                 )
+                last_persisted_response_length = len(full_response)
 
             def upsert_streaming_sub_agent_trace(entry: dict) -> dict | None:
                 nonlocal stored_sub_agent_traces
@@ -2682,7 +2684,8 @@ def register_chat_routes(app) -> None:
                 for event in agent_stream:
                     if event["type"] == "answer_delta":
                         full_response += event["text"]
-                        persist_assistant_snapshot()
+                        if len(full_response) - last_persisted_response_length >= 150:
+                            persist_assistant_snapshot()
                     elif event["type"] == "answer_sync":
                         full_response = event["text"]
                         persist_assistant_snapshot()

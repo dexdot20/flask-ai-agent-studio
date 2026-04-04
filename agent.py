@@ -5635,7 +5635,7 @@ def run_agent_stream(
         try:
             turn_result = yield from stream_model_turn(
                 turn_messages,
-                buffer_answer=("ask_clarifying_question" in normalized_prompt_tool_names),
+                buffer_answer=False,
                 call_type="agent_step",
                 retry_reason=step_retry_reason,
             )
