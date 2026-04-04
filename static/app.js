@@ -137,6 +137,7 @@ let inlineEditingDraft = "";
 let savingEditedMessageId = null;
 let pendingDeleteMessageId = null;
 let deletingMessageId = null;
+let activeDeleteMessageAbortController = null;
 let activeCanvasDocumentId = null;
 let streamingCanvasDocuments = [];
 let isCanvasEditing = false;
@@ -4021,8 +4022,10 @@ function createMessageActions(message, options = {}) {
       cancelBtn.type = "button";
       cancelBtn.className = "msg-action-btn msg-delete-confirm__btn";
       cancelBtn.textContent = "Cancel";
-      cancelBtn.disabled = isDeletingThisMessage;
       cancelBtn.addEventListener("click", () => {
+        if (isDeletingThisMessage && activeDeleteMessageAbortController) {
+          activeDeleteMessageAbortController.abort();
+        }
         clearPendingDeleteMessage({ preserveScroll: true });
       });
       confirmBox.appendChild(cancelBtn);
@@ -4085,6 +4088,10 @@ const MESSAGE_ACTION_ICONS = {
 
 function clearPendingDeleteMessage(options = {}) {
   const preserveScroll = options.preserveScroll !== false;
+  if (activeDeleteMessageAbortController) {
+    activeDeleteMessageAbortController.abort();
+    activeDeleteMessageAbortController = null;
+  }
   pendingDeleteMessageId = null;
   if (options.render !== false) {
     renderConversationHistory({ preserveScroll });
@@ -4107,12 +4114,14 @@ async function deleteConversationMessage(messageId) {
   }
 
   deletingMessageId = normalizedMessageId;
+  activeDeleteMessageAbortController = new AbortController();
   renderConversationHistory({ preserveScroll: true });
 
   try {
     const response = await fetch(`/api/messages/${normalizedMessageId}`, {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
+      signal: activeDeleteMessageAbortController.signal,
       body: JSON.stringify({ conversation_id: currentConvId }),
     });
     const payload = await response.json().catch(() => ({}));
@@ -4132,6 +4141,7 @@ async function deleteConversationMessage(messageId) {
       : history.filter((item) => Number(item.id) !== normalizedMessageId);
     pendingDeleteMessageId = null;
     deletingMessageId = null;
+    activeDeleteMessageAbortController = null;
     rebuildTokenStatsFromHistory();
     renderConversationHistory({ preserveScroll: true });
     renderCanvasPanel();
@@ -4139,8 +4149,11 @@ async function deleteConversationMessage(messageId) {
     showToast("Message deleted.", "success");
   } catch (error) {
     deletingMessageId = null;
+    activeDeleteMessageAbortController = null;
     renderConversationHistory({ preserveScroll: true });
-    showError(error.message || "Message could not be deleted.");
+    if (error.name !== "AbortError") {
+      showError(error.message || "Message could not be deleted.");
+    }
   }
 }
 
@@ -5801,6 +5814,9 @@ function autoResize(element) {
   element.style.height = element.scrollHeight + "px";
 }
 inputEl.addEventListener("input", () => {
+  if (pendingDeleteMessageId !== null) {
+    clearPendingDeleteMessage({ preserveScroll: true });
+  }
   autoResize(inputEl);
 });
 
@@ -7205,6 +7221,10 @@ async function sendMessage(options = {}) {
   const pendingDocuments = [...selectedDocumentFiles];
   if (!text && !pendingImages.length && !pendingDocuments.length) {
     return;
+  }
+
+  if (pendingDeleteMessageId !== null) {
+    clearPendingDeleteMessage({ preserveScroll: true });
   }
 
   if (inlineEditingMessageId !== null) {
