@@ -3945,9 +3945,8 @@ function createMessageActions(message, options = {}) {
   actions.className = "msg-actions msg-actions--footer";
 
   const messageId = message.id;
-  const isDeletingThisMessage = Number(deletingMessageId) === Number(messageId);
-  const isDeleteConfirmationOpen = Number(pendingDeleteMessageId) === Number(messageId);
-
+    const isDeletingThisMessage = messageId !== null && deletingMessageId !== null && Number(deletingMessageId) === Number(messageId);
+    const isDeleteConfirmationOpen = messageId !== null && pendingDeleteMessageId !== null && Number(pendingDeleteMessageId) === Number(messageId);
   if (message.role === "user" || message.role === "assistant") {
     if (options.editable && isEditableHistoryMessage(message)) {
       const editBtn = createMessageActionButton({
@@ -4476,6 +4475,7 @@ async function refreshConversationFromServer() {
   history = serverHistory;
   currentConvTitle = String(data.conversation?.title || currentConvTitle || "New Chat").trim() || "New Chat";
   latestSummaryStatus = null;
+  clearPendingDeleteMessage({ render: false });
   streamingCanvasDocuments = [];
   resetStreamingCanvasPreview();
   activeCanvasDocumentId = getActiveCanvasDocument(history)?.id || null;
@@ -5338,54 +5338,60 @@ window.addEventListener("keydown", (event) => {
 
 async function loadSidebar() {
   cancelSidebarRename();
-  const response = await fetch("/api/conversations");
-  const list = await response.json();
-  sidebarList.innerHTML = "";
-  if (list.length === 0) {
-    sidebarList.innerHTML = '<p class="sidebar-empty">No conversations yet.</p>';
-    return;
-  }
-  list.forEach((conversation) => {
-    if (conversation.id === currentConvId) {
-      currentConvTitle = String(conversation.title || "New Chat").trim() || "New Chat";
+  try {
+    const response = await fetch("/api/conversations");
+    const list = await response.json();
+    sidebarList.innerHTML = "";
+    if (list.length === 0) {
+      sidebarList.innerHTML = '<p class="sidebar-empty">No conversations yet.</p>';
+      return;
     }
-    const item = document.createElement("div");
-    item.className = "sidebar-item" + (conversation.id === currentConvId ? " active" : "");
-    item.dataset.id = conversation.id;
-    item.innerHTML =
-      `<span class="sidebar-title">${escHtml(conversation.title)}</span>` +
-      `<button class="sidebar-edit" title="Rename" aria-label="Rename" data-id="${conversation.id}">` +
-      `  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">` +
-      `    <path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>` +
-      `  </svg>` +
-      `</button>` +
-      `<button class="sidebar-del" title="Delete" data-id="${conversation.id}">` +
-      `  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">` +
-      `    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>` +
-      `  </svg>` +
-      `</button>`;
-    item.addEventListener("click", (event) => {
-      if (event.target.closest(".sidebar-del") || event.target.closest(".sidebar-edit")) {
-        return;
+    list.forEach((conversation) => {
+      if (conversation.id === currentConvId) {
+        currentConvTitle = String(conversation.title || "New Chat").trim() || "New Chat";
       }
-      if (conversation.id !== currentConvId) {
-        openConversation(conversation.id);
-        closeSidebarOnMobile();
-      }
+      const item = document.createElement("div");
+      item.className = "sidebar-item" + (conversation.id === currentConvId ? " active" : "");
+      item.dataset.id = conversation.id;
+      item.innerHTML =
+        `<span class="sidebar-title">${escHtml(conversation.title)}</span>` +
+        `<button class="sidebar-edit" title="Rename" aria-label="Rename" data-id="${conversation.id}">` +
+        `  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">` +
+        `    <path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>` +
+        `  </svg>` +
+        `</button>` +
+        `<button class="sidebar-del" title="Delete" data-id="${conversation.id}">` +
+        `  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">` +
+        `    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>` +
+        `  </svg>` +
+        `</button>`;
+      item.addEventListener("click", (event) => {
+        if (event.target.closest(".sidebar-del") || event.target.closest(".sidebar-edit")) {
+          return;
+        }
+        if (conversation.id !== currentConvId) {
+          openConversation(conversation.id);
+          closeSidebarOnMobile();
+        }
+      });
+      item.querySelector(".sidebar-edit").addEventListener("click", (event) => {
+        event.stopPropagation();
+        startSidebarRename(conversation, item);
+      });
+      item.querySelector(".sidebar-del").addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (!window.confirm("Are you sure you want to delete this conversation?")) {
+          return;
+        }
+        deleteConversation(conversation.id);
+      });
+      sidebarList.appendChild(item);
     });
-    item.querySelector(".sidebar-edit").addEventListener("click", (event) => {
-      event.stopPropagation();
-      startSidebarRename(conversation, item);
-    });
-    item.querySelector(".sidebar-del").addEventListener("click", (event) => {
-      event.stopPropagation();
-      if (!window.confirm("Are you sure you want to delete this conversation?")) {
-        return;
-      }
-      deleteConversation(conversation.id);
-    });
-    sidebarList.appendChild(item);
-  });
+  } catch (error) {
+    if (sidebarList.childElementCount === 0) {
+      sidebarList.innerHTML = '<p class="sidebar-empty">Could not load conversations.</p>';
+    }
+  }
 }
 
 function updateConversationTitleInState(conversationId, title) {
@@ -5541,11 +5547,15 @@ async function openConversation(id) {
 }
 
 async function deleteConversation(id) {
-  await fetch(`/api/conversations/${id}`, { method: "DELETE" });
-  if (id === currentConvId) {
-    startNewChat();
-  } else {
-    loadSidebar();
+  try {
+    await fetch(`/api/conversations/${id}`, { method: "DELETE" });
+    if (id === currentConvId) {
+      startNewChat();
+    } else {
+      loadSidebar();
+    }
+  } catch (error) {
+    showError("Could not delete conversation.");
   }
 }
 
@@ -7939,6 +7949,8 @@ async function generateTitle(convId) {
       const data = await response.json().catch(() => ({}));
       console.warn(data.error || "Conversation title generation failed.");
     }
+  } catch (error) {
+    console.warn("Failed to generate title:", error);
   } finally {
     loadSidebar();
   }
