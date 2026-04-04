@@ -2159,6 +2159,7 @@ function openCanvas(triggerEl = null) {
   closeCanvasConfirmModal("cancel", false);
   closeStats();
   closeExportPanel();
+  closeSidebarOnMobile();
   canvasPanel?.classList.add("open");
   canvasOverlay?.classList.add("open");
   canvasPanel?.setAttribute("aria-hidden", "false");

@@ -5289,6 +5289,7 @@ def run_agent_stream(
         retry_reason: str | None = None,
     ) -> dict:
         turn_reasoning_emitted = False
+        answer_emitted = False
         turn_tools = []
         turn_reasoning_details = []
         provider_usage = {
@@ -5319,6 +5320,12 @@ def run_agent_stream(
                     yield event
             turn_reasoning_emitted = True
             for event in emit_reasoning(reasoning_text):
+                yield event
+
+        def emit_turn_answer(answer_text: str):
+            nonlocal answer_emitted
+            for event in emit_answer(answer_text):
+                answer_emitted = True
                 yield event
 
         request_kwargs = {
@@ -5471,6 +5478,7 @@ def run_agent_stream(
                     "content_text": content_text,
                     "tool_calls": tool_calls,
                     "tool_call_error": tool_call_error,
+                    "answer_emitted": answer_emitted,
                     "stream_error": None,
                 }
 
@@ -5526,16 +5534,16 @@ def run_agent_stream(
                         if buffer_answer:
                             buffered_content_deltas.append(content_delta)
                         elif not turn_tools:
-                            for event in emit_answer(content_delta):
+                            for event in emit_turn_answer(content_delta):
                                 yield event
                         elif content_streaming_live:
-                            for event in emit_answer(content_delta):
+                            for event in emit_turn_answer(content_delta):
                                 yield event
                         elif tool_call_parts:
                             buffered_content_deltas.append(content_delta)
                         else:
                             content_streaming_live = True
-                            for event in emit_answer(content_delta):
+                            for event in emit_turn_answer(content_delta):
                                 yield event
                     if getattr(chunk, "usage", None):
                         usage_snapshot = add_usage(chunk.usage)
@@ -5569,7 +5577,7 @@ def run_agent_stream(
             finalize_call_usage()
             if buffered_content_deltas and not buffer_answer and not tool_calls and not tool_call_error:
                 for pending_delta in buffered_content_deltas:
-                    for event in emit_answer(pending_delta):
+                    for event in emit_turn_answer(pending_delta):
                         yield event
 
             _trace_agent_event(
@@ -5587,6 +5595,7 @@ def run_agent_stream(
                 "content_text": final_content,
                 "tool_calls": tool_calls,
                 "tool_call_error": tool_call_error,
+                "answer_emitted": answer_emitted,
                 "stream_error": stream_error,
             }
         finally:
@@ -6381,13 +6390,14 @@ def run_agent_stream(
             turn_result = yield from stream_model_turn(
                 final_messages,
                 allow_tools=False,
-                buffer_answer=True,
+                buffer_answer=False,
                 call_type="final_answer",
                 retry_reason=final_retry_reason,
             )
             content_text = turn_result.get("content_text") or ""
             tool_calls = turn_result.get("tool_calls")
             stream_error = turn_result.get("stream_error")
+            answer_emitted = bool(turn_result.get("answer_emitted"))
             if stream_error and _is_context_overflow_error(stream_error) and not final_phase_compaction_used:
                 _, compacted = apply_context_compaction(final_extra_messages, reason="reactive_final_stream", force=True)
                 if compacted:
@@ -6446,8 +6456,9 @@ def run_agent_stream(
                 final_text = content_text
             if stream_error:
                 yield {"type": "tool_error", "step": step, "tool": "final_answer", "error": stream_error}
-            for event in emit_answer(final_text):
-                yield event
+            if not answer_emitted:
+                for event in emit_answer(final_text):
+                    yield event
             break
         except Exception as exc:
             error = str(exc)

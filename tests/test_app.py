@@ -9207,6 +9207,40 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertIn({"type": "answer_delta", "text": "Final after compaction."}, events)
 
+    def test_run_agent_stream_streams_final_answer_deltas_after_tool_calls(self):
+        responses = [
+            iter(
+                [
+                    self._tool_call_chunk("search_web", {"queries": ["latest"]}),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=2, total_tokens=4)),
+                ]
+            ),
+            iter(
+                [
+                    self._stream_chunk(content="Hello "),
+                    self._stream_chunk(content="world"),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=3, total_tokens=5)),
+                ]
+            ),
+        ]
+
+        with patch("agent.client.chat.completions.create", side_effect=responses), patch(
+            "agent.search_web_tool",
+            return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+        ):
+            events = list(run_agent_stream([{"role": "user", "content": "Test"}], "deepseek-chat", 2, ["search_web"]))
+
+        answer_deltas = [event["text"] for event in events if event["type"] == "answer_delta"]
+        self.assertEqual(answer_deltas, ["Hello ", "world"])
+
+        tool_result_index = next(
+            index
+            for index, event in enumerate(events)
+            if event["type"] == "tool_result" and event.get("tool") == "search_web"
+        )
+        answer_start_index = next(index for index, event in enumerate(events) if event["type"] == "answer_start")
+        self.assertLess(tool_result_index, answer_start_index)
+
     def test_run_agent_stream_allows_active_tool_calls_even_when_prompt_tools_are_pruned(self):
         responses = [
             iter(
