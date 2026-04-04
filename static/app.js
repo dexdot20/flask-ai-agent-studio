@@ -4259,6 +4259,10 @@ function resetAssistantStreamingBubbleState() {
   activeAssistantStreamingHasVisibleAnswer = false;
 }
 
+function shouldAutoCollapseReasoning() {
+  return Boolean(appSettings.reasoning_auto_collapse);
+}
+
 function finalizeAssistantStreamingGroup(asstGroup, stepLog, metadata) {
   if (!asstGroup) {
     return;
@@ -4271,7 +4275,7 @@ function finalizeAssistantStreamingGroup(asstGroup, stepLog, metadata) {
   updateAssistantFetchBadge(asstGroup, metadata);
   updateAssistantToolTrace(asstGroup, metadata);
   updateAssistantSubAgentTrace(asstGroup, metadata);
-  updateReasoningPanel(asstGroup, getReasoningText(metadata));
+  updateReasoningPanel(asstGroup, getReasoningText(metadata), { autoCollapse: true });
   appendClarificationPanel(asstGroup, metadata, {});
 }
 
@@ -6462,7 +6466,7 @@ function updateAssistantSubAgentTrace(group, metadata) {
   }
 }
 
-function buildReasoningPanel(reasoningText) {
+function buildReasoningPanel(reasoningText, options = {}) {
   const text = String(reasoningText || "").trim();
   if (!text) {
     return null;
@@ -6470,7 +6474,7 @@ function buildReasoningPanel(reasoningText) {
 
   const details = document.createElement("details");
   details.className = "reasoning-panel";
-  details.open = true;
+  details.open = Boolean(options.forceOpen) || !shouldAutoCollapseReasoning();
 
   const summary = document.createElement("summary");
   summary.textContent = "Reasoning";
@@ -6484,7 +6488,7 @@ function buildReasoningPanel(reasoningText) {
   return details;
 }
 
-function updateReasoningPanel(group, reasoningText) {
+function updateReasoningPanel(group, reasoningText, options = {}) {
   const text = String(reasoningText || "").trim();
   const existing = group.querySelector(".reasoning-panel");
 
@@ -6500,10 +6504,15 @@ function updateReasoningPanel(group, reasoningText) {
     if (body) {
       body.innerHTML = renderMarkdown(text);
     }
+    if (options.forceOpen) {
+      existing.open = true;
+    } else if (options.autoCollapse && shouldAutoCollapseReasoning()) {
+      existing.open = false;
+    }
     return;
   }
 
-  const panel = buildReasoningPanel(text);
+  const panel = buildReasoningPanel(text, options);
   if (!panel) {
     return;
   }
@@ -7249,11 +7258,11 @@ async function sendMessage(options = {}) {
           asstBubble.textContent = "";
         }
       } else if (event.type === "reasoning_start") {
-        updateReasoningPanel(asstGroup, rawReasoning);
+        updateReasoningPanel(asstGroup, rawReasoning, { forceOpen: true });
         scrollToBottom();
       } else if (event.type === "reasoning_delta") {
         rawReasoning += event.text || "";
-        updateReasoningPanel(asstGroup, rawReasoning);
+        updateReasoningPanel(asstGroup, rawReasoning, { forceOpen: true });
         scrollToBottom();
       } else if (event.type === "answer_sync") {
         const syncedAnswer = String(event.text || "").trim();

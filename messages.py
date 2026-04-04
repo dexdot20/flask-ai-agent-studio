@@ -56,6 +56,16 @@ DEPENDENT_TOOL_NAMES = (
     "search_tool_memory",
 )
 
+CANVAS_CONTEXT_SECTION_HEADINGS = {
+    "## Canvas Workspace Summary",
+    "## Canvas Editing Guidance",
+    "## Canvas Decision Matrix",
+    "## Canvas Project Manifest",
+    "## Canvas Relationship Map",
+    "## Active Canvas Document",
+    "## Other Canvas Documents",
+}
+
 
 def _normalize_runtime_scratchpad_sections(
     scratchpad_sections: dict | None = None,
@@ -378,15 +388,57 @@ def build_user_message_for_model(
     return "\n\n".join(parts)
 
 
+def _strip_canvas_sections_from_context_injection(context_injection: str) -> str:
+    normalized = str(context_injection or "").strip()
+    if not normalized:
+        return ""
+
+    retained_sections: list[str] = []
+    current_lines: list[str] = []
+    current_heading: str | None = None
+
+    def flush_section() -> None:
+        nonlocal current_lines, current_heading
+        if not current_lines:
+            return
+        section_text = "\n".join(current_lines).strip()
+        if section_text and current_heading not in CANVAS_CONTEXT_SECTION_HEADINGS:
+            retained_sections.append(section_text)
+        current_lines = []
+        current_heading = None
+
+    for line in normalized.splitlines():
+        if line.startswith("## "):
+            flush_section()
+            current_heading = line.strip()
+            current_lines = [line]
+            continue
+
+        if not current_lines:
+            current_lines = [line]
+        else:
+            current_lines.append(line)
+
+    flush_section()
+    return "\n\n".join(section for section in retained_sections if section).strip()
+
+
 def build_api_messages(messages: list[dict], *, canvas_documents: list[dict] | None = None) -> list[dict]:
     api_messages = []
-    for message in messages:
+    latest_user_message_index = max(
+        (index for index, message in enumerate(messages) if message.get("role") == "user"),
+        default=-1,
+    )
+
+    for index, message in enumerate(messages):
         content = message["content"]
         role = message["role"]
         metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
         tool_calls = None
         if role == "user":
             context_injection = str(metadata.get("context_injection") or "").strip()
+            if context_injection and index != latest_user_message_index:
+                context_injection = _strip_canvas_sections_from_context_injection(context_injection)
             if context_injection:
                 api_messages.append(
                     {
@@ -956,7 +1008,6 @@ def build_runtime_system_message(
     )
     
     parts = [
-        "You are an advanced, capable, and helpful AI assistant.",
         "You have access to a suite of tools that may enable you to explore workspaces, write code, recall memories, manage canvas documents, and search the web.",
         "You must respect the rules, tool contracts, and guidelines provided below.\n"
     ]
@@ -1043,12 +1094,9 @@ def build_runtime_system_message(
         parts.append("- Scope: All workspace file tools must stay inside this root.")
         parts.append("- Safety: If a batch write tool returns needs_confirmation, wait for explicit user approval before re-running with confirm=true.\n")
 
-    # Canvas editing guidance: only inject when canvas documents exist.
-    # Without documents, the guidance is irrelevant (create_canvas_document spec is self-describing).
-    if canvas_documents:
-        canvas_editing_guidance = _build_canvas_editing_guidance(runtime_tool_names)
-        if canvas_editing_guidance:
-            parts.extend(canvas_editing_guidance)
+    canvas_editing_guidance = _build_canvas_editing_guidance(runtime_tool_names)
+    if canvas_editing_guidance:
+        parts.extend(canvas_editing_guidance)
 
     if include_volatile_context:
         parts.extend(

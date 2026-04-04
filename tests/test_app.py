@@ -231,6 +231,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["clarification_max_questions"], 5)
         self.assertAlmostEqual(payload["temperature"], 0.7)
         self.assertEqual(payload["canvas_prompt_max_lines"], 100)
+        self.assertEqual(payload["canvas_prompt_max_tokens"], 2000)
         self.assertEqual(payload["canvas_expand_max_lines"], 1600)
         self.assertEqual(payload["canvas_scroll_window_lines"], 200)
         self.assertEqual(payload["sub_agent_timeout_seconds"], 240)
@@ -240,6 +241,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["rag_auto_inject"], bool(payload["features"]["rag_enabled"]))
         self.assertEqual(payload["chat_summary_mode"], "auto")
         self.assertEqual(payload["chat_summary_trigger_token_count"], 80000)
+        self.assertFalse(payload["reasoning_auto_collapse"])
         self.assertFalse(payload["pruning_enabled"])
         self.assertEqual(payload["pruning_token_threshold"], 80000)
         self.assertEqual(payload["pruning_batch_size"], 10)
@@ -298,12 +300,14 @@ class AppRoutesTestCase(unittest.TestCase):
                 "clarification_max_questions": 4,
                 "chat_summary_mode": "aggressive",
                 "chat_summary_trigger_token_count": 9000,
+                "reasoning_auto_collapse": True,
                 "pruning_enabled": True,
                 "pruning_token_threshold": 12000,
                 "pruning_batch_size": 4,
                 "fetch_url_token_threshold": 4200,
                 "fetch_url_clip_aggressiveness": 70,
                 "canvas_prompt_max_lines": 1200,
+                "canvas_prompt_max_tokens": 3200,
                 "canvas_expand_max_lines": 2200,
                 "canvas_scroll_window_lines": 150,
                 "sub_agent_timeout_seconds": 360,
@@ -359,12 +363,14 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertAlmostEqual(payload["temperature"], 1.1)
         self.assertEqual(payload["chat_summary_mode"], "aggressive")
         self.assertEqual(payload["chat_summary_trigger_token_count"], 9000)
+        self.assertTrue(payload["reasoning_auto_collapse"])
         self.assertTrue(payload["pruning_enabled"])
         self.assertEqual(payload["pruning_token_threshold"], 12000)
         self.assertEqual(payload["pruning_batch_size"], 4)
         self.assertEqual(payload["fetch_url_token_threshold"], 4200)
         self.assertEqual(payload["fetch_url_clip_aggressiveness"], 70)
         self.assertEqual(payload["canvas_prompt_max_lines"], 1200)
+        self.assertEqual(payload["canvas_prompt_max_tokens"], 3200)
         self.assertEqual(payload["canvas_expand_max_lines"], 2200)
         self.assertEqual(payload["canvas_scroll_window_lines"], 150)
         self.assertEqual(payload["sub_agent_timeout_seconds"], 360)
@@ -2309,6 +2315,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("Remembered web result", content)
         self.assertIn("Knowledge Base", content)
         self.assertIn("Context block", content)
+        self.assertNotIn("You are an advanced, capable, and helpful AI assistant.", content)
 
     def test_runtime_system_message_places_volatile_context_after_tool_calling(self):
         message = build_runtime_system_message(
@@ -8192,6 +8199,52 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("21:40", api_messages[3]["content"])
         self.assertEqual(api_messages[4]["role"], "user")
         self.assertNotIn("id", api_messages[4])
+
+    def test_build_api_messages_strips_canvas_sections_from_historical_context_injections(self):
+        historical_context = (
+            "## Current Date and Time\n"
+            "- Time: 21:35\n\n"
+            "## Active Canvas Document\n"
+            "```text\n"
+            "1: old line\n"
+            "```"
+        )
+        latest_context = (
+            "## Current Date and Time\n"
+            "- Time: 21:40\n\n"
+            "## Active Canvas Document\n"
+            "```text\n"
+            "1: latest line\n"
+            "```"
+        )
+        normalized = normalize_chat_messages(
+            [
+                {
+                    "role": "user",
+                    "content": "First",
+                    "metadata": parse_message_metadata(
+                        serialize_message_metadata({"context_injection": historical_context})
+                    ),
+                },
+                {"role": "assistant", "content": "Reply"},
+                {
+                    "role": "user",
+                    "content": "Second",
+                    "metadata": parse_message_metadata(
+                        serialize_message_metadata({"context_injection": latest_context})
+                    ),
+                },
+            ]
+        )
+
+        api_messages = build_api_messages(normalized)
+
+        system_messages = [message for message in api_messages if message["role"] == "system"]
+        self.assertEqual(len(system_messages), 2)
+        self.assertIn("21:35", system_messages[0]["content"])
+        self.assertNotIn("## Active Canvas Document", system_messages[0]["content"])
+        self.assertIn("21:40", system_messages[1]["content"])
+        self.assertIn("## Active Canvas Document", system_messages[1]["content"])
 
     def test_patch_user_message_clears_stale_context_injection_but_keeps_attachments(self):
         conversation_id = self._create_conversation()

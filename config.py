@@ -381,6 +381,7 @@ DEFAULT_SETTINGS = {
     "chat_summary_mode": CHAT_SUMMARY_MODE if CHAT_SUMMARY_MODE in CHAT_SUMMARY_ALLOWED_MODES else "auto",
     "summary_skip_first": "2",
     "summary_skip_last": "1",
+    "reasoning_auto_collapse": "false",
     "pruning_enabled": "false",
     "pruning_token_threshold": str(CHAT_SUMMARY_TRIGGER_TOKEN_COUNT),
     "pruning_batch_size": "10",

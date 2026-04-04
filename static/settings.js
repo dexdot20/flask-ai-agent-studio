@@ -26,6 +26,7 @@ const summaryModeEl = document.getElementById("summary-mode-select");
 const summaryTriggerEl = document.getElementById("summary-trigger-input");
 const summarySkipFirstEl = document.getElementById("summary-skip-first-input");
 const summarySkipLastEl = document.getElementById("summary-skip-last-input");
+const reasoningAutoCollapseEl = document.getElementById("reasoning-auto-collapse-toggle");
 const pruningEnabledEl = document.getElementById("pruning-enabled-toggle");
 const pruningTokenThresholdEl = document.getElementById("pruning-token-threshold-input");
 const pruningBatchSizeEl = document.getElementById("pruning-batch-size-input");
@@ -1433,6 +1434,7 @@ function applySettingsToForm() {
   if (summaryTriggerEl) summaryTriggerEl.value = String(appSettings.chat_summary_trigger_token_count || 80000);
   if (summarySkipFirstEl) summarySkipFirstEl.value = String(appSettings.summary_skip_first ?? 2);
   if (summarySkipLastEl) summarySkipLastEl.value = String(appSettings.summary_skip_last ?? 1);
+  if (reasoningAutoCollapseEl) reasoningAutoCollapseEl.checked = Boolean(appSettings.reasoning_auto_collapse);
   if (pruningEnabledEl) pruningEnabledEl.checked = Boolean(appSettings.pruning_enabled);
   if (pruningTokenThresholdEl) pruningTokenThresholdEl.value = String(appSettings.pruning_token_threshold || 80000);
   if (pruningBatchSizeEl) pruningBatchSizeEl.value = String(appSettings.pruning_batch_size || 10);
@@ -1548,6 +1550,7 @@ function applyServerSettingsData(data) {
   appSettings.chat_summary_trigger_token_count = data.chat_summary_trigger_token_count || 80000;
   appSettings.summary_skip_first = data.summary_skip_first ?? 2;
   appSettings.summary_skip_last = data.summary_skip_last ?? 1;
+  appSettings.reasoning_auto_collapse = Boolean(data.reasoning_auto_collapse);
   appSettings.pruning_enabled = Boolean(data.pruning_enabled);
   appSettings.pruning_token_threshold = data.pruning_token_threshold || 80000;
   appSettings.pruning_batch_size = data.pruning_batch_size || 10;
@@ -1605,6 +1608,7 @@ async function saveSettings() {
     chat_summary_trigger_token_count: readNumericSetting(summaryTriggerEl, 80000, { allowZero: false }),
     summary_skip_first: readNumericSetting(summarySkipFirstEl, 0),
     summary_skip_last: readNumericSetting(summarySkipLastEl, 1),
+    reasoning_auto_collapse: Boolean(reasoningAutoCollapseEl?.checked),
     pruning_enabled: Boolean(pruningEnabledEl?.checked),
     pruning_token_threshold: readNumericSetting(pruningTokenThresholdEl, 80000, { allowZero: false }),
     pruning_batch_size: readNumericSetting(pruningBatchSizeEl, 10, { allowZero: false }),

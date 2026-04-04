@@ -2586,6 +2586,12 @@ def get_pruning_enabled(settings: dict | None = None) -> bool:
     return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def get_reasoning_auto_collapse(settings: dict | None = None) -> bool:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get("reasoning_auto_collapse", DEFAULT_SETTINGS["reasoning_auto_collapse"])
+    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def get_pruning_token_threshold(settings: dict | None = None) -> int:
     source = settings if settings is not None else get_app_settings()
     raw_value = source.get("pruning_token_threshold", DEFAULT_SETTINGS["pruning_token_threshold"])
