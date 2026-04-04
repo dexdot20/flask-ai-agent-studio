@@ -54,6 +54,8 @@ from config import (
     AGENT_TRACE_LOG_PATH,
     DEFAULT_MAX_PARALLEL_TOOLS,
     FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS,
+    FETCH_SUMMARIZE_MAX_INPUT_CHARS,
+    FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS,
     FETCH_SUMMARY_MAX_CHARS,
     FETCH_SUMMARY_TOKEN_THRESHOLD,
     MAX_PARALLEL_TOOLS_MAX,
@@ -176,6 +178,7 @@ TOOL_ARGUMENT_LANGUAGE_LABELS = {"json", "javascript", "js", "python", "py"}
 WEB_TOOL_NAMES = {
     "search_web",
     "fetch_url",
+    "fetch_url_summarized",
     "search_news_ddgs",
     "search_news_google",
 }
@@ -202,6 +205,8 @@ PARALLEL_SAFE_TOOL_NAMES = WEB_TOOL_NAMES | {
     "expand_canvas_document",
     "scroll_canvas_document",
     "search_canvas_document",
+    # Delegated read-only helper
+    "sub_agent",
 }
 SUB_AGENT_ALLOWED_TOOL_NAMES = {
     "search_knowledge_base",
@@ -209,6 +214,7 @@ SUB_AGENT_ALLOWED_TOOL_NAMES = {
     "read_scratchpad",
     "search_web",
     "fetch_url",
+    "fetch_url_summarized",
     "grep_fetched_content",
     "search_news_ddgs",
     "search_news_google",
@@ -219,7 +225,7 @@ SUB_AGENT_ALLOWED_TOOL_NAMES = {
     "list_dir",
     "search_files",
 }
-SUB_AGENT_DEFAULT_MAX_STEPS = 3
+SUB_AGENT_DEFAULT_MAX_STEPS = 6
 SUB_AGENT_MAX_TRANSCRIPT_MESSAGES = 24
 SUB_AGENT_MAX_MESSAGE_CONTENT_CHARS = 4_000
 SUB_AGENT_MAX_REASONING_CHARS = 4_000
@@ -812,6 +818,14 @@ def _build_recovery_hint_for_tool(tool_name: str, tool_args: dict | None = None)
                 "or search_tool_memory with the same URL."
             )
         return "If exact wording is needed, call grep_fetched_content with the same URL and a keyword or regex."
+    if normalized_tool_name == "fetch_url_summarized":
+        url = _clean_tool_text(normalized_tool_args.get("url") or "", limit=160)
+        if url:
+            return (
+                f"If the clean summary is not enough, call fetch_url or grep_fetched_content with {url} "
+                "to inspect the raw extracted page text."
+            )
+        return "If the clean summary is not enough, call fetch_url to inspect the raw extracted page text."
     if normalized_tool_name in {"search_web", "search_news_ddgs", "search_news_google"}:
         return "If exact wording is needed, fetch a specific returned URL or rerun the search with a narrower query."
     if normalized_tool_name == "search_knowledge_base":
@@ -831,6 +845,10 @@ def _coerce_int_range(value, default: int, minimum: int, maximum: int) -> int:
     except (TypeError, ValueError):
         normalized = default
     return max(minimum, min(maximum, normalized))
+
+
+def _tool_result_has_error(tool_name: str, result) -> bool:
+    return tool_name in {"fetch_url", "fetch_url_summarized"} and isinstance(result, dict) and bool(result.get("error"))
 
 
 def _normalize_search_queries(raw_queries) -> list[str]:
@@ -1219,6 +1237,7 @@ def _build_sub_agent_artifacts(transcript_messages: list[dict], tool_results: li
 
 def _build_sub_agent_messages(
     task: str,
+    parent_context: str,
     conversation_handoff: str,
     canvas_handoff: str,
     allowed_tools: list[str],
@@ -1244,6 +1263,8 @@ def _build_sub_agent_messages(
         )
 
     user_parts = [f"Delegated task from the parent assistant:\n{_clean_tool_text(task, limit=2_000)}"]
+    if parent_context:
+        user_parts.append(f"Parent context and goal:\n{_clean_tool_text(parent_context, limit=2_000)}")
     if conversation_handoff:
         user_parts.append(f"Current conversation summary:\n{conversation_handoff}")
     if canvas_handoff:
@@ -1504,6 +1525,13 @@ def _extract_compaction_tool_call_preview(tool_call: dict) -> str:
                 return f"{tool_name}: {_clean_tool_text(preview, limit=120)}"
     if tool_name == "fetch_url":
         url = str(arguments.get("url") or "").strip()
+        if url:
+            return f"{tool_name}: {_clean_tool_text(url, limit=140)}"
+    if tool_name == "fetch_url_summarized":
+        url = str(arguments.get("url") or "").strip()
+        focus = str(arguments.get("focus") or "").strip()
+        if url and focus:
+            return f"{tool_name}: {_clean_tool_text(url, limit=90)} | {_clean_tool_text(focus, limit=45)}"
         if url:
             return f"{tool_name}: {_clean_tool_text(url, limit=140)}"
     if tool_name in {"search_knowledge_base", "search_tool_memory"}:
@@ -1767,6 +1795,95 @@ def _summarize_fetch_result(result: dict, fallback_url: str = "") -> str:
     if result.get("content"):
         return f"Page content extracted: {title or url or 'page'}"
     return f"No extractable page content: {title or url or 'page'}"
+
+
+def _extract_chat_completion_text(response) -> str:
+    choices = getattr(response, "choices", None) or []
+    if not choices:
+        return ""
+    message = getattr(choices[0], "message", None)
+    content = getattr(message, "content", "")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                text = str(item.get("text") or "")
+                if text:
+                    parts.append(text)
+        return "".join(parts).strip()
+    return str(content or "").strip()
+
+
+def _build_fetch_summary_source_text(result: dict) -> str:
+    parts: list[str] = []
+    title = _clean_tool_text(result.get("title") or "", limit=200)
+    url = _clean_tool_text(result.get("url") or "", limit=240)
+    meta_description = _clean_tool_text(result.get("meta_description") or "", limit=600)
+    outline = result.get("outline") if isinstance(result.get("outline"), list) else []
+    content = _clean_tool_text(result.get("content") or "", limit=FETCH_SUMMARIZE_MAX_INPUT_CHARS)
+    if title:
+        parts.append(f"Title: {title}")
+    if url:
+        parts.append(f"URL: {url}")
+    if meta_description:
+        parts.append(f"Meta description: {meta_description}")
+    if outline:
+        headings = [f"- {_clean_tool_text(item, limit=120)}" for item in outline[:40] if _clean_tool_text(item, limit=120)]
+        if headings:
+            parts.append("Page outline:\n" + "\n".join(headings))
+    if content:
+        parts.append("Page content:\n" + content)
+    return "\n\n".join(parts).strip()
+
+
+def _summarize_fetched_page_result(result: dict, focus: str, parent_model: str = "") -> tuple[dict, str]:
+    settings = get_app_settings()
+    summarizer_model = get_operation_model("fetch_summarize", settings, fallback_model_id=parent_model)
+    target = resolve_model_target(summarizer_model, settings)
+    source_text = _build_fetch_summary_source_text(result)
+    if not source_text:
+        raise ValueError("Fetched page did not contain enough text to summarize.")
+
+    focus_text = _clean_tool_text(focus, limit=600)
+    system_prompt = (
+        "You are a precise web-page summarizer working for another AI assistant. "
+        "Produce a clean factual summary of the fetched page. Remove navigation chrome, repeated boilerplate, cookie banners, and low-signal filler. "
+        "If a focus question is provided, prioritize only the information relevant to that focus and state clearly when the page does not answer it. "
+        "Return plain text only."
+    )
+    user_parts = []
+    if focus_text:
+        user_parts.append(f"Focus:\n{focus_text}")
+    user_parts.append(source_text)
+    request_kwargs = apply_model_target_request_options(
+        {
+            "model": target["api_model"],
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": "\n\n".join(user_parts)},
+            ],
+            "max_tokens": FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS,
+            "temperature": 0.2,
+        },
+        target,
+    )
+    response = target["client"].chat.completions.create(**request_kwargs)
+    summary_text = _clean_tool_text(_extract_chat_completion_text(response), limit=RAG_TOOL_RESULT_MAX_TEXT_CHARS)
+    if not summary_text:
+        raise ValueError("Fetch summarizer returned empty content.")
+
+    summarized_result = {
+        "url": str(result.get("url") or "").strip(),
+        "title": str(result.get("title") or "").strip(),
+        "summary": summary_text,
+        "model": _clean_tool_text(summarizer_model, limit=120),
+        "content_char_count": len(_clean_tool_text(result.get("content") or "")),
+    }
+    if focus_text:
+        summarized_result["focus"] = focus_text
+    return summarized_result, f"Page summarized: {summarized_result.get('title') or summarized_result.get('url') or 'page'}"
 
 
 def _prepare_fetch_result_for_model(
@@ -3111,6 +3228,28 @@ def _run_sub_agent(tool_args: dict, runtime_state: dict):
         return stop.value
 
 
+def _execute_streaming_tool_with_event_buffer(tool_name: str, tool_args: dict, runtime_state: dict):
+    if tool_name != "sub_agent":
+        result, summary = _execute_tool(tool_name, tool_args, runtime_state=runtime_state)
+        return result, summary, []
+
+    stream = _run_sub_agent_stream(tool_args, runtime_state)
+    buffered_events: list[dict] = []
+    try:
+        while True:
+            try:
+                event = next(stream)
+            except StopIteration as stop:
+                result, summary = stop.value
+                return result, summary, buffered_events
+            if isinstance(event, dict):
+                buffered_events.append(event)
+    finally:
+        close_method = getattr(stream, "close", None)
+        if callable(close_method):
+            close_method()
+
+
 def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
     agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
     sub_agent_depth = _coerce_int_range(agent_context.get("sub_agent_depth"), 0, 0, 4)
@@ -3122,6 +3261,7 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
     if not task:
         error = "sub_agent requires a non-empty task."
         return {"status": "error", "error": error}, f"Failed: {error}"
+    parent_context = str(tool_args.get("context") or "").strip()
 
     parent_visible_tools = _normalize_tool_name_list(
         agent_context.get("prompt_tool_names")
@@ -3152,6 +3292,7 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
     canvas_handoff = _build_sub_agent_canvas_handoff(runtime_state)
     child_messages = _build_sub_agent_messages(
         task,
+        parent_context,
         conversation_handoff,
         canvas_handoff,
         child_tool_names,
@@ -3499,6 +3640,27 @@ def _run_fetch_url(tool_args: dict, runtime_state: dict):
     return result, _summarize_fetch_result(result, tool_args.get("url", ""))
 
 
+def _run_fetch_url_summarized(tool_args: dict, runtime_state: dict):
+    url = str(tool_args.get("url") or "").strip()
+    focus = str(tool_args.get("focus") or "").strip()
+    result = fetch_url_tool(url)
+    if result.get("error") or not _clean_tool_text(result.get("content") or ""):
+        error_result = {
+            "url": str(result.get("url") or url).strip(),
+            "title": str(result.get("title") or "").strip(),
+            "summary": _summarize_fetch_result(result, url),
+        }
+        if result.get("error"):
+            error_result["error"] = _clean_tool_text(result.get("error") or "", limit=400)
+        if focus:
+            error_result["focus"] = _clean_tool_text(focus, limit=600)
+        return error_result, _summarize_fetch_result(result, url)
+
+    agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
+    parent_model = str(agent_context.get("model") or "").strip()
+    return _summarize_fetched_page_result(result, focus, parent_model=parent_model)
+
+
 def _run_grep_fetched_content(tool_args: dict, runtime_state: dict):
     del runtime_state
     result = grep_fetched_content_tool(
@@ -3777,6 +3939,7 @@ _TOOL_EXECUTORS = {
     "search_news_ddgs": _run_search_news_ddgs,
     "search_news_google": _run_search_news_google,
     "fetch_url": _run_fetch_url,
+    "fetch_url_summarized": _run_fetch_url_summarized,
     "grep_fetched_content": _run_grep_fetched_content,
     "expand_canvas_document": _run_expand_canvas_document,
     "scroll_canvas_document": _run_scroll_canvas_document,
@@ -3862,6 +4025,12 @@ def _tool_input_preview(tool_name: str, tool_args: dict) -> str:
         return str(tool_args.get("query") or "").strip()[:300]
     if tool_name == "fetch_url":
         return str(tool_args.get("url") or "").strip()[:300]
+    if tool_name == "fetch_url_summarized":
+        url = str(tool_args.get("url") or "").strip()
+        focus = str(tool_args.get("focus") or "").strip()
+        if url and focus:
+            return f"{url} | {focus}"[:300]
+        return url[:300]
     if tool_name == "read_file":
         return str(tool_args.get("path") or "").strip()[:300]
     if tool_name == "list_dir":
@@ -3887,7 +4056,11 @@ def _tool_input_preview(tool_name: str, tool_args: dict) -> str:
             target = "all canvas documents"
         return f"{query} @ {target}"[:300]
     if tool_name == "sub_agent":
-        return str(tool_args.get("task") or "").strip()[:300]
+        task = str(tool_args.get("task") or "").strip()
+        context = str(tool_args.get("context") or "").strip()
+        if task and context:
+            return f"{task} | {context}"[:300]
+        return task[:300]
     return ""
 
 
@@ -3958,7 +4131,7 @@ def _format_list_tool_result(items: list[dict], title: str, link_key: str, extra
 
 
 def _build_tool_result_storage_entry(tool_name: str, tool_args: dict, result, summary: str, transcript_result=None) -> dict | None:
-    if tool_name in {"search_knowledge_base", "search_tool_memory", "sub_agent"}:
+    if tool_name in {"search_knowledge_base", "search_tool_memory"}:
         return None
 
     text = ""
@@ -3992,6 +4165,41 @@ def _build_tool_result_storage_entry(tool_name: str, tool_args: dict, result, su
             if display_content:
                 parts.append(display_content)
             text = "\n\n".join(parts)
+    elif tool_name == "fetch_url_summarized" and isinstance(result, dict):
+        parts = []
+        title = _clean_tool_text(result.get("title") or "", limit=160)
+        url = _clean_tool_text(result.get("url") or tool_args.get("url") or "", limit=220)
+        focus = _clean_tool_text(result.get("focus") or tool_args.get("focus") or "", limit=260)
+        summary_text = _clean_tool_text(result.get("summary") or "", limit=RAG_TOOL_RESULT_MAX_TEXT_CHARS)
+        if title:
+            parts.append(f"Title: {title}")
+        if url:
+            parts.append(f"URL: {url}")
+        if focus:
+            parts.append(f"Focus: {focus}")
+        if summary_text:
+            parts.append("Summary:\n" + summary_text)
+        text = "\n\n".join(parts)
+    elif tool_name == "sub_agent" and isinstance(result, dict):
+        parts = []
+        task_preview = _clean_tool_text(_tool_input_preview(tool_name, tool_args), limit=300)
+        summary_text = _clean_tool_text(result.get("summary") or summary or "", limit=RAG_TOOL_RESULT_MAX_TEXT_CHARS)
+        if task_preview:
+            parts.append(f"Task: {task_preview}")
+        if summary_text:
+            parts.append("Summary:\n" + summary_text)
+        artifacts = result.get("artifacts") if isinstance(result.get("artifacts"), list) else []
+        artifact_lines = []
+        for artifact in artifacts[:6]:
+            if not isinstance(artifact, dict):
+                continue
+            label = _clean_tool_text(artifact.get("label") or artifact.get("title") or artifact.get("type") or "artifact", limit=80)
+            artifact_summary = _clean_tool_text(artifact.get("summary") or artifact.get("content") or "", limit=160)
+            if label and artifact_summary:
+                artifact_lines.append(f"- {label}: {artifact_summary}")
+        if artifact_lines:
+            parts.append("Artifacts:\n" + "\n".join(artifact_lines))
+        text = "\n\n".join(parts)
     elif tool_name == "search_web" and isinstance(result, list):
         text = _format_list_tool_result(result, "Web results", link_key="url")
     elif tool_name in {"search_news_ddgs", "search_news_google"} and isinstance(result, list):
@@ -4046,6 +4254,23 @@ def _build_tool_result_storage_entry(tool_name: str, tool_args: dict, result, su
             entry["content_token_estimate"] = token_estimate
         if isinstance(content_char_count, int) and content_char_count >= 0:
             entry["content_char_count"] = content_char_count
+    elif tool_name == "fetch_url_summarized" and isinstance(result, dict):
+        focus = _clean_tool_text(result.get("focus") or tool_args.get("focus") or "", limit=260)
+        model = _clean_tool_text(result.get("model") or "", limit=120)
+        content_char_count = result.get("content_char_count")
+        if focus:
+            entry["focus"] = focus
+        if model:
+            entry["model"] = model
+        if isinstance(content_char_count, int) and content_char_count >= 0:
+            entry["content_char_count"] = content_char_count
+    elif tool_name == "sub_agent" and isinstance(result, dict):
+        model = _clean_tool_text(result.get("model") or "", limit=120)
+        error = _clean_tool_text(result.get("error") or "", limit=280)
+        if model:
+            entry["model"] = model
+        if error:
+            entry["error"] = error
     return entry
 
 
@@ -4294,7 +4519,7 @@ def _apply_tool_output_budget(
 
 
 def _lookup_cross_turn_tool_memory(tool_name: str, tool_args: dict) -> tuple[object, str] | None:
-    if tool_name == "fetch_url":
+    if tool_name in {"fetch_url", "fetch_url_summarized", "sub_agent"}:
         url = _tool_input_preview(tool_name, tool_args)
         if not url:
             return None
@@ -4309,7 +4534,7 @@ def _lookup_cross_turn_tool_memory(tool_name: str, tool_args: dict) -> tuple[obj
             return None
         summary = _clean_tool_text(exact_match.get("summary") or "", limit=RAG_TOOL_RESULT_SUMMARY_MAX_CHARS)
         if not summary:
-            summary = f"Reused cached fetch_url result for {url}"
+            summary = f"Reused cached {tool_name} result for {url}"
         return excerpt, summary
 
     if tool_name not in {"search_web", "search_news_ddgs", "search_news_google"}:
@@ -5522,12 +5747,26 @@ def run_agent_stream(
         if pending_slots:
             parallel_slots = [s for s in pending_slots if s["tool_name"] in PARALLEL_SAFE_TOOL_NAMES]
             sequential_slots = [s for s in pending_slots if s["tool_name"] not in PARALLEL_SAFE_TOOL_NAMES]
+            sub_agent_parallel_slots = [s for s in parallel_slots if s["tool_name"] == "sub_agent"]
+            direct_parallel_slots = [s for s in parallel_slots if s["tool_name"] != "sub_agent"]
+            buffered_sub_agent_slots = (
+                sub_agent_parallel_slots
+                if sub_agent_parallel_slots and (len(sub_agent_parallel_slots) > 1 or bool(direct_parallel_slots))
+                else []
+            )
+            if not buffered_sub_agent_slots and sub_agent_parallel_slots:
+                sequential_slots.extend(sub_agent_parallel_slots)
+            parallel_slots = [*direct_parallel_slots, *buffered_sub_agent_slots]
 
             if len(parallel_slots) > 1 and normalized_parallel_tool_limit > 1:
                 def _run_slot(s):
                     try:
-                        res, summ = _execute_tool(s["tool_name"], s["tool_args"], runtime_state=runtime_state)
-                        return {"ok": True, "result": res, "summary": summ}
+                        res, summ, events = _execute_streaming_tool_with_event_buffer(
+                            s["tool_name"],
+                            s["tool_args"],
+                            runtime_state,
+                        )
+                        return {"ok": True, "result": res, "summary": summ, "events": events}
                     except Exception as exc:
                         return {"ok": False, "error": str(exc)}
 
@@ -5538,10 +5777,21 @@ def run_agent_stream(
             else:
                 for s in parallel_slots:
                     try:
-                        res, summ = _execute_tool(s["tool_name"], s["tool_args"], runtime_state=runtime_state)
-                        s["exec_result"] = {"ok": True, "result": res, "summary": summ}
+                        res, summ, events = _execute_streaming_tool_with_event_buffer(
+                            s["tool_name"],
+                            s["tool_args"],
+                            runtime_state,
+                        )
+                        s["exec_result"] = {"ok": True, "result": res, "summary": summ, "events": events}
                     except Exception as exc:
                         s["exec_result"] = {"ok": False, "error": str(exc)}
+
+            for s in parallel_slots:
+                buffered_events = s.get("exec_result", {}).get("events") if isinstance(s.get("exec_result"), dict) else []
+                if isinstance(buffered_events, list):
+                    for event in buffered_events:
+                        if isinstance(event, dict):
+                            yield event
 
             for s in sequential_slots:
                 try:
@@ -5618,7 +5868,7 @@ def run_agent_stream(
                     {
                         "tool_name": tool_name,
                         "arguments": tool_args,
-                        "ok": not (tool_name == "fetch_url" and isinstance(result, dict) and result.get("error")),
+                        "ok": not _tool_result_has_error(tool_name, result),
                         "summary": f"{summary} (cached)",
                         "result": transcript_result,
                         "cached": True,
@@ -5634,7 +5884,7 @@ def run_agent_stream(
                         "transcript_result": transcript_result,
                         "storage_entry": storage_entry,
                         "cached": True,
-                        "ok": not (tool_name == "fetch_url" and isinstance(result, dict) and result.get("error")),
+                        "ok": not _tool_result_has_error(tool_name, result),
                     }
                 )
 
@@ -5710,12 +5960,15 @@ def run_agent_stream(
                     if storage_entry and cache_key not in persisted_tool_cache_keys:
                         persisted_tool_cache_keys.add(cache_key)
                         persisted_tool_results.append(storage_entry)
-                    if tool_name in WEB_TOOL_NAMES and storage_entry:
+                    if tool_name in (WEB_TOOL_NAMES | {"sub_agent"}) and storage_entry:
                         try:
-                            # Use raw_content when available so the full (unclipped) page
-                            # text is indexed in tool memory and can be found later by
-                            # search_tool_memory or grep_fetched_content.
-                            memory_content = storage_entry.get("raw_content") or storage_entry.get("content", "")
+                            if tool_name == "fetch_url":
+                                # Use raw_content when available so the full (unclipped) page
+                                # text is indexed in tool memory and can be found later by
+                                # search_tool_memory or grep_fetched_content.
+                                memory_content = storage_entry.get("raw_content") or storage_entry.get("content", "")
+                            else:
+                                memory_content = storage_entry.get("content", "")
                             upsert_tool_memory_result(
                                 tool_name,
                                 storage_entry.get("input_preview", ""),
@@ -5768,7 +6021,7 @@ def run_agent_stream(
                         {
                             "tool_name": tool_name,
                             "arguments": tool_args,
-                            "ok": not (tool_name == "fetch_url" and isinstance(result, dict) and result.get("error")),
+                            "ok": not _tool_result_has_error(tool_name, result),
                             "summary": summary,
                             "result": transcript_result,
                         }
@@ -5782,7 +6035,7 @@ def run_agent_stream(
                             "summary": summary,
                             "transcript_result": transcript_result,
                             "storage_entry": storage_entry,
-                            "ok": not (tool_name == "fetch_url" and isinstance(result, dict) and result.get("error")),
+                            "ok": not _tool_result_has_error(tool_name, result),
                         }
                     )
                     if tool_name in CANVAS_MUTATION_TOOL_NAMES:

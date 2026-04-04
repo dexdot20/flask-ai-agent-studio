@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 import json
 import os
 import re
@@ -47,6 +48,7 @@ from db import (
     parse_message_tool_calls,
     sanitize_edited_user_message_metadata,
     serialize_message_metadata,
+    soft_delete_messages,
 )
 from doc_service import extract_document_text, read_uploaded_document
 from model_registry import (
@@ -654,6 +656,57 @@ def register_conversation_routes(app) -> None:
             sync_conversations_to_rag_safe(conversation_id=row_conversation_id)
 
         return jsonify({"updated": True, "message": message_row_to_dict(updated_row)})
+
+    @app.route("/api/messages/<int:message_id>", methods=["DELETE"])
+    def delete_conversation_message(message_id):
+        data = request.get_json(silent=True) or {}
+        conversation_id_raw = data.get("conversation_id")
+        conversation_id = None
+        if conversation_id_raw not in (None, ""):
+            try:
+                conversation_id = int(conversation_id_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "conversation_id must be an integer."}), 400
+
+        with get_db() as conn:
+            row = conn.execute(
+                """SELECT id, conversation_id, role, tool_calls, deleted_at
+                   FROM messages WHERE id = ?""",
+                (message_id,),
+            ).fetchone()
+            if not row or row["deleted_at"] is not None:
+                return jsonify({"error": "Message not found."}), 404
+
+            row_conversation_id = int(row["conversation_id"] or 0)
+            if conversation_id is not None and row_conversation_id != conversation_id:
+                return jsonify({"error": "Message does not belong to the provided conversation."}), 400
+
+            role = str(row["role"] or "").strip()
+            if role not in {"user", "assistant"}:
+                return jsonify({"error": "Only user and assistant messages can be deleted."}), 400
+
+            if role == "assistant" and parse_message_tool_calls(row["tool_calls"]):
+                return jsonify({"error": "Assistant tool-call messages cannot be deleted."}), 400
+
+            deleted_at = datetime.now().astimezone().isoformat(timespec="seconds")
+            soft_delete_messages(conn, row_conversation_id, [message_id], deleted_at)
+            conn.execute(
+                "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
+                (row_conversation_id,),
+            )
+
+        if RAG_ENABLED:
+            sync_conversations_to_rag_safe(conversation_id=row_conversation_id)
+
+        _, updated_messages = _load_conversation_payload(row_conversation_id)
+        return jsonify(
+            {
+                "deleted": True,
+                "message_id": message_id,
+                "conversation_id": row_conversation_id,
+                "messages": updated_messages,
+            }
+        )
 
     @app.route("/api/conversations/<int:conv_id>/prune-batch", methods=["POST"])
     def prune_conversation_batch_route(conv_id):

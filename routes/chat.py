@@ -10,6 +10,7 @@ from threading import Lock
 from flask import Response, current_app, jsonify, request, stream_with_context
 
 from agent import FINAL_ANSWER_ERROR_TEXT, FINAL_ANSWER_MISSING_TEXT, collect_agent_response, run_agent_stream
+from agent import WEB_TOOL_NAMES
 from canvas_service import (
     create_canvas_document,
     create_canvas_runtime_state,
@@ -233,6 +234,19 @@ def _schedule_rag_conversation_sync(conversation_id: int | None, *, force: bool 
         sync_conversations_to_rag_safe(conversation_id=conversation_id, force=force)
         return
     sync_conversations_to_rag_background(current_app._get_current_object(), conversation_id=conversation_id, force=force)
+
+
+def _prioritize_summary_messages(messages: list[dict] | None) -> list[dict]:
+    ordered_messages = [message for message in (messages or []) if isinstance(message, dict)]
+    if not ordered_messages:
+        return []
+
+    summary_messages = [message for message in ordered_messages if str(message.get("role") or "").strip() == "summary"]
+    if not summary_messages:
+        return ordered_messages
+
+    non_summary_messages = [message for message in ordered_messages if str(message.get("role") or "").strip() != "summary"]
+    return [*summary_messages, *non_summary_messages]
 
 
 def _build_assistant_message_metadata(
@@ -2566,12 +2580,13 @@ def register_chat_routes(app) -> None:
                 canvas_documents=initial_canvas_documents,
                 workspace_root=workspace_root,
             )
+            prompt_tool_names = [name for name in runtime_tool_names if name not in WEB_TOOL_NAMES]
             agent_stream = run_agent_stream(
                 api_messages,
                 model,
                 max_steps,
                 active_tool_names,
-                prompt_tool_names=runtime_tool_names,
+                prompt_tool_names=prompt_tool_names,
                 max_parallel_tools=get_max_parallel_tools(settings),
                 temperature=temperature,
                 fetch_url_token_threshold=fetch_url_token_threshold,
@@ -2910,7 +2925,9 @@ def register_chat_routes(app) -> None:
                         yield json.dumps(
                             {
                                 "type": "history_sync",
-                                "messages": summary_outcome.get("messages") or get_conversation_messages(conv_id),
+                                "messages": _prioritize_summary_messages(
+                                    summary_outcome.get("messages") or get_conversation_messages(conv_id)
+                                ),
                             },
                             ensure_ascii=False,
                         ) + "\n"

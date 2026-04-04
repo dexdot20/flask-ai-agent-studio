@@ -135,6 +135,8 @@ let editingMessageId = null;
 let inlineEditingMessageId = null;
 let inlineEditingDraft = "";
 let savingEditedMessageId = null;
+let pendingDeleteMessageId = null;
+let deletingMessageId = null;
 let activeCanvasDocumentId = null;
 let streamingCanvasDocuments = [];
 let isCanvasEditing = false;
@@ -2851,6 +2853,11 @@ function normalizeUsagePayload(usage) {
   const maxInputTokensPerCall =
     toNonNegativeIntOrNull(source.max_input_tokens_per_call) ??
     getMaxInputTokensPerCall(modelCalls, promptTokens || estimatedInputTokens);
+  const cost = typeof source.cost === "number" && Number.isFinite(source.cost) && source.cost >= 0
+    ? Number(source.cost)
+    : null;
+  const costAvailable = source.cost_available === true;
+  const currency = String(source.currency || "").trim() || null;
 
   return {
     prompt_tokens: promptTokens,
@@ -2867,7 +2874,22 @@ function normalizeUsagePayload(usage) {
     provider: String(source.provider || "").trim() || null,
     model: String(source.model || "—") || "—",
     cache_metrics_estimated: source.cache_metrics_estimated === true,
+    cost,
+    cost_available: costAvailable,
+    currency,
   };
+}
+
+function formatUsageCost(value, currency = "USD") {
+  if (!Number.isFinite(value)) {
+    return "—";
+  }
+
+  const normalizedCurrency = String(currency || "USD").trim().toUpperCase() || "USD";
+  if (normalizedCurrency === "USD") {
+    return `$${Number(value).toFixed(6)}`;
+  }
+  return `${Number(value).toFixed(6)} ${normalizedCurrency}`;
 }
 
 function summarizeValueList(values, fallback = "—") {
@@ -3062,6 +3084,18 @@ function renderTokenStats() {
   const totalCacheMiss = tokenTurns.reduce((sum, turn) => sum + toFiniteNumber(turn.prompt_cache_miss_tokens, 0), 0);
   const totalAsst = tokenTurns.reduce((sum, turn) => sum + turn.completion_tokens, 0);
   const grandTotal = tokenTurns.reduce((sum, turn) => sum + turn.total_tokens, 0);
+  const turnsWithKnownCost = tokenTurns.filter((turn) => turn?.cost_available === true && Number.isFinite(turn.cost));
+  const sessionCostCurrencies = Array.from(
+    new Set(turnsWithKnownCost.map((turn) => String(turn.currency || "USD").trim().toUpperCase()).filter(Boolean)),
+  );
+  const sessionCost = turnsWithKnownCost.reduce((sum, turn) => sum + toFiniteNumber(turn.cost, 0), 0);
+  const sessionCostLabel = !turnsWithKnownCost.length
+    ? "—"
+    : sessionCostCurrencies.length !== 1
+      ? "Mixed currencies"
+      : tokenTurns.length !== turnsWithKnownCost.length
+        ? `${formatUsageCost(sessionCost, sessionCostCurrencies[0])} partial`
+        : formatUsageCost(sessionCost, sessionCostCurrencies[0]);
   const sessionBreakdown = aggregateBreakdown(tokenTurns);
   const lastTurn = tokenTurns.length ? tokenTurns[tokenTurns.length - 1] : null;
   const sessionHasCacheMetrics = tokenTurns.some(hasCacheUsageMetrics);
@@ -3078,6 +3112,7 @@ function renderTokenStats() {
     : "—";
   document.getElementById("stat-asst").textContent = fmt(totalAsst);
   document.getElementById("stat-total").textContent = fmt(grandTotal);
+  document.getElementById("stat-cost").textContent = sessionCostLabel;
   document.getElementById("stat-session-providers").textContent = sessionProviders;
   document.getElementById("stat-last-input").textContent = lastTurn ? fmt(lastTurn.prompt_tokens) : "—";
   document.getElementById("stat-last-cache-hit").textContent = lastTurnHasCacheMetrics
@@ -3097,6 +3132,9 @@ function renderTokenStats() {
     : "—";
   document.getElementById("stat-last-output").textContent = lastTurn ? fmt(lastTurn.completion_tokens) : "—";
   document.getElementById("stat-last-total").textContent = lastTurn ? fmt(lastTurn.total_tokens) : "—";
+  document.getElementById("stat-last-cost").textContent = lastTurn?.cost_available === true && Number.isFinite(lastTurn.cost)
+    ? formatUsageCost(lastTurn.cost, lastTurn.currency || "USD")
+    : "—";
   document.getElementById("stat-last-model").textContent = lastTurn ? lastTurn.model : "—";
   document.getElementById("stat-last-provider").textContent = lastTurn?.provider || "—";
   document.getElementById("stat-breakdown-session-total").textContent = fmt(sumBreakdown(sessionBreakdown));
@@ -3132,6 +3170,9 @@ function renderTokenStats() {
         const cacheMissStat = hasCacheUsageMetrics(turn)
           ? `<span class="turn-stat">${formatCacheMetricValue(toFiniteNumber(turn.prompt_cache_miss_tokens, 0), turn.cache_metrics_estimated === true)} ${turn.cache_metrics_estimated === true ? "estimated cache miss" : "cache miss"}</span>`
           : "";
+        const costStat = turn.cost_available === true && Number.isFinite(turn.cost)
+          ? `<span class="turn-stat">${formatUsageCost(turn.cost, turn.currency || "USD")} cost</span>`
+          : "";
         return (
         `<div class="turn-item">` +
           `<div class="turn-header">` +
@@ -3149,6 +3190,7 @@ function renderTokenStats() {
             promptCapStat +
             cacheHitStat +
             cacheMissStat +
+            costStat +
             `<span class="turn-stat"><span class="stats-dot dot-asst"></span>${fmt(turn.completion_tokens)} completion</span>` +
             `<span class="turn-stat">${fmt(turn.total_tokens)} total</span>` +
           `</div>` +
@@ -3805,6 +3847,8 @@ function createMessageActions(message, options = {}) {
   actions.className = "msg-actions msg-actions--footer";
 
   const messageId = message.id;
+  const isDeletingThisMessage = Number(deletingMessageId) === Number(messageId);
+  const isDeleteConfirmationOpen = Number(pendingDeleteMessageId) === Number(messageId);
 
   if (message.role === "user" || message.role === "assistant") {
     if (options.editable && isEditableHistoryMessage(message)) {
@@ -3813,7 +3857,7 @@ function createMessageActions(message, options = {}) {
         title: "Edit message",
         icon: MESSAGE_ACTION_ICONS.edit,
         onClick: () => beginInlineEditingMessage(messageId),
-        disabled: !isPersistedMessageId(messageId) || Number(savingEditedMessageId) === Number(messageId),
+        disabled: !isPersistedMessageId(messageId) || Number(savingEditedMessageId) === Number(messageId) || isDeletingThisMessage,
       });
       actions.appendChild(editBtn);
     }
@@ -3825,9 +3869,25 @@ function createMessageActions(message, options = {}) {
       onClick: () => {
         void (message.role === "assistant" ? copyAssistantMessageMarkdown(message) : copyUserMessageContent(message));
       },
-      disabled: !String(message.content || "").trim(),
+      disabled: !String(message.content || "").trim() || isDeletingThisMessage,
     });
     actions.appendChild(copyButton);
+
+    const deleteButton = createMessageActionButton({
+      label: isDeleteConfirmationOpen ? "Cancel delete" : "Delete",
+      title: isDeleteConfirmationOpen ? "Cancel delete" : "Delete message",
+      icon: MESSAGE_ACTION_ICONS.delete,
+      onClick: () => {
+        if (isDeleteConfirmationOpen) {
+          clearPendingDeleteMessage({ preserveScroll: true });
+          return;
+        }
+        openDeleteMessageConfirm(messageId);
+      },
+      disabled: !isPersistedMessageId(messageId) || isDeletingThisMessage || isStreaming || isFixing,
+    });
+    deleteButton.classList.add("msg-action-btn--danger");
+    actions.appendChild(deleteButton);
 
     if (message.role === "assistant") {
       const regenerateButton = createMessageActionButton({
@@ -3837,9 +3897,41 @@ function createMessageActions(message, options = {}) {
         onClick: () => {
           void regenerateAssistantMessage(message.id);
         },
-        disabled: !getPreviousUserMessage(message.id),
+        disabled: !getPreviousUserMessage(message.id) || isDeletingThisMessage,
       });
       actions.appendChild(regenerateButton);
+    }
+
+    if (isDeleteConfirmationOpen) {
+      const confirmBox = document.createElement("div");
+      confirmBox.className = "msg-delete-confirm";
+
+      const confirmText = document.createElement("span");
+      confirmText.className = "msg-delete-confirm__text";
+      confirmText.textContent = "Delete this message?";
+      confirmBox.appendChild(confirmText);
+
+      const confirmBtn = document.createElement("button");
+      confirmBtn.type = "button";
+      confirmBtn.className = "msg-action-btn msg-delete-confirm__btn msg-delete-confirm__btn--confirm";
+      confirmBtn.textContent = isDeletingThisMessage ? "Deleting..." : "Delete";
+      confirmBtn.disabled = isDeletingThisMessage;
+      confirmBtn.addEventListener("click", () => {
+        void deleteConversationMessage(messageId);
+      });
+      confirmBox.appendChild(confirmBtn);
+
+      const cancelBtn = document.createElement("button");
+      cancelBtn.type = "button";
+      cancelBtn.className = "msg-action-btn msg-delete-confirm__btn";
+      cancelBtn.textContent = "Cancel";
+      cancelBtn.disabled = isDeletingThisMessage;
+      cancelBtn.addEventListener("click", () => {
+        clearPendingDeleteMessage({ preserveScroll: true });
+      });
+      confirmBox.appendChild(cancelBtn);
+
+      actions.appendChild(confirmBox);
     }
   }
 
@@ -3884,7 +3976,120 @@ const MESSAGE_ACTION_ICONS = {
       <path d="M7 20H3v-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
     </svg>
   `,
+  delete: `
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
+      <path d="M4 7h16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+      <path d="M10 11v6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+      <path d="M14 11v6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+      <path d="M6 7l1 12a2 2 0 0 0 2 1.8h6a2 2 0 0 0 2-1.8L18 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M9 7V5.8A1.8 1.8 0 0 1 10.8 4h2.4A1.8 1.8 0 0 1 15 5.8V7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
+  `,
 };
+
+function clearPendingDeleteMessage(options = {}) {
+  const preserveScroll = options.preserveScroll !== false;
+  pendingDeleteMessageId = null;
+  if (options.render !== false) {
+    renderConversationHistory({ preserveScroll });
+  }
+}
+
+function openDeleteMessageConfirm(messageId) {
+  if (isStreaming || isFixing) {
+    return;
+  }
+  pendingDeleteMessageId = Number(messageId);
+  renderConversationHistory({ preserveScroll: true });
+}
+
+async function deleteConversationMessage(messageId) {
+  const normalizedMessageId = Number(messageId);
+  if (!isPersistedMessageId(normalizedMessageId) || !currentConvId) {
+    showToast("Message could not be deleted.", "error");
+    return;
+  }
+
+  deletingMessageId = normalizedMessageId;
+  renderConversationHistory({ preserveScroll: true });
+
+  try {
+    const response = await fetch(`/api/messages/${normalizedMessageId}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ conversation_id: currentConvId }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.error || "Message could not be deleted.");
+    }
+
+    if (Number(editingMessageId) === normalizedMessageId) {
+      clearEditTarget();
+    }
+    if (Number(inlineEditingMessageId) === normalizedMessageId) {
+      cancelInlineEditingMessage({ focusAction: false });
+    }
+
+    history = Array.isArray(payload.messages)
+      ? payload.messages.map(normalizeHistoryEntry)
+      : history.filter((item) => Number(item.id) !== normalizedMessageId);
+    pendingDeleteMessageId = null;
+    deletingMessageId = null;
+    rebuildTokenStatsFromHistory();
+    renderConversationHistory({ preserveScroll: true });
+    renderCanvasPanel();
+    refreshEditBanner();
+    showToast("Message deleted.", "success");
+  } catch (error) {
+    deletingMessageId = null;
+    renderConversationHistory({ preserveScroll: true });
+    showError(error.message || "Message could not be deleted.");
+  }
+}
+
+function fallbackCopyText(text) {
+  const normalizedText = String(text || "");
+  if (!normalizedText) {
+    return false;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = normalizedText;
+  textarea.setAttribute("readonly", "readonly");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "-9999px";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+
+  let copied = false;
+  try {
+    textarea.focus({ preventScroll: true });
+    textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+    copied = Boolean(document.execCommand && document.execCommand("copy"));
+  } catch (_) {
+    copied = false;
+  } finally {
+    textarea.remove();
+  }
+
+  return copied;
+}
+
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (_) {
+      // Fall through to the legacy copy fallback.
+    }
+  }
+
+  return fallbackCopyText(text);
+}
 
 async function copyMessageContent(content, messages) {
   const text = String(content || "");
@@ -3893,13 +4098,12 @@ async function copyMessageContent(content, messages) {
     return false;
   }
 
-  if (!navigator.clipboard?.writeText) {
-    showToast(messages.unavailable, "warning");
-    return false;
-  }
-
   try {
-    await navigator.clipboard.writeText(text);
+    const copied = await copyTextToClipboard(text);
+    if (!copied) {
+      showToast(messages.unavailable, "warning");
+      return false;
+    }
     showToast(messages.success, "success");
     return true;
   } catch (_) {
@@ -4784,12 +4988,16 @@ if (conversationExportPdfBtn) {
 if (canvasCopyBtn) {
   canvasCopyBtn.addEventListener("click", async () => {
     const document = getCanvasDocumentById(getCanvasRenderableDocuments(), activeCanvasDocumentId) || getActiveCanvasDocument();
-    if (!document || !navigator.clipboard) {
+    if (!document) {
       setCanvasStatus("Clipboard is not available.", "warning");
       return;
     }
     try {
-      await navigator.clipboard.writeText(document.content || "");
+      const copied = await copyTextToClipboard(document.content || "");
+      if (!copied) {
+        setCanvasStatus("Clipboard is not available.", "warning");
+        return;
+      }
       setCanvasStatus("Canvas copied to clipboard.", "success");
     } catch (_) {
       setCanvasStatus("Copy failed.", "danger");
@@ -4800,12 +5008,16 @@ if (canvasCopyRefBtn) {
   canvasCopyRefBtn.addEventListener("click", async () => {
     const document = getCanvasDocumentById(getCanvasRenderableDocuments(), activeCanvasDocumentId) || getActiveCanvasDocument();
     const reference = getCanvasDocumentReference(document);
-    if (!reference || !navigator.clipboard) {
+    if (!reference) {
       setCanvasStatus("Reference copy is not available.", "warning");
       return;
     }
     try {
-      await navigator.clipboard.writeText(reference);
+      const copied = await copyTextToClipboard(reference);
+      if (!copied) {
+        setCanvasStatus("Reference copy is not available.", "warning");
+        return;
+      }
       setCanvasStatus(document?.path ? "Canvas path copied." : "Canvas title copied.", "success");
     } catch (_) {
       setCanvasStatus("Reference copy failed.", "danger");

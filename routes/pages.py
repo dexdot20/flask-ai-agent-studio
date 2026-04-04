@@ -536,26 +536,32 @@ def register_page_routes(app) -> None:
         if operation_model_preferences_raw is not None:
             if not isinstance(operation_model_preferences_raw, dict):
                 return jsonify({"error": "operation_model_preferences must be an object."}), 400
-            unsupported_keys = [key for key in operation_model_preferences_raw if key not in MODEL_OPERATION_KEYS]
-            if unsupported_keys:
-                return jsonify({"error": "operation_model_preferences contains unsupported operations."}), 400
 
-            for operation_key, model_value in operation_model_preferences_raw.items():
+            filtered_operation_preferences = {
+                key: value
+                for key, value in operation_model_preferences_raw.items()
+                if key in MODEL_OPERATION_KEYS
+            }
+
+            for operation_key, model_value in filtered_operation_preferences.items():
                 candidate = canonicalize_model_id(model_value)
                 if candidate and get_model_record(candidate, settings) is None:
                     return jsonify({"error": f"operation_model_preferences.{operation_key} must reference a known model."}), 400
 
-            normalized_operation_preferences = normalize_operation_model_preferences(operation_model_preferences_raw, settings)
+            normalized_operation_preferences = normalize_operation_model_preferences(filtered_operation_preferences, settings)
             settings["operation_model_preferences"] = json.dumps(normalized_operation_preferences, ensure_ascii=False)
 
         if operation_model_fallback_preferences_raw is not None:
             if not isinstance(operation_model_fallback_preferences_raw, dict):
                 return jsonify({"error": "operation_model_fallback_preferences must be an object."}), 400
-            unsupported_keys = [key for key in operation_model_fallback_preferences_raw if key not in MODEL_OPERATION_KEYS]
-            if unsupported_keys:
-                return jsonify({"error": "operation_model_fallback_preferences contains unsupported operations."}), 400
 
-            for operation_key, model_value in operation_model_fallback_preferences_raw.items():
+            filtered_operation_fallback_preferences = {
+                key: value
+                for key, value in operation_model_fallback_preferences_raw.items()
+                if key in MODEL_OPERATION_KEYS
+            }
+
+            for operation_key, model_value in filtered_operation_fallback_preferences.items():
                 if model_value in (None, ""):
                     continue
 
@@ -572,7 +578,7 @@ def register_page_routes(app) -> None:
                         return jsonify({"error": f"operation_model_fallback_preferences.{operation_key} must reference known models."}), 400
 
             normalized_operation_fallback_preferences = normalize_operation_model_fallback_preferences(
-                operation_model_fallback_preferences_raw,
+                filtered_operation_fallback_preferences,
                 settings,
             )
             settings["operation_model_fallback_preferences"] = json.dumps(

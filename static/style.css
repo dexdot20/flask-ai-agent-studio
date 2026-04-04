@@ -604,9 +604,46 @@ body.sidebar-collapsed .chat-area {
   background: rgba(79, 110, 247, 0.08);
 }
 
+.msg-action-btn--danger:hover:not(:disabled) {
+  border-color: rgba(255, 110, 110, 0.68);
+  color: #ff9a9a;
+  background: rgba(255, 110, 110, 0.08);
+}
+
 .msg-action-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.msg-delete-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(18, 20, 28, 0.92);
+}
+
+.msg-delete-confirm__text {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.msg-delete-confirm__btn {
+  min-width: 0;
+}
+
+.msg-delete-confirm__btn--confirm {
+  border-color: rgba(255, 110, 110, 0.4);
+  color: #ffb3b3;
+}
+
+.msg-delete-confirm__btn--confirm:hover:not(:disabled) {
+  border-color: rgba(255, 110, 110, 0.68);
+  color: #ffd1d1;
+  background: rgba(255, 110, 110, 0.14);
 }
 
 .msg-group.user.editing-target .bubble {

@@ -84,6 +84,13 @@ def build_canvas_decision_matrix(
                 "notes": "Use only visible or recently inspected lines. Never guess hidden line numbers.",
             }
         )
+        rows.append(
+            {
+                "situation": "You already know edits for multiple canvas files or multiple disjoint regions.",
+                "tool": "Batch all needed line-edit calls in one answer",
+                "notes": "Do not serialize independent edits across repeated turns when the targets are already known.",
+            }
+        )
     if enabled("scroll_canvas_document"):
         rows.append(
             {
@@ -318,6 +325,10 @@ TOOL_SPECS = [
                     "type": "string",
                     "description": "The delegated task for the helper agent. Rewrite the user's request into clear English instructions unless the task is explicitly language-specific.",
                 },
+                "context": {
+                    "type": "string",
+                    "description": "Optional extra parent context or goal framing that helps the helper understand why this delegated task matters.",
+                },
                 "allowed_tools": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -352,7 +363,7 @@ TOOL_SPECS = [
                 "Use this when the investigation genuinely benefits from a separate bounded pass and would otherwise require several tool steps or repeated context stitching in the parent agent. "
                 "Do not let the token cost warning block delegation when the task is complex; the sub-agent exists for exactly those multi-tool cases. "
                 "Give the helper a concrete task, expected deliverable, and any important constraints. "
-                "Remember that the helper only receives the read-only tools currently exposed to the parent in this turn; that set can include search_web, search_news_ddgs, search_news_google, fetch_url, read_file, list_dir, search_files, search_knowledge_base, search_tool_memory, read_scratchpad, and canvas inspection tools. "
+                "Remember that the helper only receives the read-only tools currently exposed to the parent in this turn; that set can include search_web, search_news_ddgs, search_news_google, fetch_url, fetch_url_summarized, read_file, list_dir, search_files, search_knowledge_base, search_tool_memory, read_scratchpad, and canvas inspection tools. "
                 "Delegation does not bypass prompt-time tool scoping, and read-only does not mean offline-only. "
                 "Before calling this tool, rewrite the delegated task into concise English instructions for the helper, even if the user spoke Turkish or another language. "
                 "Use the user's original language only when the delegated task itself depends on that language, and otherwise expect the helper to work in English by default. "
@@ -536,10 +547,41 @@ TOOL_SPECS = [
         },
     },
     {
+        "name": "fetch_url_summarized",
+        "description": (
+            "Fetch a specific web page, send the cleaned page text to a dedicated summarizer model, and return only the resulting clean summary. "
+            "Use this when the parent assistant needs a concise distilled page summary instead of raw page text. "
+            "The returned tool result intentionally hides the full fetched content from the parent assistant."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "Full URL of the page (must start with http:// or https://).",
+                },
+                "focus": {
+                    "type": "string",
+                    "description": "Optional question, angle, or topic to focus the summary on.",
+                }
+            },
+            "required": ["url"],
+        },
+        "prompt": {
+            "purpose": "Reads a URL and returns only an AI-generated summary of the page.",
+            "inputs": {"url": "full http/https URL", "focus": "optional focus or question"},
+            "guidance": (
+                "Use this when you want the page distilled before it reaches you. "
+                "If focus is given, the summary should prioritize that question or angle. "
+                "Use fetch_url instead when you need raw extracted text, metadata, or page outline details."
+            ),
+        },
+    },
+    {
         "name": "grep_fetched_content",
         "description": (
             "Search for a keyword, phrase, or regex pattern inside the content of a previously fetched URL. "
-            "Only works for URLs that were already fetched with fetch_url in this session or stored in tool memory. "
+            "Only works for URLs that were already fetched with fetch_url or fetch_url_summarized in this session or stored in tool memory. "
             "Returns matching lines with surrounding context. "
             "Use this instead of re-fetching the same URL when you need to find a specific value, code snippet, heading, or term."
         ),

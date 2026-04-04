@@ -55,18 +55,21 @@ const customModelStatusEl = document.getElementById("custom-model-status");
 const customModelListEl = document.getElementById("custom-model-list");
 const chatModelVisibilityListEl = document.getElementById("chat-model-visibility-list");
 const summaryModelPreferenceEl = document.getElementById("summary-model-preference-select");
+const fetchSummarizeModelPreferenceEl = document.getElementById("fetch-summarize-model-preference-select");
 const pruneModelPreferenceEl = document.getElementById("prune-model-preference-select");
 const fixTextModelPreferenceEl = document.getElementById("fix-text-model-preference-select");
 const titleModelPreferenceEl = document.getElementById("title-model-preference-select");
 const uploadMetadataModelPreferenceEl = document.getElementById("upload-metadata-model-preference-select");
 const subAgentModelPreferenceEl = document.getElementById("sub-agent-model-preference-select");
 const summaryModelFallbackListEl = document.getElementById("summary-model-fallback-list");
+const fetchSummarizeModelFallbackListEl = document.getElementById("fetch-summarize-model-fallback-list");
 const pruneModelFallbackListEl = document.getElementById("prune-model-fallback-list");
 const fixTextModelFallbackListEl = document.getElementById("fix-text-model-fallback-list");
 const titleModelFallbackListEl = document.getElementById("title-model-fallback-list");
 const uploadMetadataModelFallbackListEl = document.getElementById("upload-metadata-model-fallback-list");
 const subAgentModelFallbackListEl = document.getElementById("sub-agent-model-fallback-list");
 const summaryModelFallbackAddBtn = document.getElementById("summary-model-fallback-add-btn");
+const fetchSummarizeModelFallbackAddBtn = document.getElementById("fetch-summarize-model-fallback-add-btn");
 const pruneModelFallbackAddBtn = document.getElementById("prune-model-fallback-add-btn");
 const fixTextModelFallbackAddBtn = document.getElementById("fix-text-model-fallback-add-btn");
 const titleModelFallbackAddBtn = document.getElementById("title-model-fallback-add-btn");
@@ -175,11 +178,15 @@ let draftChatModelRows = [];
 let draftOperationFallbackRows = {};
 let fallbackRowSequence = 0;
 
-const OPERATION_MODEL_KEYS = ["summarize", "prune", "fix_text", "generate_title", "upload_metadata", "sub_agent"];
+const OPERATION_MODEL_KEYS = ["summarize", "fetch_summarize", "prune", "fix_text", "generate_title", "upload_metadata", "sub_agent"];
 const OPERATION_FALLBACK_CONTROL_MAP = {
   summarize: {
     listEl: summaryModelFallbackListEl,
     addBtn: summaryModelFallbackAddBtn,
+  },
+  fetch_summarize: {
+    listEl: fetchSummarizeModelFallbackListEl,
+    addBtn: fetchSummarizeModelFallbackAddBtn,
   },
   prune: {
     listEl: pruneModelFallbackListEl,
@@ -610,6 +617,7 @@ function getOperationPreferenceValue(key) {
   const defaults = appSettings.operation_model_preferences || {};
   const elementMap = {
     summarize: summaryModelPreferenceEl,
+    fetch_summarize: fetchSummarizeModelPreferenceEl,
     prune: pruneModelPreferenceEl,
     fix_text: fixTextModelPreferenceEl,
     generate_title: titleModelPreferenceEl,
@@ -623,6 +631,7 @@ function getOperationPreferenceValue(key) {
 function getOperationModelPreferencesDraft() {
   return {
     summarize: getOperationPreferenceValue("summarize"),
+    fetch_summarize: getOperationPreferenceValue("fetch_summarize"),
     prune: getOperationPreferenceValue("prune"),
     fix_text: getOperationPreferenceValue("fix_text"),
     generate_title: getOperationPreferenceValue("generate_title"),
@@ -1007,6 +1016,7 @@ function renderOperationModelSelects(preferences = null) {
   const currentSelections = preferences && typeof preferences === "object"
     ? {
         summarize: String(preferences.summarize || ""),
+        fetch_summarize: String(preferences.fetch_summarize || ""),
         prune: String(preferences.prune || ""),
         fix_text: String(preferences.fix_text || ""),
         generate_title: String(preferences.generate_title || ""),
@@ -1015,6 +1025,7 @@ function renderOperationModelSelects(preferences = null) {
       }
     : getOperationModelPreferencesDraft();
   populateOperationModelSelect(summaryModelPreferenceEl, currentSelections.summarize);
+  populateOperationModelSelect(fetchSummarizeModelPreferenceEl, currentSelections.fetch_summarize);
   populateOperationModelSelect(pruneModelPreferenceEl, currentSelections.prune);
   populateOperationModelSelect(fixTextModelPreferenceEl, currentSelections.fix_text);
   populateOperationModelSelect(titleModelPreferenceEl, currentSelections.generate_title);
@@ -2018,6 +2029,7 @@ function registerDirtyListeners() {
   subAgentRetryAttemptsEl?.addEventListener("input", markDirty);
   subAgentRetryDelayEl?.addEventListener("input", markDirty);
   summaryModelPreferenceEl?.addEventListener("change", markDirty);
+  fetchSummarizeModelPreferenceEl?.addEventListener("change", markDirty);
   pruneModelPreferenceEl?.addEventListener("change", markDirty);
   fixTextModelPreferenceEl?.addEventListener("change", markDirty);
   titleModelPreferenceEl?.addEventListener("change", markDirty);
@@ -2054,6 +2066,7 @@ addCustomModelBtn?.addEventListener("click", addCustomModelFromInputs);
 customModelReasoningModeEl?.addEventListener("change", syncCustomModelReasoningControls);
 customModelRoutingModeEl?.addEventListener("change", syncCustomModelProviderControls);
 summaryModelFallbackAddBtn?.addEventListener("click", () => addOperationFallbackRow("summarize"));
+fetchSummarizeModelFallbackAddBtn?.addEventListener("click", () => addOperationFallbackRow("fetch_summarize"));
 pruneModelFallbackAddBtn?.addEventListener("click", () => addOperationFallbackRow("prune"));
 fixTextModelFallbackAddBtn?.addEventListener("click", () => addOperationFallbackRow("fix_text"));
 titleModelFallbackAddBtn?.addEventListener("click", () => addOperationFallbackRow("generate_title"));

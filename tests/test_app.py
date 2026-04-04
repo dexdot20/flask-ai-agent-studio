@@ -37,8 +37,10 @@ from agent import (
     _extract_usage_metrics,
     _is_context_overflow_error,
     _iter_agent_exchange_blocks,
+    _lookup_cross_turn_tool_memory,
     _parse_tool_call_arguments,
     _prepare_tool_result_for_transcript,
+    _run_fetch_url_summarized,
     _run_sub_agent_stream,
     _summarize_model_call_usage,
     _truncate_preview_text,
@@ -67,6 +69,7 @@ from db import (
     extract_message_usage,
     get_active_tool_names,
     get_app_settings,
+    get_conversation_messages,
     get_canvas_expand_max_lines,
     get_canvas_prompt_max_lines,
     get_canvas_scroll_window_lines,
@@ -254,6 +257,7 @@ class AppRoutesTestCase(unittest.TestCase):
             payload["operation_model_preferences"],
             {
                 "summarize": "",
+                "fetch_summarize": "",
                 "prune": "",
                 "fix_text": "",
                 "generate_title": "",
@@ -265,6 +269,7 @@ class AppRoutesTestCase(unittest.TestCase):
             payload["operation_model_fallback_preferences"],
             {
                 "summarize": [],
+                "fetch_summarize": [],
                 "prune": [],
                 "fix_text": [],
                 "generate_title": [],
@@ -329,6 +334,7 @@ class AppRoutesTestCase(unittest.TestCase):
                 "visible_model_order": ["openrouter:anthropic/claude-sonnet-4.5", "deepseek-chat"],
                 "operation_model_preferences": {
                     "summarize": "openrouter:anthropic/claude-sonnet-4.5",
+                    "fetch_summarize": "deepseek-chat",
                     "prune": "deepseek-chat",
                     "fix_text": "deepseek-chat",
                     "generate_title": "openrouter:anthropic/claude-sonnet-4.5",
@@ -337,6 +343,7 @@ class AppRoutesTestCase(unittest.TestCase):
                 },
                 "operation_model_fallback_preferences": {
                     "summarize": ["deepseek-reasoner", "deepseek-chat"],
+                    "fetch_summarize": ["deepseek-reasoner"],
                     "prune": ["deepseek-reasoner"],
                     "fix_text": ["deepseek-reasoner"],
                     "generate_title": ["deepseek-reasoner"],
@@ -392,8 +399,10 @@ class AppRoutesTestCase(unittest.TestCase):
             payload["operation_model_preferences"]["summarize"],
             "openrouter:anthropic/claude-sonnet-4.5@@r=enabled:high;p=deepinfra/turbo;v=1;s=1",
         )
+        self.assertEqual(payload["operation_model_preferences"]["fetch_summarize"], "deepseek-chat")
         self.assertEqual(payload["operation_model_preferences"]["sub_agent"], "deepseek-reasoner")
         self.assertEqual(payload["operation_model_fallback_preferences"]["summarize"], ["deepseek-reasoner", "deepseek-chat"])
+        self.assertEqual(payload["operation_model_fallback_preferences"]["fetch_summarize"], ["deepseek-reasoner"])
         self.assertEqual(payload["operation_model_fallback_preferences"]["sub_agent"], ["deepseek-chat", "deepseek-reasoner"])
         self.assertEqual(payload["image_processing_method"], "llm")
         self.assertTrue(
@@ -420,6 +429,48 @@ class AppRoutesTestCase(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("proxy_enabled_operations", response.get_json()["error"])
+
+    def test_settings_patch_ignores_unknown_operation_model_keys(self):
+        response = self.client.patch(
+            "/api/settings",
+            json={
+                "operation_model_preferences": {
+                    "summarize": "deepseek-chat",
+                    "legacy_unused": "deepseek-reasoner",
+                },
+                "operation_model_fallback_preferences": {
+                    "sub_agent": ["deepseek-chat"],
+                    "legacy_unused": ["deepseek-reasoner"],
+                },
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["operation_model_preferences"]["summarize"], "deepseek-chat")
+        self.assertNotIn("legacy_unused", payload["operation_model_preferences"])
+        self.assertEqual(payload["operation_model_fallback_preferences"]["sub_agent"], ["deepseek-chat"])
+        self.assertNotIn("legacy_unused", payload["operation_model_fallback_preferences"])
+
+    def test_delete_conversation_message_soft_deletes_it_and_returns_filtered_history(self):
+        conversation_id = self._create_conversation()
+        with get_db() as conn:
+            user_message_id = insert_message(conn, conversation_id, "user", "Delete me")
+            assistant_message_id = insert_message(conn, conversation_id, "assistant", "Keep me")
+
+        with patch("routes.conversations.sync_conversations_to_rag_safe"):
+            response = self.client.delete(
+                f"/api/messages/{user_message_id}",
+                json={"conversation_id": conversation_id},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["deleted"])
+        self.assertEqual(payload["message_id"], user_message_id)
+        self.assertEqual(payload["conversation_id"], conversation_id)
+        self.assertEqual([message["id"] for message in payload["messages"]], [assistant_message_id])
+        self.assertEqual([message["id"] for message in get_conversation_messages(conversation_id)], [assistant_message_id])
 
     def test_create_conversation_accepts_custom_openrouter_model(self):
         response = self.client.patch(
@@ -1656,7 +1707,7 @@ class AppRoutesTestCase(unittest.TestCase):
 
         def check_rag_context(*args, **kwargs):
             self.assertTrue(chat_sync.called)
-            self.assertEqual(chat_sync.call_args.kwargs, {"conversation_id": conversation_id})
+            self.assertEqual(chat_sync.call_args.kwargs, {"conversation_id": conversation_id, "force": False})
             return None
 
         with patch("routes.chat.run_agent_stream", return_value=fake_events), patch(
@@ -4808,11 +4859,26 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn('id="stat-cache-miss"', html_text)
         self.assertIn('id="stat-last-cache-hit"', html_text)
         self.assertIn('id="stat-last-cache-miss"', html_text)
-        self.assertNotIn('id="stat-cost"', html_text)
-        self.assertNotIn('id="stat-last-cost"', html_text)
+        self.assertIn('id="stat-cost"', html_text)
+        self.assertIn('id="stat-last-cost"', html_text)
         self.assertIn("prompt_cache_hit_tokens", script_text)
         self.assertIn("prompt_cache_miss_tokens", script_text)
         self.assertIn("cache_metrics_estimated", script_text)
+        self.assertIn("cost_available", script_text)
+        self.assertIn("formatUsageCost", script_text)
+
+    def test_frontend_exposes_delete_and_clipboard_fallback_hooks(self):
+        script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
+        script_text = script_path.read_text(encoding="utf-8")
+        style_path = Path(__file__).resolve().parent.parent / "static" / "style.css"
+        style_text = style_path.read_text(encoding="utf-8")
+
+        self.assertIn("async function deleteConversationMessage(messageId)", script_text)
+        self.assertIn("Delete this message?", script_text)
+        self.assertIn("function fallbackCopyText(text)", script_text)
+        self.assertIn("async function copyTextToClipboard(text)", script_text)
+        self.assertIn("msg-delete-confirm", style_text)
+        self.assertIn("msg-action-btn--danger", style_text)
 
     def test_frontend_includes_clarification_ui_hooks(self):
         script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
@@ -5538,13 +5604,78 @@ class AppRoutesTestCase(unittest.TestCase):
         )
 
     def test_build_sub_agent_messages_mentions_web_query_limit(self):
-        messages = _build_sub_agent_messages("Inspect the web", "", "", ["search_web"])
+        messages = _build_sub_agent_messages("Inspect the web", "", "", "", ["search_web"])
 
         self.assertIn("Use English for tool planning", messages[0]["content"])
         self.assertIn("rewrite it into clear English working notes", messages[0]["content"])
         self.assertIn("Read-only still includes web search and URL fetch tools", messages[0]["content"])
         self.assertIn("1 and 5 items", messages[0]["content"])
         self.assertIn("split broader searches into multiple calls", messages[0]["content"])
+
+    def test_build_sub_agent_messages_includes_parent_context(self):
+        messages = _build_sub_agent_messages(
+            "Inspect the web",
+            "Parent needs a concise vendor comparison.",
+            "Conversation is already narrowed to two providers.",
+            "",
+            ["search_web"],
+        )
+
+        self.assertIn("Parent context and goal:", messages[1]["content"])
+        self.assertIn("Parent needs a concise vendor comparison.", messages[1]["content"])
+
+    def test_lookup_cross_turn_tool_memory_supports_sub_agent_exact_matches(self):
+        with patch(
+            "agent.get_exact_tool_memory_match",
+            return_value={"content": "Summary:\nReusable answer", "summary": "Reusable answer"},
+        ) as mocked_lookup:
+            excerpt, summary = _lookup_cross_turn_tool_memory(
+                "sub_agent",
+                {"task": "Inspect README", "context": "Focus on install steps"},
+            )
+
+        self.assertEqual(excerpt, "Summary:\nReusable answer")
+        self.assertEqual(summary, "Reusable answer")
+        mocked_lookup.assert_called_once_with("sub_agent", "Inspect README | Focus on install steps")
+
+    def test_run_fetch_url_summarized_uses_fetch_summarize_operation_model(self):
+        fake_response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="Focused summary output."))]
+        )
+        fake_create = Mock(return_value=fake_response)
+        fake_target = {
+            "api_model": "openrouter:summary-model",
+            "client": SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))),
+        }
+
+        with patch(
+            "agent.fetch_url_tool",
+            return_value={
+                "url": "https://example.com/page",
+                "title": "Example Page",
+                "content": "Pricing details and limitations.",
+                "meta_description": "Example metadata",
+                "outline": ["Pricing", "Limits"],
+            },
+        ), patch("agent.get_app_settings", return_value={}), patch(
+            "agent.get_operation_model",
+            return_value="openrouter:summary-model",
+        ), patch("agent.resolve_model_target", return_value=fake_target), patch(
+            "agent.apply_model_target_request_options",
+            side_effect=lambda kwargs, target: kwargs,
+        ):
+            result, summary = _run_fetch_url_summarized(
+                {"url": "https://example.com/page", "focus": "pricing limits"},
+                {"agent_context": {"model": "deepseek-chat"}},
+            )
+
+        self.assertEqual(result["summary"], "Focused summary output.")
+        self.assertEqual(result["focus"], "pricing limits")
+        self.assertEqual(result["model"], "openrouter:summary-model")
+        self.assertIn("Page summarized:", summary)
+        request_kwargs = fake_create.call_args.kwargs
+        self.assertEqual(request_kwargs["max_tokens"], 800)
+        self.assertIn("Focus:\npricing limits", request_kwargs["messages"][1]["content"])
 
     def test_sub_agent_tool_spec_mentions_exposed_web_search_tools(self):
         spec = TOOL_SPEC_BY_NAME["sub_agent"]
@@ -9595,6 +9726,33 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(result["matches"][0]["line_number"], 1)
         self.assertEqual(result["matches"][0]["line"], "needle in page body")
 
+    def test_grep_fetched_content_tool_uses_summarized_fetch_tool_memory_when_available(self):
+        with patch("web_tools.cache_get", return_value=None), patch(
+            "rag_service.get_exact_tool_memory_match",
+            side_effect=lambda tool_name, args_preview: {
+                "content": "Summary: distilled page notes\nneedle in summary"
+            }
+            if tool_name == "fetch_url_summarized"
+            else None,
+        ), patch(
+            "rag_service.search_tool_memory",
+            return_value={
+                "matches": [
+                    {
+                        "source_name": "fetch_url_summarized: https://example.com/page | pricing",
+                        "text": "Summary: distilled page notes\nneedle in summary",
+                    }
+                ]
+            },
+        ):
+            result = web_tools.grep_fetched_content_tool(
+                "https://example.com/page",
+                "needle",
+            )
+
+        self.assertEqual(result["match_count"], 1)
+        self.assertIn("needle in summary", result["matches"][0]["line"])
+
     def test_fetch_url_tool_recovers_partial_chunked_content(self):
         class FakeResponse:
             def __init__(self):
@@ -12383,8 +12541,9 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertTrue(summary_event["preflight"])
         history_sync_event = next((event for event in events if event["type"] == "history_sync"), None)
         self.assertIsNotNone(history_sync_event)
-        self.assertEqual(history_sync_event["messages"][0]["role"], "summary")
-        self.assertIn(SUMMARY_LABEL, history_sync_event["messages"][0]["content"])
+        summary_messages = [message for message in history_sync_event["messages"] if message["role"] == "summary"]
+        self.assertTrue(summary_messages)
+        self.assertIn(SUMMARY_LABEL, summary_messages[0]["content"])
 
     def test_chat_preflight_summary_skips_second_summary_pass_in_same_request(self):
         conversation_id = self._create_conversation()

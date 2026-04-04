@@ -133,6 +133,8 @@ SEARCH_MAX_RESULTS = 5
 CONTENT_MAX_CHARS = 100_000
 FETCH_SUMMARY_TOKEN_THRESHOLD = max(400, _parse_int_env("FETCH_SUMMARY_TOKEN_THRESHOLD", 3500))
 FETCH_SUMMARY_MAX_CHARS = max(2000, min(CONTENT_MAX_CHARS, _parse_int_env("FETCH_SUMMARY_MAX_CHARS", 8000)))
+FETCH_SUMMARIZE_MAX_INPUT_CHARS = max(4_000, min(CONTENT_MAX_CHARS, _parse_int_env("FETCH_SUMMARIZE_MAX_INPUT_CHARS", 80_000)))
+FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS = max(200, min(4_000, _parse_int_env("FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS", 800)))
 FETCH_SUMMARY_GENERAL_TOP_K = max(1, min(6, _parse_int_env("FETCH_SUMMARY_GENERAL_TOP_K", 3)))
 FETCH_SUMMARY_QUERY_TOP_K = max(1, min(8, _parse_int_env("FETCH_SUMMARY_QUERY_TOP_K", 4)))
 FETCH_SUMMARY_EXCERPT_MAX_CHARS = max(200, min(1200, _parse_int_env("FETCH_SUMMARY_EXCERPT_MAX_CHARS", 500)))
@@ -179,6 +181,7 @@ DEFAULT_ACTIVE_TOOL_NAMES = [
     "search_tool_memory",
     "search_web",
     "fetch_url",
+    "fetch_url_summarized",
     "grep_fetched_content",
     "search_news_ddgs",
     "search_news_google",

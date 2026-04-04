@@ -35,6 +35,7 @@ DEFAULT_IMAGE_PROCESSING_METHOD = "auto"
 IMAGE_PROCESSING_METHODS = {"auto", "llm", "local_ocr", "local_vl", "local_both"}
 MODEL_OPERATION_KEYS = (
     "summarize",
+    "fetch_summarize",
     "prune",
     "fix_text",
     "generate_title",

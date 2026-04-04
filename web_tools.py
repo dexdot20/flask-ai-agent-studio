@@ -852,6 +852,29 @@ def grep_fetched_content_tool(
         except Exception:
             raw_text = ""
 
+    # 3. Fallback to summarized fetch tool memory when only the distilled summary exists.
+    if not raw_text:
+        try:
+            from rag_service import get_exact_tool_memory_match, search_tool_memory  # lazy import – avoids circular deps
+
+            summarized_match = get_exact_tool_memory_match("fetch_url_summarized", url)
+            if isinstance(summarized_match, dict):
+                raw_text = _strip_tool_memory_record_prefix(summarized_match.get("content") or "")
+
+            if not raw_text:
+                search_matches = (search_tool_memory(url, top_k=5).get("matches") or [])[:5]
+                for match in search_matches:
+                    source_name = str(match.get("source_name") or "").strip()
+                    if not source_name.startswith("fetch_url_summarized:"):
+                        continue
+                    if url not in source_name:
+                        continue
+                    raw_text = _strip_tool_memory_record_prefix(match.get("text") or "")
+                    if raw_text:
+                        break
+        except Exception:
+            raw_text = ""
+
     if not raw_text:
         return {
             "error": (
