@@ -277,6 +277,27 @@ TOOL_SPECS = [
                             "allow_free_text": {
                                 "type": "boolean",
                                 "description": "Whether the user may add custom text alongside the predefined options."
+                            },
+                            "depends_on": {
+                                "type": "object",
+                                "description": "Optional dependency rule that makes this question appear only after a prior question has one of the expected values.",
+                                "properties": {
+                                    "question_id": {
+                                        "type": "string",
+                                        "description": "The id of the earlier question this one depends on."
+                                    },
+                                    "value": {
+                                        "type": "string",
+                                        "description": "One required value from the parent question that should reveal this question."
+                                    },
+                                    "values": {
+                                        "type": "array",
+                                        "description": "Allowed parent-question values that should reveal this question.",
+                                        "items": {"type": "string"},
+                                        "minItems": 1,
+                                        "maxItems": 10
+                                    }
+                                }
                             }
                         },
                         "required": ["id", "label", "input_type"]
@@ -304,6 +325,7 @@ TOOL_SPECS = [
                 "Keep the assistant-visible reply short and brief, and let the UI render the questions. "
                 "When you call this tool, it must be the only tool call in that assistant message and you must wait for the user's reply before answering. "
                 "Prefer single_select or multi_select when the likely answers are known, keep question ids short and unique, and use required=false for optional follow-ups. "
+                "Use depends_on only for short follow-up branches that should stay hidden until a previous answer makes them relevant. "
                 "Each questions item must be an object with id, label, and input_type; example: {\"id\":\"scope\",\"label\":\"Which scope?\",\"input_type\":\"text\"}. "
                 "Use plain UI text only for intro, labels, placeholders, and options. Do not include Q:/A: prefixes, markdown bullets, XML/tag wrappers, code fences, or markers like <| and |>."
             ),
@@ -338,7 +360,7 @@ TOOL_SPECS = [
                 },
                 "max_steps": {
                     "type": "integer",
-                    "description": "Maximum helper-agent tool steps (1-8).",
+                    "description": "Optional maximum helper-agent tool steps (1-8). Omit this to let the system size the budget dynamically from task complexity.",
                     "minimum": 1,
                     "maximum": 8,
                 },
@@ -368,6 +390,7 @@ TOOL_SPECS = [
                 "Before calling this tool, rewrite the delegated task into concise English instructions for the helper, even if the user spoke Turkish or another language. "
                 "Use the user's original language only when the delegated task itself depends on that language, and otherwise expect the helper to work in English by default. "
                 "Keep it scoped: prefer one helper call over many, and do not delegate writes, clarifications, or recursive agent orchestration. "
+                "Leave max_steps unset unless you have a strong reason to constrain it manually; the runtime can size that budget dynamically for simple versus broad tasks. "
                 "If the helper uses web search, each search_web/search_news call must stay within the 1-5 query limit; split larger batches into separate calls."
             ),
         },
@@ -1238,6 +1261,16 @@ TOOL_SPECS = [
                 "document_path": {
                     "type": "string",
                     "description": "Optional target project-relative path. Prefer this over document_id in project mode."
+                },
+                "expected_start_line": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Optional first line of the current document context you expect to still match before the edit is applied."
+                },
+                "expected_lines": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional current lines that must still match before replacing. Use this to guard against line drift after earlier edits or stale previews."
                 }
             },
             "required": ["start_line", "end_line", "lines"]
@@ -1250,6 +1283,8 @@ TOOL_SPECS = [
                 "Put ALL code content inside the lines array as properly escaped JSON strings. "
                 'Example: {"start_line": 3, "end_line": 5, "lines": ["  int x = 1;", "  return x;"]}. '
                 "Multiple localized replace_canvas_lines calls are fine when the changes are separated. "
+                "If the previous tool result includes expected_lines, reuse those values on the next related edit instead of guessing a fresh snippet. "
+                "When you are editing based on a previously seen snippet and line numbers may have shifted, include expected_lines (and expected_start_line when needed) so the tool can reject stale edits safely. "
                 "If you do not know the document_id, use document_path from the workspace summary or manifest. "
                 "For broad rewrites, prefer rewrite_canvas_document. In project mode, prefer document_path when possible."
             ),
@@ -1278,6 +1313,16 @@ TOOL_SPECS = [
                 "document_path": {
                     "type": "string",
                     "description": "Optional target project-relative path. Prefer this over document_id in project mode."
+                },
+                "expected_start_line": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Optional first line of the current document context you expect to still match before inserting."
+                },
+                "expected_lines": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional nearby current lines that must still match before inserting. Use this to guard against stale insertion anchors."
                 }
             },
             "required": ["after_line", "lines"]
@@ -1288,6 +1333,8 @@ TOOL_SPECS = [
             "guidance": (
                 "Use only when the insertion point is known from the visible excerpt or a recent scroll/expand result. "
                 "Use this for partial additions instead of rewriting the whole document when the rest should stay intact. "
+                "If the previous tool result includes expected_lines, reuse those values on the next related edit instead of guessing a fresh snippet. "
+                "When the insertion point comes from an earlier view, include expected_lines (and expected_start_line when needed) so the tool can catch drift before inserting. "
                 "If the target region is not visible, inspect it first. In project mode, prefer document_path when possible."
             ),
         },
@@ -1307,6 +1354,16 @@ TOOL_SPECS = [
                 "document_path": {
                     "type": "string",
                     "description": "Optional target project-relative path. Prefer this over document_id in project mode."
+                },
+                "expected_start_line": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Optional first line of the current document context you expect to still match before deleting."
+                },
+                "expected_lines": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional current lines that must still match before deleting. Use this to guard against stale ranges."
                 }
             },
             "required": ["start_line", "end_line"]
@@ -1317,6 +1374,8 @@ TOOL_SPECS = [
             "guidance": (
                 "Use only when the exact 1-based line range is visible in the current excerpt or in a recent scroll/expand result. "
                 "Use this for partial removals instead of rewriting the whole document when the rest should stay intact. "
+                "If the previous tool result includes expected_lines, reuse those values on the next related edit instead of guessing a fresh snippet. "
+                "When the target range came from an earlier snippet, include expected_lines (and expected_start_line when needed) so stale deletions are rejected safely. "
                 "If the target region is not visible, inspect it first. In project mode, prefer document_path when possible."
             ),
         },

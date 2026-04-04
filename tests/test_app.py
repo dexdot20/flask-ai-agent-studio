@@ -26,6 +26,8 @@ from agent import (
     FINAL_ANSWER_ERROR_TEXT,
     FINAL_ANSWER_MISSING_TEXT,
     _apply_tool_output_budget,
+    _build_final_answer_instruction,
+    _build_reasoning_replay_instruction,
     _build_sub_agent_messages,
     _build_compact_tool_message_content,
     _build_tool_execution_result_message,
@@ -3513,9 +3515,14 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(spec["parameters"]["required"], ["questions"])
         self.assertEqual(spec["parameters"]["properties"]["questions"]["minItems"], 1)
         self.assertEqual(spec["parameters"]["properties"]["questions"]["maxItems"], 25)
+        self.assertEqual(
+            spec["parameters"]["properties"]["questions"]["items"]["properties"]["depends_on"]["type"],
+            "object",
+        )
         self.assertIn("explicitly asks you to ask questions first", spec["description"])
         self.assertIn("only tool call", spec["prompt"]["guidance"])
         self.assertIn("ids short and unique", spec["prompt"]["guidance"])
+        self.assertIn("depends_on", spec["prompt"]["guidance"])
 
     def test_openai_tool_specs_resize_clarification_question_limit(self):
         tools = get_openai_tool_specs(["ask_clarifying_question"], clarification_max_questions=7)
@@ -3530,6 +3537,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("clear English instructions", spec["parameters"]["properties"]["task"]["description"])
         self.assertIn("rewrite the delegated task into concise English instructions", spec["prompt"]["guidance"])
         self.assertIn("5-900", spec["parameters"]["properties"]["timeout_seconds"]["description"])
+        self.assertIn("dynamically", spec["parameters"]["properties"]["max_steps"]["description"])
 
     def test_clarification_tool_validator_accepts_stringified_question_objects(self):
         from agent import _validate_tool_arguments
@@ -3624,6 +3632,40 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(result["clarification"]["questions"][0]["id"], "software")
         self.assertEqual(result["clarification"]["questions"][0]["label"], "Hangi sanallaştırma yazılımını kullanacaksın?")
         self.assertEqual(result["clarification"]["questions"][0]["input_type"], "single_select")
+
+    def test_execute_clarification_tool_normalizes_question_dependencies(self):
+        result, summary = _execute_tool(
+            "ask_clarifying_question",
+            {
+                "questions": [
+                    {
+                        "id": "platform",
+                        "label": "Which platform?",
+                        "input_type": "single_select",
+                        "options": [
+                            {"label": "Web", "value": "web"},
+                            {"label": "Mobile", "value": "mobile"},
+                        ],
+                    },
+                    {
+                        "id": "framework",
+                        "label": "Which web framework?",
+                        "input_type": "single_select",
+                        "options": [
+                            {"label": "Flask", "value": "flask"},
+                            {"label": "FastAPI", "value": "fastapi"},
+                        ],
+                        "depends_on": {"question_id": "platform", "value": "web"},
+                    },
+                ],
+            },
+        )
+
+        self.assertEqual(summary, "Awaiting user clarification")
+        self.assertEqual(
+            result["clarification"]["questions"][1]["depends_on"],
+            {"question_id": "platform", "values": ["web"]},
+        )
 
     def test_execute_clarification_tool_rejects_select_questions_without_options(self):
         with self.assertRaises(ValueError):
@@ -3995,6 +4037,9 @@ class AppRoutesTestCase(unittest.TestCase):
         )
         self.assertEqual(insert_summary, "Canvas lines inserted in Release Plan")
         self.assertIn("## Notes", inserted["content"])
+        self.assertIn("expected_lines", inserted)
+        self.assertEqual(inserted["expected_start_line"], 1)
+        self.assertEqual(inserted["expected_lines"][0], "# Release Plan")
 
         deleted, delete_summary = _execute_tool(
             "delete_canvas_lines",
@@ -4007,6 +4052,8 @@ class AppRoutesTestCase(unittest.TestCase):
         )
         self.assertEqual(delete_summary, "Canvas lines deleted in Release Plan")
         self.assertNotIn("", deleted["content"].splitlines()[:1])
+        self.assertIn("expected_lines", deleted)
+        self.assertEqual(deleted["expected_start_line"], 2)
 
     def test_canvas_tools_support_code_format(self):
         runtime_state = {}
@@ -4884,12 +4931,14 @@ class AppRoutesTestCase(unittest.TestCase):
         script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
         script_text = script_path.read_text(encoding="utf-8")
         self.assertIn("function appendClarificationPanel(group, metadata, options = {})", script_text)
+        self.assertIn("function updateClarificationFieldVisibility(form, clarification)", script_text)
         self.assertIn("pending_clarification: pendingClarification", script_text)
         self.assertIn('clarification_response', script_text)
         self.assertIn("A: Type your answer", script_text)
         self.assertIn("Your draft answers stay in this browser until you send them.", script_text)
         self.assertIn("clarification-card__intro", script_text)
         self.assertIn("clarification-card__summary", script_text)
+        self.assertIn("clarification-options__search", script_text)
         self.assertIn("function renderBubbleWithCursor(bubbleEl, text)", script_text)
         self.assertIn('bubbleEl.classList.add("streaming-text")', script_text)
         self.assertIn("function renderBubbleMarkdown(bubbleEl, text)", script_text)
@@ -4900,6 +4949,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn(".clarification-card__intro", style_text)
         self.assertIn(".clarification-card__helper", style_text)
         self.assertIn(".clarification-form", style_text)
+        self.assertIn(".clarification-options__search", style_text)
         self.assertIn(".bubble.streaming-text", style_text)
 
     def test_frontend_streaming_render_uses_typed_markdown_queue(self):
@@ -5324,6 +5374,47 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(mocked_run.call_args.kwargs["prompt_tool_names"], ["read_file"])
         self.assertEqual(events[-1]["entry"]["status"], "ok")
 
+    def test_run_sub_agent_stream_sizes_max_steps_from_task_complexity(self):
+        runtime_state = {
+            "agent_context": {
+                "model": "deepseek-chat",
+                "enabled_tool_names": ["sub_agent", "read_file", "list_dir", "search_files", "search_web", "fetch_url"],
+                "conversation_handoff": "Compare multiple files across the repo and gather evidence from sources before you summarize.",
+                "sub_agent_depth": 0,
+            },
+            "canvas": create_canvas_runtime_state(
+                [
+                    {
+                        "id": "canvas-1",
+                        "title": "main.py",
+                        "path": "src/main.py",
+                        "format": "code",
+                        "content": "print('hello')",
+                    }
+                ]
+            ),
+            "canvas_limits": {"expand_max_lines": 800, "scroll_window_lines": 200},
+            "workspace": {"root_path": None},
+        }
+        fake_child_events = iter(
+            [
+                {"type": "answer_delta", "text": "Summary ready."},
+                {"type": "done"},
+            ]
+        )
+
+        with patch("agent.run_agent_stream", return_value=fake_child_events) as mocked_run:
+            list(
+                _run_sub_agent_stream(
+                    {
+                        "task": "Analyze the repo codebase across multiple files, compare implementations, inspect sources, gather evidence, and synthesize a thorough report.",
+                    },
+                    runtime_state,
+                )
+            )
+
+        self.assertEqual(mocked_run.call_args.args[2], 8)
+
     def test_run_sub_agent_stream_preserves_full_task_when_short_label_is_truncated(self):
         runtime_state = {
             "agent_context": {
@@ -5635,8 +5726,34 @@ class AppRoutesTestCase(unittest.TestCase):
             )
 
         self.assertEqual(excerpt, "Summary:\nReusable answer")
-        self.assertEqual(summary, "Reusable answer")
+        self.assertIn("Cached from an earlier conversation", summary)
+        self.assertIn("Reusable answer", summary)
         mocked_lookup.assert_called_once_with("sub_agent", "Inspect README | Focus on install steps")
+
+    def test_build_final_answer_instruction_forbids_claiming_unconfirmed_actions(self):
+        instruction = _build_final_answer_instruction()
+
+        self.assertEqual(instruction["role"], "system")
+        self.assertIn("Do not claim that an action was completed", instruction["content"])
+        self.assertIn("If work remains unfinished, say so explicitly", instruction["content"])
+
+    def test_build_reasoning_replay_instruction_marks_reasoning_as_non_execution_evidence(self):
+        instruction = _build_reasoning_replay_instruction(
+            {
+                "entries": [
+                    {
+                        "step": 1,
+                        "reasoning": "I should verify the latest figures and then update the canvas.",
+                        "tool_names": ["search_web"],
+                    }
+                ]
+            },
+            "Verify and update",
+        )
+
+        self.assertIsNotNone(instruction)
+        self.assertIn("Only actual tool results confirm", instruction["content"])
+        self.assertIn("planned tools = search_web", instruction["content"])
 
     def test_run_fetch_url_summarized_uses_fetch_summarize_operation_model(self):
         fake_response = SimpleNamespace(
@@ -7625,6 +7742,29 @@ class AppRoutesTestCase(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Line range exceeds"):
             replace_canvas_lines(runtime_state, 3, 3, ["replacement"], document_id="canvas-1")
 
+    def test_canvas_line_replace_rejects_stale_expected_lines(self):
+        runtime_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "canvas-1",
+                    "title": "Draft",
+                    "content": "line 1\nline 2\nline 3",
+                    "format": "markdown",
+                }
+            ]
+        )
+
+        with self.assertRaisesRegex(ValueError, "Canvas context drift detected"):
+            replace_canvas_lines(
+                runtime_state,
+                2,
+                2,
+                ["replacement"],
+                document_id="canvas-1",
+                expected_lines=["old line 2"],
+                expected_start_line=2,
+            )
+
     def test_normalize_canvas_document_falls_back_to_default_title(self):
         normalized = normalize_canvas_document(
             {
@@ -7694,6 +7834,54 @@ class AppRoutesTestCase(unittest.TestCase):
         updated = replace_canvas_lines(runtime_state, 2, 2, ["line changed"], document_path="src/app.py")
         self.assertEqual(updated["path"], "src/app.py")
         self.assertEqual(updated["content"], "line 1\nline changed")
+
+    def test_canvas_line_tools_accept_unique_suffix_document_path(self):
+        runtime_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "canvas-src",
+                    "title": "main.py",
+                    "path": "apps/demo/src/main.py",
+                    "format": "code",
+                    "content": "line 1\nline 2",
+                },
+                {
+                    "id": "canvas-test",
+                    "title": "main.py",
+                    "path": "apps/demo/tests/main.py",
+                    "format": "code",
+                    "content": "test 1\ntest 2",
+                },
+            ]
+        )
+
+        updated = replace_canvas_lines(runtime_state, 2, 2, ["line changed"], document_path="src/main.py")
+
+        self.assertEqual(updated["path"], "apps/demo/src/main.py")
+        self.assertEqual(updated["content"], "line 1\nline changed")
+
+    def test_canvas_line_tools_report_ambiguous_basename_document_path(self):
+        runtime_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "canvas-src",
+                    "title": "main.py",
+                    "path": "apps/demo/src/main.py",
+                    "format": "code",
+                    "content": "line 1\nline 2",
+                },
+                {
+                    "id": "canvas-test",
+                    "title": "main.py",
+                    "path": "apps/demo/tests/main.py",
+                    "format": "code",
+                    "content": "test 1\ntest 2",
+                },
+            ]
+        )
+
+        with self.assertRaisesRegex(ValueError, "ambiguous"):
+            replace_canvas_lines(runtime_state, 1, 1, ["line changed"], document_path="main.py")
 
     def test_run_agent_stream_executes_native_tool_calls(self):
         responses = [
@@ -8282,7 +8470,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertNotIn("id", api_messages[1])
         self.assertEqual(api_messages[1]["content"], "Hello")
 
-    def test_build_api_messages_preserves_context_injection_history_for_cache_prefixes(self):
+    def test_build_api_messages_keeps_only_latest_runtime_context_injection(self):
         normalized = normalize_chat_messages(
             [
                 {
@@ -8317,24 +8505,29 @@ class AppRoutesTestCase(unittest.TestCase):
         api_messages = build_api_messages(normalized)
 
         system_messages = [message for message in api_messages if message["role"] == "system"]
-        self.assertEqual(len(system_messages), 2)
-        self.assertEqual(api_messages[0]["role"], "system")
-        self.assertIn("21:35", api_messages[0]["content"])
+        self.assertEqual(len(system_messages), 1)
+        self.assertEqual(api_messages[0]["role"], "user")
         self.assertNotIn("id", api_messages[0])
-        self.assertEqual(api_messages[1]["role"], "user")
+        self.assertEqual(api_messages[1]["role"], "assistant")
         self.assertNotIn("id", api_messages[1])
-        self.assertEqual(api_messages[2]["role"], "assistant")
+        self.assertEqual(api_messages[2]["role"], "system")
         self.assertNotIn("id", api_messages[2])
-        self.assertEqual(api_messages[3]["role"], "system")
+        self.assertIn("21:40", api_messages[2]["content"])
+        self.assertEqual(api_messages[3]["role"], "user")
         self.assertNotIn("id", api_messages[3])
-        self.assertIn("21:40", api_messages[3]["content"])
-        self.assertEqual(api_messages[4]["role"], "user")
-        self.assertNotIn("id", api_messages[4])
 
-    def test_build_api_messages_strips_canvas_sections_from_historical_context_injections(self):
+    def test_build_api_messages_strips_historical_runtime_context_injections(self):
         historical_context = (
+            "## Tool Memory\n"
+            "Earlier search result\n\n"
+            "## Knowledge Base\n"
+            "Earlier KB excerpt\n\n"
             "## Current Date and Time\n"
             "- Time: 21:35\n\n"
+            "## Tool Execution History\n"
+            "- search_web [done]: old query\n\n"
+            "## Active Tools This Turn\n"
+            "- Callable tools: search_web\n\n"
             "## Active Canvas Document\n"
             "```text\n"
             "1: old line\n"
@@ -8371,11 +8564,11 @@ class AppRoutesTestCase(unittest.TestCase):
         api_messages = build_api_messages(normalized)
 
         system_messages = [message for message in api_messages if message["role"] == "system"]
-        self.assertEqual(len(system_messages), 2)
-        self.assertIn("21:35", system_messages[0]["content"])
-        self.assertNotIn("## Active Canvas Document", system_messages[0]["content"])
-        self.assertIn("21:40", system_messages[1]["content"])
-        self.assertIn("## Active Canvas Document", system_messages[1]["content"])
+        self.assertEqual(len(system_messages), 1)
+        self.assertIn("21:40", system_messages[0]["content"])
+        self.assertIn("## Active Canvas Document", system_messages[0]["content"])
+        self.assertNotIn("Earlier search result", system_messages[0]["content"])
+        self.assertNotIn("Earlier KB excerpt", system_messages[0]["content"])
 
     def test_patch_user_message_clears_stale_context_injection_but_keeps_attachments(self):
         conversation_id = self._create_conversation()
@@ -8766,6 +8959,8 @@ class AppRoutesTestCase(unittest.TestCase):
                 "format": "code",
                 "language": "python",
                 "line_count": 40,
+                "expected_start_line": 18,
+                "expected_lines": ["def main():", "    return 1"],
                 "content": "print('x')\n" * 500,
                 "content_truncated": True,
             },
@@ -8777,6 +8972,8 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertLess(len(result["content_preview"]), 450)
         self.assertTrue(result["content_truncated"])
         self.assertEqual(result["document_id"], "canvas-1")
+        self.assertEqual(result["expected_start_line"], 18)
+        self.assertEqual(result["expected_lines"], ["def main():", "    return 1"])
 
     def test_apply_tool_output_budget_compacts_large_results_before_next_turn(self):
         base_messages = [{"role": "user", "content": "Summarize the fetched docs."}]
@@ -8876,6 +9073,8 @@ class AppRoutesTestCase(unittest.TestCase):
         )
 
         self.assertIsNotNone(message)
+        self.assertIn("This guidance is step-local", message["content"])
+        self.assertIn("later asks you to verify or refresh", message["content"])
         self.assertIn("Recovery:", message["content"])
         self.assertIn("grep_fetched_content", message["content"])
 

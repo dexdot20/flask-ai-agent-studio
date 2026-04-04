@@ -604,7 +604,13 @@
                 </div>
                 <div class="tool-toggles tool-toggles--page tool-permission-section__tools">
                   {% for tool in section.tools %}
-                  <label class="tool-toggle"><input type="checkbox" value="{{ tool.name }}" /> <span>{{ tool.label }}</span></label>
+                  <label class="tool-toggle">
+                    <input type="checkbox" value="{{ tool.name }}" />
+                    <span>
+                      <strong>{{ tool.label }}</strong>
+                      {% if tool.description %}<br /><small>{{ tool.description }}</small>{% endif %}
+                    </span>
+                  </label>
                   {% endfor %}
                 </div>
               </section>

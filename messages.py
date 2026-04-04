@@ -56,7 +56,9 @@ DEPENDENT_TOOL_NAMES = (
     "search_tool_memory",
 )
 
-CANVAS_CONTEXT_SECTION_HEADINGS = {
+HISTORICAL_CONTEXT_INJECTION_STRIP_HEADINGS = {
+    "## Tool Memory",
+    "## Knowledge Base",
     "## Canvas Workspace Summary",
     "## Canvas Editing Guidance",
     "## Canvas Decision Matrix",
@@ -64,6 +66,10 @@ CANVAS_CONTEXT_SECTION_HEADINGS = {
     "## Canvas Relationship Map",
     "## Active Canvas Document",
     "## Other Canvas Documents",
+    "## Conversation Summaries",
+    "## Tool Execution History",
+    "## Active Tools This Turn",
+    "## Current Date and Time",
 }
 
 
@@ -388,7 +394,7 @@ def build_user_message_for_model(
     return "\n\n".join(parts)
 
 
-def _strip_canvas_sections_from_context_injection(context_injection: str) -> str:
+def _strip_volatile_sections_from_context_injection(context_injection: str) -> str:
     normalized = str(context_injection or "").strip()
     if not normalized:
         return ""
@@ -402,7 +408,7 @@ def _strip_canvas_sections_from_context_injection(context_injection: str) -> str
         if not current_lines:
             return
         section_text = "\n".join(current_lines).strip()
-        if section_text and current_heading not in CANVAS_CONTEXT_SECTION_HEADINGS:
+        if section_text and current_heading not in HISTORICAL_CONTEXT_INJECTION_STRIP_HEADINGS:
             retained_sections.append(section_text)
         current_lines = []
         current_heading = None
@@ -438,7 +444,7 @@ def build_api_messages(messages: list[dict], *, canvas_documents: list[dict] | N
         if role == "user":
             context_injection = str(metadata.get("context_injection") or "").strip()
             if context_injection and index != latest_user_message_index:
-                context_injection = _strip_canvas_sections_from_context_injection(context_injection)
+                context_injection = _strip_volatile_sections_from_context_injection(context_injection)
             if context_injection:
                 api_messages.append(
                     {

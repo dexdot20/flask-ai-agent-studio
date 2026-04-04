@@ -409,38 +409,86 @@ def _normalize_canvas_lookup_basename(value) -> str | None:
     return lookup_key.rsplit("/", 1)[-1]
 
 
-def _find_canvas_document_by_path_locator(documents: list[dict], document_path: str | None) -> tuple[int, dict] | None:
+def _collect_canvas_document_path_matches(documents: list[dict], document_path: str | None) -> dict[str, list[tuple[int, dict]]]:
     lookup_key = _normalize_canvas_lookup_key(document_path)
+    match_groups: dict[str, list[tuple[int, dict]]] = {
+        "exact_path": [],
+        "exact_title": [],
+        "suffix": [],
+        "basename": [],
+    }
     if not lookup_key:
-        return None
+        return match_groups
 
-    exact_title_matches = []
-    basename_matches = []
     lookup_basename = _normalize_canvas_lookup_basename(document_path)
+    has_path_segments = "/" in lookup_key
+    seen_ids_by_group = {key: set() for key in match_groups}
+
+    def add_match(group_key: str, index: int, document: dict) -> None:
+        document_id = str(document.get("id") or "").strip() or f"index:{index}"
+        if document_id in seen_ids_by_group[group_key]:
+            return
+        seen_ids_by_group[group_key].add(document_id)
+        match_groups[group_key].append((index, document))
 
     for index, document in enumerate(documents):
         path_key = _normalize_canvas_lookup_key(document.get("path"))
         if path_key == lookup_key:
-            return index, document
+            add_match("exact_path", index, document)
+            continue
 
         title_key = _normalize_canvas_lookup_key(document.get("title"))
         if title_key == lookup_key:
-            exact_title_matches.append((index, document))
+            add_match("exact_title", index, document)
             continue
+
+        if has_path_segments:
+            suffix = f"/{lookup_key}"
+            if path_key and path_key.endswith(suffix):
+                add_match("suffix", index, document)
+                continue
+            if title_key and title_key.endswith(suffix):
+                add_match("suffix", index, document)
+                continue
 
         if not lookup_basename:
             continue
         if path_key and path_key.rsplit("/", 1)[-1] == lookup_basename:
-            basename_matches.append((index, document))
+            add_match("basename", index, document)
             continue
         if title_key and title_key.rsplit("/", 1)[-1] == lookup_basename:
-            basename_matches.append((index, document))
+            add_match("basename", index, document)
 
-    if len(exact_title_matches) == 1:
-        return exact_title_matches[0]
-    if len(basename_matches) == 1:
-        return basename_matches[0]
+    return match_groups
+
+
+def _find_canvas_document_by_path_locator(documents: list[dict], document_path: str | None) -> tuple[int, dict] | None:
+    matches = _collect_canvas_document_path_matches(documents, document_path)
+    if matches["exact_path"]:
+        return matches["exact_path"][0]
+    if len(matches["exact_title"]) == 1:
+        return matches["exact_title"][0]
+    if len(matches["suffix"]) == 1:
+        return matches["suffix"][0]
+    if len(matches["basename"]) == 1:
+        return matches["basename"][0]
     return None
+
+
+def _describe_canvas_path_matches(documents: list[dict], document_path: str | None) -> str:
+    matches = _collect_canvas_document_path_matches(documents, document_path)
+    candidate_matches = matches["exact_title"] or matches["suffix"] or matches["basename"]
+    if len(candidate_matches) <= 1:
+        return ""
+
+    candidates = []
+    for _, document in candidate_matches[:5]:
+        label = str(document.get("path") or document.get("title") or document.get("id") or "Canvas").strip()
+        if label:
+            candidates.append(label)
+    if not candidates:
+        return ""
+    return ", ".join(candidates)
 
 
 def extract_canvas_primary_locator(document: dict | None) -> dict | None:
@@ -731,6 +779,44 @@ def join_canvas_lines(lines: Iterable[str]) -> str:
     return "\n".join(str(line) for line in lines)
 
 
+def _normalize_canvas_expected_line(line: str) -> str:
+    return _normalize_line_endings(str(line)).rstrip()
+
+
+def _validate_canvas_expected_lines(
+    existing_lines: list[str],
+    *,
+    expected_lines: list[str] | None,
+    expected_start_line: int | None,
+    default_start_line: int,
+) -> None:
+    if expected_lines is None:
+        return
+
+    normalized_expected = [_normalize_canvas_expected_line(line) for line in expected_lines]
+    if not normalized_expected:
+        return
+
+    compare_start = expected_start_line if expected_start_line is not None else default_start_line
+    if compare_start < 1:
+        raise ValueError("expected_start_line must be at least 1 when expected_lines are provided.")
+
+    compare_end = compare_start + len(normalized_expected) - 1
+    if compare_end > len(existing_lines):
+        raise ValueError(
+            "Canvas context drift detected: the expected lines no longer fit at the current location. Reinspect the document before editing."
+        )
+
+    current_slice = [
+        _normalize_canvas_expected_line(line)
+        for line in existing_lines[compare_start - 1:compare_end]
+    ]
+    if current_slice != normalized_expected:
+        raise ValueError(
+            f"Canvas context drift detected around lines {compare_start}-{compare_end}. Reinspect the document before editing."
+        )
+
+
 def create_canvas_runtime_state(initial_documents: list[dict] | None = None, active_document_id: str | None = None) -> dict:
     documents = extract_canvas_documents({"canvas_documents": initial_documents or []})
     resolved_active_document_id = extract_canvas_active_document_id({"active_document_id": active_document_id}, documents)
@@ -792,6 +878,9 @@ def _find_canvas_document(
         match = _find_canvas_document_by_path_locator(documents, normalized_path)
         if match:
             return match
+        candidate_text = _describe_canvas_path_matches(documents, normalized_path)
+        if candidate_text:
+            raise ValueError(f"Canvas document path is ambiguous for {normalized_path}. Matches: {candidate_text}")
         raise ValueError(f"Canvas document not found for path: {normalized_path}")
 
     target_id = str(document_id or runtime_state.get("active_document_id") or "").strip()
@@ -917,6 +1006,8 @@ def replace_canvas_lines(
     lines: list[str],
     document_id: str | None = None,
     document_path: str | None = None,
+    expected_lines: list[str] | None = None,
+    expected_start_line: int | None = None,
 ) -> dict:
     _, document = _find_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
     existing_lines = list_canvas_lines(document.get("content") or "")
@@ -926,6 +1017,13 @@ def replace_canvas_lines(
         raise ValueError("Line range exceeds the current canvas document.")
     if end_line > len(existing_lines):
         raise ValueError("Line range exceeds the current canvas document.")
+
+    _validate_canvas_expected_lines(
+        existing_lines,
+        expected_lines=expected_lines,
+        expected_start_line=expected_start_line,
+        default_start_line=start_line,
+    )
 
     replacement = [str(line) for line in (lines or [])]
     next_lines = [*existing_lines[: start_line - 1], *replacement, *existing_lines[end_line:]]
@@ -940,11 +1038,22 @@ def insert_canvas_lines(
     lines: list[str],
     document_id: str | None = None,
     document_path: str | None = None,
+    expected_lines: list[str] | None = None,
+    expected_start_line: int | None = None,
 ) -> dict:
     _, document = _find_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
     existing_lines = list_canvas_lines(document.get("content") or "")
     if after_line < 0 or after_line > len(existing_lines):
         raise ValueError("after_line must be between 0 and the current line count.")
+
+    expected_count = len(expected_lines or [])
+    default_start_line = 1 if after_line <= 0 else max(1, after_line - max(0, expected_count - 1))
+    _validate_canvas_expected_lines(
+        existing_lines,
+        expected_lines=expected_lines,
+        expected_start_line=expected_start_line,
+        default_start_line=default_start_line,
+    )
 
     additions = [str(line) for line in (lines or [])]
     next_lines = [*existing_lines[:after_line], *additions, *existing_lines[after_line:]]
@@ -959,8 +1068,19 @@ def delete_canvas_lines(
     end_line: int,
     document_id: str | None = None,
     document_path: str | None = None,
+    expected_lines: list[str] | None = None,
+    expected_start_line: int | None = None,
 ) -> dict:
-    return replace_canvas_lines(runtime_state, start_line, end_line, [], document_id=document_id, document_path=document_path)
+    return replace_canvas_lines(
+        runtime_state,
+        start_line,
+        end_line,
+        [],
+        document_id=document_id,
+        document_path=document_path,
+        expected_lines=expected_lines,
+        expected_start_line=expected_start_line,
+    )
 
 
 def scroll_canvas_document(
@@ -1172,6 +1292,8 @@ def build_canvas_tool_result(
     action: str,
     edit_start_line: int | None = None,
     edit_end_line: int | None = None,
+    expected_start_line: int | None = None,
+    expected_lines: list[str] | None = None,
 ) -> dict:
     normalized = normalize_canvas_document(document)
     if not normalized:
@@ -1207,6 +1329,10 @@ def build_canvas_tool_result(
         "content": preview,
         "content_truncated": content_truncated,
     }
+    if isinstance(expected_start_line, int) and expected_start_line >= 1:
+        result["expected_start_line"] = expected_start_line
+    if isinstance(expected_lines, list) and expected_lines:
+        result["expected_lines"] = [str(line) for line in expected_lines]
     if normalized.get("language"):
         result["language"] = normalized["language"]
     for key in ("path", "role", "summary", "project_id", "workspace_id"):

@@ -126,6 +126,41 @@ TOOL_PERMISSION_LABELS = {
     "validate_project_workspace": "Validate project workspace",
 }
 
+TOOL_PERMISSION_DESCRIPTIONS = {
+    "append_scratchpad": "Append durable facts to a named persistent memory section.",
+    "replace_scratchpad": "Fully rewrite one persistent memory section.",
+    "read_scratchpad": "Read the current persistent memory before editing.",
+    "ask_clarifying_question": "Pause and ask the user structured questions before answering.",
+    "sub_agent": "Delegate a bounded research task to a read-only helper agent.",
+    "image_explain": "Ask follow-up questions about a previously uploaded image.",
+    "search_knowledge_base": "Semantic search over synced chats and uploaded documents.",
+    "search_tool_memory": "Search remembered web research results from past conversations.",
+    "search_web": "Live web search via DuckDuckGo for current facts.",
+    "fetch_url": "Read and extract cleaned text from a specific web page.",
+    "fetch_url_summarized": "Fetch a page and return an AI-generated summary only.",
+    "grep_fetched_content": "Search for a keyword or pattern inside a previously fetched page.",
+    "search_news_ddgs": "Search recent news articles via DuckDuckGo News.",
+    "search_news_google": "Search recent news articles via Google News RSS.",
+    "create_canvas_document": "Create a new editable canvas document or code artifact.",
+    "expand_canvas_document": "Load a full canvas document into view beyond the active excerpt.",
+    "scroll_canvas_document": "Read a targeted line range from a canvas document.",
+    "search_canvas_document": "Search for text or patterns inside canvas documents.",
+    "rewrite_canvas_document": "Fully replace a canvas document's content in one operation.",
+    "replace_canvas_lines": "Replace a specific line range inside a canvas document.",
+    "insert_canvas_lines": "Insert new lines at a position inside a canvas document.",
+    "delete_canvas_lines": "Delete a specific line range from a canvas document.",
+    "delete_canvas_document": "Permanently remove a canvas document from the conversation.",
+    "clear_canvas": "Remove all canvas documents from the current conversation.",
+    "create_directory": "Create a directory inside the conversation workspace sandbox.",
+    "create_file": "Write a new file inside the conversation workspace sandbox.",
+    "update_file": "Replace the full content of an existing workspace sandbox file.",
+    "read_file": "Read the content of a workspace file with optional line limits.",
+    "list_dir": "List files and folders in the workspace sandbox.",
+    "search_files": "Search file paths or file contents within the workspace sandbox.",
+    "write_project_tree": "Create or overwrite many files and directories in one batch.",
+    "validate_project_workspace": "Run lightweight validation checks against the workspace sandbox.",
+}
+
 TOOL_PERMISSION_SECTION_ORDER = ["assistant", "research", "canvas", "workspace"]
 TOOL_PERMISSION_SECTION_METADATA = {
     "assistant": {
@@ -207,6 +242,7 @@ def build_tool_permission_options() -> list[dict[str, str]]:
             {
                 "name": name,
                 "label": TOOL_PERMISSION_LABELS.get(name, name.replace("_", " ").title()),
+                "description": TOOL_PERMISSION_DESCRIPTIONS.get(name, ""),
             }
         )
     return options

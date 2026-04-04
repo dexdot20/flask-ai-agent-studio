@@ -3320,6 +3320,11 @@ function normalizeClarificationQuestion(question, index) {
     options: [],
   };
 
+  const dependsOn = normalizeClarificationDependency(question.depends_on);
+  if (dependsOn) {
+    normalized.depends_on = dependsOn;
+  }
+
   const rawOptions = Array.isArray(question.options) ? question.options : [];
   normalized.options = rawOptions
     .map((option) => {
@@ -3341,6 +3346,33 @@ function normalizeClarificationQuestion(question, index) {
     .filter(Boolean);
 
   return normalized;
+}
+
+function normalizeClarificationDependency(dependsOn) {
+  if (!dependsOn || typeof dependsOn !== "object") {
+    return null;
+  }
+
+  const questionId = String(dependsOn.question_id || dependsOn.id || dependsOn.question || "").trim();
+  const rawValues = Array.isArray(dependsOn.values) ? [...dependsOn.values] : [];
+  if (dependsOn.value !== undefined && dependsOn.value !== null && String(dependsOn.value).trim()) {
+    rawValues.unshift(dependsOn.value);
+  }
+
+  const values = rawValues
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .filter((value, idx, array) => array.findIndex((entry) => entry === value) === idx)
+    .slice(0, 10);
+
+  if (!questionId || !values.length) {
+    return null;
+  }
+
+  return {
+    question_id: questionId,
+    values,
+  };
 }
 
 function getPendingClarification(metadata) {
@@ -3365,6 +3397,66 @@ function getPendingClarification(metadata) {
     submit_label: String(payload.submit_label || "").trim() || "Send answers",
     questions,
   };
+}
+
+function getClarificationLiveValue(form, question, index) {
+  const fieldName = `clarify_${index}`;
+  if (question.input_type === "text") {
+    return String(form.elements[fieldName]?.value || "").trim();
+  }
+  if (question.input_type === "single_select") {
+    return String(form.querySelector(`input[name="${fieldName}"]:checked`)?.value || "").trim();
+  }
+  return Array.from(form.querySelectorAll(`input[name="${fieldName}"]:checked`))
+    .map((element) => String(element.value || "").trim())
+    .filter(Boolean);
+}
+
+function matchesClarificationDependency(dependsOn, answerValue) {
+  if (!dependsOn || typeof dependsOn !== "object") {
+    return true;
+  }
+
+  const allowedValues = Array.isArray(dependsOn.values)
+    ? dependsOn.values.map((value) => String(value || "").trim()).filter(Boolean)
+    : [];
+  if (!allowedValues.length) {
+    return true;
+  }
+
+  const actualValues = Array.isArray(answerValue)
+    ? answerValue.map((value) => String(value || "").trim()).filter(Boolean)
+    : [String(answerValue || "").trim()].filter(Boolean);
+  return actualValues.some((value) => allowedValues.includes(value));
+}
+
+function setClarificationFieldDisabled(field, disabled) {
+  if (!(field instanceof HTMLElement)) {
+    return;
+  }
+  field.querySelectorAll("input, textarea").forEach((element) => {
+    if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+      element.disabled = disabled;
+    }
+  });
+}
+
+function updateClarificationFieldVisibility(form, clarification) {
+  const answersByQuestionId = {};
+  clarification.questions.forEach((question, index) => {
+    answersByQuestionId[question.id] = getClarificationLiveValue(form, question, index);
+  });
+
+  clarification.questions.forEach((question) => {
+    const field = form.querySelector(`.clarification-field[data-question-id="${CSS.escape(question.id)}"]`);
+    if (!(field instanceof HTMLElement)) {
+      return;
+    }
+    const visible = !question.depends_on
+      || matchesClarificationDependency(question.depends_on, answersByQuestionId[question.depends_on.question_id]);
+    field.hidden = !visible;
+    setClarificationFieldDisabled(field, !visible);
+  });
 }
 
 function getClarificationDraftStorageKey(messageId) {
@@ -3500,6 +3592,10 @@ function collectClarificationAnswers(form, clarification) {
 
   for (let index = 0; index < clarification.questions.length; index += 1) {
     const question = clarification.questions[index];
+    const field = form.querySelector(`.clarification-field[data-question-id="${CSS.escape(question.id)}"]`);
+    if (field instanceof HTMLElement && field.hidden) {
+      continue;
+    }
     const fieldName = `clarify_${index}`;
     const freeTextName = `${fieldName}_free`;
     let display = "";
@@ -6788,6 +6884,7 @@ function appendClarificationPanel(group, metadata, options = {}) {
   clarification.questions.forEach((question, index) => {
     const field = document.createElement("div");
     field.className = "clarification-field";
+    field.dataset.questionId = question.id;
 
     const label = document.createElement("label");
     label.className = "clarification-field__label";
@@ -6806,8 +6903,10 @@ function appendClarificationPanel(group, metadata, options = {}) {
       input.addEventListener("input", () => autoResize(input));
       field.appendChild(input);
     } else {
+      let optionsSearchInput = null;
       const optionsList = document.createElement("div");
       optionsList.className = "clarification-options";
+      const optionEntries = [];
       question.options.forEach((option) => {
         const optionLabel = document.createElement("label");
         optionLabel.className = "clarification-option";
@@ -6824,8 +6923,44 @@ function appendClarificationPanel(group, metadata, options = {}) {
         optionLabel.appendChild(input);
         optionLabel.appendChild(textBlock);
         optionsList.appendChild(optionLabel);
+        optionEntries.push({
+          element: optionLabel,
+          searchText: `${option.label} ${option.description || ""}`.toLowerCase(),
+        });
       });
-      field.appendChild(optionsList);
+
+      if (question.options.length > 5) {
+        optionsSearchInput = document.createElement("input");
+        optionsSearchInput.type = "search";
+        optionsSearchInput.className = "clarification-field__input clarification-options__search";
+        optionsSearchInput.placeholder = "Filter options";
+        field.appendChild(optionsSearchInput);
+
+        const emptyState = document.createElement("div");
+        emptyState.className = "clarification-options__empty";
+        emptyState.textContent = "No matching options.";
+        emptyState.hidden = true;
+
+        const applyOptionFilter = () => {
+          const query = String(optionsSearchInput.value || "").trim().toLowerCase();
+          let visibleCount = 0;
+          optionEntries.forEach((entry) => {
+            const matches = !query || entry.searchText.includes(query);
+            entry.element.hidden = !matches;
+            if (matches) {
+              visibleCount += 1;
+            }
+          });
+          emptyState.hidden = visibleCount > 0;
+        };
+
+        optionsSearchInput.addEventListener("input", applyOptionFilter);
+        field.appendChild(optionsList);
+        field.appendChild(emptyState);
+        applyOptionFilter();
+      } else {
+        field.appendChild(optionsList);
+      }
 
       if (question.allow_free_text) {
         const freeTextInput = document.createElement("input");
@@ -6842,12 +6977,19 @@ function appendClarificationPanel(group, metadata, options = {}) {
 
   applyClarificationDraft(form, clarification, loadClarificationDraft(options.messageId));
 
-  form.addEventListener("input", () => {
+  const syncClarificationFormState = () => {
+    updateClarificationFieldVisibility(form, clarification);
     saveClarificationDraft(options.messageId, collectClarificationDraft(form, clarification));
+  };
+
+  updateClarificationFieldVisibility(form, clarification);
+
+  form.addEventListener("input", () => {
+    syncClarificationFormState();
   });
 
   form.addEventListener("change", () => {
-    saveClarificationDraft(options.messageId, collectClarificationDraft(form, clarification));
+    syncClarificationFormState();
   });
 
   const error = document.createElement("div");
@@ -7143,17 +7285,13 @@ async function sendMessage(options = {}) {
     editingCanvasDocumentId = null;
     activeCanvasDocumentId = getActiveCanvasDocument(history)?.id || null;
     rebuildTokenStatsFromHistory();
-    renderConversationHistory();
+    renderConversationHistory({ preserveScroll: true });
     renderCanvasPanel();
-    userGroup = messagesEl.querySelector(".msg-group.user:last-of-type");
     clearEditTarget();
   } else {
     const userEntry = { id: null, role: "user", content: text, metadata: userMetadata };
     history.push(userEntry);
-    userGroup = appendGroup("user", text, userMetadata, { editable: false, messageId: null });
   }
-
-  const { asstGroup, stepLog, asstBubble } = createAssistantStreamingGroup();
 
   const controller = new AbortController();
   activeAbortController = controller;
@@ -7161,6 +7299,10 @@ async function sendMessage(options = {}) {
   pendingConversationRefreshTimers.forEach((timerId) => window.clearTimeout(timerId));
   pendingConversationRefreshTimers.clear();
   setStreaming(true);
+  renderConversationHistory({ preserveScroll: true });
+  userGroup = messagesEl.querySelector(".msg-group.user:last-of-type");
+
+  const { asstGroup, stepLog, asstBubble } = createAssistantStreamingGroup();
 
   let rawAnswer = "";
   let rawReasoning = "";
@@ -7751,6 +7893,7 @@ async function sendMessage(options = {}) {
   } finally {
     activeAbortController = null;
     setStreaming(false);
+    renderConversationHistory({ preserveScroll: true });
     resetAssistantStreamingBubbleState();
     refreshEditBanner();
     inputEl.focus();

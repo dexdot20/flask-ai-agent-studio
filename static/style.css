@@ -962,6 +962,15 @@ body.sidebar-collapsed .chat-area {
   gap: 8px;
 }
 
+.clarification-options__search {
+  margin-bottom: 2px;
+}
+
+.clarification-options__empty {
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+}
+
 .clarification-option {
   display: flex;
   align-items: flex-start;

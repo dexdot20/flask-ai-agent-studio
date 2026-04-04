@@ -30,6 +30,8 @@ from canvas_service import (
     get_canvas_runtime_active_document_id,
     get_canvas_runtime_documents,
     insert_canvas_lines,
+    list_canvas_lines,
+    _find_canvas_document,
     replace_canvas_lines,
     rewrite_canvas_document,
     search_canvas_document,
@@ -1279,6 +1281,127 @@ def _build_sub_agent_messages(
     ]
 
 
+def _estimate_sub_agent_max_steps(
+    task: str,
+    parent_context: str,
+    conversation_handoff: str,
+    canvas_handoff: str,
+    allowed_tools: list[str],
+) -> int:
+    combined_text = "\n".join(
+        part.strip()
+        for part in (task, parent_context, conversation_handoff, canvas_handoff)
+        if str(part or "").strip()
+    )
+    word_count = len(re.findall(r"\w+", combined_text))
+    keyword_hits = sum(
+        1
+        for keyword in (
+            "compare",
+            "across",
+            "multiple",
+            "thorough",
+            "analyze",
+            "analysis",
+            "synthesize",
+            "investigate",
+            "repo",
+            "codebase",
+            "files",
+            "sources",
+            "evidence",
+            "trace",
+            "cross-file",
+        )
+        if keyword in combined_text.casefold()
+    )
+
+    score = 0
+    if word_count >= 80:
+        score += 1
+    if word_count >= 180:
+        score += 1
+    if len(allowed_tools) >= 4:
+        score += 1
+    if len(allowed_tools) >= 8:
+        score += 1
+    if keyword_hits >= 2:
+        score += 1
+    if keyword_hits >= 5:
+        score += 1
+    if canvas_handoff:
+        score += 1
+
+    return max(3, min(8, 4 + score))
+
+
+def _resolve_sub_agent_max_steps(
+    tool_args: dict,
+    *,
+    task: str,
+    parent_context: str,
+    conversation_handoff: str,
+    canvas_handoff: str,
+    allowed_tools: list[str],
+) -> int:
+    raw_max_steps = tool_args.get("max_steps")
+    if raw_max_steps not in (None, ""):
+        return _coerce_int_range(raw_max_steps, SUB_AGENT_DEFAULT_MAX_STEPS, 1, 8)
+    return _estimate_sub_agent_max_steps(
+        task,
+        parent_context,
+        conversation_handoff,
+        canvas_handoff,
+        allowed_tools,
+    )
+
+
+def _build_canvas_expected_context(
+    canvas_state: dict,
+    *,
+    document_id: str | None = None,
+    document_path: str | None = None,
+    start_line: int | None = None,
+    end_line: int | None = None,
+    after_line: int | None = None,
+    mode: str,
+) -> tuple[int | None, list[str] | None]:
+    if not isinstance(canvas_state, dict):
+        return None, None
+
+    try:
+        _, document = _find_canvas_document(canvas_state, document_id=document_id, document_path=document_path)
+    except Exception:
+        return None, None
+
+    existing_lines = list_canvas_lines(document.get("content") or "")
+    if not existing_lines:
+        return None, None
+
+    if mode in {"replace", "delete"}:
+        if not isinstance(start_line, int) or not isinstance(end_line, int):
+            return None, None
+        if start_line < 1 or end_line < start_line:
+            return None, None
+        expected_lines = existing_lines[start_line - 1:end_line]
+        return start_line, expected_lines or None
+
+    if mode == "insert":
+        if not isinstance(after_line, int) or after_line < 0:
+            return None, None
+        if after_line == 0:
+            expected_start_line = 1
+            expected_lines = existing_lines[: min(3, len(existing_lines))]
+            return expected_start_line, expected_lines or None
+
+        expected_start_line = max(1, after_line - 1)
+        expected_end_line = min(len(existing_lines), after_line + 1)
+        expected_lines = existing_lines[expected_start_line - 1:expected_end_line]
+        return expected_start_line, expected_lines or None
+
+    return None, None
+
+
 def _build_sub_agent_resume_message(previous_model: str, reason: str) -> dict:
     parts = []
     cleaned_previous_model = _clean_tool_text(previous_model, limit=120)
@@ -2014,10 +2137,15 @@ def _prepare_tool_result_for_transcript(
             "path",
             "role",
             "summary",
+            "expected_start_line",
         ):
             value = result.get(key)
             if value not in (None, "", [], {}):
                 compact_result[key] = value
+
+        expected_lines = result.get("expected_lines")
+        if isinstance(expected_lines, list) and expected_lines:
+            compact_result["expected_lines"] = [str(line) for line in expected_lines[:20]]
 
         primary_locator = result.get("primary_locator") if isinstance(result.get("primary_locator"), dict) else None
         if primary_locator:
@@ -2908,6 +3036,8 @@ def _build_final_answer_instruction() -> dict:
             "[INSTRUCTION: FINAL ANSWER REQUIRED]\n\n"
             "Tool execution budget is exhausted. Do not call more tools.\n"
             "Respond with the best possible final answer using the available context.\n"
+            "Do not claim that an action was completed unless a tool result in this run confirms it. "
+            "If work remains unfinished, say so explicitly.\n"
             "Place the final answer in assistant content, not reasoning_content."
         ),
     }
@@ -2975,8 +3105,9 @@ def _build_tool_execution_result_message(transcript_results: list[dict]) -> dict
 
     parts = [
         f"{TOOL_EXECUTION_RESULTS_MARKER}\n",
-        "**Fetch Guidance**: Use the retrieved page content as the source of truth. "
-        "Do not repeat the same fetch_url call unless the user explicitly asks to refresh.\n",
+        "**Fetch Guidance**: Use the retrieved page content from this step as the source of truth. "
+        "This guidance is step-local, not a blanket rule for later turns. "
+        "If the user later asks you to verify or refresh, call fetch_url again.\n",
     ]
     for item in transcript_results:
         tool_name = str(item.get("tool_name") or "unknown")
@@ -3083,6 +3214,32 @@ def _normalize_clarification_question(raw_question: dict, index: int) -> dict | 
     normalized["input_type"] = input_type
     if normalized_options:
         normalized["options"] = normalized_options
+
+    raw_dependency = raw_question.get("depends_on")
+    if isinstance(raw_dependency, dict):
+        dependency_question_id = _sanitize_clarification_id(
+            str(raw_dependency.get("question_id") or raw_dependency.get("id") or raw_dependency.get("question") or ""),
+            index,
+        )
+        dependency_values = raw_dependency.get("values") if isinstance(raw_dependency.get("values"), list) else []
+        if raw_dependency.get("value") not in (None, ""):
+            dependency_values = [raw_dependency.get("value"), *dependency_values]
+        normalized_dependency_values = []
+        seen_dependency_values = set()
+        for dependency_value in dependency_values[:10]:
+            cleaned_value = _sanitize_clarification_text(str(dependency_value or ""), limit=120)
+            if not cleaned_value:
+                continue
+            dedupe_key = cleaned_value.casefold()
+            if dedupe_key in seen_dependency_values:
+                continue
+            seen_dependency_values.add(dedupe_key)
+            normalized_dependency_values.append(cleaned_value[:120])
+        if dependency_question_id and normalized_dependency_values:
+            normalized["depends_on"] = {
+                "question_id": dependency_question_id,
+                "values": normalized_dependency_values,
+            }
 
     return normalized
 
@@ -3276,7 +3433,6 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
     settings = get_app_settings()
     parent_model = str(agent_context.get("model") or "").strip()
     child_model_candidates = get_operation_model_candidates("sub_agent", settings, fallback_model_id=parent_model)
-    child_max_steps = _coerce_int_range(tool_args.get("max_steps"), SUB_AGENT_DEFAULT_MAX_STEPS, 1, 8)
     child_max_parallel_tools = get_sub_agent_max_parallel_tools(settings)
     timeout_seconds = _coerce_int_range(
         tool_args.get("timeout_seconds"),
@@ -3290,6 +3446,14 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
 
     conversation_handoff = str(agent_context.get("conversation_handoff") or "").strip()
     canvas_handoff = _build_sub_agent_canvas_handoff(runtime_state)
+    child_max_steps = _resolve_sub_agent_max_steps(
+        tool_args,
+        task=task,
+        parent_context=parent_context,
+        conversation_handoff=conversation_handoff,
+        canvas_handoff=canvas_handoff,
+        allowed_tools=child_tool_names,
+    )
     child_messages = _build_sub_agent_messages(
         task,
         parent_context,
@@ -3848,6 +4012,14 @@ def _run_replace_canvas_lines(tool_args: dict, runtime_state: dict):
     canvas_state = _get_canvas_runtime_state(runtime_state)
     start_line = int(tool_args.get("start_line") or 0)
     replacement_lines = tool_args.get("lines") or []
+    expected_start_line, expected_lines = _build_canvas_expected_context(
+        canvas_state,
+        document_id=tool_args.get("document_id"),
+        document_path=tool_args.get("document_path"),
+        start_line=start_line,
+        end_line=int(tool_args.get("end_line") or 0),
+        mode="replace",
+    )
     document = replace_canvas_lines(
         canvas_state,
         start_line=start_line,
@@ -3855,6 +4027,8 @@ def _run_replace_canvas_lines(tool_args: dict, runtime_state: dict):
         lines=replacement_lines,
         document_id=tool_args.get("document_id"),
         document_path=tool_args.get("document_path"),
+        expected_lines=tool_args.get("expected_lines"),
+        expected_start_line=tool_args.get("expected_start_line"),
     )
     edit_end = start_line + len(replacement_lines) - 1 if replacement_lines else start_line
     result = build_canvas_tool_result(
@@ -3862,6 +4036,8 @@ def _run_replace_canvas_lines(tool_args: dict, runtime_state: dict):
         action="lines_replaced",
         edit_start_line=start_line,
         edit_end_line=max(start_line, edit_end),
+        expected_start_line=expected_start_line,
+        expected_lines=expected_lines,
     )
     return result, f"Canvas lines replaced in {document['title']}"
 
@@ -3870,12 +4046,21 @@ def _run_insert_canvas_lines(tool_args: dict, runtime_state: dict):
     canvas_state = _get_canvas_runtime_state(runtime_state)
     after_line = int(tool_args.get("after_line") or 0)
     insertion_lines = tool_args.get("lines") or []
+    expected_start_line, expected_lines = _build_canvas_expected_context(
+        canvas_state,
+        document_id=tool_args.get("document_id"),
+        document_path=tool_args.get("document_path"),
+        after_line=after_line,
+        mode="insert",
+    )
     document = insert_canvas_lines(
         canvas_state,
         after_line=after_line,
         lines=insertion_lines,
         document_id=tool_args.get("document_id"),
         document_path=tool_args.get("document_path"),
+        expected_lines=tool_args.get("expected_lines"),
+        expected_start_line=tool_args.get("expected_start_line"),
     )
     edit_start = after_line + 1
     edit_end = after_line + len(insertion_lines)
@@ -3884,6 +4069,8 @@ def _run_insert_canvas_lines(tool_args: dict, runtime_state: dict):
         action="lines_inserted",
         edit_start_line=edit_start,
         edit_end_line=max(edit_start, edit_end),
+        expected_start_line=expected_start_line,
+        expected_lines=expected_lines,
     )
     return result, f"Canvas lines inserted in {document['title']}"
 
@@ -3891,12 +4078,22 @@ def _run_insert_canvas_lines(tool_args: dict, runtime_state: dict):
 def _run_delete_canvas_lines(tool_args: dict, runtime_state: dict):
     canvas_state = _get_canvas_runtime_state(runtime_state)
     start_line = int(tool_args.get("start_line") or 0)
+    expected_start_line, expected_lines = _build_canvas_expected_context(
+        canvas_state,
+        document_id=tool_args.get("document_id"),
+        document_path=tool_args.get("document_path"),
+        start_line=start_line,
+        end_line=int(tool_args.get("end_line") or 0),
+        mode="delete",
+    )
     document = delete_canvas_lines(
         canvas_state,
         start_line=start_line,
         end_line=int(tool_args.get("end_line") or 0),
         document_id=tool_args.get("document_id"),
         document_path=tool_args.get("document_path"),
+        expected_lines=tool_args.get("expected_lines"),
+        expected_start_line=tool_args.get("expected_start_line"),
     )
     # Show context around the deletion point so the model can verify placement.
     result = build_canvas_tool_result(
@@ -3904,6 +4101,8 @@ def _run_delete_canvas_lines(tool_args: dict, runtime_state: dict):
         action="lines_deleted",
         edit_start_line=start_line,
         edit_end_line=start_line,
+        expected_start_line=expected_start_line,
+        expected_lines=expected_lines,
     )
     return result, f"Canvas lines deleted in {document['title']}"
 
@@ -4518,6 +4717,16 @@ def _apply_tool_output_budget(
     return ultra_tool_messages, ultra_transcript_results, ultra_tool_execution_result_message, True
 
 
+def _prefix_cross_turn_tool_memory_summary(summary: str, fallback: str) -> str:
+    prefix = "[Cached from an earlier conversation; not executed in this turn]"
+    cleaned_summary = _clean_tool_text(summary or "", limit=RAG_TOOL_RESULT_SUMMARY_MAX_CHARS)
+    if cleaned_summary:
+        if cleaned_summary.startswith(prefix):
+            return cleaned_summary
+        return f"{prefix} {cleaned_summary}"
+    return f"{prefix} {fallback}"
+
+
 def _lookup_cross_turn_tool_memory(tool_name: str, tool_args: dict) -> tuple[object, str] | None:
     if tool_name in {"fetch_url", "fetch_url_summarized", "sub_agent"}:
         url = _tool_input_preview(tool_name, tool_args)
@@ -4532,9 +4741,10 @@ def _lookup_cross_turn_tool_memory(tool_name: str, tool_args: dict) -> tuple[obj
         excerpt = _clean_tool_text(exact_match.get("content") or "", limit=RAG_TOOL_RESULT_MAX_TEXT_CHARS)
         if not excerpt:
             return None
-        summary = _clean_tool_text(exact_match.get("summary") or "", limit=RAG_TOOL_RESULT_SUMMARY_MAX_CHARS)
-        if not summary:
-            summary = f"Reused cached {tool_name} result for {url}"
+        summary = _prefix_cross_turn_tool_memory_summary(
+            exact_match.get("summary") or "",
+            f"Reused cached {tool_name} result for {url}",
+        )
         return excerpt, summary
 
     if tool_name not in {"search_web", "search_news_ddgs", "search_news_google"}:
@@ -4561,7 +4771,7 @@ def _lookup_cross_turn_tool_memory(tool_name: str, tool_args: dict) -> tuple[obj
         return None
 
     source_name = _clean_tool_text(best_match.get("source_name") or "Tool memory", limit=120)
-    summary = f"Reused tool memory from {source_name}"
+    summary = _prefix_cross_turn_tool_memory_summary("", f"Reused tool memory from {source_name}")
     return excerpt, summary
 
 
@@ -4664,6 +4874,9 @@ def _build_reasoning_replay_instruction(reasoning_state: dict, current_goal: str
     parts = [REASONING_REPLAY_MARKER]
     parts.append(
         "This is a compact memory of your own earlier thinking in the current run. Read it as a working note, not as new user input."
+    )
+    parts.append(
+        "These entries capture prior planning and intermediate conclusions. Only actual tool results confirm that an action really happened."
     )
     parts.append(
         "Use it to keep the same plan across tool calls: remember what you already checked, what you concluded, and what the next step was."
