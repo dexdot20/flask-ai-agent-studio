@@ -34,6 +34,7 @@ from agent import (
     _build_compact_tool_message_content,
     _build_tool_execution_result_message,
     _build_streaming_canvas_tool_preview,
+    _tool_result_has_error,
     _estimate_input_breakdown,
     _estimate_message_breakdown,
     _execute_tool,
@@ -3283,6 +3284,19 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("- Root: /tmp/workspace-root", content)
         self.assertIn("needs_confirmation", content)
 
+    def test_tool_specs_include_guidance_for_workspace_and_news_tools(self):
+        for tool_name in [
+            "search_news_ddgs",
+            "search_news_google",
+            "read_file",
+            "list_dir",
+            "validate_project_workspace",
+        ]:
+            prompt = TOOL_SPEC_BY_NAME[tool_name]["prompt"]
+            self.assertTrue(str(prompt.get("guidance") or "").strip())
+
+        self.assertEqual(TOOL_SPEC_BY_NAME["read_scratchpad"]["parameters"]["required"], [])
+
     def test_settings_patch_allows_manual_scratchpad_updates(self):
         response = self.client.patch(
             "/api/settings",
@@ -5173,13 +5187,13 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(result["note_count"], 2)
         self.assertEqual(summary, "Scratchpad read")
 
-    def test_runtime_system_message_shows_empty_scratchpad_when_read_tool_is_active(self):
+    def test_runtime_system_message_omits_empty_scratchpad_section_when_only_read_tool_is_active(self):
         message = build_runtime_system_message(active_tool_names=["read_scratchpad"], scratchpad="")
 
         content = message["content"]
-        self.assertIn("## Scratchpad (AI Persistent Memory)", content)
+        self.assertNotIn("## Scratchpad (AI Persistent Memory)", content)
         self.assertIn("read_scratchpad", content)
-        self.assertIn("(All sections empty)", content)
+        self.assertNotIn("(All sections empty)", content)
         self.assertNotIn("### Memory Write Policy", content)
 
     def test_run_agent_stream_caps_parallel_safe_tool_workers(self):
@@ -9067,7 +9081,9 @@ class AppRoutesTestCase(unittest.TestCase):
             "## Active Canvas Document\n"
             "```text\n"
             "1: old line\n"
-            "```"
+            "```\n\n"
+            "## Pinned Canvas Viewports\n"
+            "- src/app.py lines 20-24\n"
         )
         latest_context = (
             "## Current Date and Time\n"
@@ -9106,6 +9122,8 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertNotIn("Earlier clarification guidance", system_messages[0]["content"])
         self.assertNotIn("Earlier search result", system_messages[0]["content"])
         self.assertNotIn("Earlier KB excerpt", system_messages[0]["content"])
+        self.assertNotIn("## Pinned Canvas Viewports", system_messages[0]["content"])
+        self.assertNotIn("src/app.py lines 20-24", system_messages[0]["content"])
 
     def test_chat_uses_compact_clarification_answers_for_rag_query(self):
         conversation_id = self._create_conversation()
@@ -9709,6 +9727,73 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("later asks you to verify or refresh", message["content"])
         self.assertIn("Recovery:", message["content"])
         self.assertIn("grep_fetched_content", message["content"])
+
+    def test_tool_result_has_error_detects_status_error_payloads(self):
+        self.assertTrue(_tool_result_has_error("sub_agent", {"status": "error", "error": "failed"}))
+        self.assertTrue(_tool_result_has_error("image_explain", {"status": "missing_image", "error": "missing"}))
+        self.assertFalse(_tool_result_has_error("ask_clarifying_question", {"status": "needs_user_input"}))
+
+    def test_apply_tool_output_budget_omits_nonstandard_tool_message_id(self):
+        base_messages = [{"role": "user", "content": "Read the file."}]
+        entries = [
+            {
+                "tool_name": "read_file",
+                "tool_args": {"path": "README.md"},
+                "call_id": "call-1",
+                "result": {"status": "ok", "path": "README.md", "content": "hello"},
+                "summary": "File read: README.md",
+                "transcript_result": {"status": "ok", "path": "README.md", "content": "hello"},
+                "ok": True,
+            }
+        ]
+
+        tool_messages, _, _, _ = _apply_tool_output_budget(base_messages, entries)
+
+        self.assertEqual(tool_messages[0]["role"], "tool")
+        self.assertEqual(tool_messages[0]["tool_call_id"], "call-1")
+        self.assertNotIn("id", tool_messages[0])
+
+    def test_run_agent_stream_deduplicates_fetch_guidance_system_message(self):
+        responses = [
+            iter(
+                [
+                    self._tool_call_chunk("fetch_url", {"url": "https://example.com/1"}, call_id="call-1", index=0),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=3, completion_tokens=3, total_tokens=6)),
+                ]
+            ),
+            iter(
+                [
+                    self._tool_call_chunk("fetch_url", {"url": "https://example.com/2"}, call_id="call-2", index=0),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=3, completion_tokens=3, total_tokens=6)),
+                ]
+            ),
+            iter(
+                [
+                    self._stream_chunk(content="Done."),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=1, total_tokens=3)),
+                ]
+            ),
+        ]
+        fetch_results = [
+            ({"url": "https://example.com/1", "title": "One", "content": "content", "content_mode": "full_text"}, "Fetched first"),
+            ({"url": "https://example.com/2", "title": "Two", "content": "content", "content_mode": "full_text"}, "Fetched second"),
+        ]
+
+        with patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create, patch(
+            "agent._execute_tool",
+            side_effect=fetch_results,
+        ):
+            events = list(run_agent_stream([{"role": "user", "content": "Check two pages"}], "deepseek-chat", 4, ["fetch_url"]))
+
+        self.assertIn({"type": "answer_delta", "text": "Done."}, events)
+        third_call_messages = mocked_create.call_args_list[2].kwargs["messages"]
+        fetch_guidance_messages = [
+            message
+            for message in third_call_messages
+            if str(message.get("role") or "") == "system"
+            and "[TOOL EXECUTION RESULTS]" in str(message.get("content") or "")
+        ]
+        self.assertEqual(len(fetch_guidance_messages), 1)
 
     def test_run_agent_stream_deduplicates_missing_final_answer_instruction(self):
         responses = [

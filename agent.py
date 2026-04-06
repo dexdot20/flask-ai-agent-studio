@@ -275,6 +275,7 @@ SYSTEM_BREAKDOWN_SECTION_KEY_BY_HEADING = {
     "## Knowledge Base": "rag_context",
     "## Canvas Workspace Summary": "canvas",
     "## Canvas Editing Guidance": "canvas",
+    "## Code Document Rules": "canvas",
     "## Canvas Decision Matrix": "canvas",
     "## Canvas Project Manifest": "canvas",
     "## Canvas Relationship Map": "canvas",
@@ -869,7 +870,22 @@ def _coerce_int_range(value, default: int, minimum: int, maximum: int) -> int:
 
 
 def _tool_result_has_error(tool_name: str, result) -> bool:
-    return tool_name in {"fetch_url", "fetch_url_summarized"} and isinstance(result, dict) and bool(result.get("error"))
+    del tool_name
+    if not isinstance(result, dict):
+        return False
+
+    if result.get("ok") is False:
+        return True
+
+    status = str(result.get("status") or "").strip().lower()
+    if status in {"error", "failed"}:
+        return True
+
+    error_text = str(result.get("error") or "").strip()
+    if not error_text:
+        return False
+
+    return status not in {"ok", "success", "needs_user_input"}
 
 
 def _normalize_search_queries(raw_queries) -> list[str]:
@@ -3152,6 +3168,22 @@ def _build_tool_execution_result_message(transcript_results: list[dict]) -> dict
     return {"role": "system", "content": "\n".join(parts)}
 
 
+def _merge_tool_execution_result_message(messages: list[dict], tool_execution_result_message: dict | None) -> None:
+    if tool_execution_result_message is None:
+        return
+
+    messages[:] = [
+        message
+        for message in messages
+        if not (
+            isinstance(message, dict)
+            and str(message.get("role") or "").strip() == "system"
+            and str(message.get("content") or "").startswith(TOOL_EXECUTION_RESULTS_MARKER)
+        )
+    ]
+    messages.append(tool_execution_result_message)
+
+
 def _normalize_clarification_question(raw_question: dict, index: int) -> dict | None:
     raw_question = _coerce_clarification_question_item(raw_question)
     if not isinstance(raw_question, dict):
@@ -4759,7 +4791,6 @@ def _render_tool_output_entries(tool_output_entries: list[dict]) -> tuple[list[d
         if execution_error:
             tool_messages.append(
                 {
-                    "id": call_id,
                     "role": "tool",
                     "tool_call_id": call_id,
                     "content": _serialize_tool_message_content({"ok": False, "error": execution_error}),
@@ -4782,7 +4813,6 @@ def _render_tool_output_entries(tool_output_entries: list[dict]) -> tuple[list[d
         transcript_result = entry.get("transcript_result")
         tool_messages.append(
             {
-                "id": call_id,
                 "role": "tool",
                 "tool_call_id": call_id,
                 "content": _build_compact_tool_message_content(
@@ -6410,7 +6440,6 @@ def run_agent_stream(
                     }
                     tool_messages.append(
                         {
-                            "id": call_id,
                             "role": "tool",
                             "tool_call_id": call_id,
                             "content": _build_compact_tool_message_content(
@@ -6481,7 +6510,6 @@ def run_agent_stream(
                     yield {"type": "tool_error", "step": step, "tool": tool_name, "error": error, "call_id": call_id}
                     tool_messages.append(
                         {
-                            "id": call_id,
                             "role": "tool",
                             "tool_call_id": call_id,
                             "content": _serialize_tool_message_content({"ok": False, "error": error}),
@@ -6534,8 +6562,7 @@ def run_agent_stream(
             "messages": [assistant_tool_call_message, *tool_messages],
         }
         messages.extend(tool_messages)
-        if tool_execution_result_message is not None:
-            messages.append(tool_execution_result_message)
+        _merge_tool_execution_result_message(messages, tool_execution_result_message)
         if clarification_repair_error and not _has_clarification_tool_repair_instruction(messages):
             messages.append(_build_clarification_tool_repair_instruction(clarification_repair_error))
             _trace_agent_event(

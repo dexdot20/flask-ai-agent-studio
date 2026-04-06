@@ -63,11 +63,8 @@ HISTORICAL_CONTEXT_INJECTION_STRIP_HEADINGS = {
     "## Knowledge Base",
     "## Canvas Workspace Summary",
     "## Canvas Editing Guidance",
-    "## Canvas Decision Matrix",
-    "## Canvas Project Manifest",
-    "## Canvas Relationship Map",
     "## Active Canvas Document",
-    "## Other Canvas Documents",
+    "## Pinned Canvas Viewports",
     "## Conversation Summaries",
     "## Tool Execution History",
     "## Active Tools This Turn",
@@ -1085,6 +1082,13 @@ def build_runtime_system_message(
         canvas_documents=canvas_documents,
         workspace_root=workspace_root,
     )
+    canvas_payload = _build_canvas_prompt_payload(
+        canvas_documents,
+        active_document_id=canvas_active_document_id,
+        canvas_viewports=canvas_viewports,
+        max_lines=canvas_prompt_max_lines or CANVAS_PROMPT_MAX_LINES,
+        max_tokens=canvas_prompt_max_tokens if canvas_prompt_max_tokens is not None else CANVAS_PROMPT_MAX_TOKENS,
+    )
     
     parts = [
         "You have access to a suite of tools that may enable you to explore workspaces, write code, recall memories, manage canvas documents, and search the web.",
@@ -1105,7 +1109,7 @@ def build_runtime_system_message(
         parts.append("")
 
     # Scratchpad
-    if non_empty_scratchpad_sections or any(name in {"append_scratchpad", "replace_scratchpad", "read_scratchpad"} for name in runtime_tool_names):
+    if non_empty_scratchpad_sections or any(name in {"append_scratchpad", "replace_scratchpad"} for name in runtime_tool_names):
         parts.append("## Scratchpad (AI Persistent Memory)")
         _scratchpad_intro = (
             "*This is the live persistent scratchpad for the assistant. It is already visible in the prompt, so read it directly here first."
@@ -1119,8 +1123,6 @@ def build_runtime_system_message(
                 parts.append(f"### {SCRATCHPAD_SECTION_METADATA[section_id]['title']}")
                 parts.append(section_content)
                 parts.append("")
-        else:
-            parts.append("(All sections empty)")
         if any(name in {"append_scratchpad", "replace_scratchpad"} for name in runtime_tool_names):
             parts.append(
                 "\n### Memory Write Policy\n"
@@ -1173,7 +1175,7 @@ def build_runtime_system_message(
         parts.append("- Scope: All workspace file tools must stay inside this root.")
         parts.append("- Safety: If a batch write tool returns needs_confirmation, wait for explicit user approval before re-running with confirm=true.\n")
 
-    canvas_editing_guidance = _build_canvas_editing_guidance(runtime_tool_names)
+    canvas_editing_guidance = _build_canvas_editing_guidance(runtime_tool_names, canvas_payload=canvas_payload)
     if canvas_editing_guidance:
         parts.extend(canvas_editing_guidance)
 

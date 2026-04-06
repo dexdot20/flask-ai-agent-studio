@@ -247,6 +247,7 @@ TOOL_SPECS = [
         "parameters": {
             "type": "object",
             "properties": {},
+            "required": [],
         },
         "prompt": {
             "purpose": "Reads the current structured scratchpad memory for inspection before editing.",
@@ -374,9 +375,8 @@ TOOL_SPECS = [
         "name": "sub_agent",
         "description": (
             "Delegate a bounded research or inspection task to a helper sub-agent that can use only read-only tools, including exposed web search and URL fetch tools. "
-            "The helper inherits only the read-only tools currently exposed to the parent assistant in this turn and can never widen that scope. "
             "Use it proactively when the task is genuinely multi-step, multi-tool, or context-heavy and would otherwise force a long inline tool chain — such as broad repo/web analysis, cross-file synthesis, or evidence gathering that needs a compact summary. "
-            "Avoid it only when you can answer directly or with a single tool call; otherwise, prefer delegation over stretching the parent agent context. "
+            "Prefer direct answering or a single tool call when that is enough. "
             "Do not use it for file mutations, user clarification, or recursive delegation."
         ),
         "parameters": {
@@ -722,6 +722,10 @@ TOOL_SPECS = [
         "prompt": {
             "purpose": "Searches news headlines/links/dates/sources with DuckDuckGo News.",
             "inputs": {"queries": "1-5 news queries", "lang": "tr|en", "when": "d|w|m|y"},
+            "guidance": (
+                "Use this for broad recent-news discovery when you need headlines, sources, and timestamps before reading full articles. "
+                "Never pass more than 5 queries in one call. If you need article details, follow up with fetch_url on the most relevant links instead of widening the same news query repeatedly."
+            ),
         },
     },
     {
@@ -757,6 +761,10 @@ TOOL_SPECS = [
         "prompt": {
             "purpose": "Searches news headlines/links/dates/sources with Google News RSS.",
             "inputs": {"queries": "1-5 news queries", "lang": "tr|en", "when": "d|w|m|y"},
+            "guidance": (
+                "Use this when Google News coverage is likely stronger than DuckDuckGo News for the topic or locale. "
+                "Never pass more than 5 queries in one call. After scanning the feed, fetch only the few links that are actually needed."
+            ),
         },
     },
     {
@@ -984,6 +992,9 @@ TOOL_SPECS = [
         "prompt": {
             "purpose": "Reads a file from the workspace sandbox.",
             "inputs": {"path": "workspace-relative file path", "start_line": "optional first line", "end_line": "optional last line"},
+            "guidance": (
+                "Use this when you need exact source text from a known file. Prefer narrow line ranges for large files, and use search_files or list_dir first when the path or target region is still unknown."
+            ),
         },
     },
     {
@@ -1001,6 +1012,9 @@ TOOL_SPECS = [
         "prompt": {
             "purpose": "Lists workspace files and directories.",
             "inputs": {"path": "optional workspace-relative directory path"},
+            "guidance": (
+                "Use this to discover the workspace structure before reading or writing files. Prefer a focused subdirectory path when possible instead of repeatedly listing the workspace root."
+            ),
         },
     },
     {
@@ -1079,6 +1093,9 @@ TOOL_SPECS = [
         "prompt": {
             "purpose": "Validates project files in the workspace sandbox.",
             "inputs": {"path": "optional workspace-relative directory path"},
+            "guidance": (
+                "Use this after scaffolding or batch file writes to catch structural issues early. Prefer validating the smallest relevant project subdirectory when you do not need a full-workspace check."
+            ),
         },
     },
     {
