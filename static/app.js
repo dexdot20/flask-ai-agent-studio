@@ -6436,7 +6436,7 @@ function clearToastRegion() {
   activeToastTimers.forEach((timerId) => window.clearTimeout(timerId));
   activeToastTimers.clear();
   if (errorArea) {
-    clearToastRegion();
+    errorArea.replaceChildren();
   }
 }
 

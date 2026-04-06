@@ -1543,7 +1543,7 @@ body.sidebar-collapsed .chat-area {
   gap: 10px;
   max-width: 780px;
   margin: 0 auto;
-  background: var(--surface);
+  background: transparent;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 10px 10px 10px 14px;
@@ -1552,7 +1552,7 @@ body.sidebar-collapsed .chat-area {
 
 .input-wrapper:focus-within {
   border-color: var(--border-focus);
-  box-shadow: 0 0 0 3px rgba(79, 110, 247, 0.12);
+  box-shadow: none;
 }
 
 .btn-fix {
