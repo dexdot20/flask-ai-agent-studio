@@ -3301,9 +3301,14 @@ def register_chat_routes(app) -> None:
 
 
 def preload_dependencies(app) -> None:
-    if OCR_ENABLED:
+    settings = get_app_settings()
+    processing_method = normalize_image_processing_method(settings.get("image_processing_method"))
+    should_preload_ocr = OCR_ENABLED and processing_method in {"auto", "local_ocr", "local_both"}
+    should_preload_vision = VISION_ENABLED and processing_method in {"auto", "local_vl", "local_both"}
+
+    if should_preload_ocr:
         preload_ocr_engine(app)
-    if VISION_ENABLED:
+    if should_preload_vision:
         preload_local_vision_engine(app)
     if RAG_ENABLED:
         preload_embedder()

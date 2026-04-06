@@ -120,9 +120,9 @@ def _resolve_processing_plan(processing_method: str, model_id: str, settings: di
     if processing_method == "local_both":
         return ["local_both", "local_vl", "local_ocr"]
     if processing_method == "local_vl":
-        return ["local_vl", "local_ocr"]
+        return ["local_vl"]
     if processing_method == "local_ocr":
-        return ["local_ocr", "local_vl"]
+        return ["local_ocr"]
     if llm_available:
         return ["llm", "local_both", "local_vl", "local_ocr"]
     return ["local_both", "local_vl", "local_ocr"]

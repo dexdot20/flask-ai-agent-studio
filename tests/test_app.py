@@ -143,6 +143,7 @@ from routes.chat import (
     _estimate_prompt_tokens,
     _is_failed_tool_summary,
     _persist_streaming_assistant_message,
+    preload_dependencies,
     _schedule_rag_conversation_sync,
     _select_recent_prompt_window,
     _select_summary_source_messages_by_token_budget,
@@ -1102,6 +1103,42 @@ class AppRoutesTestCase(unittest.TestCase):
         )
         self.assertEqual(analysis["analysis_method"], "local_both")
         self.assertEqual(analysis["ocr_text"], "Gram Altın\nAlış 4.210,11\nSatış 4.210,75")
+
+    def test_analyze_uploaded_image_local_ocr_does_not_fall_back_to_local_vision(self):
+        with patch("image_service.IMAGE_UPLOADS_ENABLED", True), patch(
+            "image_service._run_local_ocr_analysis",
+            side_effect=RuntimeError("OCR stack unavailable"),
+        ), patch(
+            "image_service._run_local_vision_analysis",
+            return_value={"vision_summary": "Should not run."},
+        ) as mocked_local_vl:
+            with self.assertRaises(RuntimeError) as raised:
+                analyze_uploaded_image(
+                    b"fake image bytes",
+                    "image/png",
+                    processing_method="local_ocr",
+                )
+
+        self.assertEqual(str(raised.exception), "OCR stack unavailable")
+        mocked_local_vl.assert_not_called()
+
+    def test_analyze_uploaded_image_local_vl_does_not_fall_back_to_local_ocr(self):
+        with patch("image_service.IMAGE_UPLOADS_ENABLED", True), patch(
+            "image_service._run_local_vision_analysis",
+            side_effect=RuntimeError("Vision stack unavailable"),
+        ), patch(
+            "image_service._run_local_ocr_analysis",
+            return_value={"ocr_text": "Should not run."},
+        ) as mocked_local_ocr:
+            with self.assertRaises(RuntimeError) as raised:
+                analyze_uploaded_image(
+                    b"fake image bytes",
+                    "image/png",
+                    processing_method="local_vl",
+                )
+
+        self.assertEqual(str(raised.exception), "Vision stack unavailable")
+        mocked_local_ocr.assert_not_called()
 
     def test_normalize_image_analysis_preserves_explicit_guidance_and_method(self):
         analysis = normalize_image_analysis(
@@ -4076,6 +4113,32 @@ class AppRoutesTestCase(unittest.TestCase):
             ),
         ):
             ocr_service.preload_ocr_engine(SimpleNamespace(debug=False))
+
+    def test_preload_dependencies_skips_vision_for_local_ocr_setting(self):
+        with patch("routes.chat.get_app_settings", return_value={"image_processing_method": "local_ocr"}), patch(
+            "routes.chat.OCR_ENABLED", True
+        ), patch("routes.chat.VISION_ENABLED", True), patch(
+            "routes.chat.RAG_ENABLED", False
+        ), patch("routes.chat.preload_ocr_engine") as mocked_preload_ocr, patch(
+            "routes.chat.preload_local_vision_engine"
+        ) as mocked_preload_vision:
+            preload_dependencies(SimpleNamespace(debug=False))
+
+        mocked_preload_ocr.assert_called_once()
+        mocked_preload_vision.assert_not_called()
+
+    def test_preload_dependencies_skips_ocr_for_local_vision_setting(self):
+        with patch("routes.chat.get_app_settings", return_value={"image_processing_method": "local_vl"}), patch(
+            "routes.chat.OCR_ENABLED", True
+        ), patch("routes.chat.VISION_ENABLED", True), patch(
+            "routes.chat.RAG_ENABLED", False
+        ), patch("routes.chat.preload_ocr_engine") as mocked_preload_ocr, patch(
+            "routes.chat.preload_local_vision_engine"
+        ) as mocked_preload_vision:
+            preload_dependencies(SimpleNamespace(debug=False))
+
+        mocked_preload_ocr.assert_not_called()
+        mocked_preload_vision.assert_called_once()
 
     def test_resolve_device_uses_cpu_without_importing_torch(self):
         from rag import embedder

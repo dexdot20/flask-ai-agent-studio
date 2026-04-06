@@ -6606,6 +6606,21 @@ function clearAllAttachments() {
   renderAttachmentPreview();
 }
 
+function describePreferredImageAnalysisMethod() {
+  switch (String(appSettings.image_processing_method || "auto").trim().toLowerCase()) {
+    case "llm":
+      return "Active model vision preferred";
+    case "local_ocr":
+      return "Local OCR preferred";
+    case "local_vl":
+      return "Local vision preferred";
+    case "local_both":
+      return "Local OCR + vision preferred";
+    default:
+      return "Auto image analysis";
+  }
+}
+
 function renderAttachmentPreview() {
   const attachments = [
     ...selectedImageFiles.map((file) => ({ kind: "image", file })),
@@ -6623,8 +6638,9 @@ function renderAttachmentPreview() {
   attachmentPreviewEl.innerHTML = attachments.map(({ kind, file }) => {
     const fileKey = getAttachmentFileKey(file);
     const icon = kind === "image" ? "🖼️" : "📄";
+    const preferredImageAnalysis = describePreferredImageAnalysisMethod();
     const description = kind === "image"
-      ? `Ready for Qwen vision analysis · ${formatFileSize(file.size)}`
+      ? `${preferredImageAnalysis} · ${formatFileSize(file.size)}`
       : `${((file.name || "").split(".").pop() || "FILE").toUpperCase()} document · ${formatFileSize(file.size)}`;
     const removeLabel = kind === "image" ? "Remove image" : "Remove document";
     return (
