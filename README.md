@@ -472,7 +472,7 @@ The Settings page persists these values in `app_settings`:
 
 The app includes a dedicated `/settings` page.
 
-- Assistant tab: user preferences, OpenRouter model management, visible chat-model ordering, task-specific model preferences, temperature, image-processing method, tool-step budget, fetch clipping, canvas limits, summarization, and pruning
+- Assistant tab: user preferences, OpenRouter model management, visible chat-model ordering, task-specific model preferences, temperature, image-processing method, tool-step budget, clarification limits, sub-agent controls, fetch clipping, canvas limits, summarization, and pruning
 - Memory tab: scratchpad, tool-memory auto-injection, RAG auto-injection, RAG source pools, and user profile memory behavior
 - Tools tab: active tool permissions, including canvas and project-workspace tools
 - Knowledge tab: knowledge-base uploads, RAG maintenance, and sync controls
