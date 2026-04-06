@@ -31,6 +31,7 @@ from config import (
     RAG_ENABLED,
     RAG_SENSITIVITY_PRESETS,
     RAG_SOURCE_CONVERSATION,
+    RAG_SOURCE_TOOL_MEMORY,
     RAG_SOURCE_TOOL_RESULT,
     VISION_ENABLED,
 )
@@ -45,6 +46,7 @@ from db import (
     create_image_asset,
     extract_clarification_response,
     extract_message_attachments,
+    extract_pending_clarification,
     extract_message_tool_results,
     extract_message_tool_trace,
     extract_sub_agent_traces,
@@ -693,6 +695,8 @@ def _build_tool_trace_context(canonical_messages: list[dict], max_entries: int =
             continue
         metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else None
         for entry in reversed(extract_message_tool_trace(metadata)):
+            if str(entry.get("tool_name") or "").strip() == "ask_clarifying_question":
+                continue
             trace_entries.append(entry)
             if len(trace_entries) >= max_entries:
                 break
@@ -1350,6 +1354,7 @@ def _build_budgeted_prompt_messages(
     settings: dict,
     active_tool_names: list[str],
     clarification_response: dict | None,
+    all_clarification_rounds: list[dict] | None,
     retrieved_context: dict | None,
     tool_memory_context: str | None,
     canvas_documents: list[dict] | None = None,
@@ -1444,6 +1449,7 @@ def _build_budgeted_prompt_messages(
     current_context_injection = build_runtime_context_injection(
         active_tool_names=active_tool_names,
         clarification_response=clarification_response,
+        all_clarification_rounds=all_clarification_rounds,
         retrieved_context=rag_context,
         tool_trace_context=trimmed_tool_trace,
         tool_memory_context=trimmed_tool_memory,
@@ -1462,6 +1468,7 @@ def _build_budgeted_prompt_messages(
         settings["user_preferences"],
         active_tool_names,
         clarification_response=clarification_response,
+        all_clarification_rounds=all_clarification_rounds,
         retrieved_context=rag_context,
         user_profile_context=user_profile_context,
         tool_trace_context=trimmed_tool_trace,
@@ -1536,6 +1543,47 @@ def _build_clarification_rag_query(message_content: str, clarification_response:
         query_parts.append(normalized_display)
 
     return " ".join(query_parts).strip()
+
+
+def _collect_answered_clarification_rounds(messages: list[dict]) -> list[dict]:
+    assistant_messages_by_id: dict[str, dict] = {}
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("role") or "").strip() != "assistant":
+            continue
+        message_id = str(message.get("id") or "").strip()
+        if message_id:
+            assistant_messages_by_id[message_id] = message
+
+    clarification_rounds: list[dict] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("role") or "").strip() != "user":
+            continue
+        metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+        clarification_response = extract_clarification_response(metadata)
+        answers = clarification_response.get("answers") if isinstance(clarification_response, dict) else {}
+        if not isinstance(answers, dict) or not answers:
+            continue
+
+        assistant_message_id = str((clarification_response or {}).get("assistant_message_id") or "").strip()
+        pending_clarification = None
+        assistant_message = assistant_messages_by_id.get(assistant_message_id)
+        if isinstance(assistant_message, dict):
+            assistant_metadata = assistant_message.get("metadata") if isinstance(assistant_message.get("metadata"), dict) else {}
+            pending_clarification = extract_pending_clarification(assistant_metadata)
+
+        clarification_rounds.append(
+            {
+                "assistant_message_id": assistant_message_id or None,
+                "questions": (pending_clarification or {}).get("questions") if isinstance(pending_clarification, dict) else None,
+                "answers": answers,
+            }
+        )
+
+    return clarification_rounds
 
 
 def _select_summary_source_messages_by_token_budget(
@@ -2432,6 +2480,11 @@ def register_chat_routes(app) -> None:
         rag_query_text = ""
         if latest_user_message is not None:
             clarification_response = extract_clarification_response(latest_user_message.get("metadata"))
+            clarification_answers = clarification_response.get("answers") if isinstance(clarification_response, dict) else {}
+            if isinstance(clarification_answers, dict) and clarification_answers:
+                active_tool_names = [
+                    name for name in active_tool_names if name != "ask_clarifying_question"
+                ]
             rag_query_text = _build_clarification_rag_query(
                 latest_user_message["content"],
                 clarification_response,
@@ -2548,13 +2601,16 @@ def register_chat_routes(app) -> None:
             if conv_id
             else None
         )
+        rag_allowed_source_types = set(get_rag_source_types(settings))
+        if get_tool_memory_auto_inject_enabled(settings):
+            rag_allowed_source_types.discard(RAG_SOURCE_TOOL_MEMORY)
         retrieved_context = build_rag_auto_context(
             rag_query_text,
             get_rag_auto_inject_enabled(settings),
             threshold=RAG_SENSITIVITY_PRESETS[get_rag_sensitivity(settings)],
             top_k=get_rag_auto_inject_top_k(settings),
             exclude_source_keys=rag_exclude_source_keys,
-            allowed_source_types=set(get_rag_source_types(settings)),
+            allowed_source_types=rag_allowed_source_types,
         )
         tool_memory_context = (
             build_tool_memory_auto_context(
@@ -2601,11 +2657,13 @@ def register_chat_routes(app) -> None:
             initial_canvas_documents = get_canvas_runtime_documents(pre_created_canvas_state)
             initial_canvas_active_document_id = get_canvas_runtime_active_document_id(pre_created_canvas_state)
             initial_canvas_viewports = get_canvas_viewport_payloads(pre_created_canvas_state)
+        all_clarification_rounds = _collect_answered_clarification_rounds(canonical_messages)
         api_messages, prompt_budget_stats, current_context_injection = _build_budgeted_prompt_messages(
             canonical_messages,
             settings,
             active_tool_names,
             clarification_response,
+            all_clarification_rounds,
             retrieved_context,
             tool_memory_context,
             canvas_documents=initial_canvas_documents,

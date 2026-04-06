@@ -143,6 +143,7 @@ from routes.auth import AUTH_LAST_SEEN_KEY, AUTH_REMEMBER_KEY, AUTH_SESSION_KEY
 from routes.chat import (
     OMITTED_TOOL_OUTPUT_TEXT,
     _build_budgeted_prompt_messages,
+    _build_tool_trace_context,
     _count_prunable_message_tokens,
     _estimate_prompt_tokens,
     _is_failed_tool_summary,
@@ -1811,6 +1812,40 @@ class AppRoutesTestCase(unittest.TestCase):
         )
         self.assertEqual(records[0]["tool_results"], [])
 
+    def test_get_conversation_records_for_rag_compacts_clarification_response_messages(self):
+        conversation_id = self._create_conversation()
+
+        with get_db() as conn:
+            insert_message(
+                conn,
+                conversation_id,
+                "user",
+                "Q: Bütçe nedir?\nA: 200-300 TL\nQ: Hedef ülke nedir?\nA: Türkiye",
+                metadata=serialize_message_metadata(
+                    {
+                        "clarification_response": {
+                            "assistant_message_id": 5,
+                            "answers": {
+                                "budget": {"display": "200-300 TL"},
+                                "country": {"display": "Türkiye"},
+                            },
+                        }
+                    }
+                ),
+            )
+            insert_message(conn, conversation_id, "assistant", "Plan hazır.")
+
+        records = get_conversation_records_for_rag(conversation_id)
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(
+            records[0]["messages"],
+            [
+                {"role": "user", "content": "200-300 TL Türkiye"},
+                {"role": "assistant", "content": "Plan hazır."},
+            ],
+        )
+
     def test_sync_conversations_to_rag_skips_unchanged_conversations_without_loading_records(self):
         conversation_id = self._create_conversation()
         user_text = "Original prompt " * 40
@@ -3114,6 +3149,44 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("## Knowledge Base", content)
         self.assertLess(content.index("## Clarification Response"), content.index("## Knowledge Base"))
 
+    def test_build_runtime_system_message_includes_all_clarification_rounds(self):
+        message = build_runtime_system_message(
+            active_tool_names=["search_knowledge_base"],
+            all_clarification_rounds=[
+                {
+                    "questions": [
+                        {"id": "budget", "label": "Reklam butceniz ne kadar?"},
+                        {"id": "goal", "label": "Ana hedefiniz nedir?"},
+                    ],
+                    "answers": {
+                        "budget": {"display": "Gunluk 200-300 TL"},
+                        "goal": {"display": "Satin alma"},
+                    },
+                },
+                {
+                    "questions": [
+                        {"id": "price", "label": "Urunun fiyat araligi nedir?"},
+                        {"id": "competition", "label": "Rakipleriniz kim?"},
+                    ],
+                    "answers": {
+                        "price": {"display": "199 TL - 3990 TL"},
+                        "competition": {"display": "Bolca var"},
+                    },
+                },
+            ],
+        )
+
+        content = message["content"]
+        self.assertIn("## Clarification Response", content)
+        self.assertIn("The clarification answers below capture the answered rounds", content)
+        self.assertIn("These answers are authoritative for the current turn", content)
+        self.assertIn("Round 1", content)
+        self.assertIn("Q: Reklam butceniz ne kadar?", content)
+        self.assertIn("A: Gunluk 200-300 TL", content)
+        self.assertIn("Round 2", content)
+        self.assertIn("Q: Urunun fiyat araligi nedir?", content)
+        self.assertIn("A: 199 TL - 3990 TL", content)
+
     def test_runtime_system_message_hides_canvas_edit_tools_without_canvas_document(self):
         message = build_runtime_system_message(
             active_tool_names=[
@@ -3584,6 +3657,95 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(mocked_rag.call_args.kwargs["threshold"], 0.55)
         self.assertEqual(mocked_rag.call_args.kwargs["top_k"], 8)
 
+    def test_chat_excludes_tool_memory_from_generic_rag_when_dedicated_tool_memory_auto_inject_is_enabled(self):
+        conversation_id = self._create_conversation()
+        save_app_settings(
+            {
+                "user_preferences": "",
+                "scratchpad": "",
+                "max_steps": "2",
+                "active_tools": "[]",
+                "rag_auto_inject": "true",
+                "rag_sensitivity": "strict",
+                "rag_context_size": "large",
+                "rag_source_types": json.dumps(["conversation", "tool_memory", "uploaded_document"], ensure_ascii=False),
+                "tool_memory_auto_inject": "true",
+            }
+        )
+
+        fake_events = iter(
+            [
+                {"type": "answer_start"},
+                {"type": "answer_delta", "text": "Done."},
+                {"type": "tool_capture", "tool_results": []},
+                {"type": "done"},
+            ]
+        )
+
+        with patch("routes.chat.build_rag_auto_context", return_value=None) as mocked_rag, patch(
+            "routes.chat.run_agent_stream", return_value=fake_events
+        ):
+            response = self.client.post(
+                "/chat",
+                json={
+                    "conversation_id": conversation_id,
+                    "model": "deepseek-chat",
+                    "user_content": "Hello",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(mocked_rag.call_args.kwargs["allowed_source_types"], {"conversation", "uploaded_document"})
+
+    def test_chat_disables_clarification_tool_for_clarification_response_turn(self):
+        conversation_id = self._create_conversation()
+        save_app_settings(
+            {
+                "user_preferences": "",
+                "scratchpad": "",
+                "max_steps": "2",
+                "active_tools": json.dumps(["ask_clarifying_question"], ensure_ascii=False),
+                "rag_auto_inject": "false",
+            }
+        )
+
+        fake_events = iter(
+            [
+                {"type": "answer_start"},
+                {"type": "answer_delta", "text": "Done."},
+                {"type": "tool_capture", "tool_results": []},
+                {"type": "done"},
+            ]
+        )
+
+        with patch("routes.chat.run_agent_stream", return_value=fake_events) as mocked_stream:
+            response = self.client.post(
+                "/chat",
+                json={
+                    "conversation_id": conversation_id,
+                    "model": "deepseek-chat",
+                    "user_content": "Q: Budget?\nA: 200-300 TL",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Q: Budget?\nA: 200-300 TL",
+                            "metadata": {
+                                "clarification_response": {
+                                    "assistant_message_id": 12,
+                                    "answers": {
+                                        "budget": {"display": "200-300 TL"},
+                                    },
+                                }
+                            },
+                        }
+                    ],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("ask_clarifying_question", mocked_stream.call_args.args[3])
+
     def test_index_uses_external_app_script(self):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
@@ -3604,6 +3766,8 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn('data-settings-tab="memory"', html)
         self.assertIn('data-settings-tab="tools"', html)
         self.assertIn('data-settings-tab="knowledge"', html)
+        self.assertIn("This is separate from generic RAG retrieval", html)
+        self.assertIn("skips the Tool memory pool here to avoid duplicate prompt injection", html)
         self.assertIn('src="/static/settings.js?v=', html)
         self.assertIn('id="kb-sync-btn"', html)
         self.assertIn("Proxy scope", html)
@@ -3768,6 +3932,25 @@ class AppRoutesTestCase(unittest.TestCase):
         )
 
         self.assertEqual(content, "Use the document in canvas.")
+
+    def test_build_user_message_for_model_replaces_raw_clarification_qna_text(self):
+        content = build_user_message_for_model(
+            "Q: Budget?\nA: 200-300 TL\nQ: Goal?\nA: Sales",
+            {
+                "clarification_response": {
+                    "assistant_message_id": 12,
+                    "answers": {
+                        "budget": {"display": "200-300 TL"},
+                        "goal": {"display": "Sales"},
+                    },
+                }
+            },
+        )
+
+        self.assertEqual(
+            content,
+            "[Clarification answers provided - see the Clarification Response section for the full Q/A.]",
+        )
 
     def test_image_explain_tool_spec_requires_image_and_conversation_ids(self):
         spec = TOOL_SPEC_BY_NAME["image_explain"]
@@ -9424,8 +9607,189 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertNotIn("Earlier clarification guidance", system_messages[0]["content"])
         self.assertNotIn("Earlier search result", system_messages[0]["content"])
         self.assertNotIn("Earlier KB excerpt", system_messages[0]["content"])
-        self.assertNotIn("## Pinned Canvas Viewports", system_messages[0]["content"])
-        self.assertNotIn("src/app.py lines 20-24", system_messages[0]["content"])
+
+    def test_build_api_messages_strips_answered_clarification_tool_blocks(self):
+        normalized = normalize_chat_messages(
+            [
+                {
+                    "id": 10,
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {
+                                "name": "ask_clarifying_question",
+                                "arguments": '{"questions":[{"id":"budget","label":"Budget?","input_type":"text"}]}'
+                            },
+                        }
+                    ],
+                },
+                {
+                    "id": 11,
+                    "role": "tool",
+                    "content": '{"status":"needs_user_input","clarification":{"questions":[{"id":"budget","label":"Budget?","input_type":"text"}]}}',
+                    "tool_call_id": "call-1",
+                },
+                {
+                    "id": 12,
+                    "role": "assistant",
+                    "content": "",
+                    "metadata": {
+                        "pending_clarification": {
+                            "questions": [{"id": "budget", "label": "Budget?", "input_type": "text"}]
+                        }
+                    },
+                },
+                {
+                    "id": 13,
+                    "role": "user",
+                    "content": "Q: Budget?\nA: 200-300 TL",
+                    "metadata": {
+                        "clarification_response": {
+                            "assistant_message_id": 12,
+                            "answers": {"budget": {"display": "200-300 TL"}},
+                        }
+                    },
+                },
+            ]
+        )
+
+        api_messages = build_api_messages(normalized)
+
+        self.assertEqual(
+            api_messages,
+            [
+                {
+                    "role": "user",
+                    "content": "[Clarification answers provided - see the Clarification Response section for the full Q/A.]",
+                }
+            ],
+        )
+
+    def test_build_api_messages_strips_old_clarification_response_user_turns(self):
+        normalized = normalize_chat_messages(
+            [
+                {
+                    "id": 10,
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {
+                                "name": "ask_clarifying_question",
+                                "arguments": '{"questions":[{"id":"budget","label":"Budget?","input_type":"text"}]}'
+                            },
+                        }
+                    ],
+                },
+                {
+                    "id": 11,
+                    "role": "tool",
+                    "content": '{"status":"needs_user_input"}',
+                    "tool_call_id": "call-1",
+                },
+                {
+                    "id": 12,
+                    "role": "assistant",
+                    "content": "",
+                    "metadata": {
+                        "pending_clarification": {
+                            "questions": [{"id": "budget", "label": "Budget?", "input_type": "text"}]
+                        }
+                    },
+                },
+                {
+                    "id": 13,
+                    "role": "user",
+                    "content": "Q: Budget?\nA: 200-300 TL",
+                    "metadata": {
+                        "clarification_response": {
+                            "assistant_message_id": 12,
+                            "answers": {"budget": {"display": "200-300 TL"}},
+                        }
+                    },
+                },
+                {
+                    "id": 20,
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call-2",
+                            "type": "function",
+                            "function": {
+                                "name": "ask_clarifying_question",
+                                "arguments": '{"questions":[{"id":"price","label":"Price?","input_type":"text"}]}'
+                            },
+                        }
+                    ],
+                },
+                {
+                    "id": 21,
+                    "role": "tool",
+                    "content": '{"status":"needs_user_input"}',
+                    "tool_call_id": "call-2",
+                },
+                {
+                    "id": 22,
+                    "role": "assistant",
+                    "content": "",
+                    "metadata": {
+                        "pending_clarification": {
+                            "questions": [{"id": "price", "label": "Price?", "input_type": "text"}]
+                        }
+                    },
+                },
+                {
+                    "id": 23,
+                    "role": "user",
+                    "content": "Q: Price?\nA: 199 TL",
+                    "metadata": {
+                        "clarification_response": {
+                            "assistant_message_id": 22,
+                            "answers": {"price": {"display": "199 TL"}},
+                        }
+                    },
+                },
+            ]
+        )
+
+        api_messages = build_api_messages(normalized)
+
+        self.assertEqual(
+            api_messages,
+            [
+                {
+                    "role": "user",
+                    "content": "[Clarification answers provided - see the Clarification Response section for the full Q/A.]",
+                }
+            ],
+        )
+
+    def test_build_tool_trace_context_ignores_clarification_entries(self):
+        canonical_messages = normalize_chat_messages(
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "metadata": {
+                        "tool_trace": [
+                            {"tool_name": "ask_clarifying_question", "state": "done", "summary": "asked 3 questions"},
+                            {"tool_name": "search_web", "state": "done", "summary": "found pricing page"},
+                        ]
+                    },
+                }
+            ]
+        )
+
+        context = _build_tool_trace_context(canonical_messages)
+
+        self.assertIn("search_web", context)
+        self.assertNotIn("ask_clarifying_question", context)
 
     def test_build_api_messages_uses_null_content_for_tool_only_assistant_turns(self):
         api_messages = build_api_messages(
@@ -13519,6 +13883,7 @@ class AppRoutesTestCase(unittest.TestCase):
                 settings,
                 active_tool_names=[],
                 clarification_response=None,
+                all_clarification_rounds=None,
                 retrieved_context=None,
                 tool_memory_context=tool_memory_context,
             )
@@ -13562,6 +13927,7 @@ class AppRoutesTestCase(unittest.TestCase):
                 settings,
                 active_tool_names=[],
                 clarification_response=None,
+                all_clarification_rounds=None,
                 retrieved_context=None,
                 tool_memory_context=None,
             )

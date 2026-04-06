@@ -475,7 +475,7 @@
                     <span class="settings-section-kicker">Remembered tool results</span>
                     <h3>Tool memory</h3>
                   </div>
-                  <p>Past web and URL results can be re-used instead of searched again.</p>
+                  <p>Past web and URL results can be re-used instead of searched again. This is separate from generic RAG retrieval.</p>
                 </div>
                 <p id="tool-memory-disabled-note" class="settings-copy" hidden>Tool memory requires RAG to be enabled.</p>
                 <label class="tool-toggle"><input type="checkbox" id="tool-memory-auto-inject-toggle" /> <span>Auto inject remembered tool results into each chat turn</span></label>
@@ -514,6 +514,7 @@
 
                   <div class="rag-setting-group rag-setting-group--full">
                     <div class="settings-label">Allowed RAG source pools</div>
+                    <p class="settings-copy">These pools feed generic retrieved context. If dedicated Tool memory auto-inject is enabled above, the backend skips the Tool memory pool here to avoid duplicate prompt injection.</p>
                     <div id="rag-source-types" class="rag-source-type-list">
                       <label class="rag-source-toggle">
                         <input type="checkbox" name="rag-source-type" value="conversation" />

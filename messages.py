@@ -18,7 +18,13 @@ from config import (
     SCRATCHPAD_SECTION_METADATA,
     SCRATCHPAD_SECTION_ORDER,
 )
-from db import extract_message_attachments, parse_message_metadata, parse_message_tool_calls
+from db import (
+    extract_clarification_response,
+    extract_message_attachments,
+    extract_pending_clarification,
+    parse_message_metadata,
+    parse_message_tool_calls,
+)
 from tool_registry import resolve_runtime_tool_names
 
 SUMMARY_LABEL = "Conversation summary (generated from deleted messages):"
@@ -128,6 +134,7 @@ def _build_clarification_policy_payload(active_tool_names: list[str], clarificat
             "If the user explicitly asks you to ask questions first, you MUST emit an actual ask_clarifying_question tool call — "
             "outlining questions in your reasoning/thinking without emitting the call is not sufficient. "
             "Do not say that you prepared questions in assistant text unless you emitted the tool call in that same turn. "
+            "If the Clarification Response section already answers your pending questions for this turn, continue the task instead of calling ask_clarifying_question again. "
             f"Ask only the minimum number of questions needed, ask at most {limit} question(s) in one call, "
             "use plain structured UI fields only, avoid Q:/A: prefixes, markdown bullets, XML/tag wrappers, code fences, or tokens like <| and |>, "
             "and wait for the user's reply before continuing."
@@ -201,18 +208,108 @@ def _build_tool_memory_payload(tool_memory_context, active_tool_names: list[str]
     return payload or None
 
 
-def _build_clarification_response_payload(clarification_response: dict | None) -> dict | None:
-    response = clarification_response if isinstance(clarification_response, dict) else {}
-    answers = response.get("answers") if isinstance(response.get("answers"), dict) else {}
-    if not answers:
+def _normalize_clarification_rounds(
+    clarification_response: dict | None,
+    all_clarification_rounds: list[dict] | None = None,
+) -> list[dict]:
+    normalized_rounds: list[dict] = []
+    raw_rounds = all_clarification_rounds if isinstance(all_clarification_rounds, list) else []
+    if not raw_rounds:
+        raw_rounds = [clarification_response] if isinstance(clarification_response, dict) else []
+
+    for round_payload in raw_rounds[:10]:
+        if not isinstance(round_payload, dict):
+            continue
+
+        answers = round_payload.get("answers") if isinstance(round_payload.get("answers"), dict) else {}
+        normalized_answers: dict[str, dict[str, str]] = {}
+        for key, value in list(answers.items())[:10]:
+            key_text = str(key or "").strip()[:80]
+            if not key_text or not isinstance(value, dict):
+                continue
+            display = str(value.get("display") or "").strip()[:500]
+            if not display:
+                continue
+            normalized_answers[key_text] = {"display": display}
+        if not normalized_answers:
+            continue
+
+        questions = round_payload.get("questions") if isinstance(round_payload.get("questions"), list) else []
+        normalized_questions: list[dict] = []
+        for question in questions[:CLARIFICATION_QUESTION_LIMIT_MAX]:
+            if not isinstance(question, dict):
+                continue
+            question_id = str(question.get("id") or "").strip()[:80]
+            question_text = str(question.get("label") or question.get("text") or "").strip()[:300]
+            if not question_id and not question_text:
+                continue
+            normalized_question: dict[str, str] = {}
+            if question_id:
+                normalized_question["id"] = question_id
+            if question_text:
+                normalized_question["text"] = question_text
+            normalized_questions.append(normalized_question)
+
+        normalized_rounds.append(
+            {
+                "questions": normalized_questions,
+                "answers": normalized_answers,
+            }
+        )
+
+    return normalized_rounds
+
+
+def _build_clarification_response_payload(
+    clarification_response: dict | None,
+    *,
+    all_clarification_rounds: list[dict] | None = None,
+) -> dict | None:
+    rounds = _normalize_clarification_rounds(clarification_response, all_clarification_rounds)
+    if not rounds:
         return None
+
+    rendered_rounds: list[str] = []
+    multiple_rounds = len(rounds) > 1
+    for round_index, round_payload in enumerate(rounds, start=1):
+        if multiple_rounds:
+            rendered_rounds.append(f"Round {round_index}")
+
+        questions = round_payload.get("questions") if isinstance(round_payload.get("questions"), list) else []
+        answers = round_payload.get("answers") if isinstance(round_payload.get("answers"), dict) else {}
+        consumed_answer_ids: set[str] = set()
+
+        for question in questions:
+            if not isinstance(question, dict):
+                continue
+            question_id = str(question.get("id") or "").strip()
+            answer = answers.get(question_id) if question_id else None
+            if not isinstance(answer, dict):
+                continue
+            question_text = str(question.get("text") or question_id or "Answer").strip()
+            rendered_rounds.append(f"Q: {question_text}")
+            rendered_rounds.append(f"A: {str(answer.get('display') or '').strip()}")
+            consumed_answer_ids.add(question_id)
+
+        for answer_id, answer in answers.items():
+            if answer_id in consumed_answer_ids or not isinstance(answer, dict):
+                continue
+            fallback_question = str(answer_id or "Answer").strip().replace("_", " ")
+            rendered_rounds.append(f"Q: {fallback_question}")
+            rendered_rounds.append(f"A: {str(answer.get('display') or '').strip()}")
+
+        if multiple_rounds and round_index < len(rounds):
+            rendered_rounds.append("")
 
     return {
         "guidance": (
-            "The user message in this turn is a direct response to your earlier clarifying questions. "
-            "Treat any Q:/A: formatted content as the user's answers to the specific questions you asked. "
-            "Use those answers directly to continue the task, and do not reinterpret them as retrieved knowledge-base content."
-        )
+            "The user message in a clarification turn is a direct response to your earlier clarifying questions. "
+            "The clarification answers below capture the answered rounds for this conversation. "
+            "Use those answers directly to continue the task, do not reinterpret them as retrieved knowledge-base content, "
+            "and do not ask the same questions again unless the user changes the requirements or explicitly asks to revisit them. "
+            "These answers are authoritative for the current turn. If they cover your pending questions, continue the task and do not call ask_clarifying_question again in this turn."
+        ),
+        "formatted_answers": "\n".join(rendered_rounds).strip(),
     }
 
 
@@ -332,6 +429,11 @@ def build_user_message_for_model(
     content = (content or "").strip()
     metadata = metadata if isinstance(metadata, dict) else {}
 
+    clarification_response = extract_clarification_response(metadata)
+    clarification_answers = clarification_response.get("answers") if isinstance(clarification_response, dict) else {}
+    if isinstance(clarification_answers, dict) and clarification_answers:
+        content = "[Clarification answers provided - see the Clarification Response section for the full Q/A.]"
+
     attachments = extract_message_attachments(metadata)
     canvas_document_lookup = _build_canvas_document_lookup(canvas_documents)
     file_context_blocks = []
@@ -431,14 +533,90 @@ def _strip_volatile_sections_from_context_injection(context_injection: str) -> s
     return "\n\n".join(section for section in retained_sections if section).strip()
 
 
+def _collect_answered_clarification_skip_indexes(messages: list[dict]) -> set[int]:
+    assistant_index_by_id: dict[str, int] = {}
+    answered_assistant_ids: set[str] = set()
+    clarification_response_user_indexes: list[int] = []
+    latest_user_message_index = max(
+        (index for index, message in enumerate(messages) if isinstance(message, dict) and message.get("role") == "user"),
+        default=-1,
+    )
+
+    for index, message in enumerate(messages):
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "").strip()
+        message_id = str(message.get("id") or "").strip()
+        metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+        if role == "assistant" and message_id:
+            assistant_index_by_id[message_id] = index
+        if role == "user":
+            clarification_response = extract_clarification_response(metadata)
+            answers = clarification_response.get("answers") if isinstance(clarification_response, dict) else {}
+            if isinstance(answers, dict) and answers:
+                clarification_response_user_indexes.append(index)
+            assistant_message_id = str((clarification_response or {}).get("assistant_message_id") or "").strip()
+            if assistant_message_id:
+                answered_assistant_ids.add(assistant_message_id)
+
+    skip_indexes: set[int] = set()
+    for clarification_user_index in clarification_response_user_indexes:
+        if clarification_user_index != latest_user_message_index:
+            skip_indexes.add(clarification_user_index)
+
+    for assistant_message_id in answered_assistant_ids:
+        assistant_index = assistant_index_by_id.get(assistant_message_id)
+        if assistant_index is None:
+            continue
+
+        assistant_message = messages[assistant_index]
+        assistant_metadata = assistant_message.get("metadata") if isinstance(assistant_message.get("metadata"), dict) else {}
+        if not extract_pending_clarification(assistant_metadata):
+            continue
+
+        skip_indexes.add(assistant_index)
+        tool_indexes: list[int] = []
+        probe_index = assistant_index - 1
+        while probe_index >= 0 and str(messages[probe_index].get("role") or "").strip() == "tool":
+            tool_indexes.append(probe_index)
+            probe_index -= 1
+
+        if probe_index < 0 or str(messages[probe_index].get("role") or "").strip() != "assistant":
+            continue
+
+        tool_call_message = messages[probe_index]
+        tool_calls = parse_message_tool_calls(tool_call_message.get("tool_calls"))
+        clarification_call_ids = {
+            str(tool_call.get("id") or "").strip()
+            for tool_call in tool_calls
+            if str(((tool_call.get("function") or {}).get("name") or "")).strip() == "ask_clarifying_question"
+        }
+        if not clarification_call_ids:
+            continue
+
+        matched_tool_indexes = {
+            index
+            for index in tool_indexes
+            if str(messages[index].get("tool_call_id") or "").strip() in clarification_call_ids
+        }
+        if matched_tool_indexes:
+            skip_indexes.add(probe_index)
+            skip_indexes.update(matched_tool_indexes)
+
+    return skip_indexes
+
+
 def build_api_messages(messages: list[dict], *, canvas_documents: list[dict] | None = None) -> list[dict]:
     api_messages = []
+    skip_indexes = _collect_answered_clarification_skip_indexes(messages)
     latest_user_message_index = max(
         (index for index, message in enumerate(messages) if message.get("role") == "user"),
         default=-1,
     )
 
     for index, message in enumerate(messages):
+        if index in skip_indexes:
+            continue
         content = message["content"]
         role = message["role"]
         metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
@@ -811,6 +989,7 @@ def _build_runtime_volatile_parts(
     *,
     active_tool_names: list[str],
     clarification_response: dict | None = None,
+    all_clarification_rounds: list[dict] | None = None,
     retrieved_context=None,
     tool_trace_context=None,
     tool_memory_context=None,
@@ -838,10 +1017,15 @@ def _build_runtime_volatile_parts(
                 volatile_parts.append(json.dumps(tool_memory_payload["auto_injected_context"], ensure_ascii=False, indent=2))
         volatile_parts.append("")
 
-    clarification_payload = _build_clarification_response_payload(clarification_response)
+    clarification_payload = _build_clarification_response_payload(
+        clarification_response,
+        all_clarification_rounds=all_clarification_rounds,
+    )
     if clarification_payload:
         volatile_parts.append("## Clarification Response")
         volatile_parts.append(f"*{clarification_payload['guidance']}*\n")
+        if clarification_payload.get("formatted_answers"):
+            volatile_parts.append(str(clarification_payload["formatted_answers"]).strip())
         volatile_parts.append("")
 
     kb_payload = _build_knowledge_base_payload(retrieved_context, active_tool_names)
@@ -961,6 +1145,7 @@ def _build_runtime_volatile_parts(
 def build_runtime_context_injection(
     active_tool_names=None,
     clarification_response: dict | None = None,
+    all_clarification_rounds: list[dict] | None = None,
     retrieved_context=None,
     tool_trace_context=None,
     tool_memory_context=None,
@@ -988,6 +1173,7 @@ def build_runtime_context_injection(
         _build_runtime_volatile_parts(
             active_tool_names=resolved_tool_names,
             clarification_response=clarification_response,
+            all_clarification_rounds=all_clarification_rounds,
             retrieved_context=retrieved_context,
             tool_trace_context=tool_trace_context,
             tool_memory_context=tool_memory_context,
@@ -1008,6 +1194,7 @@ def build_runtime_system_message(
     user_preferences="",
     active_tool_names=None,
     clarification_response: dict | None = None,
+    all_clarification_rounds: list[dict] | None = None,
     retrieved_context=None,
     user_profile_context=None,
     tool_trace_context=None,
@@ -1149,6 +1336,7 @@ def build_runtime_system_message(
             _build_runtime_volatile_parts(
                 active_tool_names=runtime_tool_names,
                 clarification_response=clarification_response,
+                all_clarification_rounds=all_clarification_rounds,
                 retrieved_context=retrieved_context,
                 tool_trace_context=tool_trace_context,
                 tool_memory_context=tool_memory_context,
@@ -1177,6 +1365,7 @@ def prepend_runtime_context(
     user_preferences="",
     active_tool_names=None,
     clarification_response: dict | None = None,
+    all_clarification_rounds: list[dict] | None = None,
     retrieved_context=None,
     user_profile_context=None,
     tool_trace_context=None,
@@ -1211,6 +1400,7 @@ def prepend_runtime_context(
         user_preferences,
         active_tool_names or [],
         clarification_response=clarification_response,
+        all_clarification_rounds=all_clarification_rounds,
         retrieved_context=retrieved_context,
         user_profile_context=user_profile_context,
         tool_trace_context=tool_trace_context,
@@ -1237,6 +1427,7 @@ def prepend_runtime_context(
         injection_content = build_runtime_context_injection(
             active_tool_names=active_tool_names or [],
             clarification_response=clarification_response,
+            all_clarification_rounds=all_clarification_rounds,
             retrieved_context=retrieved_context,
             tool_trace_context=tool_trace_context,
             tool_memory_context=tool_memory_context,

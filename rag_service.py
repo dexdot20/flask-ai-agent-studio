@@ -35,6 +35,7 @@ from config import (
 )
 from db import (
     delete_rag_document_records,
+    extract_clarification_response,
     extract_message_tool_results,
     get_db,
     get_expired_rag_document_source_keys,
@@ -939,6 +940,44 @@ def build_tool_memory_auto_context(query: str, top_k: int) -> str | None:
     return "\n\n".join(sections)
 
 
+def _build_compact_clarification_rag_text(content: str, metadata: dict | None) -> str:
+    clarification_response = extract_clarification_response(metadata)
+    answers = clarification_response.get("answers") if isinstance(clarification_response, dict) else None
+    if not isinstance(answers, dict) or not answers:
+        return build_user_message_for_model(content, metadata)
+
+    query_parts: list[str] = []
+    seen_parts: set[str] = set()
+
+    for line in str(content or "").splitlines():
+        match = re.match(r"^\s*A:\s*(.+?)\s*$", line)
+        if not match:
+            continue
+        normalized_display = " ".join(match.group(1).split())
+        if not normalized_display:
+            continue
+        dedupe_key = normalized_display.casefold()
+        if dedupe_key in seen_parts:
+            continue
+        seen_parts.add(dedupe_key)
+        query_parts.append(normalized_display)
+
+    if not query_parts:
+        for answer in answers.values():
+            if not isinstance(answer, dict):
+                continue
+            normalized_display = " ".join(str(answer.get("display") or "").split())
+            if not normalized_display:
+                continue
+            dedupe_key = normalized_display.casefold()
+            if dedupe_key in seen_parts:
+                continue
+            seen_parts.add(dedupe_key)
+            query_parts.append(normalized_display)
+
+    return " ".join(query_parts).strip() or build_user_message_for_model(content, metadata)
+
+
 def build_rag_auto_context(
     query: str,
     enabled: bool,
@@ -1153,7 +1192,7 @@ def get_conversation_records_for_rag(
                 metadata = parse_message_metadata(msg["metadata"])
                 content = str(msg["content"] or "").strip()
                 if role == "user":
-                    content = build_user_message_for_model(content, metadata)
+                    content = _build_compact_clarification_rag_text(content, metadata)
                 if role == "summary" and content:
                     conversation_messages.append({"role": "assistant", "content": content})
                 elif role in {"user", "assistant"} and content:
