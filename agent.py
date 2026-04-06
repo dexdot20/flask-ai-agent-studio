@@ -20,8 +20,11 @@ from logging.handlers import RotatingFileHandler
 from uuid import uuid4
 
 from canvas_service import (
+    batch_canvas_edits,
     build_canvas_document_context_result,
     build_canvas_tool_result,
+    clear_canvas_viewport,
+    clear_overlapping_canvas_viewports,
     clear_canvas,
     create_canvas_document,
     create_canvas_runtime_state,
@@ -29,14 +32,19 @@ from canvas_service import (
     delete_canvas_lines,
     get_canvas_runtime_active_document_id,
     get_canvas_runtime_documents,
+    get_canvas_runtime_snapshot,
     insert_canvas_lines,
     list_canvas_lines,
     _find_canvas_document,
+    preview_canvas_changes,
     replace_canvas_lines,
     rewrite_canvas_document,
     search_canvas_document,
+    set_canvas_viewport,
     scroll_canvas_document,
     scale_canvas_char_limit,
+    transform_canvas_lines,
+    update_canvas_metadata,
 )
 from project_workspace_service import (
     create_directory as workspace_create_directory,
@@ -137,6 +145,12 @@ CANVAS_TOOL_NAMES = {
     "search_canvas_document",
     "create_canvas_document",
     "rewrite_canvas_document",
+    "preview_canvas_changes",
+    "batch_canvas_edits",
+    "transform_canvas_lines",
+    "update_canvas_metadata",
+    "set_canvas_viewport",
+    "clear_canvas_viewport",
     "replace_canvas_lines",
     "insert_canvas_lines",
     "delete_canvas_lines",
@@ -146,6 +160,11 @@ CANVAS_TOOL_NAMES = {
 CANVAS_MUTATION_TOOL_NAMES = {
     "create_canvas_document",
     "rewrite_canvas_document",
+    "batch_canvas_edits",
+    "transform_canvas_lines",
+    "update_canvas_metadata",
+    "set_canvas_viewport",
+    "clear_canvas_viewport",
     "replace_canvas_lines",
     "insert_canvas_lines",
     "delete_canvas_lines",
@@ -4005,6 +4024,11 @@ def _run_rewrite_canvas_document(tool_args: dict, runtime_state: dict):
         project_id=tool_args.get("project_id"),
         workspace_id=tool_args.get("workspace_id"),
     )
+    clear_canvas_viewport(
+        canvas_state,
+        document_id=document.get("id"),
+        document_path=document.get("path"),
+    )
     return build_canvas_tool_result(document, action="rewritten"), f"Canvas updated: {document['title']}"
 
 
@@ -4039,6 +4063,13 @@ def _run_replace_canvas_lines(tool_args: dict, runtime_state: dict):
         expected_start_line=expected_start_line,
         expected_lines=expected_lines,
     )
+    clear_overlapping_canvas_viewports(
+        canvas_state,
+        document_id=document.get("id"),
+        document_path=document.get("path"),
+        edit_start_line=start_line,
+        edit_end_line=max(start_line, edit_end),
+    )
     return result, f"Canvas lines replaced in {document['title']}"
 
 
@@ -4072,6 +4103,13 @@ def _run_insert_canvas_lines(tool_args: dict, runtime_state: dict):
         expected_start_line=expected_start_line,
         expected_lines=expected_lines,
     )
+    clear_overlapping_canvas_viewports(
+        canvas_state,
+        document_id=document.get("id"),
+        document_path=document.get("path"),
+        edit_start_line=edit_start,
+        edit_end_line=max(edit_start, edit_end),
+    )
     return result, f"Canvas lines inserted in {document['title']}"
 
 
@@ -4104,7 +4142,145 @@ def _run_delete_canvas_lines(tool_args: dict, runtime_state: dict):
         expected_start_line=expected_start_line,
         expected_lines=expected_lines,
     )
+    clear_overlapping_canvas_viewports(
+        canvas_state,
+        document_id=document.get("id"),
+        document_path=document.get("path"),
+        edit_start_line=start_line,
+        edit_end_line=int(tool_args.get("end_line") or 0),
+    )
     return result, f"Canvas lines deleted in {document['title']}"
+
+
+def _run_batch_canvas_edits(tool_args: dict, runtime_state: dict):
+    canvas_state = _get_canvas_runtime_state(runtime_state)
+    batch_result = batch_canvas_edits(
+        canvas_state,
+        tool_args.get("operations") or [],
+        document_id=tool_args.get("document_id"),
+        document_path=tool_args.get("document_path"),
+        atomic=tool_args.get("atomic") is True,
+    )
+    changed_ranges = batch_result.get("changed_ranges") or []
+    edit_start_line = None
+    edit_end_line = None
+    if changed_ranges:
+        edit_start_line = min(int(entry.get("edit_start_line") or 0) for entry in changed_ranges if entry.get("edit_start_line"))
+        edit_end_line = max(int(entry.get("edit_end_line") or 0) for entry in changed_ranges if entry.get("edit_end_line"))
+    result = build_canvas_tool_result(
+        batch_result["document"],
+        action="lines_batch_edited",
+        edit_start_line=edit_start_line,
+        edit_end_line=edit_end_line,
+    )
+    result["applied_count"] = batch_result.get("applied_count", 0)
+    result["operation_count"] = batch_result.get("operation_count", 0)
+    result["changed_ranges"] = changed_ranges
+    if edit_start_line is not None and edit_end_line is not None:
+        clear_overlapping_canvas_viewports(
+            canvas_state,
+            document_id=batch_result["document"].get("id"),
+            document_path=batch_result["document"].get("path"),
+            edit_start_line=edit_start_line,
+            edit_end_line=edit_end_line,
+        )
+    return result, f"Canvas batch edit applied in {batch_result['document']['title']}"
+
+
+def _run_preview_canvas_changes(tool_args: dict, runtime_state: dict):
+    canvas_state = _get_canvas_runtime_state(runtime_state)
+    result = preview_canvas_changes(
+        canvas_state,
+        tool_args.get("operations") or [],
+        document_id=tool_args.get("document_id"),
+        document_path=tool_args.get("document_path"),
+    )
+    preview = result.get("preview") if isinstance(result.get("preview"), dict) else {}
+    target_label = str(preview.get("document_path") or preview.get("title") or "Canvas").strip()
+    return result, f"Canvas changes previewed for {target_label}"
+
+
+def _run_transform_canvas_lines(tool_args: dict, runtime_state: dict):
+    canvas_state = _get_canvas_runtime_state(runtime_state)
+    count_only = tool_args.get("count_only") is True
+    case_sensitive = True if "case_sensitive" not in tool_args else tool_args.get("case_sensitive") is True
+    result = transform_canvas_lines(
+        canvas_state,
+        tool_args.get("pattern", ""),
+        tool_args.get("replacement", ""),
+        document_id=tool_args.get("document_id"),
+        document_path=tool_args.get("document_path"),
+        scope=tool_args.get("scope") or "all",
+        is_regex=tool_args.get("is_regex") is True,
+        case_sensitive=case_sensitive,
+        count_only=count_only,
+    )
+    if count_only:
+        return result, f"Canvas transform matched {result.get('matches_found', 0)} line(s)"
+    if int(result.get("matches_replaced") or 0) <= 0:
+        return result, f"Canvas transform matched {result.get('matches_found', 0)} line(s)"
+    document = result.get("document") if isinstance(result.get("document"), dict) else None
+    if document and result.get("affected_lines"):
+        clear_overlapping_canvas_viewports(
+            canvas_state,
+            document_id=document.get("id"),
+            document_path=document.get("path"),
+            edit_start_line=min(result.get("affected_lines") or [0]),
+            edit_end_line=max(result.get("affected_lines") or [0]),
+        )
+    if document:
+        tool_result = build_canvas_tool_result(document, action="lines_transformed")
+        tool_result["matches_found"] = result.get("matches_found", 0)
+        tool_result["matches_replaced"] = result.get("matches_replaced", 0)
+        tool_result["affected_lines"] = result.get("affected_lines") or []
+        tool_result["scope"] = result.get("scope")
+        return tool_result, f"Canvas transformed in {document['title']}"
+    return result, f"Canvas transform matched {result.get('matches_found', 0)} line(s)"
+
+
+def _run_update_canvas_metadata(tool_args: dict, runtime_state: dict):
+    canvas_state = _get_canvas_runtime_state(runtime_state)
+    result = update_canvas_metadata(
+        canvas_state,
+        document_id=tool_args.get("document_id"),
+        document_path=tool_args.get("document_path"),
+        title=tool_args.get("title"),
+        summary=tool_args.get("summary"),
+        role=tool_args.get("role"),
+        add_dependencies=tool_args.get("add_dependencies"),
+        remove_dependencies=tool_args.get("remove_dependencies"),
+        add_symbols=tool_args.get("add_symbols"),
+    )
+    tool_result = build_canvas_tool_result(result["document"], action="metadata_updated")
+    tool_result["updated_fields"] = result.get("updated_fields") or []
+    return tool_result, f"Canvas metadata updated for {result['document']['title']}"
+
+
+def _run_set_canvas_viewport(tool_args: dict, runtime_state: dict):
+    canvas_state = _get_canvas_runtime_state(runtime_state)
+    auto_unpin_on_edit = True if "auto_unpin_on_edit" not in tool_args else tool_args.get("auto_unpin_on_edit") is True
+    result = set_canvas_viewport(
+        canvas_state,
+        start_line=int(tool_args.get("start_line") or 0),
+        end_line=int(tool_args.get("end_line") or 0),
+        ttl_turns=int(tool_args.get("ttl_turns") or 0) if tool_args.get("ttl_turns") not in (None, "") else 3,
+        auto_unpin_on_edit=auto_unpin_on_edit,
+        document_id=tool_args.get("document_id"),
+        document_path=tool_args.get("document_path"),
+    )
+    pinned = result.get("pinned") if isinstance(result.get("pinned"), dict) else {}
+    target_label = str(pinned.get("document_path") or pinned.get("document_id") or "Canvas").strip()
+    return result, f"Canvas viewport pinned for {target_label}"
+
+
+def _run_clear_canvas_viewport(tool_args: dict, runtime_state: dict):
+    canvas_state = _get_canvas_runtime_state(runtime_state)
+    result = clear_canvas_viewport(
+        canvas_state,
+        document_id=tool_args.get("document_id"),
+        document_path=tool_args.get("document_path"),
+    )
+    return result, f"Canvas viewport cleared ({result.get('cleared_count', 0)})"
 
 
 def _run_delete_canvas_document(tool_args: dict, runtime_state: dict):
@@ -4153,9 +4329,15 @@ _TOOL_EXECUTORS = {
     "validate_project_workspace": _run_validate_project_workspace,
     "create_canvas_document": _run_create_canvas_document,
     "rewrite_canvas_document": _run_rewrite_canvas_document,
+    "preview_canvas_changes": _run_preview_canvas_changes,
+    "transform_canvas_lines": _run_transform_canvas_lines,
+    "update_canvas_metadata": _run_update_canvas_metadata,
+    "set_canvas_viewport": _run_set_canvas_viewport,
+    "clear_canvas_viewport": _run_clear_canvas_viewport,
     "replace_canvas_lines": _run_replace_canvas_lines,
     "insert_canvas_lines": _run_insert_canvas_lines,
     "delete_canvas_lines": _run_delete_canvas_lines,
+    "batch_canvas_edits": _run_batch_canvas_edits,
     "delete_canvas_document": _run_delete_canvas_document,
     "clear_canvas": _run_clear_canvas,
 }
@@ -5071,14 +5253,16 @@ def run_agent_stream(
     pricing_known = has_known_model_pricing(model, model_settings)
 
     def build_tool_capture_event() -> dict:
-        current_canvas_documents = get_canvas_runtime_documents(runtime_state.get("canvas"))
-        active_canvas_document_id = get_canvas_runtime_active_document_id(runtime_state.get("canvas"))
+        current_canvas_snapshot = get_canvas_runtime_snapshot(runtime_state.get("canvas"))
+        current_canvas_documents = current_canvas_snapshot.get("documents") or []
+        active_canvas_document_id = current_canvas_snapshot.get("active_document_id")
         sub_agent_traces = runtime_state.get("sub_agent_traces") if isinstance(runtime_state.get("sub_agent_traces"), list) else []
         return {
             "type": "tool_capture",
             "tool_results": persisted_tool_results,
             "canvas_documents": current_canvas_documents,
             "active_document_id": active_canvas_document_id,
+            "canvas_viewports": current_canvas_snapshot.get("viewports") or {},
             "canvas_modified": canvas_modified,
             "canvas_cleared": canvas_modified and not current_canvas_documents,
             "sub_agent_traces": sub_agent_traces,

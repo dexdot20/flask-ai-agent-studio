@@ -430,6 +430,7 @@ def register_conversation_routes(app) -> None:
             {
                 "canvas_documents": next_documents,
                 "active_document_id": get_canvas_runtime_active_document_id(runtime_state),
+                "canvas_viewports": runtime_state.get("viewports") if isinstance(runtime_state.get("viewports"), dict) else {},
                 "canvas_cleared": not next_documents,
             }
         )
@@ -510,6 +511,7 @@ def register_conversation_routes(app) -> None:
             {
                 "canvas_documents": next_documents,
                 "active_document_id": get_canvas_runtime_active_document_id(runtime_state),
+                "canvas_viewports": runtime_state.get("viewports") if isinstance(runtime_state.get("viewports"), dict) else {},
                 "canvas_cleared": not next_documents,
             }
         )

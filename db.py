@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from flask import current_app, has_app_context
 
-from canvas_service import extract_canvas_active_document_id, extract_canvas_documents
+from canvas_service import extract_canvas_active_document_id, extract_canvas_documents, extract_canvas_viewports
 from config import (
     CACHE_TTL_HOURS,
     CANVAS_EXPAND_DEFAULT_MAX_LINES,
@@ -1906,6 +1906,9 @@ def serialize_message_metadata(metadata: dict | None) -> str | None:
     active_document_id = extract_canvas_active_document_id(metadata, canvas_documents)
     if active_document_id:
         cleaned["active_document_id"] = active_document_id
+    canvas_viewports = extract_canvas_viewports(metadata, canvas_documents)
+    if canvas_viewports:
+        cleaned["canvas_viewports"] = canvas_viewports
     if metadata.get("canvas_cleared") is True:
         cleaned["canvas_cleared"] = True
 

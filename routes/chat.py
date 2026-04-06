@@ -14,7 +14,9 @@ from agent import WEB_TOOL_NAMES
 from canvas_service import (
     create_canvas_document,
     create_canvas_runtime_state,
+    decrement_canvas_viewport_ttls,
     extract_canvas_documents,
+    get_canvas_viewport_payloads,
     get_canvas_runtime_active_document_id,
     find_latest_canvas_documents,
     find_latest_canvas_state,
@@ -41,6 +43,7 @@ from db import (
     count_visible_message_tokens,
     create_file_asset,
     create_image_asset,
+    extract_clarification_response,
     extract_message_attachments,
     extract_message_tool_results,
     extract_message_tool_trace,
@@ -255,6 +258,7 @@ def _build_assistant_message_metadata(
     sub_agent_traces: list[dict] | None = None,
     canvas_documents: list[dict] | None = None,
     active_document_id: str | None = None,
+    canvas_viewports: dict | None = None,
     canvas_cleared: bool = False,
     tool_trace_entries: list[dict] | None = None,
     reasoning: str = "",
@@ -267,6 +271,7 @@ def _build_assistant_message_metadata(
             "sub_agent_traces": sub_agent_traces or [],
             "canvas_documents": canvas_documents or [],
             "active_document_id": active_document_id,
+            "canvas_viewports": canvas_viewports or {},
             "canvas_cleared": canvas_cleared,
             "tool_trace": tool_trace_entries or [],
             "reasoning_content": reasoning,
@@ -287,6 +292,7 @@ def _persist_streaming_assistant_message(
     sub_agent_traces: list[dict] | None = None,
     canvas_documents: list[dict],
     active_document_id: str | None,
+    canvas_viewports: dict | None = None,
     canvas_cleared: bool,
     tool_trace_entries: list[dict],
     pending_clarification: dict | None,
@@ -314,6 +320,7 @@ def _persist_streaming_assistant_message(
         sub_agent_traces=sub_agent_traces,
         canvas_documents=canvas_documents,
         active_document_id=active_document_id,
+        canvas_viewports=canvas_viewports,
         canvas_cleared=canvas_cleared,
         tool_trace_entries=tool_trace_entries,
         reasoning=reasoning,
@@ -1342,10 +1349,12 @@ def _build_budgeted_prompt_messages(
     canonical_messages: list[dict],
     settings: dict,
     active_tool_names: list[str],
+    clarification_response: dict | None,
     retrieved_context: dict | None,
     tool_memory_context: str | None,
     canvas_documents: list[dict] | None = None,
     canvas_active_document_id: str | None = None,
+    canvas_viewports: list[dict] | None = None,
     canvas_prompt_max_lines: int | None = None,
     canvas_prompt_max_tokens: int | None = None,
     workspace_root: str | None = None,
@@ -1367,6 +1376,7 @@ def _build_budgeted_prompt_messages(
         scratchpad_sections=scratchpad_sections,
         canvas_documents=canvas_documents,
         canvas_active_document_id=canvas_active_document_id,
+        canvas_viewports=canvas_viewports,
         canvas_prompt_max_lines=canvas_prompt_max_lines,
         canvas_prompt_max_tokens=canvas_prompt_max_tokens,
         workspace_root=workspace_root,
@@ -1433,11 +1443,13 @@ def _build_budgeted_prompt_messages(
 
     current_context_injection = build_runtime_context_injection(
         active_tool_names=active_tool_names,
+        clarification_response=clarification_response,
         retrieved_context=rag_context,
         tool_trace_context=trimmed_tool_trace,
         tool_memory_context=trimmed_tool_memory,
         canvas_documents=canvas_documents,
         canvas_active_document_id=canvas_active_document_id,
+        canvas_viewports=canvas_viewports,
         canvas_prompt_max_lines=canvas_prompt_max_lines,
         canvas_prompt_max_tokens=canvas_prompt_max_tokens,
         workspace_root=workspace_root,
@@ -1449,6 +1461,7 @@ def _build_budgeted_prompt_messages(
         prompt_history_api,
         settings["user_preferences"],
         active_tool_names,
+        clarification_response=clarification_response,
         retrieved_context=rag_context,
         user_profile_context=user_profile_context,
         tool_trace_context=trimmed_tool_trace,
@@ -1480,6 +1493,47 @@ def _build_budgeted_prompt_messages(
         "recent_message_count": len(selected_recent),
     }
     return api_messages, stats, current_context_injection or None
+
+
+def _build_clarification_rag_query(message_content: str, clarification_response: dict | None) -> str:
+    response = clarification_response if isinstance(clarification_response, dict) else {}
+    answers = response.get("answers") if isinstance(response.get("answers"), dict) else {}
+    if not answers:
+        return ""
+
+    query_parts: list[str] = []
+    seen_parts: set[str] = set()
+
+    for line in str(message_content or "").splitlines():
+        match = re.match(r"^\s*A:\s*(.+?)\s*$", line)
+        if not match:
+            continue
+        normalized_display = " ".join(match.group(1).split())
+        if not normalized_display:
+            continue
+        dedupe_key = normalized_display.casefold()
+        if dedupe_key in seen_parts:
+            continue
+        seen_parts.add(dedupe_key)
+        query_parts.append(normalized_display)
+
+    if query_parts:
+        return " ".join(query_parts).strip()
+
+    for answer in answers.values():
+        if not isinstance(answer, dict):
+            continue
+        display = str(answer.get("display") or "").strip()
+        normalized_display = " ".join(display.split())
+        if not normalized_display:
+            continue
+        dedupe_key = normalized_display.casefold()
+        if dedupe_key in seen_parts:
+            continue
+        seen_parts.add(dedupe_key)
+        query_parts.append(normalized_display)
+
+    return " ".join(query_parts).strip()
 
 
 def _select_summary_source_messages_by_token_budget(
@@ -2372,9 +2426,14 @@ def register_chat_routes(app) -> None:
             active_tool_names = [name for name in active_tool_names if name != "image_explain"]
         fetch_url_clip_aggressiveness = get_fetch_url_clip_aggressiveness(settings)
         fetch_url_token_threshold = get_fetch_url_token_threshold(settings)
+        clarification_response = None
         rag_query_text = ""
         if latest_user_message is not None:
-            rag_query_text = build_user_message_for_model(
+            clarification_response = extract_clarification_response(latest_user_message.get("metadata"))
+            rag_query_text = _build_clarification_rag_query(
+                latest_user_message["content"],
+                clarification_response,
+            ) or build_user_message_for_model(
                 latest_user_message["content"],
                 latest_user_message.get("metadata"),
             )
@@ -2504,8 +2563,10 @@ def register_chat_routes(app) -> None:
             else None
         )
         latest_canvas_state = find_latest_canvas_state(canonical_messages)
+        decrement_canvas_viewport_ttls(latest_canvas_state)
         initial_canvas_documents = latest_canvas_state.get("documents") or []
         initial_canvas_active_document_id = latest_canvas_state.get("active_document_id")
+        initial_canvas_viewports = get_canvas_viewport_payloads(latest_canvas_state)
         workspace_runtime_state = create_workspace_runtime_state(conv_id)
         workspace_root = get_workspace_root(workspace_runtime_state)
         document_events = []
@@ -2513,6 +2574,7 @@ def register_chat_routes(app) -> None:
             pre_created_canvas_state = create_canvas_runtime_state(
                 initial_canvas_documents,
                 active_document_id=initial_canvas_active_document_id,
+                viewports=latest_canvas_state.get("viewports") if isinstance(latest_canvas_state.get("viewports"), dict) else {},
             )
             for upload in processed_document_uploads:
                 canvas_doc = create_canvas_document(
@@ -2536,14 +2598,17 @@ def register_chat_routes(app) -> None:
                 )
             initial_canvas_documents = get_canvas_runtime_documents(pre_created_canvas_state)
             initial_canvas_active_document_id = get_canvas_runtime_active_document_id(pre_created_canvas_state)
+            initial_canvas_viewports = get_canvas_viewport_payloads(pre_created_canvas_state)
         api_messages, prompt_budget_stats, current_context_injection = _build_budgeted_prompt_messages(
             canonical_messages,
             settings,
             active_tool_names,
+            clarification_response,
             retrieved_context,
             tool_memory_context,
             canvas_documents=initial_canvas_documents,
             canvas_active_document_id=initial_canvas_active_document_id,
+            canvas_viewports=initial_canvas_viewports,
             canvas_prompt_max_lines=get_canvas_prompt_max_lines(settings),
             canvas_prompt_max_tokens=get_canvas_prompt_max_tokens(settings),
             workspace_root=workspace_root,
@@ -2567,6 +2632,7 @@ def register_chat_routes(app) -> None:
             stored_sub_agent_traces = []
             canvas_documents = []
             active_document_id = initial_canvas_active_document_id
+            canvas_viewports = latest_canvas_state.get("viewports") if isinstance(latest_canvas_state.get("viewports"), dict) else {}
             canvas_cleared = False
             pending_clarification = None
             persisted_tool_history = []
@@ -2611,6 +2677,7 @@ def register_chat_routes(app) -> None:
                     sub_agent_traces=stored_sub_agent_traces,
                     canvas_documents=canvas_documents,
                     active_document_id=active_document_id,
+                    canvas_viewports=canvas_viewports,
                     canvas_cleared=canvas_cleared,
                     tool_trace_entries=tool_trace_entries,
                     pending_clarification=pending_clarification,
@@ -2758,6 +2825,7 @@ def register_chat_routes(app) -> None:
                         stored_sub_agent_traces = extract_sub_agent_traces({"sub_agent_traces": event.get("sub_agent_traces")})
                         canvas_documents = extract_canvas_documents({"canvas_documents": event.get("canvas_documents")})
                         active_document_id = str(event.get("active_document_id") or "").strip() or None
+                        canvas_viewports = event.get("canvas_viewports") if isinstance(event.get("canvas_viewports"), dict) else {}
                         canvas_modified = event.get("canvas_modified") is True
                         canvas_cleared = event.get("canvas_cleared") is True
                         persist_assistant_snapshot()
@@ -2807,6 +2875,7 @@ def register_chat_routes(app) -> None:
                             sub_agent_traces=stored_sub_agent_traces,
                             canvas_documents=canvas_documents,
                             active_document_id=active_document_id,
+                            canvas_viewports=canvas_viewports,
                             canvas_cleared=canvas_cleared,
                             tool_trace_entries=tool_trace_entries,
                             pending_clarification=pending_clarification,
@@ -2834,6 +2903,7 @@ def register_chat_routes(app) -> None:
                     sub_agent_traces=stored_sub_agent_traces,
                     canvas_documents=canvas_documents,
                     active_document_id=active_document_id,
+                    canvas_viewports=canvas_viewports,
                     canvas_cleared=canvas_cleared,
                     tool_trace_entries=tool_trace_entries,
                     pending_clarification=pending_clarification,

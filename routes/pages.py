@@ -98,6 +98,8 @@ from tool_registry import TOOL_SPEC_BY_NAME
 
 TOOL_PERMISSION_LABELS = {
     "append_scratchpad": "Append persistent scratchpad",
+    "replace_scratchpad": "Rewrite persistent scratchpad section",
+    "read_scratchpad": "Read persistent scratchpad",
     "ask_clarifying_question": "Ask interactive clarification questions",
     "sub_agent": "Delegate to sub-agent",
     "image_explain": "Follow up on stored images",
@@ -105,12 +107,21 @@ TOOL_PERMISSION_LABELS = {
     "search_tool_memory": "Search tool memory",
     "search_web": "Web search",
     "fetch_url": "Read URL content",
+    "fetch_url_summarized": "Fetch URL (summarized)",
+    "grep_fetched_content": "Search fetched page content",
     "search_news_ddgs": "Search news (DDGS)",
     "search_news_google": "Search news (Google)",
     "create_canvas_document": "Create canvas document",
     "expand_canvas_document": "Expand canvas document",
     "scroll_canvas_document": "Scroll canvas document",
+    "search_canvas_document": "Search canvas document",
     "rewrite_canvas_document": "Rewrite canvas document",
+    "preview_canvas_changes": "Preview canvas changes",
+    "batch_canvas_edits": "Batch canvas edits",
+    "transform_canvas_lines": "Transform canvas lines",
+    "update_canvas_metadata": "Update canvas metadata",
+    "set_canvas_viewport": "Set canvas viewport",
+    "clear_canvas_viewport": "Clear canvas viewport",
     "replace_canvas_lines": "Replace canvas lines",
     "insert_canvas_lines": "Insert canvas lines",
     "delete_canvas_lines": "Delete canvas lines",
@@ -146,6 +157,12 @@ TOOL_PERMISSION_DESCRIPTIONS = {
     "scroll_canvas_document": "Read a targeted line range from a canvas document.",
     "search_canvas_document": "Search for text or patterns inside canvas documents.",
     "rewrite_canvas_document": "Fully replace a canvas document's content in one operation.",
+    "preview_canvas_changes": "Dry-run a set of canvas edits and preview the result without applying.",
+    "batch_canvas_edits": "Apply several non-overlapping line edits to a canvas document in one call.",
+    "transform_canvas_lines": "Apply a text transformation to a range of lines in a canvas document.",
+    "update_canvas_metadata": "Update the title, language, or other metadata of a canvas document.",
+    "set_canvas_viewport": "Pin a line range as the active viewport for a canvas document.",
+    "clear_canvas_viewport": "Remove the pinned viewport so the full canvas is shown.",
     "replace_canvas_lines": "Replace a specific line range inside a canvas document.",
     "insert_canvas_lines": "Insert new lines at a position inside a canvas document.",
     "delete_canvas_lines": "Delete a specific line range from a canvas document.",
@@ -217,7 +234,7 @@ PROXY_OPERATION_OPTIONS = [
 def _get_tool_permission_section_key(name: str) -> str:
     if name in {"append_scratchpad", "replace_scratchpad", "read_scratchpad", "ask_clarifying_question", "sub_agent", "image_explain", "search_knowledge_base", "search_tool_memory"}:
         return "assistant"
-    if name in {"search_web", "fetch_url", "search_news_ddgs", "search_news_google"}:
+    if name in {"search_web", "fetch_url", "fetch_url_summarized", "grep_fetched_content", "search_news_ddgs", "search_news_google"}:
         return "research"
     if name in {
         "create_canvas_document",
@@ -225,6 +242,12 @@ def _get_tool_permission_section_key(name: str) -> str:
         "scroll_canvas_document",
         "search_canvas_document",
         "rewrite_canvas_document",
+        "preview_canvas_changes",
+        "batch_canvas_edits",
+        "transform_canvas_lines",
+        "update_canvas_metadata",
+        "set_canvas_viewport",
+        "clear_canvas_viewport",
         "replace_canvas_lines",
         "insert_canvas_lines",
         "delete_canvas_lines",

@@ -47,6 +47,7 @@ PARALLEL_SAFE_READ_ONLY_TOOL_NAMES = (
     "expand_canvas_document",
     "scroll_canvas_document",
     "search_canvas_document",
+    "preview_canvas_changes",
 )
 # Tools whose results may still be inputs for other calls in the same batch;
 # they are parallel-safe among themselves but must not be batched with any
@@ -57,6 +58,7 @@ DEPENDENT_TOOL_NAMES = (
 )
 
 HISTORICAL_CONTEXT_INJECTION_STRIP_HEADINGS = {
+    "## Clarification Response",
     "## Tool Memory",
     "## Knowledge Base",
     "## Canvas Workspace Summary",
@@ -194,6 +196,21 @@ def _build_tool_memory_payload(tool_memory_context, active_tool_names: list[str]
             "Only perform a new web request when no matching memory exists or the stored data is clearly outdated for the question at hand."
         )
     return payload or None
+
+
+def _build_clarification_response_payload(clarification_response: dict | None) -> dict | None:
+    response = clarification_response if isinstance(clarification_response, dict) else {}
+    answers = response.get("answers") if isinstance(response.get("answers"), dict) else {}
+    if not answers:
+        return None
+
+    return {
+        "guidance": (
+            "The user message in this turn is a direct response to your earlier clarifying questions. "
+            "Treat any Q:/A: formatted content as the user's answers to the specific questions you asked. "
+            "Use those answers directly to continue the task, and do not reinterpret them as retrieved knowledge-base content."
+        )
+    }
 
 
 def normalize_chat_messages(messages) -> list[dict]:
@@ -480,6 +497,7 @@ def build_api_messages(messages: list[dict], *, canvas_documents: list[dict] | N
 def _build_canvas_prompt_payload(
     canvas_documents,
     active_document_id: str | None = None,
+    canvas_viewports: list[dict] | None = None,
     *,
     max_lines: int = CANVAS_PROMPT_MAX_LINES,
     max_chars: int | None = None,
@@ -565,6 +583,7 @@ def _build_canvas_prompt_payload(
         "is_truncated": len(visible_lines) < len(all_lines),
         "visible_line_end": len(visible_lines),
         "total_lines": int(active_document.get("line_count") or len(all_lines)),
+        "viewports": [viewport for viewport in (canvas_viewports or []) if isinstance(viewport, dict)],
     }
 
 
@@ -619,6 +638,12 @@ def _build_canvas_decision_matrix_rows(active_tool_names: list[str], canvas_payl
         {
             "create_canvas_document",
             "rewrite_canvas_document",
+            "batch_canvas_edits",
+            "preview_canvas_changes",
+            "transform_canvas_lines",
+            "update_canvas_metadata",
+            "set_canvas_viewport",
+            "clear_canvas_viewport",
             "replace_canvas_lines",
             "insert_canvas_lines",
             "delete_canvas_lines",
@@ -645,6 +670,12 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
         {
             "create_canvas_document",
             "rewrite_canvas_document",
+            "batch_canvas_edits",
+            "preview_canvas_changes",
+            "transform_canvas_lines",
+            "update_canvas_metadata",
+            "set_canvas_viewport",
+            "clear_canvas_viewport",
             "replace_canvas_lines",
             "insert_canvas_lines",
             "delete_canvas_lines",
@@ -659,6 +690,11 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
         "## Canvas Editing Guidance",
         "- Prefer the smallest valid canvas change that satisfies the request.",
         "- Do not rewrite the whole document when only part needs to change; use replace_canvas_lines, insert_canvas_lines, or delete_canvas_lines for local edits when the exact visible lines are known.",
+        "- When several non-overlapping edits for the same document are already known, prefer batch_canvas_edits over serial line-edit calls.",
+        "- Use preview_canvas_changes before a large or risky batch when you need a non-mutating diff preview first.",
+        "- Use transform_canvas_lines for bulk find-replace work; use count_only first when the replacement scope is uncertain.",
+        "- Use update_canvas_metadata for title, summary, role, dependency, or symbol metadata changes that do not change document content.",
+        "- If you will keep working in the same region for multiple turns, use set_canvas_viewport so the pinned lines are injected automatically in later prompts.",
         "- If you first need to locate text or a symbol in a large canvas, use search_canvas_document before expanding or scrolling.",
         "- If the target lines are not visible yet, inspect first with scroll_canvas_document or expand_canvas_document.",
         "- When multiple files or canvas regions are involved, batch independent inspection calls together in one answer instead of requesting them one by one.",
@@ -831,12 +867,14 @@ def _count_summary_messages(messages: list[dict] | None) -> int:
 def _build_runtime_volatile_parts(
     *,
     active_tool_names: list[str],
+    clarification_response: dict | None = None,
     retrieved_context=None,
     tool_trace_context=None,
     tool_memory_context=None,
     now: datetime,
     canvas_documents=None,
     canvas_active_document_id: str | None = None,
+    canvas_viewports: list[dict] | None = None,
     canvas_prompt_max_lines: int | None = None,
     canvas_prompt_max_tokens: int | None = None,
     summary_count: int = 0,
@@ -856,6 +894,12 @@ def _build_runtime_volatile_parts(
                 volatile_parts.append(json.dumps(tool_memory_payload["auto_injected_context"], ensure_ascii=False, indent=2))
         volatile_parts.append("")
 
+    clarification_payload = _build_clarification_response_payload(clarification_response)
+    if clarification_payload:
+        volatile_parts.append("## Clarification Response")
+        volatile_parts.append(f"*{clarification_payload['guidance']}*\n")
+        volatile_parts.append("")
+
     kb_payload = _build_knowledge_base_payload(retrieved_context, active_tool_names)
     if kb_payload:
         volatile_parts.append("## Knowledge Base")
@@ -871,6 +915,7 @@ def _build_runtime_volatile_parts(
     canvas_payload = _build_canvas_prompt_payload(
         canvas_documents,
         active_document_id=canvas_active_document_id,
+        canvas_viewports=canvas_viewports,
         max_lines=canvas_prompt_max_lines or CANVAS_PROMPT_MAX_LINES,
         max_tokens=canvas_prompt_max_tokens if canvas_prompt_max_tokens is not None else CANVAS_PROMPT_MAX_TOKENS,
     )
@@ -920,6 +965,24 @@ def _build_runtime_volatile_parts(
             volatile_parts.append("```text\n" + "\n".join(canvas_payload["visible_lines"]) + "\n```\n")
         else:
             volatile_parts.append("(The active canvas document is empty.)\n")
+        viewport_payloads = canvas_payload.get("viewports") if isinstance(canvas_payload.get("viewports"), list) else []
+        if viewport_payloads:
+            volatile_parts.append("## Pinned Canvas Viewports")
+            volatile_parts.append("- These pinned ranges are auto-injected from prior viewport selections. Reuse them before asking to scroll or expand the same region again.")
+            for viewport in viewport_payloads[:6]:
+                target_label = str(viewport.get("document_path") or viewport.get("title") or viewport.get("document_id") or "Canvas").strip()
+                volatile_parts.append(
+                    f"- {target_label} lines {int(viewport.get('start_line') or 0)}-{int(viewport.get('end_line') or 0)}"
+                    + (
+                        f" (remaining turns: {int(viewport.get('remaining_turns') or 0)})"
+                        if int(viewport.get("remaining_turns") or 0) > 0
+                        else ""
+                    )
+                )
+                visible_lines = viewport.get("visible_lines") if isinstance(viewport.get("visible_lines"), list) else []
+                if visible_lines:
+                    volatile_parts.append("```text\n" + "\n".join(str(line) for line in visible_lines) + "\n```")
+            volatile_parts.append("")
 
     if summary_count:
         volatile_parts.append(
@@ -947,12 +1010,14 @@ def _build_runtime_volatile_parts(
 
 def build_runtime_context_injection(
     active_tool_names=None,
+    clarification_response: dict | None = None,
     retrieved_context=None,
     tool_trace_context=None,
     tool_memory_context=None,
     now=None,
     canvas_documents=None,
     canvas_active_document_id: str | None = None,
+    canvas_viewports: list[dict] | None = None,
     canvas_prompt_max_lines: int | None = None,
     canvas_prompt_max_tokens: int | None = None,
     workspace_root: str | None = None,
@@ -968,12 +1033,14 @@ def build_runtime_context_injection(
     return "\n".join(
         _build_runtime_volatile_parts(
             active_tool_names=resolved_tool_names,
+            clarification_response=clarification_response,
             retrieved_context=retrieved_context,
             tool_trace_context=tool_trace_context,
             tool_memory_context=tool_memory_context,
             now=normalized_now,
             canvas_documents=canvas_documents,
             canvas_active_document_id=canvas_active_document_id,
+            canvas_viewports=canvas_viewports,
             canvas_prompt_max_lines=canvas_prompt_max_lines,
             canvas_prompt_max_tokens=canvas_prompt_max_tokens,
             summary_count=summary_count,
@@ -985,6 +1052,7 @@ def build_runtime_context_injection(
 def build_runtime_system_message(
     user_preferences="",
     active_tool_names=None,
+    clarification_response: dict | None = None,
     retrieved_context=None,
     user_profile_context=None,
     tool_trace_context=None,
@@ -994,6 +1062,7 @@ def build_runtime_system_message(
     scratchpad_sections=None,
     canvas_documents=None,
     canvas_active_document_id: str | None = None,
+    canvas_viewports: list[dict] | None = None,
     canvas_prompt_max_lines: int | None = None,
     canvas_prompt_max_tokens: int | None = None,
     workspace_root: str | None = None,
@@ -1112,12 +1181,14 @@ def build_runtime_system_message(
         parts.extend(
             _build_runtime_volatile_parts(
                 active_tool_names=runtime_tool_names,
+                clarification_response=clarification_response,
                 retrieved_context=retrieved_context,
                 tool_trace_context=tool_trace_context,
                 tool_memory_context=tool_memory_context,
                 now=now,
                 canvas_documents=canvas_documents,
                 canvas_active_document_id=canvas_active_document_id,
+                canvas_viewports=canvas_viewports,
                 canvas_prompt_max_lines=canvas_prompt_max_lines,
                 canvas_prompt_max_tokens=canvas_prompt_max_tokens,
                 summary_count=summary_count,
@@ -1137,6 +1208,7 @@ def prepend_runtime_context(
     messages,
     user_preferences="",
     active_tool_names=None,
+    clarification_response: dict | None = None,
     retrieved_context=None,
     user_profile_context=None,
     tool_trace_context=None,
@@ -1145,6 +1217,7 @@ def prepend_runtime_context(
     scratchpad_sections=None,
     canvas_documents=None,
     canvas_active_document_id: str | None = None,
+    canvas_viewports: list[dict] | None = None,
     canvas_prompt_max_lines: int | None = None,
     canvas_prompt_max_tokens: int | None = None,
     workspace_root: str | None = None,
@@ -1156,6 +1229,7 @@ def prepend_runtime_context(
     runtime_message = build_runtime_system_message(
         user_preferences,
         active_tool_names or [],
+        clarification_response=clarification_response,
         retrieved_context=retrieved_context,
         user_profile_context=user_profile_context,
         tool_trace_context=tool_trace_context,
@@ -1164,6 +1238,7 @@ def prepend_runtime_context(
         scratchpad_sections=scratchpad_sections,
         canvas_documents=canvas_documents,
         canvas_active_document_id=canvas_active_document_id,
+        canvas_viewports=canvas_viewports,
         canvas_prompt_max_lines=canvas_prompt_max_lines,
         canvas_prompt_max_tokens=canvas_prompt_max_tokens,
         workspace_root=workspace_root,
@@ -1178,11 +1253,13 @@ def prepend_runtime_context(
     if not injection_content:
         injection_content = build_runtime_context_injection(
             active_tool_names=active_tool_names or [],
+            clarification_response=clarification_response,
             retrieved_context=retrieved_context,
             tool_trace_context=tool_trace_context,
             tool_memory_context=tool_memory_context,
             canvas_documents=canvas_documents,
             canvas_active_document_id=canvas_active_document_id,
+            canvas_viewports=canvas_viewports,
             canvas_prompt_max_lines=canvas_prompt_max_lines,
             canvas_prompt_max_tokens=canvas_prompt_max_tokens,
             workspace_root=workspace_root,

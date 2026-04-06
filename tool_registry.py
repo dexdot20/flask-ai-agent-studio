@@ -17,6 +17,12 @@ CANVAS_DOCUMENT_TOOL_NAMES = {
     "scroll_canvas_document",
     "search_canvas_document",
     "rewrite_canvas_document",
+    "preview_canvas_changes",
+    "batch_canvas_edits",
+    "transform_canvas_lines",
+    "update_canvas_metadata",
+    "set_canvas_viewport",
+    "clear_canvas_viewport",
     "replace_canvas_lines",
     "insert_canvas_lines",
     "delete_canvas_lines",
@@ -84,11 +90,44 @@ def build_canvas_decision_matrix(
                 "notes": "Use only visible or recently inspected lines. Never guess hidden line numbers.",
             }
         )
+    if enabled("batch_canvas_edits"):
         rows.append(
             {
-                "situation": "You already know edits for multiple canvas files or multiple disjoint regions.",
-                "tool": "Batch all needed line-edit calls in one answer",
-                "notes": "Do not serialize independent edits across repeated turns when the targets are already known.",
+                "situation": "You already know several edits for multiple disjoint regions in the same canvas document.",
+                "tool": "batch_canvas_edits",
+                "notes": "Prefer one batch tool call over serial line edits when several non-overlapping changes in the same canvas document are already known.",
+            }
+        )
+    if enabled("preview_canvas_changes"):
+        rows.append(
+            {
+                "situation": "You want to inspect the exact effect of a planned batch before mutating the canvas.",
+                "tool": "preview_canvas_changes",
+                "notes": "Use this for non-mutating diff previews of planned batch edits.",
+            }
+        )
+    if enabled("transform_canvas_lines"):
+        rows.append(
+            {
+                "situation": "A bulk find-replace or regex transform should be applied across one scope.",
+                "tool": "transform_canvas_lines",
+                "notes": "Use count_only first if the replacement scope is uncertain.",
+            }
+        )
+    if enabled("update_canvas_metadata"):
+        rows.append(
+            {
+                "situation": "Only document metadata should change, not the content lines.",
+                "tool": "update_canvas_metadata",
+                "notes": "Use this for summary, role, dependency, symbol, or title updates without rewriting content.",
+            }
+        )
+    if enabled("set_canvas_viewport", "clear_canvas_viewport"):
+        rows.append(
+            {
+                "situation": "You will keep working in the same region for several turns or want to stop injecting a pinned region.",
+                "tool": "set_canvas_viewport / clear_canvas_viewport",
+                "notes": "Pinned viewport lines are auto-injected in later prompts until they expire or are cleared.",
             }
         )
     if enabled("scroll_canvas_document"):
@@ -1233,6 +1272,197 @@ TOOL_SPECS = [
                 "In project mode prefer document_path when possible. "
                 "If the user needs an additional file, create a separate canvas document instead of rewriting the current one into a different file."
             ),
+        },
+    },
+    {
+        "name": "preview_canvas_changes",
+        "description": "Preview the effect of multiple non-overlapping line edits against one canvas document without mutating it.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "document_id": {"type": "string", "description": "Optional target canvas document id."},
+                "document_path": {"type": "string", "description": "Optional target project-relative path. Prefer this over document_id in project mode."},
+                "operations": {
+                    "type": "array",
+                    "minItems": 1,
+                    "description": "Ordered list of non-overlapping replace, insert, or delete operations to preview.",
+                    "items": {"type": "object"}
+                }
+            },
+            "required": ["operations"]
+        },
+        "prompt": {
+            "purpose": "Shows a non-mutating preview of planned batch canvas edits.",
+            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "operations": "ordered edit operations"},
+            "guidance": (
+                "Use this when you want to inspect the exact before/after effect of planned canvas changes before applying them. "
+                "Prefer this over speculative prose descriptions when the user needs a concrete diff preview."
+            ),
+        },
+    },
+    {
+        "name": "batch_canvas_edits",
+        "description": "Apply multiple non-overlapping line edit operations to one canvas document in a single call.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "document_id": {
+                    "type": "string",
+                    "description": "Optional target canvas document id. Defaults to the active document when document_path is omitted."
+                },
+                "document_path": {
+                    "type": "string",
+                    "description": "Optional target project-relative path. Prefer this over document_id in project mode."
+                },
+                "operations": {
+                    "type": "array",
+                    "description": "Ordered list of non-overlapping replace, insert, or delete operations to apply against the same document snapshot.",
+                    "minItems": 1,
+                    "items": {
+                        "oneOf": [
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "action": {"type": "string", "enum": ["replace"]},
+                                    "start_line": {"type": "integer", "minimum": 1},
+                                    "end_line": {"type": "integer", "minimum": 1},
+                                    "lines": {"type": "array", "items": {"type": "string"}},
+                                    "expected_start_line": {"type": "integer", "minimum": 1},
+                                    "expected_lines": {"type": "array", "items": {"type": "string"}}
+                                },
+                                "required": ["action", "start_line", "end_line", "lines"],
+                                "additionalProperties": False
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "action": {"type": "string", "enum": ["insert"]},
+                                    "after_line": {"type": "integer", "minimum": 0},
+                                    "lines": {"type": "array", "items": {"type": "string"}},
+                                    "expected_start_line": {"type": "integer", "minimum": 1},
+                                    "expected_lines": {"type": "array", "items": {"type": "string"}}
+                                },
+                                "required": ["action", "after_line", "lines"],
+                                "additionalProperties": False
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "action": {"type": "string", "enum": ["delete"]},
+                                    "start_line": {"type": "integer", "minimum": 1},
+                                    "end_line": {"type": "integer", "minimum": 1},
+                                    "expected_start_line": {"type": "integer", "minimum": 1},
+                                    "expected_lines": {"type": "array", "items": {"type": "string"}}
+                                },
+                                "required": ["action", "start_line", "end_line"],
+                                "additionalProperties": False
+                            }
+                        ]
+                    }
+                },
+                "atomic": {
+                    "type": "boolean",
+                    "description": "When true, restore the original document if any operation in the batch fails."
+                }
+            },
+            "required": ["operations"]
+        },
+        "prompt": {
+            "purpose": "Applies multiple disjoint line edits to one canvas document in a single call.",
+            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "operations": "ordered edit operations", "atomic": "optional rollback flag"},
+            "guidance": (
+                "Use this when you already know several non-overlapping edits for the same canvas document. "
+                "Prefer one batch_canvas_edits call over serial replace_canvas_lines, insert_canvas_lines, or delete_canvas_lines calls when the targets are already known. "
+                "Every operation must target a disjoint region or insertion anchor. "
+                "Line numbers are interpreted against the pre-batch document and adjusted automatically for earlier operations in the same batch. "
+                "When you are editing from a previously seen snippet, include expected_lines and expected_start_line on each operation so stale edits are rejected safely. "
+                "In project mode, prefer document_path when possible."
+            ),
+        },
+    },
+    {
+        "name": "transform_canvas_lines",
+        "description": "Apply a plain-text or regex find-replace across a full canvas document or a specific line scope.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "document_id": {"type": "string", "description": "Optional target canvas document id."},
+                "document_path": {"type": "string", "description": "Optional target project-relative path. Prefer this over document_id in project mode."},
+                "pattern": {"type": "string", "description": "Search text or regex pattern."},
+                "replacement": {"type": "string", "description": "Replacement text. Regex capture groups may use $1, $2, and so on."},
+                "scope": {"type": "string", "description": "Use 'all' or 'lines_<start>_<end>'."},
+                "is_regex": {"type": "boolean"},
+                "case_sensitive": {"type": "boolean"},
+                "count_only": {"type": "boolean", "description": "When true, report matches without mutating the document."}
+            },
+            "required": ["pattern", "replacement"]
+        },
+        "prompt": {
+            "purpose": "Performs a scoped plain-text or regex transformation across one canvas document.",
+            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "pattern": "search text or regex", "replacement": "replacement text", "scope": "all or lines range", "is_regex": "regex toggle", "case_sensitive": "case sensitivity toggle", "count_only": "preview-only toggle"},
+            "guidance": (
+                "Use this for bulk find-replace work across a document or a bounded line range. "
+                "If the exact impact is uncertain, run with count_only=true first, then apply the real replacement."
+            ),
+        },
+    },
+    {
+        "name": "update_canvas_metadata",
+        "description": "Update canvas document metadata such as title, summary, role, dependencies, or important symbols without changing content lines.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "document_id": {"type": "string", "description": "Optional target canvas document id."},
+                "document_path": {"type": "string", "description": "Optional target project-relative path. Prefer this over document_id in project mode."},
+                "title": {"type": "string"},
+                "summary": {"type": "string"},
+                "role": {"type": "string", "enum": ["source", "config", "dependency", "docs", "test", "script", "note"]},
+                "add_dependencies": {"type": "array", "items": {"type": "string"}},
+                "remove_dependencies": {"type": "array", "items": {"type": "string"}},
+                "add_symbols": {"type": "array", "items": {"type": "string"}}
+            }
+        },
+        "prompt": {
+            "purpose": "Updates canvas metadata without touching document content.",
+            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "title": "new title", "summary": "new summary", "role": "new role", "add_dependencies": "dependencies to append", "remove_dependencies": "dependencies to remove", "add_symbols": "symbols to append"},
+            "guidance": "Use this when only metadata should change and the document body must remain untouched.",
+        },
+    },
+    {
+        "name": "set_canvas_viewport",
+        "description": "Pin a document line range so it is automatically injected into later prompts for a limited number of turns.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "document_id": {"type": "string", "description": "Optional target canvas document id."},
+                "document_path": {"type": "string", "description": "Optional target project-relative path. Prefer this over document_id in project mode."},
+                "start_line": {"type": "integer", "minimum": 1},
+                "end_line": {"type": "integer", "minimum": 1},
+                "ttl_turns": {"type": "integer", "minimum": 0},
+                "auto_unpin_on_edit": {"type": "boolean"}
+            },
+            "required": ["start_line", "end_line"]
+        },
+        "prompt": {
+            "purpose": "Pins a canvas range for automatic reuse in subsequent prompts.",
+            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "start_line": "viewport start", "end_line": "viewport end", "ttl_turns": "number of future turns to keep it pinned", "auto_unpin_on_edit": "whether overlapping edits clear it automatically"},
+            "guidance": "Use this when you expect to keep working in the same region for multiple turns and want to avoid repeated scroll or expand calls.",
+        },
+    },
+    {
+        "name": "clear_canvas_viewport",
+        "description": "Clear one pinned canvas viewport or all pinned viewports.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "document_id": {"type": "string", "description": "Optional target canvas document id."},
+                "document_path": {"type": "string", "description": "Optional target project-relative path. When omitted with document_id, clears all viewports."}
+            }
+        },
+        "prompt": {
+            "purpose": "Removes one or all pinned canvas viewports.",
+            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path"},
+            "guidance": "Use this when a pinned viewport is no longer useful or should stop consuming prompt space.",
         },
     },
     {

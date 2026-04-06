@@ -22,6 +22,8 @@ import prune_service
 from docx import Document
 from proxy_settings import DEFAULT_PROXY_ENABLED_OPERATIONS, PROXY_OPERATION_FETCH_URL
 from agent import (
+    CANVAS_MUTATION_TOOL_NAMES,
+    CANVAS_TOOL_NAMES,
     CONTEXT_OVERFLOW_RECOVERY_ERROR_TEXT,
     FINAL_ANSWER_ERROR_TEXT,
     FINAL_ANSWER_MISSING_TEXT,
@@ -52,15 +54,22 @@ from agent import (
 )
 from app import create_app
 from canvas_service import (
+    batch_canvas_edits,
     build_canvas_project_manifest,
     create_canvas_runtime_state,
     find_latest_canvas_documents,
     find_latest_canvas_state,
     get_canvas_runtime_active_document_id,
+    get_canvas_runtime_documents,
+    get_canvas_viewport_payloads,
     normalize_canvas_document,
+    preview_canvas_changes,
     replace_canvas_lines,
     search_canvas_document,
+    set_canvas_viewport,
     scroll_canvas_document,
+    transform_canvas_lines,
+    update_canvas_metadata,
 )
 from db import (
     append_to_scratchpad,
@@ -2898,12 +2907,47 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertNotIn("secret-source-key", message["content"])
         self.assertNotIn('"source_name"', message["content"])
 
+    def test_build_runtime_system_message_marks_clarification_responses_before_knowledge_base(self):
+        message = build_runtime_system_message(
+            active_tool_names=["search_knowledge_base"],
+            clarification_response={
+                "assistant_message_id": 42,
+                "answers": {
+                    "group_size": {"display": "2 kişi"},
+                    "age_range": {"display": "15-18"},
+                },
+            },
+            retrieved_context={
+                "query": "2 kişi 15-18",
+                "count": 1,
+                "matches": [
+                    {
+                        "source_name": "Social anxiety notes",
+                        "similarity": 0.83,
+                        "text": "Structured exposure tasks work better when matched to age and group size.",
+                    }
+                ],
+            },
+        )
+
+        content = message["content"]
+        self.assertIn("## Clarification Response", content)
+        self.assertIn("direct response to your earlier clarifying questions", content)
+        self.assertIn("## Knowledge Base", content)
+        self.assertLess(content.index("## Clarification Response"), content.index("## Knowledge Base"))
+
     def test_runtime_system_message_hides_canvas_edit_tools_without_canvas_document(self):
         message = build_runtime_system_message(
             active_tool_names=[
                 "expand_canvas_document",
                 "create_canvas_document",
                 "rewrite_canvas_document",
+                "preview_canvas_changes",
+                "batch_canvas_edits",
+                "transform_canvas_lines",
+                "update_canvas_metadata",
+                "set_canvas_viewport",
+                "clear_canvas_viewport",
                 "replace_canvas_lines",
                 "insert_canvas_lines",
                 "delete_canvas_lines",
@@ -3058,6 +3102,34 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertNotIn("## Canvas Relationship Map", content)
         self.assertNotIn("## Other Canvas Documents", content)
 
+    def test_runtime_system_message_includes_pinned_canvas_viewports(self):
+        runtime_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "canvas-1",
+                    "title": "app.py",
+                    "path": "src/app.py",
+                    "format": "code",
+                    "language": "python",
+                    "content": "line 1\nline 2\nline 3\nline 4",
+                }
+            ]
+        )
+        set_canvas_viewport(runtime_state, document_path="src/app.py", start_line=2, end_line=3, ttl_turns=2)
+
+        message = build_runtime_system_message(
+            active_tool_names=["set_canvas_viewport", "clear_canvas_viewport", "replace_canvas_lines"],
+            canvas_documents=get_canvas_runtime_documents(runtime_state),
+            canvas_active_document_id=get_canvas_runtime_active_document_id(runtime_state),
+            canvas_viewports=get_canvas_viewport_payloads(runtime_state),
+        )
+
+        content = message["content"]
+        self.assertIn("## Pinned Canvas Viewports", content)
+        self.assertIn("src/app.py lines 2-3", content)
+        self.assertIn("2: line 2", content)
+        self.assertIn("3: line 3", content)
+
     def test_runtime_system_message_mentions_canvas_preview_compaction(self):
         message = build_runtime_system_message(
             active_tool_names=[
@@ -3081,6 +3153,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("scroll_canvas_document or expand_canvas_document", content)
 
     def test_canvas_tool_specs_prefer_smallest_valid_edit(self):
+        batch_guidance = TOOL_SPEC_BY_NAME["batch_canvas_edits"]["prompt"]["guidance"]
         rewrite_guidance = TOOL_SPEC_BY_NAME["rewrite_canvas_document"]["prompt"]["guidance"]
         replace_guidance = TOOL_SPEC_BY_NAME["replace_canvas_lines"]["prompt"]["guidance"]
         expand_description = TOOL_SPEC_BY_NAME["expand_canvas_document"]["description"]
@@ -3088,6 +3161,7 @@ class AppRoutesTestCase(unittest.TestCase):
         scroll_description = TOOL_SPEC_BY_NAME["scroll_canvas_document"]["description"]
         search_guidance = TOOL_SPEC_BY_NAME["search_canvas_document"]["prompt"]["guidance"]
 
+        self.assertIn("Prefer one batch_canvas_edits call", batch_guidance)
         self.assertIn("Do not default to this when only part of the file needs to change", rewrite_guidance)
         self.assertIn("Multiple localized replace_canvas_lines calls are fine", replace_guidance)
         self.assertIn("document_id is optional", expand_description)
@@ -3098,6 +3172,7 @@ class AppRoutesTestCase(unittest.TestCase):
     def test_openai_tool_specs_include_expand_canvas_document_with_canvas_documents(self):
         tools = get_openai_tool_specs(
             [
+                "batch_canvas_edits",
                 "expand_canvas_document",
                 "create_canvas_document",
                 "rewrite_canvas_document",
@@ -3114,13 +3189,14 @@ class AppRoutesTestCase(unittest.TestCase):
         )
 
         tool_names = [entry["function"]["name"] for entry in tools]
-        self.assertEqual(tool_names, ["expand_canvas_document", "create_canvas_document", "rewrite_canvas_document"])
+        self.assertEqual(tool_names, ["expand_canvas_document", "create_canvas_document", "rewrite_canvas_document", "batch_canvas_edits"])
 
     def test_openai_tool_specs_hide_canvas_edit_tools_without_canvas_document(self):
         tools = get_openai_tool_specs(
             [
                 "create_canvas_document",
                 "rewrite_canvas_document",
+                "batch_canvas_edits",
                 "replace_canvas_lines",
                 "clear_canvas",
             ]
@@ -4689,6 +4765,8 @@ class AppRoutesTestCase(unittest.TestCase):
             [
                 "create_canvas_document",
                 "search_canvas_document",
+                "preview_canvas_changes",
+                "set_canvas_viewport",
                 "rewrite_canvas_document",
                 "replace_canvas_lines",
             ],
@@ -4704,7 +4782,7 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertEqual(
             runtime_names,
-            ["create_canvas_document", "search_canvas_document", "rewrite_canvas_document", "replace_canvas_lines"],
+            ["create_canvas_document", "search_canvas_document", "preview_canvas_changes", "set_canvas_viewport", "rewrite_canvas_document", "replace_canvas_lines"],
         )
 
     def test_extract_message_usage_maps_legacy_system_prompt_breakdown(self):
@@ -7765,6 +7843,462 @@ class AppRoutesTestCase(unittest.TestCase):
                 expected_start_line=2,
             )
 
+    def test_batch_canvas_edits_applies_mixed_operations_with_offsets(self):
+        runtime_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "canvas-1",
+                    "title": "app.py",
+                    "path": "src/app.py",
+                    "format": "code",
+                    "content": "alpha\nbeta\ngamma\ndelta\nepsilon\nzeta",
+                }
+            ]
+        )
+
+        result = batch_canvas_edits(
+            runtime_state,
+            [
+                {"action": "replace", "start_line": 2, "end_line": 2, "lines": ["beta updated", "beta extra"]},
+                {"action": "insert", "after_line": 5, "lines": ["inserted after epsilon"]},
+                {"action": "delete", "start_line": 6, "end_line": 6},
+            ],
+            document_path="src/app.py",
+            atomic=True,
+        )
+
+        self.assertEqual(result["applied_count"], 3)
+        self.assertEqual(
+            result["document"]["content"],
+            "alpha\nbeta updated\nbeta extra\ngamma\ndelta\nepsilon\ninserted after epsilon",
+        )
+        self.assertEqual(result["changed_ranges"][1]["applied_after_line"], 6)
+        self.assertEqual(result["changed_ranges"][2]["applied_start_line"], 8)
+
+    def test_batch_canvas_edits_rejects_overlapping_operations(self):
+        runtime_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "canvas-1",
+                    "title": "Draft",
+                    "format": "markdown",
+                    "content": "line 1\nline 2\nline 3",
+                }
+            ]
+        )
+
+        with self.assertRaisesRegex(ValueError, "overlap"):
+            batch_canvas_edits(
+                runtime_state,
+                [
+                    {"action": "replace", "start_line": 2, "end_line": 2, "lines": ["changed"]},
+                    {"action": "insert", "after_line": 2, "lines": ["inserted"]},
+                ],
+                document_id="canvas-1",
+            )
+
+    def test_batch_canvas_edits_atomic_rolls_back_on_failure(self):
+        runtime_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "canvas-1",
+                    "title": "Draft",
+                    "format": "markdown",
+                    "content": "line 1\nline 2\nline 3",
+                }
+            ]
+        )
+
+        with self.assertRaisesRegex(ValueError, "Line range exceeds"):
+            batch_canvas_edits(
+                runtime_state,
+                [
+                    {"action": "replace", "start_line": 2, "end_line": 2, "lines": ["changed"]},
+                    {"action": "delete", "start_line": 99, "end_line": 99},
+                ],
+                document_id="canvas-1",
+                atomic=True,
+            )
+
+        self.assertEqual(get_canvas_runtime_documents(runtime_state)[0]["content"], "line 1\nline 2\nline 3")
+
+    def test_batch_canvas_edits_clears_auto_unpin_viewport_for_multi_line_delete(self):
+        runtime_state = {"canvas": create_canvas_runtime_state(
+            [
+                {
+                    "id": "canvas-1",
+                    "title": "app.py",
+                    "path": "src/app.py",
+                    "format": "code",
+                    "content": "line 1\nline 2\nline 3\nline 4\nline 5",
+                }
+            ]
+        )}
+        set_canvas_viewport(runtime_state["canvas"], document_path="src/app.py", start_line=3, end_line=5, ttl_turns=3, auto_unpin_on_edit=True)
+
+        _execute_tool(
+            "batch_canvas_edits",
+            {
+                "document_path": "src/app.py",
+                "operations": [
+                    {"action": "delete", "start_line": 3, "end_line": 5},
+                ],
+            },
+            runtime_state,
+        )
+
+        self.assertEqual(runtime_state["canvas"]["viewports"], {})
+
+    def test_preview_canvas_changes_does_not_mutate_runtime_state(self):
+        runtime_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "canvas-1",
+                    "title": "Draft",
+                    "format": "markdown",
+                    "content": "line 1\nline 2\nline 3",
+                }
+            ]
+        )
+
+        result = preview_canvas_changes(
+            runtime_state,
+            [{"action": "replace", "start_line": 2, "end_line": 2, "lines": ["updated line 2"]}],
+            document_id="canvas-1",
+        )
+
+        self.assertEqual(result["preview"]["changes"][0]["before"], "line 2")
+        self.assertEqual(result["preview"]["changes"][0]["after"], "updated line 2")
+        self.assertEqual(get_canvas_runtime_documents(runtime_state)[0]["content"], "line 1\nline 2\nline 3")
+
+    def test_transform_canvas_lines_supports_count_only_and_replace(self):
+        runtime_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "canvas-1",
+                    "title": "config.py",
+                    "path": "config.py",
+                    "format": "code",
+                    "content": "DEBUG = False\nDEBUG = False\nprint('done')",
+                }
+            ]
+        )
+
+        count_result = transform_canvas_lines(
+            runtime_state,
+            "DEBUG = False",
+            "DEBUG = True",
+            document_path="config.py",
+            count_only=True,
+        )
+        self.assertEqual(count_result["matches_found"], 2)
+        self.assertEqual(get_canvas_runtime_documents(runtime_state)[0]["content"], "DEBUG = False\nDEBUG = False\nprint('done')")
+
+        apply_result = transform_canvas_lines(
+            runtime_state,
+            "DEBUG = False",
+            "DEBUG = True",
+            document_path="config.py",
+        )
+        self.assertEqual(apply_result["matches_replaced"], 2)
+        self.assertEqual(get_canvas_runtime_documents(runtime_state)[0]["content"], "DEBUG = True\nDEBUG = True\nprint('done')")
+
+    def test_execute_tool_count_only_transform_does_not_mutate_or_clear_viewport(self):
+        runtime_state = {"canvas": create_canvas_runtime_state(
+            [
+                {
+                    "id": "canvas-1",
+                    "title": "config.py",
+                    "path": "config.py",
+                    "format": "code",
+                    "content": "DEBUG = False\nDEBUG = False\nprint('done')",
+                }
+            ]
+        )}
+        set_canvas_viewport(runtime_state["canvas"], document_path="config.py", start_line=1, end_line=2, ttl_turns=3, auto_unpin_on_edit=True)
+
+        result, summary = _execute_tool(
+            "transform_canvas_lines",
+            {
+                "document_path": "config.py",
+                "pattern": "DEBUG = False",
+                "replacement": "DEBUG = True",
+                "count_only": True,
+            },
+            runtime_state,
+        )
+
+        self.assertEqual(result["action"], "transformed")
+        self.assertEqual(result["matches_found"], 2)
+        self.assertIn("Canvas transform matched", summary)
+        self.assertEqual(get_canvas_runtime_documents(runtime_state["canvas"])[0]["content"], "DEBUG = False\nDEBUG = False\nprint('done')")
+        self.assertNotEqual(runtime_state["canvas"]["viewports"], {})
+
+    def test_execute_tool_transform_defaults_to_case_sensitive_and_reports_no_match(self):
+        runtime_state = {"canvas": create_canvas_runtime_state(
+            [
+                {
+                    "id": "canvas-1",
+                    "title": "config.py",
+                    "path": "config.py",
+                    "format": "code",
+                    "content": "DEBUG = False\nprint('done')",
+                }
+            ]
+        )}
+
+        result, summary = _execute_tool(
+            "transform_canvas_lines",
+            {
+                "document_path": "config.py",
+                "pattern": "debug = false",
+                "replacement": "DEBUG = True",
+            },
+            runtime_state,
+        )
+
+        self.assertEqual(result["action"], "transformed")
+        self.assertEqual(result["matches_found"], 0)
+        self.assertEqual(result["matches_replaced"], 0)
+        self.assertIn("matched 0 line(s)", summary)
+        self.assertEqual(get_canvas_runtime_documents(runtime_state["canvas"])[0]["content"], "DEBUG = False\nprint('done')")
+
+    def test_transform_canvas_lines_rejects_empty_pattern(self):
+        runtime_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "canvas-1",
+                    "title": "config.py",
+                    "path": "config.py",
+                    "format": "code",
+                    "content": "DEBUG = False",
+                }
+            ]
+        )
+
+        with self.assertRaisesRegex(ValueError, "must not be empty"):
+            transform_canvas_lines(
+                runtime_state,
+                "",
+                "DEBUG = True",
+                document_path="config.py",
+            )
+
+    def test_update_canvas_metadata_updates_summary_dependencies_and_symbols(self):
+        runtime_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "canvas-1",
+                    "title": "README.md",
+                    "path": "README.md",
+                    "format": "markdown",
+                    "content": "# Demo",
+                    "dependencies": ["config.py"],
+                    "symbols": ["create_app"],
+                }
+            ]
+        )
+
+        result = update_canvas_metadata(
+            runtime_state,
+            document_path="README.md",
+            summary="Main documentation",
+            role="docs",
+            add_dependencies=["app.py"],
+            remove_dependencies=["config.py"],
+            add_symbols=["init_db"],
+        )
+
+        self.assertIn("summary", result["updated_fields"])
+        self.assertIn("dependencies", result["updated_fields"])
+        self.assertEqual(result["document"]["role"], "docs")
+        self.assertEqual(result["document"]["dependencies"], ["app.py"])
+        self.assertEqual(result["document"]["symbols"], ["create_app", "init_db"])
+
+    def test_overlapping_edit_clears_auto_unpin_canvas_viewport(self):
+        runtime_state = {"canvas": create_canvas_runtime_state(
+            [
+                {
+                    "id": "canvas-1",
+                    "title": "app.py",
+                    "path": "src/app.py",
+                    "format": "code",
+                    "content": "line 1\nline 2\nline 3",
+                }
+            ]
+        )}
+        set_canvas_viewport(runtime_state["canvas"], document_path="src/app.py", start_line=2, end_line=3, ttl_turns=3, auto_unpin_on_edit=True)
+
+        _execute_tool(
+            "replace_canvas_lines",
+            {
+                "document_path": "src/app.py",
+                "start_line": 2,
+                "end_line": 2,
+                "lines": ["line 2 updated"],
+            },
+            runtime_state,
+        )
+
+        self.assertEqual(runtime_state["canvas"]["viewports"], {})
+
+    def test_execute_tool_set_canvas_viewport_defaults_auto_unpin_on_edit(self):
+        runtime_state = {"canvas": create_canvas_runtime_state(
+            [
+                {
+                    "id": "canvas-1",
+                    "title": "app.py",
+                    "path": "src/app.py",
+                    "format": "code",
+                    "content": "line 1\nline 2\nline 3",
+                }
+            ]
+        )}
+
+        _execute_tool(
+            "set_canvas_viewport",
+            {
+                "document_path": "src/app.py",
+                "start_line": 2,
+                "end_line": 3,
+                "ttl_turns": 3,
+            },
+            runtime_state,
+        )
+
+        _execute_tool(
+            "replace_canvas_lines",
+            {
+                "document_path": "src/app.py",
+                "start_line": 2,
+                "end_line": 2,
+                "lines": ["line 2 updated"],
+            },
+            runtime_state,
+        )
+
+        self.assertEqual(runtime_state["canvas"]["viewports"], {})
+
+    def test_canvas_tool_sets_include_new_canvas_tools(self):
+        self.assertTrue(
+            {
+                "preview_canvas_changes",
+                "batch_canvas_edits",
+                "transform_canvas_lines",
+                "update_canvas_metadata",
+                "set_canvas_viewport",
+                "clear_canvas_viewport",
+            }.issubset(CANVAS_TOOL_NAMES)
+        )
+        self.assertTrue(
+            {
+                "batch_canvas_edits",
+                "transform_canvas_lines",
+                "update_canvas_metadata",
+                "set_canvas_viewport",
+                "clear_canvas_viewport",
+            }.issubset(CANVAS_MUTATION_TOOL_NAMES)
+        )
+
+    def test_execute_tool_runs_transform_metadata_and_viewport_tools(self):
+        runtime_state = {"canvas": create_canvas_runtime_state(
+            [
+                {
+                    "id": "canvas-1",
+                    "title": "app.py",
+                    "path": "src/app.py",
+                    "format": "code",
+                    "content": "alpha\nbeta",
+                }
+            ]
+        )}
+
+        preview_result, _ = _execute_tool(
+            "preview_canvas_changes",
+            {
+                "document_path": "src/app.py",
+                "operations": [{"action": "insert", "after_line": 2, "lines": ["gamma"]}],
+            },
+            runtime_state,
+        )
+        self.assertEqual(preview_result["action"], "previewed")
+
+        transform_result, _ = _execute_tool(
+            "transform_canvas_lines",
+            {
+                "document_path": "src/app.py",
+                "pattern": "beta",
+                "replacement": "beta updated",
+            },
+            runtime_state,
+        )
+        self.assertEqual(transform_result["action"], "lines_transformed")
+
+        metadata_result, _ = _execute_tool(
+            "update_canvas_metadata",
+            {
+                "document_path": "src/app.py",
+                "summary": "Main app file",
+                "add_symbols": ["main"],
+            },
+            runtime_state,
+        )
+        self.assertEqual(metadata_result["action"], "metadata_updated")
+
+        viewport_result, _ = _execute_tool(
+            "set_canvas_viewport",
+            {
+                "document_path": "src/app.py",
+                "start_line": 1,
+                "end_line": 2,
+                "ttl_turns": 2,
+            },
+            runtime_state,
+        )
+        self.assertEqual(viewport_result["action"], "viewport_set")
+
+        clear_result, _ = _execute_tool(
+            "clear_canvas_viewport",
+            {"document_path": "src/app.py"},
+            runtime_state,
+        )
+        self.assertEqual(clear_result["action"], "viewport_cleared")
+
+    def test_execute_tool_runs_batch_canvas_edits(self):
+        runtime_state = {
+            "canvas": create_canvas_runtime_state(
+                [
+                    {
+                        "id": "canvas-1",
+                        "title": "app.py",
+                        "path": "src/app.py",
+                        "format": "code",
+                        "content": "alpha\nbeta\ngamma",
+                    }
+                ]
+            )
+        }
+
+        result, summary = _execute_tool(
+            "batch_canvas_edits",
+            {
+                "document_path": "src/app.py",
+                "operations": [
+                    {"action": "replace", "start_line": 2, "end_line": 2, "lines": ["beta updated"]},
+                    {"action": "insert", "after_line": 3, "lines": ["delta"]},
+                ],
+            },
+            runtime_state,
+        )
+
+        self.assertEqual(result["action"], "lines_batch_edited")
+        self.assertEqual(result["applied_count"], 2)
+        self.assertIn("Canvas batch edit applied", summary)
+        self.assertEqual(
+            get_canvas_runtime_documents(runtime_state["canvas"])[0]["content"],
+            "alpha\nbeta updated\ngamma\ndelta",
+        )
+
     def test_normalize_canvas_document_falls_back_to_default_title(self):
         normalized = normalize_canvas_document(
             {
@@ -8518,6 +9052,8 @@ class AppRoutesTestCase(unittest.TestCase):
 
     def test_build_api_messages_strips_historical_runtime_context_injections(self):
         historical_context = (
+            "## Clarification Response\n"
+            "Earlier clarification guidance\n\n"
             "## Tool Memory\n"
             "Earlier search result\n\n"
             "## Knowledge Base\n"
@@ -8567,8 +9103,104 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(len(system_messages), 1)
         self.assertIn("21:40", system_messages[0]["content"])
         self.assertIn("## Active Canvas Document", system_messages[0]["content"])
+        self.assertNotIn("Earlier clarification guidance", system_messages[0]["content"])
         self.assertNotIn("Earlier search result", system_messages[0]["content"])
         self.assertNotIn("Earlier KB excerpt", system_messages[0]["content"])
+
+    def test_chat_uses_compact_clarification_answers_for_rag_query(self):
+        conversation_id = self._create_conversation()
+        save_app_settings(
+            {
+                "user_preferences": "",
+                "scratchpad": "",
+                "max_steps": "2",
+                "active_tools": "[]",
+                "rag_auto_inject": "true",
+                "rag_sensitivity": "strict",
+                "rag_context_size": "large",
+            }
+        )
+
+        fake_events = iter(
+            [
+                {"type": "answer_start"},
+                {"type": "answer_delta", "text": "Done."},
+                {"type": "tool_capture", "tool_results": []},
+                {"type": "done"},
+            ]
+        )
+
+        message_text = "Q: Kaç kişisiniz?\nA: 2 kişi\nQ: Yaş grubunuz nedir?\nA: 15-18\nQ: Nerede yaşıyorsunuz?\nA: İstanbul"
+        with patch("routes.chat.build_rag_auto_context", return_value=None) as mocked_rag, patch(
+            "routes.chat.run_agent_stream", return_value=fake_events
+        ):
+            response = self.client.post(
+                "/chat",
+                json={
+                    "conversation_id": conversation_id,
+                    "model": "deepseek-chat",
+                    "user_content": message_text,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": message_text,
+                            "metadata": {
+                                "clarification_response": {
+                                    "assistant_message_id": 7,
+                                    "answers": {
+                                        "group_size": {"display": "2 kişi"},
+                                        "age_range": {"display": "15-18"},
+                                        "city": {"display": "İstanbul"},
+                                    },
+                                }
+                            },
+                        }
+                    ],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(mocked_rag.call_args.args[0], "2 kişi 15-18 İstanbul")
+
+    def test_chat_does_not_compact_plain_messages_that_only_look_like_qna(self):
+        conversation_id = self._create_conversation()
+        save_app_settings(
+            {
+                "user_preferences": "",
+                "scratchpad": "",
+                "max_steps": "2",
+                "active_tools": "[]",
+                "rag_auto_inject": "true",
+                "rag_sensitivity": "strict",
+                "rag_context_size": "large",
+            }
+        )
+
+        fake_events = iter(
+            [
+                {"type": "answer_start"},
+                {"type": "answer_delta", "text": "Done."},
+                {"type": "tool_capture", "tool_results": []},
+                {"type": "done"},
+            ]
+        )
+
+        message_text = "Q: Bu bir başlık mı?\nA: Evet\nEk açıklama: A: burada normal bir metin"
+        with patch("routes.chat.build_rag_auto_context", return_value=None) as mocked_rag, patch(
+            "routes.chat.run_agent_stream", return_value=fake_events
+        ):
+            response = self.client.post(
+                "/chat",
+                json={
+                    "conversation_id": conversation_id,
+                    "model": "deepseek-chat",
+                    "user_content": message_text,
+                    "messages": [{"role": "user", "content": message_text}],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(mocked_rag.call_args.args[0], message_text)
 
     def test_patch_user_message_clears_stale_context_injection_but_keeps_attachments(self):
         conversation_id = self._create_conversation()
@@ -12405,6 +13037,7 @@ class AppRoutesTestCase(unittest.TestCase):
                 canonical_messages,
                 settings,
                 active_tool_names=[],
+                clarification_response=None,
                 retrieved_context=None,
                 tool_memory_context=tool_memory_context,
             )
@@ -12447,6 +13080,7 @@ class AppRoutesTestCase(unittest.TestCase):
                 canonical_messages,
                 settings,
                 active_tool_names=[],
+                clarification_response=None,
                 retrieved_context=None,
                 tool_memory_context=None,
             )

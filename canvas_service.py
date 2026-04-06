@@ -817,12 +817,51 @@ def _validate_canvas_expected_lines(
         )
 
 
-def create_canvas_runtime_state(initial_documents: list[dict] | None = None, active_document_id: str | None = None) -> dict:
+def extract_canvas_viewports(metadata: dict | None, documents: list[dict] | None = None) -> dict[str, dict]:
+    source = metadata if isinstance(metadata, dict) else {}
+    raw_viewports = source.get("canvas_viewports")
+    if not isinstance(raw_viewports, dict):
+        return {}
+
+    normalized_documents = documents if isinstance(documents, list) else extract_canvas_documents(source)
+    valid_document_ids = {str(document.get("id") or "") for document in normalized_documents}
+    normalized_viewports: dict[str, dict] = {}
+    for key, viewport in raw_viewports.items():
+        if not isinstance(viewport, dict):
+            continue
+        document_id = str(viewport.get("document_id") or "").strip()
+        if not document_id or document_id not in valid_document_ids:
+            continue
+        start_line = int(viewport.get("start_line") or 0)
+        end_line = int(viewport.get("end_line") or 0)
+        if start_line < 1 or end_line < start_line:
+            continue
+        normalized_key = str(key or viewport.get("document_path") or document_id).strip()
+        if not normalized_key:
+            continue
+        normalized_viewports[normalized_key] = {
+            "document_id": document_id,
+            "document_path": _normalize_canvas_path(viewport.get("document_path")),
+            "start_line": start_line,
+            "end_line": end_line,
+            "ttl_turns": max(0, int(viewport.get("ttl_turns") or 0)),
+            "remaining_turns": max(0, int(viewport.get("remaining_turns") or 0)),
+            "auto_unpin_on_edit": viewport.get("auto_unpin_on_edit") is True,
+        }
+    return normalized_viewports
+
+
+def create_canvas_runtime_state(
+    initial_documents: list[dict] | None = None,
+    active_document_id: str | None = None,
+    viewports: dict[str, dict] | None = None,
+) -> dict:
     documents = extract_canvas_documents({"canvas_documents": initial_documents or []})
     resolved_active_document_id = extract_canvas_active_document_id({"active_document_id": active_document_id}, documents)
     runtime_state = {
         "documents": documents,
         "active_document_id": resolved_active_document_id,
+        "viewports": extract_canvas_viewports({"canvas_viewports": viewports or {}}, documents),
     }
     runtime_state["mode"] = determine_canvas_mode(documents)
     return runtime_state
@@ -843,6 +882,7 @@ def get_canvas_runtime_snapshot(runtime_state: dict | None) -> dict:
     return {
         "documents": documents,
         "active_document_id": active_document_id,
+        "viewports": extract_canvas_viewports({"canvas_viewports": (runtime_state or {}).get("viewports")}, documents),
         "mode": determine_canvas_mode(documents),
         "manifest": build_canvas_project_manifest(documents, active_document_id=active_document_id),
     }
@@ -862,6 +902,7 @@ def _refresh_canvas_runtime_state(runtime_state: dict) -> None:
         documents,
     )
     runtime_state["mode"] = determine_canvas_mode(documents)
+    runtime_state["viewports"] = extract_canvas_viewports({"canvas_viewports": runtime_state.get("viewports")}, documents)
 
 
 def _find_canvas_document(
@@ -912,6 +953,21 @@ def _store_canvas_document(runtime_state: dict, document: dict) -> dict:
     runtime_state["active_document_id"] = normalized["id"]
     _refresh_canvas_runtime_state(runtime_state)
     return normalized
+
+
+def _update_canvas_document_in_place(runtime_state: dict, document_id: str, content: str) -> dict:
+    documents = runtime_state.setdefault("documents", [])
+    for index, existing in enumerate(documents):
+        if str(existing.get("id") or "") != document_id:
+            continue
+        next_document = dict(existing)
+        next_document["content"] = _clip_text(content, CANVAS_MAX_CONTENT_LENGTH)
+        normalized = normalize_canvas_document(next_document)
+        documents[index] = normalized
+        runtime_state["active_document_id"] = normalized["id"]
+        _refresh_canvas_runtime_state(runtime_state)
+        return normalized
+    raise ValueError(f"Canvas document not found for id: {document_id}")
 
 
 def create_canvas_document(
@@ -1083,6 +1139,650 @@ def delete_canvas_lines(
     )
 
 
+def _normalize_batch_canvas_lines(value, *, field_name: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"Batch canvas edit field '{field_name}' must be an array of strings.")
+    return [str(line) for line in value]
+
+
+def _normalize_batch_canvas_operation(operation: dict, index: int) -> dict:
+    if not isinstance(operation, dict):
+        raise ValueError(f"Batch canvas operation #{index + 1} must be an object.")
+
+    action = str(operation.get("action") or "").strip().lower()
+    if action not in {"replace", "insert", "delete"}:
+        raise ValueError(f"Batch canvas operation #{index + 1} has unsupported action: {action or '<empty>'}.")
+
+    normalized = {"action": action, "index": index}
+    expected_lines = operation.get("expected_lines")
+    if expected_lines is not None:
+        normalized["expected_lines"] = _normalize_batch_canvas_lines(expected_lines, field_name="expected_lines")
+
+    expected_start_line = operation.get("expected_start_line")
+    if expected_start_line is not None:
+        try:
+            normalized_expected_start_line = int(expected_start_line)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Batch canvas operation #{index + 1} has an invalid expected_start_line.") from exc
+        if normalized_expected_start_line < 1:
+            raise ValueError(f"Batch canvas operation #{index + 1} expected_start_line must be at least 1.")
+        normalized["expected_start_line"] = normalized_expected_start_line
+
+    if action == "insert":
+        try:
+            after_line = int(operation.get("after_line"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Batch canvas operation #{index + 1} is missing a valid after_line.") from exc
+        if after_line < 0:
+            raise ValueError(f"Batch canvas operation #{index + 1} after_line must be at least 0.")
+        normalized["after_line"] = after_line
+        normalized["lines"] = _normalize_batch_canvas_lines(operation.get("lines"), field_name="lines")
+        return normalized
+
+    try:
+        start_line = int(operation.get("start_line"))
+        end_line = int(operation.get("end_line"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Batch canvas operation #{index + 1} is missing a valid line range.") from exc
+
+    if start_line < 1 or end_line < start_line:
+        raise ValueError(f"Batch canvas operation #{index + 1} must define a valid 1-based inclusive range.")
+
+    normalized["start_line"] = start_line
+    normalized["end_line"] = end_line
+    if action == "replace":
+        normalized["lines"] = _normalize_batch_canvas_lines(operation.get("lines"), field_name="lines")
+    return normalized
+
+
+def _batch_canvas_operation_delta(operation: dict) -> int:
+    action = operation["action"]
+    if action == "insert":
+        return len(operation.get("lines") or [])
+    replaced_count = operation["end_line"] - operation["start_line"] + 1
+    if action == "delete":
+        return -replaced_count
+    return len(operation.get("lines") or []) - replaced_count
+
+
+def _calculate_batch_canvas_offset(reference_line: int, prior_operations: list[dict]) -> int:
+    offset = 0
+    for operation in prior_operations:
+        if operation["action"] == "insert":
+            if operation["after_line"] < reference_line:
+                offset += len(operation.get("lines") or [])
+            continue
+        if operation["start_line"] < reference_line:
+            offset += _batch_canvas_operation_delta(operation)
+    return offset
+
+
+def _batch_canvas_operations_overlap(left: dict, right: dict) -> bool:
+    left_action = left["action"]
+    right_action = right["action"]
+
+    if left_action == "insert" and right_action == "insert":
+        return left["after_line"] == right["after_line"]
+    if left_action == "insert":
+        return right["start_line"] <= left["after_line"] <= right["end_line"]
+    if right_action == "insert":
+        return left["start_line"] <= right["after_line"] <= left["end_line"]
+    return max(left["start_line"], right["start_line"]) <= min(left["end_line"], right["end_line"])
+
+
+def _validate_batch_canvas_operations(operations: list[dict]) -> list[dict]:
+    normalized_operations = [_normalize_batch_canvas_operation(operation, index) for index, operation in enumerate(operations)]
+    for index, left in enumerate(normalized_operations):
+        for right in normalized_operations[index + 1:]:
+            if _batch_canvas_operations_overlap(left, right):
+                raise ValueError(
+                    f"Batch canvas operations #{left['index'] + 1} and #{right['index'] + 1} overlap. Split them into separate non-overlapping edits."
+                )
+    return normalized_operations
+
+
+def batch_canvas_edits(
+    runtime_state: dict,
+    operations: list[dict],
+    *,
+    document_id: str | None = None,
+    document_path: str | None = None,
+    atomic: bool = False,
+) -> dict:
+    if not isinstance(operations, list) or not operations:
+        raise ValueError("batch_canvas_edits requires a non-empty operations array.")
+
+    normalized_operations = _validate_batch_canvas_operations(operations)
+    _, document = _find_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
+    resolved_document_id = str(document.get("id") or "").strip() or document_id
+    original_document = dict(document)
+
+    applied_operations: list[dict] = []
+    changed_ranges: list[dict] = []
+    current_document = original_document
+    try:
+        for operation in normalized_operations:
+            expected_start_line = operation.get("expected_start_line")
+            adjusted_expected_start_line = None
+            if expected_start_line is not None:
+                adjusted_expected_start_line = expected_start_line + _calculate_batch_canvas_offset(
+                    expected_start_line,
+                    applied_operations,
+                )
+
+            if operation["action"] == "insert":
+                original_after_line = operation["after_line"]
+                adjusted_after_line = original_after_line + _calculate_batch_canvas_offset(original_after_line, applied_operations)
+                current_document = insert_canvas_lines(
+                    runtime_state,
+                    after_line=adjusted_after_line,
+                    lines=operation.get("lines") or [],
+                    document_id=resolved_document_id,
+                    expected_lines=operation.get("expected_lines"),
+                    expected_start_line=adjusted_expected_start_line,
+                )
+                edit_start_line = adjusted_after_line + 1
+                edit_end_line = adjusted_after_line + len(operation.get("lines") or [])
+                changed_ranges.append(
+                    {
+                        "operation_index": operation["index"],
+                        "action": "insert",
+                        "requested_after_line": original_after_line,
+                        "applied_after_line": adjusted_after_line,
+                        "edit_start_line": edit_start_line,
+                        "edit_end_line": max(edit_start_line, edit_end_line),
+                    }
+                )
+            else:
+                original_start_line = operation["start_line"]
+                original_end_line = operation["end_line"]
+                adjusted_start_line = original_start_line + _calculate_batch_canvas_offset(original_start_line, applied_operations)
+                adjusted_end_line = original_end_line + _calculate_batch_canvas_offset(original_end_line, applied_operations)
+                if operation["action"] == "replace":
+                    current_document = replace_canvas_lines(
+                        runtime_state,
+                        start_line=adjusted_start_line,
+                        end_line=adjusted_end_line,
+                        lines=operation.get("lines") or [],
+                        document_id=resolved_document_id,
+                        expected_lines=operation.get("expected_lines"),
+                        expected_start_line=adjusted_expected_start_line,
+                    )
+                    replacement_line_count = len(operation.get("lines") or [])
+                    changed_ranges.append(
+                        {
+                            "operation_index": operation["index"],
+                            "action": "replace",
+                            "requested_start_line": original_start_line,
+                            "requested_end_line": original_end_line,
+                            "applied_start_line": adjusted_start_line,
+                            "applied_end_line": adjusted_end_line,
+                            "edit_start_line": adjusted_start_line,
+                            "edit_end_line": max(adjusted_start_line, adjusted_start_line + replacement_line_count - 1),
+                        }
+                    )
+                else:
+                    current_document = delete_canvas_lines(
+                        runtime_state,
+                        start_line=adjusted_start_line,
+                        end_line=adjusted_end_line,
+                        document_id=resolved_document_id,
+                        expected_lines=operation.get("expected_lines"),
+                        expected_start_line=adjusted_expected_start_line,
+                    )
+                    changed_ranges.append(
+                        {
+                            "operation_index": operation["index"],
+                            "action": "delete",
+                            "requested_start_line": original_start_line,
+                            "requested_end_line": original_end_line,
+                            "applied_start_line": adjusted_start_line,
+                            "applied_end_line": adjusted_end_line,
+                            "edit_start_line": adjusted_start_line,
+                            "edit_end_line": adjusted_end_line,
+                        }
+                    )
+            applied_operations.append(operation)
+    except Exception:
+        if atomic:
+            _store_canvas_document(runtime_state, original_document)
+        raise
+
+    return {
+        "status": "ok",
+        "action": "batch_edited",
+        "document": current_document,
+        "document_id": current_document.get("id"),
+        "document_path": current_document.get("path"),
+        "title": current_document.get("title"),
+        "applied_count": len(applied_operations),
+        "operation_count": len(normalized_operations),
+        "changed_ranges": changed_ranges,
+    }
+
+
+def _parse_canvas_transform_scope(scope: str | None, total_lines: int) -> tuple[int, int]:
+    normalized_scope = str(scope or "all").strip().lower()
+    if not normalized_scope or normalized_scope == "all":
+        return 1, total_lines
+
+    match = re.fullmatch(r"lines_(\d+)_(\d+)", normalized_scope)
+    if not match:
+        raise ValueError("transform_canvas_lines scope must be 'all' or 'lines_<start>_<end>'.")
+
+    start_line = int(match.group(1))
+    end_line = int(match.group(2))
+    if start_line < 1 or end_line < start_line:
+        raise ValueError("transform_canvas_lines scope must define a valid 1-based inclusive range.")
+    if total_lines == 0:
+        return 1, 0
+    if end_line > total_lines:
+        raise ValueError("transform_canvas_lines scope exceeds the current canvas document.")
+    return start_line, end_line
+
+
+def _compile_canvas_transform_pattern(pattern: str, *, is_regex: bool, case_sensitive: bool):
+    if pattern == "":
+        raise ValueError("transform_canvas_lines pattern must not be empty.")
+    if len(pattern) > 500:
+        raise ValueError("transform_canvas_lines pattern is too long.")
+    flags = 0 if case_sensitive else re.IGNORECASE
+    try:
+        return re.compile(pattern if is_regex else re.escape(pattern), flags)
+    except re.error as exc:
+        raise ValueError(f"Invalid transform_canvas_lines pattern: {exc}") from exc
+
+
+def _format_canvas_regex_replacement(replacement: str) -> str:
+    return re.sub(r"\$(\d+)", r"\\g<\1>", str(replacement))
+
+
+def _iter_canvas_transform_affected_lines(text: str, compiled_pattern) -> list[int]:
+    line_offsets = [0]
+    for index, char in enumerate(text):
+        if char == "\n":
+            line_offsets.append(index + 1)
+
+    affected_lines: list[int] = []
+    for match in compiled_pattern.finditer(text):
+        start_offset = match.start()
+        line_number = 1
+        for candidate_index, offset in enumerate(line_offsets, start=1):
+            if offset > start_offset:
+                break
+            line_number = candidate_index
+        if line_number not in affected_lines:
+            affected_lines.append(line_number)
+    return affected_lines
+
+
+def transform_canvas_lines(
+    runtime_state: dict,
+    pattern: str,
+    replacement: str,
+    *,
+    document_id: str | None = None,
+    document_path: str | None = None,
+    scope: str = "all",
+    is_regex: bool = False,
+    case_sensitive: bool = True,
+    count_only: bool = False,
+) -> dict:
+    _, document = _find_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
+    document_id = str(document.get("id") or "")
+    all_lines = list_canvas_lines(document.get("content") or "")
+    scope_start, scope_end = _parse_canvas_transform_scope(scope, len(all_lines))
+    scoped_lines = [] if scope_end <= 0 else all_lines[scope_start - 1:scope_end]
+    scoped_text = join_canvas_lines(scoped_lines)
+
+    compiled_pattern = _compile_canvas_transform_pattern(str(pattern), is_regex=is_regex, case_sensitive=case_sensitive)
+    matches = list(compiled_pattern.finditer(scoped_text))
+    affected_line_numbers = [scope_start + line_number - 1 for line_number in _iter_canvas_transform_affected_lines(scoped_text, compiled_pattern)]
+    result = {
+        "status": "ok",
+        "action": "transformed",
+        "document_id": document.get("id"),
+        "document_path": document.get("path"),
+        "title": document.get("title"),
+        "matches_found": len(matches),
+        "matches_replaced": 0 if count_only else len(matches),
+        "affected_lines": affected_line_numbers,
+        "scope": scope,
+    }
+    if count_only or not matches:
+        result["document"] = document
+        return result
+
+    replacement_text = _format_canvas_regex_replacement(replacement) if is_regex else str(replacement)
+    transformed_text = compiled_pattern.sub(replacement_text, scoped_text)
+    next_lines = list(all_lines)
+    replacement_lines = list_canvas_lines(transformed_text)
+    next_lines[scope_start - 1:scope_end] = replacement_lines
+    updated_document = _update_canvas_document_in_place(runtime_state, document_id, join_canvas_lines(next_lines))
+    result["document"] = updated_document
+    return result
+
+
+def update_canvas_metadata(
+    runtime_state: dict,
+    *,
+    document_id: str | None = None,
+    document_path: str | None = None,
+    title: str | None = None,
+    summary: str | None = None,
+    role: str | None = None,
+    add_dependencies: list[str] | None = None,
+    remove_dependencies: list[str] | None = None,
+    add_symbols: list[str] | None = None,
+) -> dict:
+    _, document = _find_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
+    next_document = dict(document)
+    updated_fields: list[str] = []
+
+    if title is not None:
+        next_document["title"] = str(title or "Canvas").strip()[:CANVAS_MAX_TITLE_LENGTH] or "Canvas"
+        updated_fields.append("title")
+    if summary is not None:
+        next_document["summary"] = _normalize_canvas_short_text(summary, CANVAS_MAX_SUMMARY_LENGTH) or next_document.get("summary")
+        updated_fields.append("summary")
+    if role is not None:
+        normalized_role = _normalize_canvas_role(role)
+        if not normalized_role:
+            raise ValueError(f"Unsupported canvas role: {role}")
+        next_document["role"] = normalized_role
+        updated_fields.append("role")
+
+    if add_dependencies is not None or remove_dependencies is not None:
+        dependency_values = list(next_document.get("dependencies") or [])
+        dependency_lookup = {str(item).casefold(): str(item) for item in dependency_values}
+        for value in _normalize_canvas_string_list(add_dependencies):
+            if value.casefold() in dependency_lookup:
+                continue
+            dependency_values.append(value)
+            dependency_lookup[value.casefold()] = value
+        for value in _normalize_canvas_string_list(remove_dependencies):
+            dependency_lookup.pop(value.casefold(), None)
+            dependency_values = [item for item in dependency_values if item.casefold() != value.casefold()]
+        next_document["dependencies"] = dependency_values
+        updated_fields.append("dependencies")
+
+    if add_symbols is not None:
+        symbol_values = list(next_document.get("symbols") or [])
+        symbol_lookup = {str(item).casefold() for item in symbol_values}
+        for value in _normalize_canvas_string_list(add_symbols):
+            if value.casefold() in symbol_lookup:
+                continue
+            symbol_values.append(value)
+            symbol_lookup.add(value.casefold())
+        next_document["symbols"] = symbol_values
+        updated_fields.append("symbols")
+
+    normalized_document = _store_canvas_document(runtime_state, next_document)
+    return {
+        "status": "ok",
+        "action": "metadata_updated",
+        "document": normalized_document,
+        "updated_fields": updated_fields,
+    }
+
+
+def preview_canvas_changes(
+    runtime_state: dict,
+    operations: list[dict],
+    *,
+    document_id: str | None = None,
+    document_path: str | None = None,
+) -> dict:
+    _, document = _find_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
+    preview_state = create_canvas_runtime_state([document], active_document_id=document.get("id"))
+    normalized_operations = _validate_batch_canvas_operations(operations)
+    preview_entries: list[dict] = []
+    applied_operations: list[dict] = []
+
+    for operation in normalized_operations:
+        preview_document = get_canvas_runtime_documents(preview_state)[0]
+        preview_lines = list_canvas_lines(preview_document.get("content") or "")
+        if operation["action"] == "insert":
+            original_after_line = operation["after_line"]
+            adjusted_after_line = original_after_line + _calculate_batch_canvas_offset(original_after_line, applied_operations)
+            after_index = max(0, adjusted_after_line)
+            before_text = ""
+            after_text = join_canvas_lines(operation.get("lines") or [])
+            edit_start_line = adjusted_after_line + 1
+            edit_end_line = max(edit_start_line, adjusted_after_line + len(operation.get("lines") or []))
+            preview_entries.append(
+                {
+                    "operation_index": operation["index"],
+                    "action": "insert",
+                    "affected_lines": f"{edit_start_line}-{edit_end_line}",
+                    "before": before_text,
+                    "after": after_text,
+                }
+            )
+        else:
+            original_start_line = operation["start_line"]
+            original_end_line = operation["end_line"]
+            adjusted_start_line = original_start_line + _calculate_batch_canvas_offset(original_start_line, applied_operations)
+            adjusted_end_line = original_end_line + _calculate_batch_canvas_offset(original_end_line, applied_operations)
+            before_text = join_canvas_lines(preview_lines[adjusted_start_line - 1:adjusted_end_line])
+            after_text = "" if operation["action"] == "delete" else join_canvas_lines(operation.get("lines") or [])
+            preview_entries.append(
+                {
+                    "operation_index": operation["index"],
+                    "action": operation["action"],
+                    "affected_lines": f"{adjusted_start_line}-{adjusted_end_line}",
+                    "before": before_text,
+                    "after": after_text,
+                }
+            )
+
+        expected_start_line = operation.get("expected_start_line")
+        adjusted_expected_start_line = None
+        if expected_start_line is not None:
+            adjusted_expected_start_line = expected_start_line + _calculate_batch_canvas_offset(expected_start_line, applied_operations)
+        if operation["action"] == "insert":
+            adjusted_after_line = operation["after_line"] + _calculate_batch_canvas_offset(operation["after_line"], applied_operations)
+            insert_canvas_lines(
+                preview_state,
+                after_line=adjusted_after_line,
+                lines=operation.get("lines") or [],
+                document_id=document.get("id"),
+                expected_lines=operation.get("expected_lines"),
+                expected_start_line=adjusted_expected_start_line,
+            )
+        elif operation["action"] == "replace":
+            adjusted_start_line = operation["start_line"] + _calculate_batch_canvas_offset(operation["start_line"], applied_operations)
+            adjusted_end_line = operation["end_line"] + _calculate_batch_canvas_offset(operation["end_line"], applied_operations)
+            replace_canvas_lines(
+                preview_state,
+                start_line=adjusted_start_line,
+                end_line=adjusted_end_line,
+                lines=operation.get("lines") or [],
+                document_id=document.get("id"),
+                expected_lines=operation.get("expected_lines"),
+                expected_start_line=adjusted_expected_start_line,
+            )
+        else:
+            adjusted_start_line = operation["start_line"] + _calculate_batch_canvas_offset(operation["start_line"], applied_operations)
+            adjusted_end_line = operation["end_line"] + _calculate_batch_canvas_offset(operation["end_line"], applied_operations)
+            delete_canvas_lines(
+                preview_state,
+                start_line=adjusted_start_line,
+                end_line=adjusted_end_line,
+                document_id=document.get("id"),
+                expected_lines=operation.get("expected_lines"),
+                expected_start_line=adjusted_expected_start_line,
+            )
+        applied_operations.append(operation)
+
+    insertion_count = sum(1 for entry in preview_entries if entry["action"] == "insert")
+    deletion_count = sum(1 for entry in preview_entries if entry["action"] == "delete")
+    replace_count = sum(1 for entry in preview_entries if entry["action"] == "replace")
+    summary_parts = []
+    if insertion_count:
+        summary_parts.append(f"{insertion_count} insertion(s)")
+    if deletion_count:
+        summary_parts.append(f"{deletion_count} deletion(s)")
+    if replace_count:
+        summary_parts.append(f"{replace_count} replacement(s)")
+    summary = ", ".join(summary_parts) if summary_parts else "No changes"
+
+    return {
+        "status": "ok",
+        "action": "previewed",
+        "preview": {
+            "document_path": document.get("path"),
+            "document_id": document.get("id"),
+            "title": document.get("title"),
+            "changes": preview_entries,
+            "summary": summary,
+        },
+    }
+
+
+def _normalize_canvas_viewports(runtime_state: dict) -> dict[str, dict]:
+    viewports = runtime_state.get("viewports") if isinstance(runtime_state, dict) else None
+    if not isinstance(viewports, dict):
+        viewports = {}
+        runtime_state["viewports"] = viewports
+    return viewports
+
+
+def set_canvas_viewport(
+    runtime_state: dict,
+    *,
+    start_line: int,
+    end_line: int,
+    ttl_turns: int = 3,
+    auto_unpin_on_edit: bool = True,
+    document_id: str | None = None,
+    document_path: str | None = None,
+) -> dict:
+    _, document = _find_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
+    total_lines = int(document.get("line_count") or 0)
+    if start_line < 1 or end_line < start_line:
+        raise ValueError("set_canvas_viewport requires a valid 1-based inclusive range.")
+    if total_lines and end_line > total_lines:
+        raise ValueError("set_canvas_viewport range exceeds the current canvas document.")
+    viewport_key = str(document.get("path") or document.get("id") or "").strip()
+    if not viewport_key:
+        raise ValueError("Canvas viewport target is missing a stable document key.")
+    normalized_ttl_turns = max(0, int(ttl_turns or 0))
+    _normalize_canvas_viewports(runtime_state)[viewport_key] = {
+        "document_id": document.get("id"),
+        "document_path": document.get("path"),
+        "start_line": int(start_line),
+        "end_line": int(end_line),
+        "ttl_turns": normalized_ttl_turns,
+        "remaining_turns": normalized_ttl_turns,
+        "auto_unpin_on_edit": auto_unpin_on_edit is True,
+    }
+    return {
+        "status": "ok",
+        "action": "viewport_set",
+        "pinned": dict(_normalize_canvas_viewports(runtime_state)[viewport_key]),
+    }
+
+
+def clear_canvas_viewport(runtime_state: dict, *, document_path: str | None = None, document_id: str | None = None) -> dict:
+    viewports = _normalize_canvas_viewports(runtime_state)
+    if document_path is None and document_id is None:
+        cleared_count = len(viewports)
+        viewports.clear()
+        return {"status": "ok", "action": "viewport_cleared", "cleared_count": cleared_count}
+
+    cleared_count = 0
+    target_document_id = str(document_id or "").strip()
+    target_document_path = _normalize_canvas_path(document_path)
+    for key in list(viewports.keys()):
+        viewport = viewports.get(key) or {}
+        if target_document_id and str(viewport.get("document_id") or "") == target_document_id:
+            viewports.pop(key, None)
+            cleared_count += 1
+            continue
+        if target_document_path and _normalize_canvas_path(viewport.get("document_path")) == target_document_path:
+            viewports.pop(key, None)
+            cleared_count += 1
+    return {"status": "ok", "action": "viewport_cleared", "cleared_count": cleared_count}
+
+
+def decrement_canvas_viewport_ttls(runtime_state: dict) -> None:
+    viewports = _normalize_canvas_viewports(runtime_state)
+    for key in list(viewports.keys()):
+        remaining_turns = int(viewports[key].get("remaining_turns") or 0)
+        ttl_turns = int(viewports[key].get("ttl_turns") or 0)
+        if ttl_turns <= 0:
+            continue
+        remaining_turns -= 1
+        if remaining_turns <= 0:
+            viewports.pop(key, None)
+            continue
+        viewports[key]["remaining_turns"] = remaining_turns
+
+
+def get_canvas_viewport_payloads(runtime_state: dict) -> list[dict]:
+    documents = get_canvas_runtime_documents(runtime_state)
+    document_by_id = {str(document.get("id") or ""): document for document in documents}
+    payloads: list[dict] = []
+    for viewport in _normalize_canvas_viewports(runtime_state).values():
+        document = document_by_id.get(str(viewport.get("document_id") or ""))
+        if not document:
+            continue
+        start_line = int(viewport.get("start_line") or 0)
+        end_line = int(viewport.get("end_line") or 0)
+        all_lines = list_canvas_lines(document.get("content") or "")
+        if start_line < 1 or end_line < start_line or end_line > len(all_lines):
+            continue
+        payloads.append(
+            {
+                "document_id": document.get("id"),
+                "document_path": document.get("path"),
+                "title": document.get("title"),
+                "start_line": start_line,
+                "end_line": end_line,
+                "remaining_turns": int(viewport.get("remaining_turns") or 0),
+                "auto_unpin_on_edit": viewport.get("auto_unpin_on_edit") is True,
+                "visible_lines": [
+                    f"{line_number}: {all_lines[line_number - 1]}"
+                    for line_number in range(start_line, end_line + 1)
+                ],
+            }
+        )
+    return payloads
+
+
+def clear_overlapping_canvas_viewports(
+    runtime_state: dict,
+    *,
+    document_id: str | None = None,
+    document_path: str | None = None,
+    edit_start_line: int,
+    edit_end_line: int,
+) -> int:
+    viewports = _normalize_canvas_viewports(runtime_state)
+    cleared_count = 0
+    normalized_path = _normalize_canvas_path(document_path)
+    for key in list(viewports.keys()):
+        viewport = viewports.get(key) or {}
+        if viewport.get("auto_unpin_on_edit") is not True:
+            continue
+        same_document = False
+        if document_id and str(viewport.get("document_id") or "") == str(document_id):
+            same_document = True
+        if normalized_path and _normalize_canvas_path(viewport.get("document_path")) == normalized_path:
+            same_document = True
+        if not same_document:
+            continue
+        viewport_start = int(viewport.get("start_line") or 0)
+        viewport_end = int(viewport.get("end_line") or 0)
+        if max(viewport_start, edit_start_line) <= min(viewport_end, edit_end_line):
+            viewports.pop(key, None)
+            cleared_count += 1
+    return cleared_count
+
+
 def scroll_canvas_document(
     runtime_state: dict,
     start_line: int,
@@ -1232,6 +1932,7 @@ def delete_canvas_document(
 
     previous_active_document_id = get_canvas_runtime_active_document_id(runtime_state)
     removed = documents.pop(index)
+    clear_canvas_viewport(runtime_state, document_id=str(removed.get("id") or "") or None, document_path=removed.get("path"))
     if documents:
         runtime_state["active_document_id"] = (
             documents[-1]["id"]
@@ -1255,6 +1956,7 @@ def clear_canvas(runtime_state: dict) -> dict:
     cleared_count = len(documents)
     runtime_state["documents"] = []
     runtime_state["active_document_id"] = None
+    runtime_state["viewports"] = {}
     runtime_state["mode"] = CANVAS_MODE_DOCUMENT
     return {
         "status": "ok",
@@ -1305,7 +2007,7 @@ def build_canvas_tool_result(
     if (
         edit_start_line is not None
         and normalized.get("format") == "code"
-        and action in ("lines_replaced", "lines_inserted", "lines_deleted")
+        and action in ("lines_replaced", "lines_inserted", "lines_deleted", "lines_batch_edited")
     ):
         all_lines = list_canvas_lines(content)
         total = len(all_lines)
@@ -1406,7 +2108,8 @@ def find_latest_canvas_state(messages: list[dict]) -> dict:
         if not documents:
             continue
         active_document_id = extract_canvas_active_document_id(metadata, documents)
-        return create_canvas_runtime_state(documents, active_document_id=active_document_id)
+        viewports = extract_canvas_viewports(metadata, documents)
+        return create_canvas_runtime_state(documents, active_document_id=active_document_id, viewports=viewports)
     return create_canvas_runtime_state()
 
 
