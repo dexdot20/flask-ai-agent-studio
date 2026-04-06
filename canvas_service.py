@@ -59,6 +59,7 @@ CANVAS_ALLOWED_FORMATS = {"markdown", "code"}
 CANVAS_ALLOWED_ROLES = {"source", "config", "dependency", "docs", "test", "script", "note"}
 CANVAS_MODE_DOCUMENT = "document"
 CANVAS_MODE_PROJECT = "project"
+CANVAS_PAGE_HEADING_RE = re.compile(r"^\s{0,3}##\s+Page\s+(\d+)\s*$", re.IGNORECASE)
 CANVAS_FILE_PRIORITY = {
     "source": 10,
     "config": 20,
@@ -85,6 +86,47 @@ def _line_count(text: str) -> int:
     if not text:
         return 0
     return len(text.split("\n"))
+
+
+def _extract_canvas_page_sections(content: str) -> list[dict]:
+    lines = list_canvas_lines(content)
+    if not lines:
+        return []
+
+    sections: list[dict] = []
+    for line_number, line in enumerate(lines, start=1):
+        match = CANVAS_PAGE_HEADING_RE.match(line)
+        if not match:
+            continue
+        sections.append(
+            {
+                "page_number": int(match.group(1)),
+                "start_line": line_number,
+            }
+        )
+
+    if not sections:
+        return []
+
+    for index, section in enumerate(sections):
+        next_start_line = sections[index + 1]["start_line"] if index + 1 < len(sections) else len(lines) + 1
+        end_line = next_start_line - 1
+        while end_line >= section["start_line"] and not lines[end_line - 1].strip():
+            end_line -= 1
+        if end_line >= section["start_line"] and lines[end_line - 1].strip() == "---":
+            end_line -= 1
+        while end_line >= section["start_line"] and not lines[end_line - 1].strip():
+            end_line -= 1
+        section["end_line"] = max(section["start_line"], end_line)
+
+    return sections
+
+
+def _get_canvas_page_range(content: str, page_number: int) -> tuple[int, int] | None:
+    for section in _extract_canvas_page_sections(content):
+        if int(section.get("page_number") or 0) == int(page_number):
+            return int(section["start_line"]), int(section["end_line"])
+    return None
 
 
 def _normalize_canvas_language(value) -> str | None:
@@ -709,6 +751,18 @@ def normalize_canvas_document(value, *, fallback_title: str = "Canvas") -> dict 
         "content": content,
         "line_count": _line_count(content),
     }
+    raw_page_count = value.get("page_count")
+    if format_name != "code":
+        detected_page_count = len(_extract_canvas_page_sections(content))
+        if detected_page_count > 0:
+            page_count = detected_page_count
+        else:
+            try:
+                page_count = max(0, int(raw_page_count or 0))
+            except (TypeError, ValueError):
+                page_count = 0
+        if page_count > 0:
+            cleaned["page_count"] = page_count
 
     if path:
         cleaned["path"] = path
@@ -848,6 +902,12 @@ def extract_canvas_viewports(metadata: dict | None, documents: list[dict] | None
             "remaining_turns": max(0, int(viewport.get("remaining_turns") or 0)),
             "auto_unpin_on_edit": viewport.get("auto_unpin_on_edit") is True,
         }
+        try:
+            page_number = int(viewport.get("page_number") or 0)
+        except (TypeError, ValueError):
+            page_number = 0
+        if page_number > 0:
+            normalized_viewports[normalized_key]["page_number"] = page_number
     return normalized_viewports
 
 
@@ -1659,6 +1719,7 @@ def set_canvas_viewport(
     auto_unpin_on_edit: bool = True,
     document_id: str | None = None,
     document_path: str | None = None,
+    page_number: int | None = None,
 ) -> dict:
     _, document = _find_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
     total_lines = int(document.get("line_count") or 0)
@@ -1679,10 +1740,61 @@ def set_canvas_viewport(
         "remaining_turns": normalized_ttl_turns,
         "auto_unpin_on_edit": auto_unpin_on_edit is True,
     }
+    if isinstance(page_number, int) and page_number > 0:
+        _normalize_canvas_viewports(runtime_state)[viewport_key]["page_number"] = page_number
     return {
         "status": "ok",
         "action": "viewport_set",
         "pinned": dict(_normalize_canvas_viewports(runtime_state)[viewport_key]),
+    }
+
+
+def focus_canvas_page(
+    runtime_state: dict,
+    *,
+    page_number: int,
+    ttl_turns: int = 3,
+    auto_unpin_on_edit: bool = True,
+    document_id: str | None = None,
+    document_path: str | None = None,
+) -> dict:
+    if int(page_number or 0) < 1:
+        raise ValueError("focus_canvas_page requires page_number >= 1.")
+
+    _, document = _find_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
+    page_sections = _extract_canvas_page_sections(document.get("content") or "")
+    if not page_sections:
+        raise ValueError(
+            "This canvas document does not expose page markers yet. focus_canvas_page currently works with page-aware documents such as uploaded PDFs."
+        )
+
+    page_range = _get_canvas_page_range(document.get("content") or "", int(page_number))
+    if not page_range:
+        available_pages = ", ".join(str(section.get("page_number")) for section in page_sections[:12])
+        raise ValueError(f"Canvas page {page_number} was not found. Available pages: {available_pages}")
+
+    viewport_result = set_canvas_viewport(
+        runtime_state,
+        start_line=page_range[0],
+        end_line=page_range[1],
+        ttl_turns=ttl_turns,
+        auto_unpin_on_edit=auto_unpin_on_edit,
+        document_id=document.get("id"),
+        document_path=document.get("path"),
+        page_number=int(page_number),
+    )
+    pinned = viewport_result.get("pinned") if isinstance(viewport_result.get("pinned"), dict) else {}
+    return {
+        "status": "ok",
+        "action": "page_focused",
+        "document_id": document.get("id"),
+        "document_path": document.get("path"),
+        "title": document.get("title"),
+        "page_number": int(page_number),
+        "page_count": len(page_sections),
+        "start_line": page_range[0],
+        "end_line": page_range[1],
+        "pinned": pinned,
     }
 
 
@@ -1742,6 +1854,7 @@ def get_canvas_viewport_payloads(runtime_state: dict) -> list[dict]:
                 "title": document.get("title"),
                 "start_line": start_line,
                 "end_line": end_line,
+                "page_number": int(viewport.get("page_number") or 0),
                 "remaining_turns": int(viewport.get("remaining_turns") or 0),
                 "auto_unpin_on_edit": viewport.get("auto_unpin_on_edit") is True,
                 "visible_lines": [
@@ -1976,6 +2089,8 @@ def build_canvas_document_result_snapshot(document: dict | None) -> dict | None:
         "format": normalized["format"],
         "line_count": normalized["line_count"],
     }
+    if int(normalized.get("page_count") or 0) > 0:
+        snapshot["page_count"] = int(normalized["page_count"])
     if normalized.get("language"):
         snapshot["language"] = normalized["language"]
     for key in ("path", "role", "summary", "project_id", "workspace_id"):
@@ -2037,6 +2152,8 @@ def build_canvas_tool_result(
         result["expected_lines"] = [str(line) for line in expected_lines]
     if normalized.get("language"):
         result["language"] = normalized["language"]
+    if int(normalized.get("page_count") or 0) > 0:
+        result["page_count"] = int(normalized["page_count"])
     for key in ("path", "role", "summary", "project_id", "workspace_id"):
         if normalized.get(key):
             result[key] = normalized[key]

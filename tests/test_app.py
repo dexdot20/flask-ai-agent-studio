@@ -15,6 +15,7 @@ import requests as http_requests
 import pdfplumber
 from werkzeug.datastructures import MultiDict
 
+import rag_service
 import web_tools
 import ocr_service
 import model_registry
@@ -61,6 +62,7 @@ from canvas_service import (
     create_canvas_runtime_state,
     find_latest_canvas_documents,
     find_latest_canvas_state,
+    focus_canvas_page,
     get_canvas_runtime_active_document_id,
     get_canvas_runtime_documents,
     get_canvas_viewport_payloads,
@@ -133,6 +135,8 @@ from rag_service import (
     get_exact_tool_memory_match,
     search_knowledge_base_tool,
     search_tool_memory,
+    sync_conversations_to_rag,
+    sync_conversations_to_rag_background,
     upsert_tool_memory_result,
 )
 from routes.auth import AUTH_LAST_SEEN_KEY, AUTH_REMEMBER_KEY, AUTH_SESSION_KEY
@@ -1383,6 +1387,30 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertTrue(payload["visible_lines"][0].endswith(".."))
         self.assertLess(len(payload["visible_lines"][0]), len(f"1: {long_line}"))
 
+    def test_normalize_canvas_document_detects_page_count_from_markers(self):
+        document = normalize_canvas_document(
+            {
+                "id": "pdf-1",
+                "title": "report.pdf",
+                "format": "markdown",
+                "content": "## Page 1\n\nAlpha\n\n---\n\n## Page 2\n\nBeta",
+            }
+        )
+
+        self.assertEqual(document["page_count"], 2)
+
+    def test_normalize_canvas_document_ignores_page_markers_in_code_documents(self):
+        document = normalize_canvas_document(
+            {
+                "id": "code-1",
+                "title": "app.py",
+                "format": "code",
+                "content": "## Page 1\nprint('hello')",
+            }
+        )
+
+        self.assertNotIn("page_count", document)
+
     def test_scroll_canvas_document_returns_window_flags(self):
         content = "\n".join(f"line {index}" for index in range(1, 101))
         runtime_state = create_canvas_runtime_state(
@@ -1457,6 +1485,30 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertEqual(result["match_count"], 2)
         self.assertEqual([match["document_id"] for match in result["matches"]], ["doc-1", "doc-2"])
+
+    def test_focus_canvas_page_pins_detected_page_range(self):
+        runtime_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "doc-1",
+                    "title": "report.pdf",
+                    "path": "docs/report.pdf",
+                    "format": "markdown",
+                    "content": "## Page 1\n\nAlpha\n\n---\n\n## Page 2\n\nBeta",
+                }
+            ]
+        )
+
+        result = focus_canvas_page(runtime_state, document_path="docs/report.pdf", page_number=2, ttl_turns=2)
+        payloads = get_canvas_viewport_payloads(runtime_state)
+
+        self.assertEqual(result["action"], "page_focused")
+        self.assertEqual(result["page_number"], 2)
+        self.assertEqual(result["start_line"], 7)
+        self.assertEqual(result["end_line"], 9)
+        self.assertEqual(payloads[0]["page_number"], 2)
+        self.assertEqual(payloads[0]["start_line"], 7)
+        self.assertEqual(payloads[0]["end_line"], 9)
 
     def test_execute_tool_scroll_canvas_document_uses_runtime_window_limit(self):
         content = "\n".join(f"line {index}" for index in range(1, 101))
@@ -1758,6 +1810,39 @@ class AppRoutesTestCase(unittest.TestCase):
             ],
         )
         self.assertEqual(records[0]["tool_results"], [])
+
+    def test_sync_conversations_to_rag_skips_unchanged_conversations_without_loading_records(self):
+        conversation_id = self._create_conversation()
+        user_text = "Original prompt " * 40
+        assistant_text = "Current answer " * 60
+        assistant_metadata = serialize_message_metadata(
+            {
+                "tool_results": [
+                    {
+                        "tool_name": "fetch_url",
+                        "content": "Indexed tool result " * 40,
+                    }
+                ]
+            }
+        )
+
+        with get_db() as conn:
+            insert_message(conn, conversation_id, "user", user_text)
+            insert_message(conn, conversation_id, "assistant", assistant_text, metadata=assistant_metadata)
+            conn.execute(
+                "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
+                (conversation_id,),
+            )
+
+        first_sync = sync_conversations_to_rag(conversation_id)
+
+        self.assertTrue(first_sync)
+
+        with patch("rag_service.get_conversation_records_for_rag") as mocked_records:
+            second_sync = sync_conversations_to_rag(conversation_id)
+
+        self.assertEqual(second_sync, [])
+        mocked_records.assert_not_called()
 
     def test_chat_edit_resyncs_rag_before_retrieval(self):
         fake_events = iter(
@@ -2751,6 +2836,16 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(first[0].text, "Café")
         self.assertEqual(first[0].id, second[0].id)
 
+    def test_chunk_text_document_assigns_page_number_metadata(self):
+        text = "## Page 1\n\n" + ("Alpha " * 80) + "\n\n## Page 2\n\n" + ("Beta " * 80)
+
+        chunks = chunk_text_document(text, "doc", "uploaded-document", "general", chunk_size=160, overlap=40)
+
+        page_numbers = [chunk.metadata.get("page_number") for chunk in chunks]
+        self.assertIn(1, page_numbers)
+        self.assertIn(2, page_numbers)
+        self.assertEqual(page_numbers[0], 1)
+
     def test_chunks_from_records_skips_short_noise_messages(self):
         chunks = chunks_from_records(
             [
@@ -2943,6 +3038,29 @@ class AppRoutesTestCase(unittest.TestCase):
             self.assertTrue(mocked_background.call_args.kwargs["force"])
         finally:
             self.app.config["TESTING"] = previous_testing
+
+    def test_sync_conversations_to_rag_background_coalesces_duplicate_jobs(self):
+        class FakeExecutor:
+            def __init__(self):
+                self.calls = []
+
+            def submit(self, fn):
+                future = object()
+                self.calls.append((fn, future))
+                return future
+
+        executor = FakeExecutor()
+        rag_service._rag_background_sync_jobs.clear()
+        try:
+            with patch("rag_service._get_rag_background_executor", return_value=executor):
+                first_future = sync_conversations_to_rag_background(self.app, conversation_id=321, force=False)
+                second_future = sync_conversations_to_rag_background(self.app, conversation_id=321, force=True)
+
+            self.assertIs(first_future, second_future)
+            self.assertEqual(len(executor.calls), 1)
+            self.assertTrue(rag_service._rag_background_sync_jobs["conversation:321"]["force"])
+        finally:
+            rag_service._rag_background_sync_jobs.clear()
 
     def test_build_runtime_system_message_formats_compact_auto_injected_rag_context(self):
         message = build_runtime_system_message(
@@ -8306,6 +8424,7 @@ class AppRoutesTestCase(unittest.TestCase):
                 "transform_canvas_lines",
                 "update_canvas_metadata",
                 "set_canvas_viewport",
+                "focus_canvas_page",
                 "clear_canvas_viewport",
             }.issubset(CANVAS_TOOL_NAMES)
         )
@@ -8315,6 +8434,7 @@ class AppRoutesTestCase(unittest.TestCase):
                 "transform_canvas_lines",
                 "update_canvas_metadata",
                 "set_canvas_viewport",
+                "focus_canvas_page",
                 "clear_canvas_viewport",
             }.issubset(CANVAS_MUTATION_TOOL_NAMES)
         )
@@ -8375,6 +8495,31 @@ class AppRoutesTestCase(unittest.TestCase):
             runtime_state,
         )
         self.assertEqual(viewport_result["action"], "viewport_set")
+
+        focus_runtime_state = {
+            "canvas": create_canvas_runtime_state(
+                [
+                    {
+                        "id": "pdf-1",
+                        "title": "report.pdf",
+                        "path": "docs/report.pdf",
+                        "format": "markdown",
+                        "content": "## Page 1\n\nAlpha\n\n---\n\n## Page 2\n\nBeta",
+                    }
+                ]
+            )
+        }
+        focus_result, focus_summary = _execute_tool(
+            "focus_canvas_page",
+            {
+                "document_path": "docs/report.pdf",
+                "page_number": 2,
+                "ttl_turns": 2,
+            },
+            focus_runtime_state,
+        )
+        self.assertEqual(focus_result["action"], "page_focused")
+        self.assertIn("page 2", focus_summary)
 
         clear_result, _ = _execute_tool(
             "clear_canvas_viewport",

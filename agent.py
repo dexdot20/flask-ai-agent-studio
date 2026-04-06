@@ -30,6 +30,7 @@ from canvas_service import (
     create_canvas_runtime_state,
     delete_canvas_document,
     delete_canvas_lines,
+    focus_canvas_page,
     get_canvas_runtime_active_document_id,
     get_canvas_runtime_documents,
     get_canvas_runtime_snapshot,
@@ -150,6 +151,7 @@ CANVAS_TOOL_NAMES = {
     "transform_canvas_lines",
     "update_canvas_metadata",
     "set_canvas_viewport",
+    "focus_canvas_page",
     "clear_canvas_viewport",
     "replace_canvas_lines",
     "insert_canvas_lines",
@@ -164,6 +166,7 @@ CANVAS_MUTATION_TOOL_NAMES = {
     "transform_canvas_lines",
     "update_canvas_metadata",
     "set_canvas_viewport",
+    "focus_canvas_page",
     "clear_canvas_viewport",
     "replace_canvas_lines",
     "insert_canvas_lines",
@@ -4456,6 +4459,21 @@ def _run_set_canvas_viewport(tool_args: dict, runtime_state: dict):
     return result, f"Canvas viewport pinned for {target_label}"
 
 
+def _run_focus_canvas_page(tool_args: dict, runtime_state: dict):
+    canvas_state = _get_canvas_runtime_state(runtime_state)
+    auto_unpin_on_edit = True if "auto_unpin_on_edit" not in tool_args else tool_args.get("auto_unpin_on_edit") is True
+    result = focus_canvas_page(
+        canvas_state,
+        page_number=int(tool_args.get("page_number") or 0),
+        ttl_turns=int(tool_args.get("ttl_turns") or 0) if tool_args.get("ttl_turns") not in (None, "") else 3,
+        auto_unpin_on_edit=auto_unpin_on_edit,
+        document_id=tool_args.get("document_id"),
+        document_path=tool_args.get("document_path"),
+    )
+    target_label = str(result.get("document_path") or result.get("document_id") or "Canvas").strip()
+    return result, f"Canvas focused on page {result.get('page_number')} for {target_label}"
+
+
 def _run_clear_canvas_viewport(tool_args: dict, runtime_state: dict):
     canvas_state = _get_canvas_runtime_state(runtime_state)
     result = clear_canvas_viewport(
@@ -4516,6 +4534,7 @@ _TOOL_EXECUTORS = {
     "transform_canvas_lines": _run_transform_canvas_lines,
     "update_canvas_metadata": _run_update_canvas_metadata,
     "set_canvas_viewport": _run_set_canvas_viewport,
+    "focus_canvas_page": _run_focus_canvas_page,
     "clear_canvas_viewport": _run_clear_canvas_viewport,
     "replace_canvas_lines": _run_replace_canvas_lines,
     "insert_canvas_lines": _run_insert_canvas_lines,

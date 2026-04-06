@@ -65,6 +65,9 @@ _rag_sources_last_verified_at = 0.0
 _RAG_SOURCES_VERIFY_COOLDOWN_SECS = 60.0
 _rag_background_executor = None
 _rag_background_executor_lock = Lock()
+_rag_background_sync_jobs: dict[str, dict] = {}
+_rag_background_sync_jobs_lock = Lock()
+_RAG_ALL_CONVERSATIONS_SYNC_KEY = "__all__"
 CATEGORY_TOOL_MEMORY = RAG_SOURCE_TOOL_MEMORY
 DYNAMIC_RAG_CATEGORIES = {RAG_SOURCE_CONVERSATION, RAG_SOURCE_TOOL_MEMORY, RAG_SOURCE_TOOL_RESULT}
 AUTO_INJECT_EXCERPT_LIMIT = 560
@@ -379,22 +382,88 @@ def _delete_rag_source_if_present(source_key: str) -> int:
 
 
 def _build_conversation_sync_metadata(conversation: dict, source_key: str, sync_signature: str) -> dict:
-    return {
+    metadata = {
         "source_key": source_key,
         "conversation_id": conversation["conversation_id"],
         "title": conversation["title"],
         "sync_signature": sync_signature,
     }
+    updated_at = str(conversation.get("updated_at") or "").strip()
+    if updated_at:
+        metadata["conversation_updated_at"] = updated_at
+    return metadata
 
 
-def _conversation_source_needs_sync(source_key: str, sync_signature: str, force: bool = False) -> bool:
+def _conversation_source_needs_sync(
+    source_key: str,
+    sync_signature: str | None = None,
+    *,
+    sync_marker: str | None = None,
+    force: bool = False,
+) -> bool:
     if force:
         return True
     row = get_rag_document_record(source_key)
     if not row:
         return True
     metadata = parse_rag_metadata(row["metadata"])
+    normalized_marker = str(sync_marker or "").strip()
+    if normalized_marker and str(metadata.get("conversation_updated_at") or "").strip() != normalized_marker:
+        return True
+    if sync_signature is None:
+        return False
     return metadata.get("sync_signature") != sync_signature
+
+
+def _normalize_rag_background_sync_key(conversation_id: int | None) -> str:
+    if conversation_id is None:
+        return _RAG_ALL_CONVERSATIONS_SYNC_KEY
+    return f"conversation:{int(conversation_id)}"
+
+
+def _queue_rag_background_sync_request(conversation_id: int | None, force: bool) -> tuple[str, bool, object | None]:
+    job_key = _normalize_rag_background_sync_key(conversation_id)
+    with _rag_background_sync_jobs_lock:
+        existing = _rag_background_sync_jobs.get(job_key)
+        if existing is not None:
+            existing["requested"] = True
+            existing["force"] = existing.get("force") is True or force is True
+            return job_key, False, existing.get("future")
+        _rag_background_sync_jobs[job_key] = {
+            "requested": True,
+            "force": force is True,
+            "future": None,
+        }
+    return job_key, True, None
+
+
+def _start_rag_background_sync_run(job_key: str) -> bool:
+    with _rag_background_sync_jobs_lock:
+        entry = _rag_background_sync_jobs.get(job_key)
+        if entry is None:
+            return False
+        force = entry.get("force") is True
+        entry["force"] = False
+        entry["requested"] = False
+        return force
+
+
+def _finish_rag_background_sync_run(job_key: str) -> bool:
+    with _rag_background_sync_jobs_lock:
+        entry = _rag_background_sync_jobs.get(job_key)
+        if entry is None:
+            return False
+        if entry.get("requested") is True:
+            return True
+        _rag_background_sync_jobs.pop(job_key, None)
+        return False
+
+
+def _set_rag_background_sync_future(job_key: str, future) -> None:
+    with _rag_background_sync_jobs_lock:
+        entry = _rag_background_sync_jobs.get(job_key)
+        if entry is not None:
+            entry["future"] = future
 
 
 def _clip_rag_excerpt(text: str, limit: int = 1200) -> str:
@@ -1044,15 +1113,30 @@ def ingest_rag_chunks_background(
     return _get_rag_background_executor().submit(task)
 
 
-def get_conversation_records_for_rag(conversation_id: int | None = None) -> list[dict]:
+def get_conversation_records_for_rag(
+    conversation_id: int | None = None,
+    *,
+    conversation_ids: list[int] | tuple[int, ...] | set[int] | None = None,
+) -> list[dict]:
     _require_rag_enabled()
     ensure_supported_rag_sources()
+    normalized_ids = None
+    if conversation_ids is not None:
+        normalized_ids = sorted({int(value) for value in conversation_ids})
+        if not normalized_ids:
+            return []
     with get_db() as conn:
-        if conversation_id is None:
-            rows = conn.execute("SELECT id, title FROM conversations ORDER BY updated_at DESC").fetchall()
+        if normalized_ids is not None:
+            placeholders = ", ".join("?" for _ in normalized_ids)
+            rows = conn.execute(
+                f"SELECT id, title, updated_at FROM conversations WHERE id IN ({placeholders}) ORDER BY updated_at DESC",
+                tuple(normalized_ids),
+            ).fetchall()
+        elif conversation_id is None:
+            rows = conn.execute("SELECT id, title, updated_at FROM conversations ORDER BY updated_at DESC").fetchall()
         else:
             rows = conn.execute(
-                "SELECT id, title FROM conversations WHERE id = ? ORDER BY updated_at DESC",
+                "SELECT id, title, updated_at FROM conversations WHERE id = ? ORDER BY updated_at DESC",
                 (conversation_id,),
             ).fetchall()
 
@@ -1087,6 +1171,7 @@ def get_conversation_records_for_rag(conversation_id: int | None = None) -> list
                 {
                     "conversation_id": row["id"],
                     "title": row["title"],
+                    "updated_at": row["updated_at"],
                     "messages": conversation_messages,
                     "tool_results": tool_messages,
                 }
@@ -1094,27 +1179,78 @@ def get_conversation_records_for_rag(conversation_id: int | None = None) -> list
     return conversations
 
 
+def _get_conversation_sync_candidates(conversation_id: int | None = None) -> list[dict]:
+    with get_db() as conn:
+        if conversation_id is None:
+            rows = conn.execute("SELECT id, title, updated_at FROM conversations ORDER BY updated_at DESC").fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, title, updated_at FROM conversations WHERE id = ? ORDER BY updated_at DESC",
+                (conversation_id,),
+            ).fetchall()
+    return [
+        {
+            "conversation_id": int(row["id"]),
+            "title": str(row["title"] or "").strip(),
+            "updated_at": str(row["updated_at"] or "").strip(),
+        }
+        for row in rows
+    ]
+
+
 def sync_conversations_to_rag(conversation_id: int | None = None, force: bool = False) -> list[dict]:
     _require_rag_enabled()
     ensure_supported_rag_sources()
     synced = []
-    conversations = get_conversation_records_for_rag(conversation_id)
+    sync_plan: list[dict] = []
+    for candidate in _get_conversation_sync_candidates(conversation_id):
+        conversation_key = conversation_rag_source_key(RAG_SOURCE_CONVERSATION, candidate["conversation_id"])
+        tool_key = conversation_rag_source_key(RAG_SOURCE_TOOL_RESULT, candidate["conversation_id"])
+        sync_marker = candidate.get("updated_at")
+        sync_conversation = _conversation_source_needs_sync(
+            conversation_key,
+            sync_marker=sync_marker,
+            force=force,
+        )
+        sync_tool_results = _conversation_source_needs_sync(
+            tool_key,
+            sync_marker=sync_marker,
+            force=force,
+        )
+        if sync_conversation or sync_tool_results:
+            sync_plan.append(
+                {
+                    **candidate,
+                    "sync_conversation": sync_conversation,
+                    "sync_tool_results": sync_tool_results,
+                }
+            )
+
+    if not sync_plan:
+        return synced
+
+    planned_ids = [int(item["conversation_id"]) for item in sync_plan]
+    conversations = get_conversation_records_for_rag(conversation_ids=planned_ids)
+    planned_by_id = {int(item["conversation_id"]): item for item in sync_plan}
     for conversation in conversations:
+        planned = planned_by_id.get(int(conversation["conversation_id"]))
+        if planned is None:
+            continue
         conversation_key = conversation_rag_source_key(RAG_SOURCE_CONVERSATION, conversation["conversation_id"])
         conversation_name = _conversation_rag_source_name(
             RAG_SOURCE_CONVERSATION,
             conversation["conversation_id"],
             conversation["title"],
         )
-        conversation_signature = _build_rag_sync_signature(
-            {
-                "title": conversation["title"],
-                "messages": conversation["messages"],
-            }
-        )
-        conversation_metadata = _build_conversation_sync_metadata(conversation, conversation_key, conversation_signature)
-        if conversation["messages"]:
-            if _conversation_source_needs_sync(conversation_key, conversation_signature, force=force):
+        if planned["sync_conversation"]:
+            conversation_signature = _build_rag_sync_signature(
+                {
+                    "title": conversation["title"],
+                    "messages": conversation["messages"],
+                }
+            )
+            conversation_metadata = _build_conversation_sync_metadata(conversation, conversation_key, conversation_signature)
+            if conversation["messages"]:
                 conversation_chunks = chunks_from_records(
                     conversation["messages"],
                     source_name=conversation_name,
@@ -1135,8 +1271,8 @@ def sync_conversations_to_rag(conversation_id: int | None = None, force: bool = 
                     )
                 else:
                     _delete_rag_source_if_present(conversation_key)
-        else:
-            _delete_rag_source_if_present(conversation_key)
+            else:
+                _delete_rag_source_if_present(conversation_key)
 
         tool_key = conversation_rag_source_key(RAG_SOURCE_TOOL_RESULT, conversation["conversation_id"])
         tool_name = _conversation_rag_source_name(
@@ -1144,15 +1280,15 @@ def sync_conversations_to_rag(conversation_id: int | None = None, force: bool = 
             conversation["conversation_id"],
             conversation["title"],
         )
-        tool_signature = _build_rag_sync_signature(
-            {
-                "title": conversation["title"],
-                "tool_results": conversation["tool_results"],
-            }
-        )
-        tool_metadata = _build_conversation_sync_metadata(conversation, tool_key, tool_signature)
-        if conversation["tool_results"]:
-            if _conversation_source_needs_sync(tool_key, tool_signature, force=force):
+        if planned["sync_tool_results"]:
+            tool_signature = _build_rag_sync_signature(
+                {
+                    "title": conversation["title"],
+                    "tool_results": conversation["tool_results"],
+                }
+            )
+            tool_metadata = _build_conversation_sync_metadata(conversation, tool_key, tool_signature)
+            if conversation["tool_results"]:
                 tool_chunks = chunks_from_records(
                     conversation["tool_results"],
                     source_name=tool_name,
@@ -1173,8 +1309,8 @@ def sync_conversations_to_rag(conversation_id: int | None = None, force: bool = 
                     )
                 else:
                     _delete_rag_source_if_present(tool_key)
-        else:
-            _delete_rag_source_if_present(tool_key)
+            else:
+                _delete_rag_source_if_present(tool_key)
     return synced
 
 
@@ -1191,10 +1327,20 @@ def sync_conversations_to_rag_safe(conversation_id: int | None = None, force: bo
 def sync_conversations_to_rag_background(app_obj, conversation_id: int | None = None, force: bool = False):
     if not RAG_ENABLED:
         return None
+    job_key, should_submit, existing_future = _queue_rag_background_sync_request(conversation_id, force)
+    if not should_submit:
+        return existing_future
     background_app = _resolve_background_app(app_obj)
 
     def task():
-        with background_app.app_context():
-            return sync_conversations_to_rag_safe(conversation_id=conversation_id, force=force)
+        latest_result = []
+        while True:
+            run_force = _start_rag_background_sync_run(job_key)
+            with background_app.app_context():
+                latest_result = sync_conversations_to_rag_safe(conversation_id=conversation_id, force=run_force)
+            if not _finish_rag_background_sync_run(job_key):
+                return latest_result
 
-    return _get_rag_background_executor().submit(task)
+    future = _get_rag_background_executor().submit(task)
+    _set_rag_background_sync_future(job_key, future)
+    return future

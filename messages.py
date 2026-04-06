@@ -591,6 +591,7 @@ def _build_canvas_workspace_summary(canvas_payload: dict) -> list[str]:
     lines.append(f"- Active file: {active_label}")
 
     total_lines = int(active_document.get("line_count") or 0)
+    total_pages = int(active_document.get("page_count") or 0)
     visible_line_end = int(canvas_payload.get("visible_line_end") or 0)
     if total_lines and visible_line_end:
         if visible_line_end >= total_lines:
@@ -602,6 +603,9 @@ def _build_canvas_workspace_summary(canvas_payload: dict) -> list[str]:
             lines.append(f"- Canvas view status: truncated excerpt ({visible_line_end}/{total_lines} lines visible)")
     else:
         lines.append("- Canvas view status: unknown")
+
+    if total_pages > 1:
+        lines.append(f"- Active document pages: {total_pages}")
 
     other_documents = canvas_payload.get("other_documents") if isinstance(canvas_payload.get("other_documents"), list) else []
     other_labels = [
@@ -633,6 +637,7 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
         "- Use transform_canvas_lines for bulk find-replace work; use count_only first when the replacement scope is uncertain.",
         "- Use update_canvas_metadata for title, summary, role, dependency, or symbol metadata changes that do not change document content.",
         "- If you will keep working in the same region for multiple turns, use set_canvas_viewport so the pinned lines are injected automatically in later prompts.",
+        "- If the document is multi-page and the task is page-specific, use focus_canvas_page instead of manually estimating a page's line range.",
         "- If you first need to locate text or a symbol in a large canvas, use search_canvas_document before expanding or scrolling.",
         "- If the target lines are not visible yet, inspect first with scroll_canvas_document or expand_canvas_document.",
         "- When multiple files or canvas regions are involved, batch independent inspection calls together in one answer instead of requesting them one by one.",
@@ -876,6 +881,8 @@ def _build_runtime_volatile_parts(
         if active_document.get("language"):
             volatile_parts.append(f"- Language: {active_document['language']}")
         volatile_parts.append(f"- Total lines: {canvas_payload['total_lines']}")
+        if int(active_document.get("page_count") or 0) > 1:
+            volatile_parts.append(f"- Total pages: {int(active_document.get('page_count') or 0)}")
         volatile_parts.append(
             f"- Visible lines in prompt: 1-{canvas_payload['visible_line_end']}"
             + (" (truncated excerpt)" if canvas_payload["is_truncated"] else "")
@@ -899,6 +906,10 @@ def _build_runtime_volatile_parts(
             volatile_parts.append(
                 "- In project mode, prefer document_path for targeting, even when you do not know the document_id yet."
             )
+        if int(active_document.get("page_count") or 0) > 1:
+            volatile_parts.append(
+                "- Multi-page guidance: if the task refers to a specific PDF-style page, call focus_canvas_page to pin that whole page before quoting or editing it."
+            )
         if canvas_payload["visible_lines"]:
             volatile_parts.append("```text\n" + "\n".join(canvas_payload["visible_lines"]) + "\n```\n")
         else:
@@ -909,8 +920,9 @@ def _build_runtime_volatile_parts(
             volatile_parts.append("- These pinned ranges are auto-injected from prior viewport selections. Reuse them before asking to scroll or expand the same region again.")
             for viewport in viewport_payloads[:6]:
                 target_label = str(viewport.get("document_path") or viewport.get("title") or viewport.get("document_id") or "Canvas").strip()
+                page_label = f" page {int(viewport.get('page_number') or 0)}" if int(viewport.get("page_number") or 0) > 0 else ""
                 volatile_parts.append(
-                    f"- {target_label} lines {int(viewport.get('start_line') or 0)}-{int(viewport.get('end_line') or 0)}"
+                    f"- {target_label}{page_label} lines {int(viewport.get('start_line') or 0)}-{int(viewport.get('end_line') or 0)}"
                     + (
                         f" (remaining turns: {int(viewport.get('remaining_turns') or 0)})"
                         if int(viewport.get("remaining_turns") or 0) > 0

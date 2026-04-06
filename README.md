@@ -1,6 +1,6 @@
 # Flask ChatBot: Multi-Provider + Tools + RAG + OCR + Vision + Canvas + Memory + Workspace
 
-This is a single-page Flask chat application built around DeepSeek plus optional OpenRouter models, multi-step tool use, local RAG, dedicated local OCR, optional local vision analysis, conversation summarization, pruning, persistent memory, editable canvas documents, and a per-conversation workspace sandbox.
+This is a single-page Flask chat application built around DeepSeek plus optional OpenRouter models, multi-step tool use, local RAG, dedicated local OCR, optional local vision analysis, conversation summarization, pruning, persistent memory, editable canvas documents, page-aware canvas navigation, and a per-conversation workspace sandbox.
 
 It is not a minimal prompt/response demo. The app keeps conversation history in SQLite, restores assistant metadata when a conversation is reopened, supports editing earlier user messages, streams tool progress and reasoning, can enrich a user turn with local OCR or extracted document text before the model sees it, and can compact older content with summaries and pruning.
 
@@ -53,7 +53,7 @@ It is not a minimal prompt/response demo. The app keeps conversation history in 
 
 ### Attachments
 
-- Image uploads can use the active chat model for LLM-based vision when that model supports images, or fall back to local OCR and/or local Qwen2.5-VL analysis
+- Image uploads can use the active chat model for LLM-based vision when that model supports images, or use the configured local OCR, local Qwen2.5-VL, or combined local pipeline depending on the selected image-processing method
 - Document uploads are extracted locally and injected into the conversation context
 - Supported image formats:
   - PNG
@@ -102,7 +102,7 @@ Manual smoke test checklist for the Canvas UI is available in [docs/canvas-ui-sm
 1. The browser sends JSON or multipart form data to `/chat`.
 2. The backend loads persisted settings from SQLite.
 3. If an image is attached, the configured image-processing method chooses among active-model LLM vision, local OCR, local Qwen2.5-VL, or a local combined pipeline.
-4. If the preferred image method is unavailable, the backend falls back to the nearest supported method.
+4. If the preferred image method is unavailable, `auto` and `llm` fall back to the nearest supported method, while explicit `local_ocr` and `local_vl` modes stay strict.
 5. If a document is attached, its text is extracted and added to the turn context.
 6. If RAG auto-injection is enabled, the user message is searched against the knowledge base.
 7. If tool-memory auto-injection is enabled, the same query searches remembered web results.
@@ -119,7 +119,7 @@ Manual smoke test checklist for the Canvas UI is available in [docs/canvas-ui-sm
 .
 ├── app.py                  # Flask app factory and entrypoint
 ├── agent.py                # Streaming agent loop, tool execution, usage tracking, trace logging
-├── canvas_service.py       # Canvas document storage and line-level editing
+├── canvas_service.py       # Canvas document storage, page-aware navigation, and line-level editing
 ├── config.py               # Environment variables, defaults, feature flags, runtime limits
 ├── conversation_export.py  # Conversation and canvas export utilities
 ├── db.py                   # SQLite schema, settings, assets, cache, metadata helpers
@@ -295,7 +295,8 @@ At least one provider key is required.
 | `DOCUMENT_STORAGE_DIR` | `./data/documents` | Directory used for uploaded document assets |
 | `PROJECT_WORKSPACE_ROOT` | `./data/workspaces` | Root directory for per-conversation workspace sandboxes |
 | `CHROMA_DB_PATH` | `./chroma_db` | ChromaDB persistence directory used by RAG |
-| `CANVAS_PROMPT_DEFAULT_MAX_LINES` | `800` | Default number of canvas lines injected into prompts |
+| `CANVAS_PROMPT_DEFAULT_MAX_LINES` | `100` | Default number of canvas lines injected into prompts |
+| `CANVAS_PROMPT_DEFAULT_MAX_TOKENS` | `2000` | Default token budget for canvas context injections |
 | `CANVAS_EXPAND_DEFAULT_MAX_LINES` | `1600` | Default number of canvas lines returned by expand |
 | `CANVAS_SCROLL_WINDOW_LINES` | `200` | Default targeted canvas scroll window |
 | `SCRATCHPAD_ADMIN_EDITING_ENABLED` | `false` | Shows scratchpad editing in the UI |
@@ -327,7 +328,7 @@ At least one provider key is required.
 | `RAG_AUTO_INJECT_THRESHOLD` | `0.50` | Seed value used to derive the default sensitivity preset |
 | `RAG_SEARCH_MIN_SIMILARITY` | `0.35` | Minimum similarity shown in search results |
 | `RAG_QUERY_EXPANSION_ENABLED` | `true` | Expands some search queries before retrieval |
-| `RAG_QUERY_EXPANSION_MAX_VARIANTS` | `3` | Maximum query expansion variants |
+| `RAG_QUERY_EXPANSION_MAX_VARIANTS` | `2` | Maximum query expansion variants |
 | `RAG_TEMPORAL_DECAY_ALPHA` | `0.15` | Score decay factor for recency weighting |
 | `RAG_TEMPORAL_DECAY_LAMBDA` | `0.05` | Score decay factor for time-based weighting |
 
@@ -336,7 +337,7 @@ At least one provider key is required.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `TOOL_MEMORY_TTL_DEFAULT_SECONDS` | `604800` | Default retention window for stored tool-memory entries |
-| `TOOL_MEMORY_TTL_WEB_SECONDS` | `86400` | Retention window for stored web results |
+| `TOOL_MEMORY_TTL_WEB_SECONDS` | `43200` | Retention window for stored web results |
 | `TOOL_MEMORY_TTL_NEWS_SECONDS` | `7200` | Retention window for stored news results |
 
 Note: `rag_context_size` and `rag_sensitivity` are the runtime settings used during retrieval. The corresponding env vars above only seed the default presets stored in SQLite.
@@ -368,6 +369,8 @@ Note: `rag_context_size` and `rag_sensitivity` are the runtime settings used dur
 | `FETCH_SUMMARY_GENERAL_TOP_K` | `3` | Top-K sentences used by fetch summarization |
 | `FETCH_SUMMARY_QUERY_TOP_K` | `4` | Query-aware sentence count for fetch summarization |
 | `FETCH_SUMMARY_EXCERPT_MAX_CHARS` | `500` | Maximum excerpt length in summaries |
+| `FETCH_SUMMARIZE_MAX_INPUT_CHARS` | `80000` | Maximum raw text fed into fetch summarization |
+| `FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS` | `800` | Maximum tokens returned by fetch summarization |
 | `FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS` | `24000` | Maximum raw tool-result text kept for fetch-style results |
 | `CHAT_SUMMARY_TRIGGER_TOKEN_COUNT` | `80000` | Visible-token count that triggers automatic summarization |
 | `CHAT_SUMMARY_MODE` | `auto` | `auto`, `never`, or `aggressive` |
@@ -378,6 +381,7 @@ Note: `rag_context_size` and `rag_sensitivity` are the runtime settings used dur
 | `PROMPT_SUMMARY_MAX_TOKENS` | `15000` | Max summary budget |
 | `PROMPT_RAG_MAX_TOKENS` | `6000` | Max RAG budget |
 | `PROMPT_RAG_AUTO_MAX_TOKENS` | `1200` | Auto-inject RAG cap used when no stronger override is set |
+| `PROMPT_TOOL_TRACE_MAX_TOKENS` | `500` | Max tool-trace budget |
 | `PROMPT_TOOL_MEMORY_MAX_TOKENS` | `1500` | Max tool-memory budget |
 | `PROMPT_PREFLIGHT_SUMMARY_TOKEN_COUNT` | `90000` | Preflight summary trigger budget |
 | `AGENT_CONTEXT_COMPACTION_THRESHOLD` | `0.85` | Fraction of budget that triggers context compaction |
@@ -401,7 +405,8 @@ Note: `rag_context_size` and `rag_sensitivity` are the runtime settings used dur
 - max upload image size: 10 MB
 - document upload max size: 20 MB
 - document max extracted text: 50,000 characters
-- canvas prompt max lines: 800
+- canvas prompt max lines: 100
+- canvas prompt max tokens: 2,000
 - canvas expand max lines: 1,600
 - canvas scroll window lines: 200
 - canvas document limit: 12 documents per conversation
@@ -414,7 +419,13 @@ The Settings page persists these values in `app_settings`:
 - `user_preferences`
 - `scratchpad`
 - `max_steps`
+- `max_parallel_tools`
 - `temperature`
+- `clarification_max_questions`
+- `sub_agent_timeout_seconds`
+- `sub_agent_retry_attempts`
+- `sub_agent_retry_delay_seconds`
+- `sub_agent_max_parallel_tools`
 - `custom_models`
 - `visible_model_order`
 - `operation_model_preferences`
@@ -426,6 +437,7 @@ The Settings page persists these values in `app_settings`:
 - `rag_source_types`
 - `tool_memory_auto_inject`
 - `canvas_prompt_max_lines`
+- `canvas_prompt_max_tokens`
 - `canvas_expand_max_lines`
 - `canvas_scroll_window_lines`
 - `chat_summary_mode`
@@ -509,7 +521,7 @@ If you attach an image:
 2. The backend revalidates and reads the upload.
 3. The image is optimized locally.
 4. The configured OCR provider extracts readable text when OCR is enabled.
-5. If vision is enabled, Qwen2.5-VL adds non-text visual context.
+5. If vision is enabled, Qwen2.5-VL adds non-text visual context, and the local combined image pipeline can merge OCR and vision outputs when both are active.
 6. That context is injected into the user message before the main model call.
 
 The backend also stores the analysis so follow-up questions about the same image can use the `image_explain` tool when vision is enabled. In OCR-only mode, image uploads still work but `image_explain` is not exposed.
@@ -551,8 +563,9 @@ The same extraction path is also used by the knowledge-base upload form in Setti
 
 - The model can create a canvas document with `create_canvas_document`.
 - Canvas documents may be markdown or code artifacts, and in project mode they can carry `path`, `role`, `summary`, `imports`, `exports`, `symbols`, `dependencies`, `project_id`, and `workspace_id` metadata.
+- Page-aware uploaded documents can also expose page counts and be pinned page-by-page with `focus_canvas_page` when the content includes `## Page N` markers.
 - The model can expand a non-active canvas file with `expand_canvas_document` when project summaries are insufficient.
-- Targeted reads use `scroll_canvas_document`; existing documents can then be rewritten with `rewrite_canvas_document`.
+- Targeted reads use `scroll_canvas_document`, while `set_canvas_viewport` pins a line range and `focus_canvas_page` pins a whole page for later turns; existing documents can then be rewritten with `rewrite_canvas_document`.
 - Line-level edits use `replace_canvas_lines`, `insert_canvas_lines`, and `delete_canvas_lines`.
 - Canvas documents can be deleted with `delete_canvas_document` or cleared with `clear_canvas`.
 - Canvas documents are stored in SQLite and attached to the current conversation.
@@ -738,6 +751,17 @@ Read a targeted 1-based line range from a canvas document.
   - `start_line` (integer, required) - 1-based starting line number
   - `end_line` (integer, required) - 1-based ending line number
 
+#### `focus_canvas_page`
+
+Pin one specific page from a page-aware canvas document so it is reused in later prompts.
+
+- Arguments:
+  - `document_id` (string, optional) - target canvas document id
+  - `document_path` (string, optional) - target project-relative path
+  - `page_number` (integer, required) - 1-based page number to pin
+  - `ttl_turns` (integer, optional) - how many future turns to keep the page pinned
+  - `auto_unpin_on_edit` (boolean, optional) - automatically clear the pinned page when an overlapping edit changes it
+
 #### `rewrite_canvas_document`
 
 Rewrite the full active canvas document while keeping the same document id.
@@ -852,6 +876,7 @@ The app creates and uses these tables:
 - vision summary
 - assistant guidance
 - key points
+- canvas page counts and pinned page or viewport data
 - reasoning content
 - tool trace
 - stored tool results
@@ -882,7 +907,7 @@ RAG data is stored in a persistent Chroma collection under `CHROMA_DB_PATH`.
 ### Run tests
 
 ```bash
-/home/ricky/Desktop/os-chatbot/venv/bin/python -m pytest tests/test_app.py
+python -m pytest tests/test_app.py
 ```
 
 ### Lint
@@ -966,7 +991,7 @@ Canvas documents are attached to the current conversation. Make sure you are in 
 
 **Image uploads are rejected**
 
-Image uploads require an existing saved conversation and a supported image type. At least one of `OCR_ENABLED` or `VISION_ENABLED` must be enabled in `.env`.
+Image uploads require an existing saved conversation and a supported image type. They also need OCR or vision enabled locally, or an image-capable OpenRouter model.
 
 **Document uploads fail**
 

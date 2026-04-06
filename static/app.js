@@ -147,6 +147,8 @@ let streamingCanvasDocuments = [];
 let isCanvasEditing = false;
 let editingCanvasDocumentId = null;
 let pendingCanvasDiff = null;
+let canvasPageByDocumentId = new Map();
+let pendingCanvasPageSyncFrame = 0;
 let canvasHasUnreadUpdates = false;
 let lastCanvasTriggerEl = null;
 let lastCanvasConfirmTriggerEl = null;
@@ -484,6 +486,7 @@ const SIDEBAR_STORAGE_KEY = "chatbot.sidebarOpen";
 const CLARIFICATION_DRAFT_STORAGE_PREFIX = "chatbot.clarificationDraft";
 const CANVAS_STREAMING_PREVIEW_TOOLS = new Set(["create_canvas_document", "rewrite_canvas_document", "replace_canvas_lines", "insert_canvas_lines", "delete_canvas_lines"]);
 const CANVAS_EDIT_PREVIEW_TOOLS = new Set(["replace_canvas_lines", "insert_canvas_lines", "delete_canvas_lines"]);
+const CANVAS_PAGE_HEADING_TEXT_RE = /^Page\s+(\d+)$/i;
 
 function isCanvasStreamingPreviewTool(toolName) {
   return CANVAS_STREAMING_PREVIEW_TOOLS.has(String(toolName || "").trim());
@@ -496,6 +499,7 @@ function normalizeCanvasDocument(document) {
   const format = String(document.format || "markdown").trim().toLowerCase();
   const normalizedFormat = format === "code" ? "code" : "markdown";
   const content = String(document.content || "").replace(/\r\n?/g, "\n");
+  const rawPageCount = Number.parseInt(String(document.page_count ?? "0"), 10);
   return {
     id: String(document.id || "").trim(),
     title: String(document.title || "Canvas").trim() || "Canvas",
@@ -506,8 +510,155 @@ function normalizeCanvasDocument(document) {
     language: String(document.language || "").trim().toLowerCase(),
     content,
     line_count: Number.isInteger(Number(document.line_count)) ? Number(document.line_count) : content.split("\n").length,
+    page_count: Number.isFinite(rawPageCount) && rawPageCount > 0 ? rawPageCount : 0,
     source_message_id: Number.isInteger(Number(document.source_message_id)) ? Number(document.source_message_id) : null,
   };
+}
+
+function isCanvasPageAwareDocument(document) {
+  return Boolean(document && !shouldRenderCanvasAsCode(document) && Number(document.page_count) > 1);
+}
+
+function getCanvasPageAnchorId(documentId, pageNumber) {
+  const normalizedDocumentId = String(documentId || "canvas")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-") || "canvas";
+  return `canvas-page-${normalizedDocumentId}-${pageNumber}`;
+}
+
+function clampCanvasPageNumber(document, pageNumber) {
+  const totalPages = Number(document?.page_count || 0);
+  if (!totalPages) {
+    return 0;
+  }
+  const normalizedPage = Number.parseInt(String(pageNumber || 1), 10);
+  if (!Number.isFinite(normalizedPage)) {
+    return 1;
+  }
+  return Math.min(Math.max(normalizedPage, 1), totalPages);
+}
+
+function getCanvasCurrentPage(document) {
+  if (!isCanvasPageAwareDocument(document)) {
+    return 0;
+  }
+  return clampCanvasPageNumber(document, canvasPageByDocumentId.get(document.id) || 1);
+}
+
+function setCanvasCurrentPage(document, pageNumber) {
+  if (!document?.id || !isCanvasPageAwareDocument(document)) {
+    return 0;
+  }
+  const nextPage = clampCanvasPageNumber(document, pageNumber);
+  canvasPageByDocumentId.set(document.id, nextPage);
+  return nextPage;
+}
+
+function getCanvasPageHeadingNodes() {
+  if (!canvasDocumentEl) {
+    return [];
+  }
+  return Array.from(canvasDocumentEl.querySelectorAll("[data-canvas-page-number]"));
+}
+
+function updateCanvasPageNavigationUi(document) {
+  if (!canvasDocumentEl || !isCanvasPageAwareDocument(document)) {
+    return;
+  }
+  const currentPage = getCanvasCurrentPage(document);
+  const totalPages = clampCanvasPageNumber(document, document.page_count);
+  const labelEl = canvasDocumentEl.querySelector("[data-canvas-page-label]");
+  const prevBtn = canvasDocumentEl.querySelector('[data-canvas-page-action="prev"]');
+  const nextBtn = canvasDocumentEl.querySelector('[data-canvas-page-action="next"]');
+  if (labelEl) {
+    labelEl.textContent = `Page ${currentPage} / ${totalPages}`;
+  }
+  if (prevBtn) {
+    prevBtn.disabled = currentPage <= 1;
+  }
+  if (nextBtn) {
+    nextBtn.disabled = currentPage >= totalPages;
+  }
+}
+
+function syncCanvasCurrentPageFromScroll(document) {
+  if (!canvasDocumentEl || !isCanvasPageAwareDocument(document)) {
+    return;
+  }
+  const headings = getCanvasPageHeadingNodes();
+  if (!headings.length) {
+    return;
+  }
+  const containerRect = canvasDocumentEl.getBoundingClientRect();
+  let currentPage = 1;
+  headings.forEach((heading) => {
+    const topOffset = heading.getBoundingClientRect().top - containerRect.top;
+    if (topOffset <= 88) {
+      currentPage = Number.parseInt(String(heading.dataset.canvasPageNumber || "1"), 10) || currentPage;
+    }
+  });
+  setCanvasCurrentPage(document, currentPage);
+  updateCanvasPageNavigationUi(document);
+}
+
+function scheduleCanvasPageSync(document) {
+  if (!isCanvasPageAwareDocument(document) || pendingCanvasPageSyncFrame) {
+    return;
+  }
+  pendingCanvasPageSyncFrame = globalThis.requestAnimationFrame(() => {
+    pendingCanvasPageSyncFrame = 0;
+    syncCanvasCurrentPageFromScroll(document);
+  });
+}
+
+function scrollCanvasToPage(document, pageNumber, behavior = "smooth") {
+  if (!canvasDocumentEl || !isCanvasPageAwareDocument(document)) {
+    return;
+  }
+  const normalizedPage = setCanvasCurrentPage(document, pageNumber);
+  const target = canvasDocumentEl.querySelector(`#${getCanvasPageAnchorId(document.id, normalizedPage)}`);
+  if (target) {
+    target.scrollIntoView({ behavior, block: "start" });
+  }
+  updateCanvasPageNavigationUi(document);
+}
+
+function bindCanvasPageNavigation(document) {
+  if (!canvasDocumentEl) {
+    return;
+  }
+  canvasDocumentEl.onscroll = null;
+  if (!isCanvasPageAwareDocument(document)) {
+    return;
+  }
+
+  const headings = Array.from(canvasDocumentEl.querySelectorAll("h1, h2, h3, h4, h5, h6"));
+  headings.forEach((heading) => {
+    const match = CANVAS_PAGE_HEADING_TEXT_RE.exec(String(heading.textContent || "").trim());
+    if (!match) {
+      return;
+    }
+    const pageNumber = Number.parseInt(match[1], 10);
+    heading.id = getCanvasPageAnchorId(document.id, pageNumber);
+    heading.dataset.canvasPageNumber = String(pageNumber);
+    heading.classList.add("canvas-page-heading");
+  });
+
+  canvasDocumentEl.querySelector('[data-canvas-page-action="prev"]')?.addEventListener("click", () => {
+    scrollCanvasToPage(document, getCanvasCurrentPage(document) - 1);
+  });
+  canvasDocumentEl.querySelector('[data-canvas-page-action="next"]')?.addEventListener("click", () => {
+    scrollCanvasToPage(document, getCanvasCurrentPage(document) + 1);
+  });
+
+  updateCanvasPageNavigationUi(document);
+  canvasDocumentEl.onscroll = () => scheduleCanvasPageSync(document);
+  if (getCanvasCurrentPage(document) > 1) {
+    scrollCanvasToPage(document, getCanvasCurrentPage(document), "auto");
+  } else {
+    syncCanvasCurrentPageFromScroll(document);
+  }
 }
 
 function getCanvasMode(documents) {
@@ -587,6 +738,11 @@ function resetCanvasWorkspaceState() {
   isCanvasEditing = false;
   editingCanvasDocumentId = null;
   pendingCanvasDiff = null;
+  if (pendingCanvasPageSyncFrame) {
+    globalThis.cancelAnimationFrame(pendingCanvasPageSyncFrame);
+    pendingCanvasPageSyncFrame = 0;
+  }
+  canvasPageByDocumentId = new Map();
   resetStreamingCanvasPreview();
   lastCanvasStructureSignature = "";
   collapsedCanvasFolders = new Set();
@@ -1159,7 +1315,21 @@ function renderCanvasDocumentBody(document) {
   if (document.format === "code") {
     return sanitizeHtml(`<div class="canvas-code-document">${renderHighlightedCodeBlock(document.content, document.language || null)}</div>`);
   }
-  return renderMarkdown(document.content);
+  const markdownHtml = renderMarkdown(document.content);
+  if (!isCanvasPageAwareDocument(document)) {
+    return markdownHtml;
+  }
+  const currentPage = getCanvasCurrentPage(document) || setCanvasCurrentPage(document, 1);
+  return (
+    `<div class="canvas-document-shell">` +
+      `<div class="canvas-page-nav" data-canvas-page-nav>` +
+        `<button type="button" class="canvas-page-nav__button" data-canvas-page-action="prev" aria-label="Previous page">&larr;</button>` +
+        `<div class="canvas-page-nav__status" data-canvas-page-label>Page ${currentPage} / ${document.page_count}</div>` +
+        `<button type="button" class="canvas-page-nav__button" data-canvas-page-action="next" aria-label="Next page">&rarr;</button>` +
+      `</div>` +
+      `<div class="canvas-page-content">${markdownHtml}</div>` +
+    `</div>`
+  );
 }
 
 function getCanvasDocumentById(documents, documentId) {
@@ -1667,6 +1837,9 @@ function renderCanvasMetaBar(renderState) {
   if (isStreamingPreviewActive) {
     chips.push({ label: "Live preview", className: "canvas-meta-chip canvas-meta-chip--live" });
   }
+  if (Number(activeDocument.page_count) > 1) {
+    chips.push({ label: `${activeDocument.page_count} pages`, className: "canvas-meta-chip" });
+  }
   if (activeDocument.role) {
     chips.push({ label: activeDocument.role, className: "canvas-meta-chip" });
   }
@@ -1734,9 +1907,10 @@ function updateCanvasActiveDocumentDisplay(renderState) {
   activeCanvasDocumentId = activeDocument.id;
   const modeLabel = getCanvasMode(documents) === "project" ? "Project mode" : "Document mode";
   const detailLabel = activeDocument.path || activeDocument.title;
+  const pageLabel = Number(activeDocument.page_count) > 1 ? ` · ${activeDocument.page_count} pages` : "";
   const roleLabel = activeDocument.role ? ` · ${activeDocument.role}` : "";
   const languageLabel = activeDocument.language ? ` · ${activeDocument.language}` : "";
-  canvasSubtitle.textContent = `${modeLabel} · ${visibleDocuments.length}/${documents.length} files · ${detailLabel} · ${activeDocument.line_count} lines${roleLabel}${languageLabel}`;
+  canvasSubtitle.textContent = `${modeLabel} · ${visibleDocuments.length}/${documents.length} files · ${detailLabel} · ${activeDocument.line_count} lines${pageLabel}${roleLabel}${languageLabel}`;
   renderCanvasMetaBar(renderState);
   const promptLineLimit = Number(appSettings.canvas_prompt_max_lines || 100);
   const expandLineLimit = Number(appSettings.canvas_expand_max_lines || 1600);
@@ -1790,6 +1964,7 @@ function updateCanvasActiveDocumentDisplay(renderState) {
   } else {
     canvasDocumentEl.hidden = false;
     canvasDocumentEl.innerHTML = renderCanvasDocumentBody(activeDocument);
+    bindCanvasPageNavigation(activeDocument);
     if (canvasEditorEl) {
       canvasEditorEl.hidden = true;
     }

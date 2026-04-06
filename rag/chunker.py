@@ -10,6 +10,7 @@ DEFAULT_CHUNK_SIZE = 1800
 DEFAULT_CHUNK_OVERLAP = 250
 MAX_METADATA_VALUE_LENGTH = 500
 _INVISIBLE_TEXT_RE = re.compile(r"[\u00ad\u200b-\u200f\u2028\u2029\ufeff]")
+_PAGE_MARKER_RE = re.compile(r"^##\s+Page\s+(\d+)\s*$", re.IGNORECASE)
 
 
 @dataclass(slots=True)
@@ -82,6 +83,14 @@ def _slice_long_paragraph(paragraph: str, chunk_size: int, overlap: int) -> Iter
         start += step
 
 
+def _paragraph_page_number(paragraph: str, fallback_page_number: int | None) -> int | None:
+    first_line = str(paragraph or "").split("\n", 1)[0].strip()
+    match = _PAGE_MARKER_RE.match(first_line)
+    if match:
+        return int(match.group(1))
+    return fallback_page_number
+
+
 def split_text_into_chunks(
     text: str, chunk_size: int = DEFAULT_CHUNK_SIZE, overlap: int = DEFAULT_CHUNK_OVERLAP
 ) -> list[str]:
@@ -142,10 +151,76 @@ def chunk_text_document(
     if not normalized_text:
         return []
 
-    chunks = split_text_into_chunks(normalized_text, chunk_size=chunk_size, overlap=overlap)
+    chunk_size = max(300, int(chunk_size or DEFAULT_CHUNK_SIZE))
+    overlap = max(0, min(int(overlap or DEFAULT_CHUNK_OVERLAP), chunk_size // 2))
+    paragraphs = _paragraphs_from_text(normalized_text)
+    if not paragraphs:
+        return []
+
     base_metadata = dict(metadata or {})
+    chunk_entries: list[tuple[str, int | None]] = []
+    current_chunk = ""
+    current_chunk_page: int | None = None
+    current_page: int | None = None
+
+    def flush_current_chunk() -> None:
+        nonlocal current_chunk, current_chunk_page
+        cleaned = _normalize_whitespace(current_chunk)
+        if cleaned:
+            chunk_entries.append((cleaned, current_chunk_page))
+        current_chunk = ""
+        current_chunk_page = None
+
+    for paragraph in paragraphs:
+        paragraph_page = _paragraph_page_number(paragraph, current_page)
+        if paragraph_page is not None:
+            current_page = paragraph_page
+        pieces = list(_slice_long_paragraph(paragraph, chunk_size, overlap))
+        for piece in pieces:
+            piece_page = _paragraph_page_number(piece, current_page)
+            if piece_page is not None:
+                current_page = piece_page
+            if current_chunk and piece_page is not None and current_chunk_page is not None and piece_page != current_chunk_page:
+                flush_current_chunk()
+
+            if not current_chunk:
+                current_chunk = piece
+                current_chunk_page = piece_page
+                continue
+
+            candidate = f"{current_chunk}\n\n{piece}" if current_chunk else piece
+            if len(candidate) <= chunk_size:
+                current_chunk = candidate
+                continue
+
+            previous_chunk = current_chunk
+            previous_page = current_chunk_page
+            flush_current_chunk()
+            carry = ""
+            if (
+                overlap
+                and previous_chunk
+                and previous_page is not None
+                and piece_page is not None
+                and previous_page == piece_page
+                and len(previous_chunk) > overlap
+            ):
+                carry = previous_chunk[-overlap:].strip()
+            candidate_with_overlap = f"{carry}\n\n{piece}".strip() if carry else piece
+            current_chunk = candidate_with_overlap if len(candidate_with_overlap) <= chunk_size else piece
+            current_chunk_page = piece_page
+
+    flush_current_chunk()
+
     items: list[Chunk] = []
-    for index, chunk_text in enumerate(chunks):
+    seen_texts: set[str] = set()
+    for index, (chunk_text, page_number) in enumerate(chunk_entries):
+        if chunk_text in seen_texts:
+            continue
+        seen_texts.add(chunk_text)
+        chunk_metadata = dict(base_metadata)
+        if page_number is not None:
+            chunk_metadata["page_number"] = int(page_number)
         chunk_id = _build_chunk_id(source_name, source_type, normalized_category, chunk_text)
         items.append(
             Chunk(
@@ -154,8 +229,8 @@ def chunk_text_document(
                 source_name=source_name,
                 source_type=source_type,
                 category=normalized_category,
-                chunk_index=index,
-                metadata=base_metadata,
+                chunk_index=len(items),
+                metadata=chunk_metadata,
             )
         )
     return items

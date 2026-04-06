@@ -22,6 +22,7 @@ CANVAS_DOCUMENT_TOOL_NAMES = {
     "transform_canvas_lines",
     "update_canvas_metadata",
     "set_canvas_viewport",
+    "focus_canvas_page",
     "clear_canvas_viewport",
     "replace_canvas_lines",
     "insert_canvas_lines",
@@ -176,6 +177,14 @@ def build_canvas_decision_matrix(
                 "situation": "You will keep working in the same region for several turns or want to stop injecting a pinned region.",
                 "tool": "set_canvas_viewport / clear_canvas_viewport",
                 "notes": "Pinned viewport lines are auto-injected in later prompts until they expire or are cleared.",
+            }
+        )
+    if enabled("focus_canvas_page"):
+        rows.append(
+            {
+                "situation": "The active canvas document is multi-page and you need one specific page pinned into future prompts.",
+                "tool": "focus_canvas_page",
+                "notes": "Prefer this over manually estimating page line ranges when the document exposes '## Page N' markers.",
             }
         )
     if enabled("scroll_canvas_document"):
@@ -1476,6 +1485,26 @@ TOOL_SPECS = [
             "purpose": "Pins a canvas range for automatic reuse in subsequent prompts.",
             "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "start_line": "viewport start", "end_line": "viewport end", "ttl_turns": "number of future turns to keep it pinned", "auto_unpin_on_edit": "whether overlapping edits clear it automatically"},
             "guidance": "Use this when you expect to keep working in the same region for multiple turns and want to avoid repeated scroll or expand calls. Use ttl_turns=0 only when the range should stay pinned until you explicitly clear it.",
+        },
+    },
+    {
+        "name": "focus_canvas_page",
+        "description": "Pin one specific page from a page-aware canvas document so it is automatically injected into later prompts.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "document_id": {"type": "string", "description": "Optional target canvas document id."},
+                "document_path": {"type": "string", "description": "Optional target project-relative path. Prefer this over document_id in project mode."},
+                "page_number": {"type": "integer", "minimum": 1, "description": "1-based page number to pin."},
+                "ttl_turns": {"type": "integer", "minimum": 0, "description": "How many future turns to keep the page pinned. Use 0 to keep it pinned until explicitly cleared."},
+                "auto_unpin_on_edit": {"type": "boolean", "description": "When true, automatically clear the pinned page if an overlapping edit changes that region."}
+            },
+            "required": ["page_number"]
+        },
+        "prompt": {
+            "purpose": "Pins one full page from a multi-page canvas document for automatic reuse in subsequent prompts.",
+            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "page_number": "page to focus", "ttl_turns": "number of future turns to keep it pinned", "auto_unpin_on_edit": "whether overlapping edits clear it automatically"},
+            "guidance": "Use this for uploaded PDFs or other page-aware documents with visible page markers. Prefer it over set_canvas_viewport when the user refers to a specific page or when page-scoped reasoning is clearer than raw line ranges.",
         },
     },
     {
