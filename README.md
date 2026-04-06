@@ -196,9 +196,11 @@ pip install -r requirements-vl.txt
 If you want PaddleOCR instead of EasyOCR:
 
 ```bash
-pip install paddlepaddle
+pip install paddlepaddle==3.2.2
 pip install -r requirements-ocr-paddle.txt
 ```
+
+The OCR stack in this project is currently validated with PaddlePaddle 3.2.2 and PaddleOCR 3.4.0. Newer PaddlePaddle 3.3.1 builds can hit an onednn/PIR runtime error during OCR inference in this codebase.
 
 Development:
 

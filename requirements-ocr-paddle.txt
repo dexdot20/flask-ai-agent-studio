@@ -1,3 +1,4 @@
 ## Optional OCR stack using PaddleOCR.
 ## Install a matching paddlepaddle or paddlepaddle-gpu wheel separately when using this stack directly.
-paddleocr>=3.0
+paddlepaddle==3.2.2
+paddleocr==3.4.0

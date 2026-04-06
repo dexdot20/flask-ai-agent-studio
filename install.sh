@@ -88,16 +88,16 @@ install_requirements_file() {
 
 install_paddle_runtime() {
   if [[ "${ACCELERATOR}" == "CUDA" ]]; then
-    info "Attempting PaddlePaddle GPU runtime installation"
-    if "${VENV_DIR}/bin/python" -m pip install paddlepaddle-gpu; then
+    info "Installing PaddlePaddle 3.2.2 runtime for OCR"
+    if "${VENV_DIR}/bin/python" -m pip install paddlepaddle==3.2.2; then
       return
     fi
-    warn "Automatic paddlepaddle-gpu installation failed; falling back to paddlepaddle CPU runtime."
+    warn "Automatic PaddlePaddle installation failed; OCR will need a compatible paddlepaddle wheel."
     warn "See README.md if you want to install a CUDA-specific PaddlePaddle wheel manually."
   fi
 
-  info "Installing PaddlePaddle runtime"
-  "${VENV_DIR}/bin/python" -m pip install paddlepaddle
+  info "Installing PaddlePaddle 3.2.2 runtime"
+  "${VENV_DIR}/bin/python" -m pip install paddlepaddle==3.2.2
 }
 
 download_model_snapshot() {
