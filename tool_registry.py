@@ -46,6 +46,54 @@ SCRATCHPAD_SECTION_DESCRIPTION = "Section to update: " + "; ".join(
     f"{section_id} = {SCRATCHPAD_SECTION_METADATA[section_id]['title']} ({SCRATCHPAD_SECTION_METADATA[section_id]['description']})"
     for section_id in SCRATCHPAD_SECTION_ORDER
 )
+CANVAS_LINE_ARRAY_DESCRIPTION = (
+    "Each element is one line of text as a properly quoted JSON string with no trailing newline characters. "
+    "Code content, including quotes, backslashes, and semicolons, must appear inside these strings and be properly escaped. "
+    'Example: ["const char* ssid = \\\"MyNet\\\";", "const char* pass = \\\"abc\\\";"] . '
+    "Never place code outside this array or as an argument key."
+)
+
+
+def _build_canvas_edit_operation_variants() -> list[dict]:
+    return [
+        {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["replace"], "description": "Replace an inclusive 1-based line range."},
+                "start_line": {"type": "integer", "minimum": 1, "description": "1-based first line to replace."},
+                "end_line": {"type": "integer", "minimum": 1, "description": "1-based last line to replace."},
+                "lines": {"type": "array", "items": {"type": "string"}, "description": CANVAS_LINE_ARRAY_DESCRIPTION},
+                "expected_start_line": {"type": "integer", "minimum": 1, "description": "Optional first line of the current snippet that must still match before applying the edit."},
+                "expected_lines": {"type": "array", "items": {"type": "string"}, "description": "Optional current lines that must still match before applying the edit."},
+            },
+            "required": ["action", "start_line", "end_line", "lines"],
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["insert"], "description": "Insert new lines after a specific anchor line."},
+                "after_line": {"type": "integer", "minimum": 0, "description": "Insert after this line number. Use 0 to insert before line 1 at the top of the file."},
+                "lines": {"type": "array", "items": {"type": "string"}, "description": CANVAS_LINE_ARRAY_DESCRIPTION},
+                "expected_start_line": {"type": "integer", "minimum": 1, "description": "Optional first line of the current snippet that must still match before applying the insert."},
+                "expected_lines": {"type": "array", "items": {"type": "string"}, "description": "Optional nearby current lines that must still match before applying the insert."},
+            },
+            "required": ["action", "after_line", "lines"],
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["delete"], "description": "Delete an inclusive 1-based line range."},
+                "start_line": {"type": "integer", "minimum": 1, "description": "1-based first line to delete."},
+                "end_line": {"type": "integer", "minimum": 1, "description": "1-based last line to delete."},
+                "expected_start_line": {"type": "integer", "minimum": 1, "description": "Optional first line of the current snippet that must still match before applying the delete."},
+                "expected_lines": {"type": "array", "items": {"type": "string"}, "description": "Optional current lines that must still match before applying the delete."},
+            },
+            "required": ["action", "start_line", "end_line"],
+            "additionalProperties": False,
+        },
+    ]
 
 
 def build_canvas_decision_matrix(
@@ -438,7 +486,8 @@ TOOL_SPECS = [
         "name": "image_explain",
         "description": (
             "Answer a follow-up question about a previously uploaded image saved in the current conversation. "
-            "Use this when the user refers back to an earlier image or screenshot and the stored visual context may matter."
+            "Use this when the user refers back to an earlier image or screenshot and the stored visual context may matter. "
+            "Always send the follow-up question in English."
         ),
         "parameters": {
             "type": "object",
@@ -633,9 +682,9 @@ TOOL_SPECS = [
             "purpose": "Reads a URL and returns only an AI-generated summary of the page.",
             "inputs": {"url": "full http/https URL", "focus": "optional focus or question"},
             "guidance": (
-                "Use this when you want the page distilled before it reaches you. "
+                "Use this when you want the page distilled before it reaches you, such as long articles where only the key points matter. "
                 "If focus is given, the summary should prioritize that question or angle. "
-                "Use fetch_url instead when you need raw extracted text, metadata, or page outline details."
+                "Use fetch_url instead when you need raw extracted text, metadata, page outline details, or exact wording from the source page."
             ),
         },
     },
@@ -693,7 +742,7 @@ TOOL_SPECS = [
         "name": "search_news_ddgs",
         "description": (
             "Search recent news articles using DuckDuckGo News. Returns title, link, publication time and source for each article. "
-            "Use this for general news, trending topics or when a broad news index is appropriate. "
+            "Use this for general news, trending topics, exploratory discovery, or when a broad news index is appropriate. "
             "Optionally filter by time range and language. If you need the full article text, follow up with fetch_url on the returned links."
         ),
         "parameters": {
@@ -724,6 +773,7 @@ TOOL_SPECS = [
             "inputs": {"queries": "1-5 news queries", "lang": "tr|en", "when": "d|w|m|y"},
             "guidance": (
                 "Use this for broad recent-news discovery when you need headlines, sources, and timestamps before reading full articles. "
+                "Prefer this over search_news_google for generic international topics or the first pass on a topic. "
                 "Never pass more than 5 queries in one call. If you need article details, follow up with fetch_url on the most relevant links instead of widening the same news query repeatedly."
             ),
         },
@@ -732,7 +782,7 @@ TOOL_SPECS = [
         "name": "search_news_google",
         "description": (
             "Search Google News via RSS feed. Returns title, link, publication time and source for each article. "
-            "Use this when Google News coverage is preferred (e.g. Turkish financial news, local outlets, or when DuckDuckGo News yields poor results). "
+            "Use this when Google News coverage is preferred, especially for Turkish financial news, local outlets, or when DuckDuckGo News yields weak coverage. "
             "Optionally filter by time range and language. If you need the full article text, follow up with fetch_url on the returned links."
         ),
         "parameters": {
@@ -762,7 +812,7 @@ TOOL_SPECS = [
             "purpose": "Searches news headlines/links/dates/sources with Google News RSS.",
             "inputs": {"queries": "1-5 news queries", "lang": "tr|en", "when": "d|w|m|y"},
             "guidance": (
-                "Use this when Google News coverage is likely stronger than DuckDuckGo News for the topic or locale. "
+                "Use this when Google News coverage is likely stronger than DuckDuckGo News for the topic or locale, especially Turkish or local-source coverage. "
                 "Never pass more than 5 queries in one call. After scanning the feed, fetch only the few links that are actually needed."
             ),
         },
@@ -771,7 +821,7 @@ TOOL_SPECS = [
         "name": "expand_canvas_document",
         "description": (
             "Load one canvas document beyond the active excerpt when you need more context. "
-            "Use this before broader reasoning or editing; document_id is optional."
+            "Use this before broader reasoning or editing; when document_id and document_path are omitted it defaults to the active document."
         ),
         "parameters": {
             "type": "object",
@@ -1041,6 +1091,7 @@ TOOL_SPECS = [
         "prompt": {
             "purpose": "Searches file paths or contents inside the workspace sandbox.",
             "inputs": {"query": "case-insensitive search text", "path_prefix": "optional subdirectory", "search_content": "optional boolean"},
+            "guidance": "Use this when you know a filename fragment, directory prefix, or exact text to look for. Prefer path-only search first, then enable search_content when you need matching file contents too.",
         },
     },
     {
@@ -1303,7 +1354,7 @@ TOOL_SPECS = [
                     "type": "array",
                     "minItems": 1,
                     "description": "Ordered list of non-overlapping replace, insert, or delete operations to preview.",
-                    "items": {"type": "object"}
+                    "items": {"oneOf": _build_canvas_edit_operation_variants()}
                 }
             },
             "required": ["operations"]
@@ -1313,6 +1364,7 @@ TOOL_SPECS = [
             "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "operations": "ordered edit operations"},
             "guidance": (
                 "Use this when you want to inspect the exact before/after effect of planned canvas changes before applying them. "
+                "Each operation must be a replace, insert, or delete object using the same schema as batch_canvas_edits. "
                 "Prefer this over speculative prose descriptions when the user needs a concrete diff preview."
             ),
         },
@@ -1335,47 +1387,7 @@ TOOL_SPECS = [
                     "type": "array",
                     "description": "Ordered list of non-overlapping replace, insert, or delete operations to apply against the same document snapshot.",
                     "minItems": 1,
-                    "items": {
-                        "oneOf": [
-                            {
-                                "type": "object",
-                                "properties": {
-                                    "action": {"type": "string", "enum": ["replace"]},
-                                    "start_line": {"type": "integer", "minimum": 1},
-                                    "end_line": {"type": "integer", "minimum": 1},
-                                    "lines": {"type": "array", "items": {"type": "string"}},
-                                    "expected_start_line": {"type": "integer", "minimum": 1},
-                                    "expected_lines": {"type": "array", "items": {"type": "string"}}
-                                },
-                                "required": ["action", "start_line", "end_line", "lines"],
-                                "additionalProperties": False
-                            },
-                            {
-                                "type": "object",
-                                "properties": {
-                                    "action": {"type": "string", "enum": ["insert"]},
-                                    "after_line": {"type": "integer", "minimum": 0},
-                                    "lines": {"type": "array", "items": {"type": "string"}},
-                                    "expected_start_line": {"type": "integer", "minimum": 1},
-                                    "expected_lines": {"type": "array", "items": {"type": "string"}}
-                                },
-                                "required": ["action", "after_line", "lines"],
-                                "additionalProperties": False
-                            },
-                            {
-                                "type": "object",
-                                "properties": {
-                                    "action": {"type": "string", "enum": ["delete"]},
-                                    "start_line": {"type": "integer", "minimum": 1},
-                                    "end_line": {"type": "integer", "minimum": 1},
-                                    "expected_start_line": {"type": "integer", "minimum": 1},
-                                    "expected_lines": {"type": "array", "items": {"type": "string"}}
-                                },
-                                "required": ["action", "start_line", "end_line"],
-                                "additionalProperties": False
-                            }
-                        ]
-                    }
+                    "items": {"oneOf": _build_canvas_edit_operation_variants()}
                 },
                 "atomic": {
                     "type": "boolean",
@@ -1453,17 +1465,17 @@ TOOL_SPECS = [
             "properties": {
                 "document_id": {"type": "string", "description": "Optional target canvas document id."},
                 "document_path": {"type": "string", "description": "Optional target project-relative path. Prefer this over document_id in project mode."},
-                "start_line": {"type": "integer", "minimum": 1},
-                "end_line": {"type": "integer", "minimum": 1},
-                "ttl_turns": {"type": "integer", "minimum": 0},
-                "auto_unpin_on_edit": {"type": "boolean"}
+                "start_line": {"type": "integer", "minimum": 1, "description": "1-based first line to pin."},
+                "end_line": {"type": "integer", "minimum": 1, "description": "1-based last line to pin."},
+                "ttl_turns": {"type": "integer", "minimum": 0, "description": "How many future turns to keep the viewport pinned. Use 0 to keep it pinned until explicitly cleared."},
+                "auto_unpin_on_edit": {"type": "boolean", "description": "When true, automatically clear the viewport if an overlapping edit changes that region."}
             },
             "required": ["start_line", "end_line"]
         },
         "prompt": {
             "purpose": "Pins a canvas range for automatic reuse in subsequent prompts.",
             "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "start_line": "viewport start", "end_line": "viewport end", "ttl_turns": "number of future turns to keep it pinned", "auto_unpin_on_edit": "whether overlapping edits clear it automatically"},
-            "guidance": "Use this when you expect to keep working in the same region for multiple turns and want to avoid repeated scroll or expand calls.",
+            "guidance": "Use this when you expect to keep working in the same region for multiple turns and want to avoid repeated scroll or expand calls. Use ttl_turns=0 only when the range should stay pinned until you explicitly clear it.",
         },
     },
     {
@@ -1479,7 +1491,7 @@ TOOL_SPECS = [
         "prompt": {
             "purpose": "Removes one or all pinned canvas viewports.",
             "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path"},
-            "guidance": "Use this when a pinned viewport is no longer useful or should stop consuming prompt space.",
+            "guidance": "Use this when a pinned viewport is no longer useful or should stop consuming prompt space. If both document_id and document_path are omitted, the tool clears all pinned viewports.",
         },
     },
     {
@@ -1646,6 +1658,7 @@ TOOL_SPECS = [
         "prompt": {
             "purpose": "Deletes one canvas document from the current conversation.",
             "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path"},
+            "guidance": "Use this only when the user explicitly wants to remove a single canvas document. Deletion is irreversible for the current conversation state.",
         },
     },
     {
@@ -1658,6 +1671,7 @@ TOOL_SPECS = [
         "prompt": {
             "purpose": "Clears all canvas documents from the current conversation.",
             "inputs": {},
+            "guidance": "Use this only when the user explicitly requests deleting all canvas documents. This is irreversible for the current conversation state, so do not use it as a shortcut for deleting a single file.",
         },
     },
 ]

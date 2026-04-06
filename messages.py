@@ -19,7 +19,7 @@ from config import (
     SCRATCHPAD_SECTION_ORDER,
 )
 from db import extract_message_attachments, parse_message_metadata, parse_message_tool_calls
-from tool_registry import build_canvas_decision_matrix, resolve_runtime_tool_names
+from tool_registry import resolve_runtime_tool_names
 
 SUMMARY_LABEL = "Conversation summary (generated from deleted messages):"
 CANVAS_PROMPT_MAX_CHARS = 20_000
@@ -49,6 +49,18 @@ PARALLEL_SAFE_READ_ONLY_TOOL_NAMES = (
     "search_canvas_document",
     "preview_canvas_changes",
 )
+CANVAS_MUTATING_TOOL_NAMES = {
+    "create_canvas_document",
+    "rewrite_canvas_document",
+    "batch_canvas_edits",
+    "transform_canvas_lines",
+    "update_canvas_metadata",
+    "replace_canvas_lines",
+    "insert_canvas_lines",
+    "delete_canvas_lines",
+    "delete_canvas_document",
+    "clear_canvas",
+}
 # Tools whose results may still be inputs for other calls in the same batch;
 # they are parallel-safe among themselves but must not be batched with any
 # call that depends on their output.
@@ -103,12 +115,6 @@ def _build_image_policy_payload(active_tool_names: list[str]) -> dict | None:
         "tool": "image_explain",
         "guidance": "Use for follow-up questions about a stored prior image. Send the question in English. Ask for clarification if multiple earlier images could match.",
     }
-
-
-def _make_generated_message_id(prefix: str, index: int) -> str:
-    normalized_prefix = str(prefix or "message").strip() or "message"
-    normalized_index = max(0, int(index or 0))
-    return f"msg-{normalized_prefix}-{normalized_index}"
 
 
 def _build_clarification_policy_payload(active_tool_names: list[str], clarification_max_questions: int | None = None) -> dict | None:
@@ -237,24 +243,6 @@ def normalize_chat_messages(messages) -> list[dict]:
         )
 
     return normalized
-
-
-def _get_api_message_id(
-    message: dict,
-    role: str,
-    *,
-    fallback_id: str,
-    tool_calls: list[dict] | None = None,
-) -> str:
-    message_id = str(message.get("id") or "").strip()
-    if message_id:
-        if message_id.startswith("msg"):
-            return message_id[:120]
-        return f"msg-{message_id[:116]}"
-
-    if fallback_id.startswith("msg"):
-        return fallback_id[:120]
-    return f"msg-{fallback_id[:116]}"
 
 
 def _normalize_canvas_document_name(value: str | None) -> str:
@@ -473,6 +461,8 @@ def build_api_messages(messages: list[dict], *, canvas_documents: list[dict] | N
                 content = f"{SUMMARY_LABEL}\n\n{content.strip()}" if content.strip() else SUMMARY_LABEL
         elif role == "assistant":
             tool_calls = parse_message_tool_calls(message.get("tool_calls"))
+            if tool_calls and not content.strip():
+                content = None
 
         api_message = {
             "role": role,
@@ -629,58 +619,9 @@ def _build_canvas_workspace_summary(canvas_payload: dict) -> list[str]:
     return lines
 
 
-def _build_canvas_decision_matrix_rows(active_tool_names: list[str], canvas_payload: dict | None = None) -> list[dict[str, str]]:
-    active_set = set(active_tool_names or [])
-    if not active_set.intersection(
-        {
-            "create_canvas_document",
-            "rewrite_canvas_document",
-            "batch_canvas_edits",
-            "preview_canvas_changes",
-            "transform_canvas_lines",
-            "update_canvas_metadata",
-            "set_canvas_viewport",
-            "clear_canvas_viewport",
-            "replace_canvas_lines",
-            "insert_canvas_lines",
-            "delete_canvas_lines",
-            "expand_canvas_document",
-            "scroll_canvas_document",
-            "search_canvas_document",
-        }
-    ):
-        return []
-
-    if canvas_payload is None:
-        return []
-
-    return build_canvas_decision_matrix(
-        active_tool_names,
-        has_canvas_documents=bool(canvas_payload),
-        canvas_mode=(canvas_payload or {}).get("mode"),
-    )
-
-
 def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload: dict | None = None) -> list[str]:
     active_set = set(active_tool_names or [])
-    if not active_set.intersection(
-        {
-            "create_canvas_document",
-            "rewrite_canvas_document",
-            "batch_canvas_edits",
-            "preview_canvas_changes",
-            "transform_canvas_lines",
-            "update_canvas_metadata",
-            "set_canvas_viewport",
-            "clear_canvas_viewport",
-            "replace_canvas_lines",
-            "insert_canvas_lines",
-            "delete_canvas_lines",
-            "expand_canvas_document",
-            "scroll_canvas_document",
-            "search_canvas_document",
-        }
-    ):
+    if not active_set.intersection(CANVAS_MUTATING_TOOL_NAMES):
         return []
 
     lines = [
@@ -874,6 +815,7 @@ def _build_runtime_volatile_parts(
     canvas_viewports: list[dict] | None = None,
     canvas_prompt_max_lines: int | None = None,
     canvas_prompt_max_tokens: int | None = None,
+    canvas_payload: dict | None = None,
     summary_count: int = 0,
     include_time_context: bool = True,
 ) -> list[str]:
@@ -909,13 +851,14 @@ def _build_runtime_volatile_parts(
                 volatile_parts.append(json.dumps(kb_payload["auto_injected_context"], ensure_ascii=False, indent=2))
         volatile_parts.append("")
 
-    canvas_payload = _build_canvas_prompt_payload(
-        canvas_documents,
-        active_document_id=canvas_active_document_id,
-        canvas_viewports=canvas_viewports,
-        max_lines=canvas_prompt_max_lines or CANVAS_PROMPT_MAX_LINES,
-        max_tokens=canvas_prompt_max_tokens if canvas_prompt_max_tokens is not None else CANVAS_PROMPT_MAX_TOKENS,
-    )
+    if canvas_payload is None:
+        canvas_payload = _build_canvas_prompt_payload(
+            canvas_documents,
+            active_document_id=canvas_active_document_id,
+            canvas_viewports=canvas_viewports,
+            max_lines=canvas_prompt_max_lines or CANVAS_PROMPT_MAX_LINES,
+            max_tokens=canvas_prompt_max_tokens if canvas_prompt_max_tokens is not None else CANVAS_PROMPT_MAX_TOKENS,
+        )
     if canvas_payload:
         workspace_summary_lines = _build_canvas_workspace_summary(canvas_payload)
         if workspace_summary_lines:
@@ -923,9 +866,9 @@ def _build_runtime_volatile_parts(
         active_document = canvas_payload["active_document"]
         volatile_parts.append("## Active Canvas Document")
         volatile_parts.append(f"- Active document id: {active_document['id']}")
-        if active_document.get("path"):
+        if not workspace_summary_lines and active_document.get("path"):
             volatile_parts.append(f"- Path: {active_document['path']}")
-        elif active_document.get("title"):
+        elif not workspace_summary_lines and active_document.get("title"):
             volatile_parts.append(f"- Title: {active_document['title']}")
         if active_document.get("role"):
             volatile_parts.append(f"- Role: {active_document['role']}")
@@ -950,9 +893,7 @@ def _build_runtime_volatile_parts(
             )
         else:
             volatile_parts.append(
-                "- Guidance: The active canvas document is fully visible in the current excerpt. "
-                "Canvas is already fully visible, so you do not need expand_canvas_document or scroll_canvas_document just to see more of this same document. "
-                "Use visible line numbers directly and never guess line numbers outside the excerpt."
+                "- Guidance: The active canvas document is fully visible in the current excerpt. Canvas is already fully visible, so use the visible line numbers directly for line-level edits."
             )
         if canvas_payload["mode"] == "project":
             volatile_parts.append(
@@ -1018,15 +959,19 @@ def build_runtime_context_injection(
     canvas_prompt_max_lines: int | None = None,
     canvas_prompt_max_tokens: int | None = None,
     workspace_root: str | None = None,
+    runtime_tool_names: list[str] | None = None,
+    canvas_payload: dict | None = None,
     summary_count: int = 0,
     include_time_context: bool = True,
 ) -> str:
     normalized_now = (now or datetime.now().astimezone()).astimezone()
-    resolved_tool_names = resolve_runtime_tool_names(
-        _normalize_tool_name_list(active_tool_names),
-        canvas_documents=canvas_documents,
-        workspace_root=workspace_root,
-    )
+    resolved_tool_names = _normalize_tool_name_list(runtime_tool_names)
+    if not resolved_tool_names:
+        resolved_tool_names = resolve_runtime_tool_names(
+            _normalize_tool_name_list(active_tool_names),
+            canvas_documents=canvas_documents,
+            workspace_root=workspace_root,
+        )
     return "\n".join(
         _build_runtime_volatile_parts(
             active_tool_names=resolved_tool_names,
@@ -1040,6 +985,7 @@ def build_runtime_context_injection(
             canvas_viewports=canvas_viewports,
             canvas_prompt_max_lines=canvas_prompt_max_lines,
             canvas_prompt_max_tokens=canvas_prompt_max_tokens,
+            canvas_payload=canvas_payload,
             summary_count=summary_count,
             include_time_context=include_time_context,
         )
@@ -1067,6 +1013,8 @@ def build_runtime_system_message(
     max_parallel_tools: int | None = None,
     include_time_context: bool = True,
     include_volatile_context: bool = True,
+    runtime_tool_names: list[str] | None = None,
+    canvas_payload: dict | None = None,
     summary_count: int = 0,
 ):
     now = (now or datetime.now().astimezone()).astimezone()
@@ -1077,20 +1025,25 @@ def build_runtime_system_message(
     )
     non_empty_scratchpad_sections = _iter_non_empty_scratchpad_sections(normalized_scratchpad_sections)
     configured_tool_names = _normalize_tool_name_list(active_tool_names)
-    runtime_tool_names = resolve_runtime_tool_names(
-        configured_tool_names,
-        canvas_documents=canvas_documents,
-        workspace_root=workspace_root,
-    )
-    canvas_payload = _build_canvas_prompt_payload(
-        canvas_documents,
-        active_document_id=canvas_active_document_id,
-        canvas_viewports=canvas_viewports,
-        max_lines=canvas_prompt_max_lines or CANVAS_PROMPT_MAX_LINES,
-        max_tokens=canvas_prompt_max_tokens if canvas_prompt_max_tokens is not None else CANVAS_PROMPT_MAX_TOKENS,
-    )
+    resolved_runtime_tool_names = _normalize_tool_name_list(runtime_tool_names)
+    if not resolved_runtime_tool_names:
+        resolved_runtime_tool_names = resolve_runtime_tool_names(
+            configured_tool_names,
+            canvas_documents=canvas_documents,
+            workspace_root=workspace_root,
+        )
+    runtime_tool_names = resolved_runtime_tool_names
+    if canvas_payload is None:
+        canvas_payload = _build_canvas_prompt_payload(
+            canvas_documents,
+            active_document_id=canvas_active_document_id,
+            canvas_viewports=canvas_viewports,
+            max_lines=canvas_prompt_max_lines or CANVAS_PROMPT_MAX_LINES,
+            max_tokens=canvas_prompt_max_tokens if canvas_prompt_max_tokens is not None else CANVAS_PROMPT_MAX_TOKENS,
+        )
     
     parts = [
+        "You are a tool-using assistant that should reason from the provided conversation state, tool results, and runtime context with minimal redundancy.",
         "You have access to a suite of tools that may enable you to explore workspaces, write code, recall memories, manage canvas documents, and search the web.",
         "You must respect the rules, tool contracts, and guidelines provided below.\n"
     ]
@@ -1193,6 +1146,7 @@ def build_runtime_system_message(
                 canvas_viewports=canvas_viewports,
                 canvas_prompt_max_lines=canvas_prompt_max_lines,
                 canvas_prompt_max_tokens=canvas_prompt_max_tokens,
+                canvas_payload=canvas_payload,
                 summary_count=summary_count,
                 include_time_context=include_time_context,
             )
@@ -1228,6 +1182,19 @@ def prepend_runtime_context(
     current_context_injection: str | None = None,
     summary_count: int | None = None,
 ):
+    resolved_runtime_tool_names = resolve_runtime_tool_names(
+        _normalize_tool_name_list(active_tool_names),
+        canvas_documents=canvas_documents,
+        workspace_root=workspace_root,
+    )
+    canvas_payload = _build_canvas_prompt_payload(
+        canvas_documents,
+        active_document_id=canvas_active_document_id,
+        canvas_viewports=canvas_viewports,
+        max_lines=canvas_prompt_max_lines or CANVAS_PROMPT_MAX_LINES,
+        max_tokens=canvas_prompt_max_tokens if canvas_prompt_max_tokens is not None else CANVAS_PROMPT_MAX_TOKENS,
+    )
+
     runtime_message = build_runtime_system_message(
         user_preferences,
         active_tool_names or [],
@@ -1248,6 +1215,8 @@ def prepend_runtime_context(
         max_parallel_tools=max_parallel_tools,
         include_time_context=False,
         include_volatile_context=False,
+        runtime_tool_names=resolved_runtime_tool_names,
+        canvas_payload=canvas_payload,
     )
 
     normalized_summary_count = summary_count if summary_count is not None else _count_summary_messages(messages)
@@ -1265,6 +1234,8 @@ def prepend_runtime_context(
             canvas_prompt_max_lines=canvas_prompt_max_lines,
             canvas_prompt_max_tokens=canvas_prompt_max_tokens,
             workspace_root=workspace_root,
+            runtime_tool_names=resolved_runtime_tool_names,
+            canvas_payload=canvas_payload,
             summary_count=normalized_summary_count,
             include_time_context=True,
         )

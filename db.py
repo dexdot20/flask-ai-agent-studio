@@ -1318,6 +1318,8 @@ def _normalize_message_usage(value: dict | None) -> dict | None:
         cleaned["cost_available"] = value["cost_available"]
     if value.get("cache_metrics_estimated") is True:
         cleaned["cache_metrics_estimated"] = True
+    if value.get("provider_usage_partial") is True:
+        cleaned["provider_usage_partial"] = True
 
     currency = str(value.get("currency") or "").strip()[:16]
     if currency:

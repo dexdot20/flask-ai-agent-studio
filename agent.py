@@ -792,6 +792,21 @@ def _clean_tool_text(text: str, limit: int | None = None) -> str:
     return cleaned
 
 
+def _format_tool_execution_error(error: Exception | str) -> str:
+    raw_text = _clean_tool_text(str(error or ""), limit=280)
+    if not raw_text:
+        return "Tool execution failed."
+
+    class_name = type(error).__name__ if isinstance(error, Exception) else ""
+    lowered = raw_text.casefold()
+    if class_name.endswith("Error") and class_name not in {"ValueError", "RuntimeError"}:
+        if lowered.startswith(class_name.casefold()):
+            raw_text = raw_text[len(class_name):].lstrip(": ") or raw_text
+    if raw_text.lower().startswith("traceback"):
+        return "Tool execution failed before producing a usable result."
+    return raw_text
+
+
 def _sanitize_clarification_text(text: str, limit: int | None = None) -> str:
     cleaned = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     if not cleaned:
@@ -5419,7 +5434,10 @@ def run_agent_stream(
         prompt_tokens_total = max(0, int(usage_totals["prompt_tokens"] or 0))
         input_breakdown = dict(usage_totals["input_breakdown"])
         estimated_input_tokens = max(0, int(usage_totals["estimated_input_tokens"] or 0))
-        if prompt_tokens_total > 0:
+        provider_usage_partial = any(
+            bool(call.get("missing_provider_usage")) for call in usage_totals["model_calls"]
+        )
+        if prompt_tokens_total > 0 and not provider_usage_partial:
             input_breakdown = _align_breakdown_to_provider_total(input_breakdown, prompt_tokens_total)
             estimated_input_tokens = prompt_tokens_total
         elif input_breakdown:
@@ -5459,6 +5477,7 @@ def run_agent_stream(
             "model": model,
             "provider": model_target["record"]["provider"],
             "cache_metrics_estimated": usage_totals["cache_metrics_estimated"],
+            "provider_usage_partial": provider_usage_partial,
         }
 
     def remember_tool_result(tool_name: str, tool_args: dict, result, summary: str, cache_key: str, transcript_result=None):
@@ -5629,8 +5648,9 @@ def run_agent_stream(
             final_cache_miss_tokens = _coerce_usage_int(cache_miss_tokens)
 
             usage_totals["prompt_tokens"] += provider_usage["prompt_tokens"]
-            usage_totals["prompt_cache_hit_tokens"] += final_cache_hit_tokens
-            usage_totals["prompt_cache_miss_tokens"] += final_cache_miss_tokens
+            if provider_usage["received"]:
+                usage_totals["prompt_cache_hit_tokens"] += final_cache_hit_tokens
+                usage_totals["prompt_cache_miss_tokens"] += final_cache_miss_tokens
             usage_totals["completion_tokens"] += provider_usage["completion_tokens"]
             usage_totals["total_tokens"] += provider_usage["total_tokens"]
             if cache_metrics_estimated:
@@ -5657,10 +5677,9 @@ def run_agent_stream(
                     "cache_metrics_estimated": cache_metrics_estimated,
                 }
             )
-            if provider_usage["received"]:
-                usage_totals["estimated_input_tokens"] += estimated_input_tokens
-                for key, value in estimated_breakdown.items():
-                    usage_totals["input_breakdown"][key] += value
+            usage_totals["estimated_input_tokens"] += estimated_input_tokens
+            for key, value in estimated_breakdown.items():
+                usage_totals["input_breakdown"][key] += value
             return estimated_breakdown, estimated_input_tokens, tool_schema_tokens
 
         try:
@@ -6204,7 +6223,7 @@ def run_agent_stream(
                         )
                         return {"ok": True, "result": res, "summary": summ, "events": events}
                     except Exception as exc:
-                        return {"ok": False, "error": str(exc)}
+                        return {"ok": False, "error": _format_tool_execution_error(exc)}
 
                 with ThreadPoolExecutor(max_workers=min(normalized_parallel_tool_limit, len(parallel_slots))) as executor:
                     futures_list = [(executor.submit(_run_slot, s), s) for s in parallel_slots]
@@ -6220,7 +6239,7 @@ def run_agent_stream(
                         )
                         s["exec_result"] = {"ok": True, "result": res, "summary": summ, "events": events}
                     except Exception as exc:
-                        s["exec_result"] = {"ok": False, "error": str(exc)}
+                        s["exec_result"] = {"ok": False, "error": _format_tool_execution_error(exc)}
 
             for s in parallel_slots:
                 buffered_events = s.get("exec_result", {}).get("events") if isinstance(s.get("exec_result"), dict) else []
@@ -6237,7 +6256,7 @@ def run_agent_stream(
                         res, summ = _execute_tool(s["tool_name"], s["tool_args"], runtime_state=runtime_state)
                     s["exec_result"] = {"ok": True, "result": res, "summary": summ}
                 except Exception as exc:
-                    s["exec_result"] = {"ok": False, "error": str(exc)}
+                    s["exec_result"] = {"ok": False, "error": _format_tool_execution_error(exc)}
 
         # ---- Phase 3: post-process all slots in original order ----
         for slot in slots:
@@ -6533,7 +6552,6 @@ def run_agent_stream(
                         }
                     )
 
-        tool_execution_result_message = _build_tool_execution_result_message(transcript_results)
         if tool_output_entries:
             tool_messages, transcript_results, tool_execution_result_message, tool_results_budget_compacted = _apply_tool_output_budget(
                 messages,

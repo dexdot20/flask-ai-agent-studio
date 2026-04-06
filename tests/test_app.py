@@ -38,6 +38,7 @@ from agent import (
     _estimate_input_breakdown,
     _estimate_message_breakdown,
     _execute_tool,
+        _format_tool_execution_error,
     _extract_partial_json_string_value,
     _extract_usage_metrics,
     _is_context_overflow_error,
@@ -150,7 +151,7 @@ from routes.chat import (
 )
 from routes.pages import build_tool_permission_options, build_tool_permission_sections
 from token_utils import estimate_text_tokens
-from tool_registry import TOOL_SPEC_BY_NAME, get_openai_tool_specs, resolve_runtime_tool_names
+from tool_registry import TOOL_SPEC_BY_NAME, get_enabled_tool_specs, get_openai_tool_specs, resolve_runtime_tool_names
 from vision import normalize_image_analysis
 from web_tools import (
     _extract_html,
@@ -3086,7 +3087,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("- Project label: demo-app", content)
         self.assertIn("- Active file: src/app.py", content)
         self.assertIn("- Other documents: src/config.py", content)
-        self.assertIn("- Path: src/app.py", content)
+        self.assertNotIn("- Path: src/app.py", content)
         self.assertIn("- Role: source", content)
         self.assertIn("- Active document id: canvas-1", content)
         self.assertIn("- Canvas view status: full document visible (3/3 lines)", content)
@@ -4905,6 +4906,26 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(usage["currency"], "USD")
         self.assertEqual(usage["provider"], "openrouter")
         self.assertEqual(usage["model"], "openrouter:anthropic/claude-sonnet-4.5")
+
+    def test_extract_message_usage_preserves_partial_provider_usage_flag(self):
+        usage = extract_message_usage(
+            {
+                "usage": {
+                    "estimated_input_tokens": 18,
+                    "provider_usage_partial": True,
+                    "model_calls": [
+                        {
+                            "index": 1,
+                            "estimated_input_tokens": 18,
+                            "missing_provider_usage": True,
+                        }
+                    ],
+                }
+            }
+        )
+
+        self.assertTrue(usage["provider_usage_partial"])
+        self.assertTrue(usage["model_calls"][0]["missing_provider_usage"])
 
     def test_extract_usage_metrics_normalizes_openrouter_prompt_tokens_details(self):
         # OpenRouter returns cached_tokens inside prompt_tokens_details
@@ -8708,6 +8729,58 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertGreater(usage_event["model_calls"][1]["prompt_cache_hit_tokens"], 0)
         self.assertLess(usage_event["model_calls"][1]["prompt_cache_miss_tokens"], 14)
 
+    def test_run_agent_stream_keeps_estimated_breakdown_when_provider_usage_is_missing(self):
+        responses = [
+            iter(
+                [
+                    self._stream_chunk(reasoning="Need current info. "),
+                    self._stream_chunk(
+                        tool_calls=[
+                            {
+                                "index": 0,
+                                "id": "tool-call-1",
+                                "function": {
+                                    "name": "search_web",
+                                    "arguments": '{"queries":["test query"]}',
+                                },
+                            }
+                        ]
+                    ),
+                ]
+            ),
+            iter(
+                [
+                    self._stream_chunk(content="Final answer."),
+                    self._stream_chunk(
+                        usage=SimpleNamespace(
+                            prompt_tokens=3,
+                            completion_tokens=5,
+                            total_tokens=8,
+                        )
+                    ),
+                ]
+            ),
+        ]
+
+        with patch("agent.client.chat.completions.create", side_effect=responses), patch(
+            "agent.search_web_tool",
+            return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+        ):
+            events = list(run_agent_stream([{"role": "user", "content": "Test"}], "deepseek-chat", 3, ["search_web"]))
+
+        usage_event = next(event for event in events if event["type"] == "usage")
+        self.assertEqual(usage_event["prompt_tokens"], 3)
+        self.assertEqual(usage_event["completion_tokens"], 5)
+        self.assertEqual(usage_event["total_tokens"], 8)
+        self.assertTrue(usage_event["provider_usage_partial"])
+        self.assertGreater(usage_event["estimated_input_tokens"], usage_event["prompt_tokens"])
+        self.assertGreater(usage_event["input_breakdown"]["tool_results"], 0)
+        self.assertEqual(len(usage_event["model_calls"]), 2)
+        self.assertTrue(usage_event["model_calls"][0]["missing_provider_usage"])
+        self.assertEqual(usage_event["model_calls"][0]["prompt_tokens"], None)
+        self.assertGreater(usage_event["model_calls"][0]["estimated_input_tokens"], 0)
+        self.assertEqual(usage_event["model_calls"][1]["prompt_tokens"], 3)
+
     def test_run_agent_stream_passes_openrouter_extra_body_preferences(self):
         responses = [
             iter(
@@ -9124,6 +9197,76 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertNotIn("Earlier KB excerpt", system_messages[0]["content"])
         self.assertNotIn("## Pinned Canvas Viewports", system_messages[0]["content"])
         self.assertNotIn("src/app.py lines 20-24", system_messages[0]["content"])
+
+    def test_build_api_messages_uses_null_content_for_tool_only_assistant_turns(self):
+        api_messages = build_api_messages(
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {"name": "search_web", "arguments": "{}"},
+                        }
+                    ],
+                }
+            ]
+        )
+
+        self.assertIsNone(api_messages[0]["content"])
+        self.assertIn("tool_calls", api_messages[0])
+
+    def test_runtime_system_message_avoids_duplicate_active_canvas_identity_when_workspace_summary_is_present(self):
+        message = build_runtime_system_message(
+            active_tool_names=["replace_canvas_lines"],
+            canvas_documents=[
+                {
+                    "id": "canvas-1",
+                    "title": "app.py",
+                    "path": "src/app.py",
+                    "role": "source",
+                    "project_id": "demo-app",
+                    "workspace_id": "demo-workspace",
+                    "format": "code",
+                    "language": "python",
+                    "content": "print('a')\nprint('b')\n",
+                },
+                {
+                    "id": "canvas-2",
+                    "title": "utils.py",
+                    "path": "src/utils.py",
+                    "role": "source",
+                    "project_id": "demo-app",
+                    "workspace_id": "demo-workspace",
+                    "format": "code",
+                    "language": "python",
+                    "content": "pass\n",
+                },
+            ],
+            canvas_active_document_id="canvas-1",
+        )
+
+        content = message["content"]
+        self.assertIn("- Active file: src/app.py", content)
+        self.assertEqual(content.count("- Path: src/app.py"), 0)
+
+    def test_build_runtime_system_message_skips_canvas_editing_guidance_for_read_only_canvas_tools(self):
+        message = build_runtime_system_message(
+            active_tool_names=["search_canvas_document", "expand_canvas_document", "set_canvas_viewport"],
+            canvas_documents=[
+                {
+                    "id": "doc-1",
+                    "title": "notes.txt",
+                    "content": "alpha\nbeta\n",
+                    "format": "markdown",
+                }
+            ],
+            include_volatile_context=False,
+        )
+
+        self.assertNotIn("## Canvas Editing Guidance", message["content"])
 
     def test_chat_uses_compact_clarification_answers_for_rag_query(self):
         conversation_id = self._create_conversation()
@@ -9727,6 +9870,30 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("later asks you to verify or refresh", message["content"])
         self.assertIn("Recovery:", message["content"])
         self.assertIn("grep_fetched_content", message["content"])
+
+    def test_tool_specs_include_preview_operation_schema_and_new_guidance(self):
+        preview_specs = get_openai_tool_specs(
+            ["preview_canvas_changes"],
+            canvas_documents=[{"id": "doc-1", "title": "draft.py", "content": "print('x')\n"}],
+        )
+        operations_items = preview_specs[0]["function"]["parameters"]["properties"]["operations"]["items"]
+        enabled_specs = {spec["name"]: spec for spec in get_enabled_tool_specs(["search_files", "set_canvas_viewport", "clear_canvas"])}
+
+        self.assertIn("oneOf", operations_items)
+        self.assertEqual(
+            {variant["properties"]["action"]["enum"][0] for variant in operations_items["oneOf"]},
+            {"replace", "insert", "delete"},
+        )
+        self.assertIn("Prefer path-only search first", enabled_specs["search_files"]["prompt"]["guidance"])
+        self.assertIn("Use 0 to keep it pinned", enabled_specs["set_canvas_viewport"]["parameters"]["properties"]["ttl_turns"]["description"])
+        self.assertIn("explicitly requests deleting all canvas documents", enabled_specs["clear_canvas"]["prompt"]["guidance"])
+
+    def test_format_tool_execution_error_hides_internal_exception_class_names(self):
+        error_text = _format_tool_execution_error(ValueError("Canvas document not found for path: src/app.py"))
+        custom_error = type("CanvasDocumentLookupError", (Exception,), {})("Canvas document not found for path: src/app.py")
+
+        self.assertEqual(error_text, "Canvas document not found for path: src/app.py")
+        self.assertEqual(_format_tool_execution_error(custom_error), "Canvas document not found for path: src/app.py")
 
     def test_tool_result_has_error_detects_status_error_payloads(self):
         self.assertTrue(_tool_result_has_error("sub_agent", {"status": "error", "error": "failed"}))
