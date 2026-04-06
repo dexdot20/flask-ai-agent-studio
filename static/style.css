@@ -52,6 +52,10 @@ body {
   box-shadow: 0 0 0 3px rgba(79, 110, 247, 0.14);
 }
 
+textarea:focus-visible {
+  box-shadow: none;
+}
+
 /* ── Scrollbar ──────────────────────────────────────────── */
 ::-webkit-scrollbar       { width: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -1544,14 +1548,13 @@ body.sidebar-collapsed .chat-area {
   max-width: 780px;
   margin: 0 auto;
   background: transparent;
-  border: 1px solid var(--border);
+  border: none;
   border-radius: var(--radius-md);
   padding: 10px 10px 10px 14px;
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition: box-shadow 0.2s;
 }
 
 .input-wrapper:focus-within {
-  border-color: var(--border-focus);
   box-shadow: none;
 }
 
