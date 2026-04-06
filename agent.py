@@ -714,8 +714,86 @@ def _summarize_model_call_usage(model_calls: list[dict], fallback_input_tokens: 
     }
 
 
-def _is_context_overflow_error(error_str: str) -> bool:
-    normalized = str(error_str or "").strip().lower()
+def _extract_error_signal_text(error) -> str:
+    fragments: list[str] = []
+
+    def visit(value, depth: int = 0):
+        if depth > 4 or value in (None, ""):
+            return
+        if isinstance(value, bytes):
+            visit(value.decode("utf-8", errors="replace"), depth + 1)
+            return
+        if isinstance(value, dict):
+            for key in ("message", "error", "detail", "code", "type"):
+                nested = value.get(key)
+                if nested not in (None, ""):
+                    visit(nested, depth + 1)
+            return
+        if isinstance(value, Exception):
+            visit(str(value), depth + 1)
+            for attr in ("message", "body", "response"):
+                nested = getattr(value, attr, None)
+                if nested not in (None, ""):
+                    visit(nested, depth + 1)
+            return
+
+        text = str(value or "").strip()
+        if not text:
+            return
+        if text[:1] in "{" and text[-1:] in "}":
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                pass
+            else:
+                visit(parsed, depth + 1)
+                return
+        if len(text) > 600:
+            text = text[:600]
+        fragments.append(text)
+
+    visit(error)
+    if not fragments:
+        return ""
+    return " | ".join(fragment for fragment in fragments if fragment).strip().lower()
+
+
+def _summarize_input_breakdown_for_error(messages_to_send: list[dict]) -> str:
+    if not isinstance(messages_to_send, list) or not messages_to_send:
+        return ""
+
+    breakdown, estimated_input_tokens, tool_schema_tokens = _estimate_input_breakdown(messages_to_send)
+    summary_parts: list[str] = []
+    if estimated_input_tokens > 0:
+        prompt_part = f"Estimated prompt size: ~{estimated_input_tokens:,} tokens"
+        if tool_schema_tokens > 0:
+            prompt_part += f" (+ ~{tool_schema_tokens:,} tool-schema tokens)"
+        summary_parts.append(prompt_part)
+
+    largest_buckets = [
+        (key, max(0, int(value or 0)))
+        for key, value in breakdown.items()
+        if max(0, int(value or 0)) > 0
+    ]
+    largest_buckets.sort(key=lambda item: item[1], reverse=True)
+    if largest_buckets:
+        bucket_summary = ", ".join(
+            f"{str(key).replace('_', ' ')} ~{value:,}"
+            for key, value in largest_buckets[:3]
+        )
+        summary_parts.append(f"Largest input buckets: {bucket_summary}")
+    return ". ".join(summary_parts).strip().rstrip(".")
+
+
+def _build_context_overflow_recovery_error(messages_to_send: list[dict] | None = None) -> str:
+    detail = _summarize_input_breakdown_for_error(messages_to_send or [])
+    if not detail:
+        return CONTEXT_OVERFLOW_RECOVERY_ERROR_TEXT
+    return f"{CONTEXT_OVERFLOW_RECOVERY_ERROR_TEXT} {detail}."
+
+
+def _is_context_overflow_error(error_str) -> bool:
+    normalized = _extract_error_signal_text(error_str)
     if not normalized:
         return False
     if "rate_limit" in normalized or re.search(r"\b429\b", normalized):
@@ -732,6 +810,10 @@ def _is_context_overflow_error(error_str: str) -> bool:
         "context window",
         "context is full",
         "max_tokens",
+        "context overflow",
+        "input tokens exceed",
+        "prompt has too many tokens",
+        "prompt tokens exceed",
     )
     if any(phrase in normalized for phrase in known_phrases):
         return True
@@ -1889,6 +1971,43 @@ def _normalize_fetch_clip_aggressiveness(value) -> int:
     return max(0, min(100, aggressiveness))
 
 
+def _clip_text_preserving_ends(text: str, target_chars: int) -> str:
+    cleaned = str(text or "")
+    normalized_target = max(0, int(target_chars or 0))
+    if not cleaned or normalized_target <= 0 or len(cleaned) <= normalized_target:
+        return cleaned
+
+    if normalized_target < 240:
+        return _clean_tool_text(cleaned, limit=normalized_target)
+
+    marker = "\n\n[... middle content omitted ...]\n\n"
+    available = normalized_target - len(marker)
+    if available < 1_200:
+        return _clean_tool_text(cleaned, limit=normalized_target)
+
+    head_chars = max(700, int(available * 0.72))
+    tail_chars = max(320, available - head_chars)
+    if head_chars + tail_chars >= len(cleaned):
+        return cleaned
+
+    omitted_chars = max(0, len(cleaned) - head_chars - tail_chars)
+    dynamic_marker = f"\n\n[... {omitted_chars:,} middle characters omitted ...]\n\n"
+    available = normalized_target - len(dynamic_marker)
+    if available < 1_000:
+        return _clean_tool_text(cleaned, limit=normalized_target)
+
+    head_chars = max(600, int(available * 0.72))
+    tail_chars = max(280, available - head_chars)
+    if head_chars + tail_chars >= len(cleaned):
+        return cleaned
+
+    head = cleaned[:head_chars].rstrip()
+    tail = cleaned[-tail_chars:].lstrip()
+    if not head or not tail:
+        return _clean_tool_text(cleaned, limit=normalized_target)
+    return f"{head}{dynamic_marker}{tail}"
+
+
 def _build_fetch_clipped_text(result: dict, token_threshold: int, clip_aggressiveness: int) -> tuple[str, int]:
     raw_content = _clean_tool_text(result.get("content") or "")
     token_estimate = _estimate_text_tokens(raw_content)
@@ -1901,7 +2020,7 @@ def _build_fetch_clipped_text(result: dict, token_threshold: int, clip_aggressiv
     clip_ratio = min(1.0, token_threshold / max(token_estimate, 1))
     preserve_multiplier = min(1.0, 1.8 - (_normalize_fetch_clip_aggressiveness(clip_aggressiveness) / 100) * 1.0)
     target_chars = max(2000, min(FETCH_SUMMARY_MAX_CHARS, int(len(raw_content) * clip_ratio * preserve_multiplier)))
-    clipped_content = _clean_tool_text(raw_content, limit=target_chars)
+    clipped_content = _clip_text_preserving_ends(raw_content, target_chars)
     result_text = clipped_content or raw_content
     return result_text, _estimate_text_tokens(result_text)
 
@@ -1994,6 +2113,7 @@ def _build_fetch_summary_source_text(result: dict) -> str:
     title = _clean_tool_text(result.get("title") or "", limit=200)
     url = _clean_tool_text(result.get("url") or "", limit=240)
     meta_description = _clean_tool_text(result.get("meta_description") or "", limit=600)
+    structured_data = _clean_tool_text(result.get("structured_data") or "", limit=2_000)
     outline = result.get("outline") if isinstance(result.get("outline"), list) else []
     content = _clean_tool_text(result.get("content") or "", limit=FETCH_SUMMARIZE_MAX_INPUT_CHARS)
     if title:
@@ -2002,6 +2122,8 @@ def _build_fetch_summary_source_text(result: dict) -> str:
         parts.append(f"URL: {url}")
     if meta_description:
         parts.append(f"Meta description: {meta_description}")
+    if structured_data:
+        parts.append("Structured data:\n" + structured_data)
     if outline:
         headings = [f"- {_clean_tool_text(item, limit=120)}" for item in outline[:40] if _clean_tool_text(item, limit=120)]
         if headings:
@@ -2101,10 +2223,11 @@ def _prepare_fetch_result_for_model(
     clipped_pct = int(100 * clipped_char_count / max(raw_char_count, 1))
     prepared["content"] = clipped_text
     prepared["content_mode"] = "clipped_text"
+    prepared["clip_strategy"] = "head_tail_excerpt"
     prepared["summary_notice"] = (
         f"Content was clipped: showing {clipped_char_count:,} of {raw_char_count:,} characters "
         f"({clipped_pct}% of the page, approximately {token_estimate:,} tokens). "
-        "The leading portion is preserved. "
+        "The leading and trailing excerpts are preserved; the middle portion is omitted. "
         f"{recovery_hint or 'Use grep_fetched_content for exact text and search_tool_memory for semantic recall.'}"
     )
     prepared["content_token_estimate"] = token_estimate
@@ -2127,37 +2250,50 @@ def _build_fetch_tool_message_content(tool_args: dict, summary: str, transcript_
     pages_extracted = transcript_result.get("pages_extracted")
     page_count = transcript_result.get("page_count")
     body = _clean_tool_text(transcript_result.get("content") or "", limit=FETCH_SUMMARY_MAX_CHARS)
+    content_mode = str(transcript_result.get("content_mode") or "").strip()
+
+    source_lines = []
     if title:
-        parts.append(f"Title: {title}")
+        source_lines.append(f"Title: {title}")
     if url:
-        parts.append(f"URL: {url}")
+        source_lines.append(f"URL: {url}")
     if content_format and content_format != "html":
         fmt_info = f"Format: {content_format}"
         if content_format == "pdf" and isinstance(pages_extracted, int) and isinstance(page_count, int):
             fmt_info += f" ({pages_extracted} of {page_count} pages extracted)"
         elif content_format == "pdf" and isinstance(pages_extracted, int):
             fmt_info += f" ({pages_extracted} pages extracted)"
-        parts.append(fmt_info)
-    if summary:
-        parts.append(f"Summary: {_clean_tool_text(summary, limit=300)}")
-    if notice:
-        parts.append(f"Note: {notice}")
-    if diagnostic:
-        parts.append(f"Fetch status: {diagnostic}")
+        source_lines.append(fmt_info)
     if meta_description:
-        parts.append(f"Description: {meta_description}")
-    if structured_data:
-        parts.append("Structured data:\n" + structured_data)
+        source_lines.append(f"Description: {meta_description}")
+    if source_lines:
+        parts.append("## Source Metadata\n" + "\n".join(source_lines))
+
+    if summary:
+        parts.append("## Fetch Summary\n" + f"Summary: {_clean_tool_text(summary, limit=300)}")
+
+    note_lines = []
+    if notice:
+        note_lines.append(f"Note: {notice}")
+    if diagnostic:
+        note_lines.append(f"Fetch status: {diagnostic}")
     if budget_notice:
-        parts.append(f"Budget note: {budget_notice}")
+        note_lines.append(f"Budget note: {budget_notice}")
     if recovery_hint:
-        parts.append(f"Recovery: {recovery_hint}")
-    if outline and isinstance(outline, list) and transcript_result.get("content_mode") in {"clipped_text", "budget_compact", "budget_brief"}:
-        heading_lines = [f"  - {_clean_tool_text(str(h), limit=120)}" for h in outline[:30] if str(h).strip()]
+        note_lines.append(f"Recovery: {recovery_hint}")
+    if note_lines:
+        parts.append("## Retrieval Notes\n" + "\n".join(note_lines))
+
+    if outline and isinstance(outline, list):
+        heading_lines = [f"- {_clean_tool_text(str(h), limit=120)}" for h in outline[:30] if str(h).strip()]
         if heading_lines:
             parts.append("## Page Outline\n" + "\n".join(heading_lines))
+
+    if structured_data:
+        parts.append("## Structured Data\n" + structured_data)
     if body:
-        parts.append(body)
+        body_heading = "## Page Content Excerpt" if content_mode in {"clipped_text", "budget_compact", "budget_brief"} else "## Page Content"
+        parts.append(body_heading + "\n" + body)
     return "\n\n".join(parts).strip()
 
 
@@ -5400,11 +5536,33 @@ def run_agent_stream(
         if not force and before_tokens <= threshold:
             return turn_messages, False
 
-        compacted_messages = _try_compact_messages(
-            messages,
-            max(1, int(PROMPT_MAX_INPUT_TOKENS * 0.75)),
-            keep_recent=0 if force else AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS,
-        )
+        target_budget = max(1, int(PROMPT_MAX_INPUT_TOKENS * 0.75))
+        configured_keep_recent = max(0, int(AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS))
+        if force:
+            keep_recent_candidates = list(range(max(0, configured_keep_recent - 1), -1, -1)) or [0]
+        else:
+            keep_recent_candidates = [configured_keep_recent]
+
+        compacted_messages = None
+        chosen_keep_recent = None
+        chosen_tokens = None
+        for keep_recent in keep_recent_candidates:
+            candidate_messages = _try_compact_messages(
+                messages,
+                target_budget,
+                keep_recent=keep_recent,
+            )
+            if candidate_messages is None:
+                continue
+            candidate_turn_messages = [*candidate_messages, *extra_messages]
+            candidate_tokens = _estimate_messages_tokens(candidate_turn_messages)
+            if chosen_tokens is None or candidate_tokens < chosen_tokens:
+                compacted_messages = candidate_messages
+                chosen_keep_recent = keep_recent
+                chosen_tokens = candidate_tokens
+            if candidate_tokens <= target_budget:
+                break
+
         if compacted_messages is None:
             return turn_messages, False
 
@@ -5426,7 +5584,7 @@ def run_agent_stream(
             after_message_count=after_message_count,
             compacted_exchange_count=max(0, before_exchange_count - after_exchange_count),
             merged_message_delta=max(0, before_message_count - after_message_count),
-            keep_recent=0 if force else AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS,
+            keep_recent=chosen_keep_recent,
         )
         return compacted_turn_messages, True
 

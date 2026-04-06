@@ -26,11 +26,13 @@ client = get_provider_client(DEEPSEEK_PROVIDER)
 PRUNING_SYSTEM_PROMPT = (
     "You are a specialized text refinement AI. Your goal is to rewrite a single chat message for conciseness while strictly preserving the original language, core meaning, intent, tone, and all critical facts.\n"
     "Do not delete, summarize, or paraphrase code blocks, commands, logs, JSON, tables, numbers, URLs, identifiers, API names, configuration values, or other technical data.\n"
+    "Preserve unresolved questions, decisions, constraints, requested follow-ups, and references that later turns may rely on.\n"
     "When you encounter those sections, keep those sections verbatim and only trim truly redundant surrounding prose.\n"
     "Return only the refined message text without conversational filler or markdown artifacts."
 )
 PRUNING_TARGET_REDUCTION_RATIO = 0.65
-PRUNING_MIN_TARGET_TOKENS = 80
+PRUNING_MIN_TARGET_TOKENS = 160
+PRUNING_CONTEXT_MESSAGE_MAX_CHARS = 280
 
 
 def _extract_response_text(response: Any) -> str:
@@ -61,19 +63,82 @@ def _estimate_pruning_target_tokens(content: str) -> int:
     return max(PRUNING_MIN_TARGET_TOKENS, target_tokens)
 
 
-def _build_pruning_messages(content: str, target_tokens: int | None = None) -> list[dict[str, str]]:
+def _build_pruning_context_hint(conversation_id: int, message_id: int) -> str:
+    normalized_conversation_id = int(conversation_id or 0)
+    normalized_message_id = int(message_id or 0)
+    if normalized_conversation_id <= 0 or normalized_message_id <= 0:
+        return ""
+
+    with get_db() as conn:
+        rows = get_conversation_message_rows(conn, normalized_conversation_id)
+
+    visible_messages = [message_row_to_dict(row) for row in rows]
+    current_index = next(
+        (index for index, message in enumerate(visible_messages) if int(message.get("id") or 0) == normalized_message_id),
+        -1,
+    )
+    if current_index < 0:
+        return ""
+
+    def format_neighbor(label: str, message: dict) -> str:
+        role = str(message.get("role") or "").strip() or "message"
+        content = str(message.get("content") or "").strip()
+        if not content:
+            return ""
+        if len(content) > PRUNING_CONTEXT_MESSAGE_MAX_CHARS:
+            content = content[:PRUNING_CONTEXT_MESSAGE_MAX_CHARS].rstrip() + "..."
+        return f"{label} ({role}): {content}"
+
+    context_lines: list[str] = []
+    for index in range(current_index - 1, -1, -1):
+        neighbor = visible_messages[index]
+        if not str(neighbor.get("content") or "").strip():
+            continue
+        snippet = format_neighbor("Previous visible message", neighbor)
+        if snippet:
+            context_lines.append(snippet)
+            break
+
+    for index in range(current_index + 1, len(visible_messages)):
+        neighbor = visible_messages[index]
+        if not str(neighbor.get("content") or "").strip():
+            continue
+        snippet = format_neighbor("Next visible message", neighbor)
+        if snippet:
+            context_lines.append(snippet)
+            break
+
+    return "\n".join(context_lines).strip()
+
+
+def _estimate_pruning_max_output_tokens(target_tokens: int) -> int:
+    normalized_target = max(1, int(target_tokens or 1))
+    return max(256, min(4000, max(normalized_target + 96, int(normalized_target * 1.5))))
+
+
+def _build_pruning_messages(
+    content: str,
+    target_tokens: int | None = None,
+    context_hint: str = "",
+) -> list[dict[str, str]]:
     normalized_target_tokens = max(1, int(target_tokens or _estimate_pruning_target_tokens(content)))
+    normalized_context_hint = str(context_hint or "").strip()
+    user_prompt_parts = [
+        "Preserve the message's core idea, critical details, technical accuracy, unresolved questions, user constraints, and action items; only reduce unnecessary repetition, indirect phrasing, and filler.",
+        "Code blocks, logs, JSON, tables, numbers, commands, URLs, and other sensitive technical data must be kept verbatim; do not rewrite, summarize, or delete those sections.",
+        f"Aim for roughly {normalized_target_tokens} tokens while keeping the message faithful and readable.",
+    ]
+    if normalized_context_hint:
+        user_prompt_parts.append(
+            "Conversation context below is reference-only. Do not rewrite it; use it only to judge which details in the target message must survive pruning."
+        )
+        user_prompt_parts.append(f"Conversation context:\n{normalized_context_hint}")
+    user_prompt_parts.append(f"Target message:\n{content}")
     return [
         {"role": "system", "content": PRUNING_SYSTEM_PROMPT},
         {
             "role": "user",
-            "content": (
-                "Preserve the message's core idea, critical details, and technical accuracy; only reduce unnecessary repetition, "
-                "indirect phrasing, and filler. Code blocks, logs, JSON, tables, numbers, commands, URLs, and other sensitive "
-                "technical data must be kept verbatim; do not rewrite, summarize, or delete those sections. "
-                f"Aim for roughly {normalized_target_tokens} tokens while keeping the message faithful and readable.\n\n"
-                f"Mesaj:\n{content}"
-            ),
+            "content": "\n\n".join(user_prompt_parts),
         },
     ]
 
@@ -130,6 +195,7 @@ def prune_message(message_id: int) -> dict:
     original_content = str(message.get("content") or "")
     metadata = parse_message_metadata(message.get("metadata"))
     target_tokens = _estimate_pruning_target_tokens(original_content)
+    context_hint = _build_pruning_context_hint(int(row["conversation_id"] or 0), int(row["id"] or 0))
 
     settings = get_app_settings()
     pruning_model = get_operation_model("prune", settings, fallback_model_id=PRUNING_MODEL)
@@ -138,7 +204,13 @@ def prune_message(message_id: int) -> dict:
     request_kwargs = apply_model_target_request_options(
         {
             "model": target["api_model"],
-            "messages": _build_pruning_messages(original_content, target_tokens=target_tokens),
+            "messages": _build_pruning_messages(
+                original_content,
+                target_tokens=target_tokens,
+                context_hint=context_hint,
+            ),
+            "max_tokens": _estimate_pruning_max_output_tokens(target_tokens),
+            "temperature": 0.2,
         },
         target,
     )
