@@ -105,6 +105,7 @@ def _build_login_context(error: str | None = None, next_url: str | None = None, 
             lockout_until=_lockout_until(),
             timeout_minutes=config.LOGIN_SESSION_TIMEOUT_MINUTES,
             remember_days=config.LOGIN_REMEMBER_SESSION_DAYS,
+            page_lang=request.accept_languages.best_match(["tr", "en"]) or "en",
         ),
         status_code,
     )

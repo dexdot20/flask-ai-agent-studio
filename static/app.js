@@ -19,6 +19,8 @@ const imageInputEl = document.getElementById("image-input");
 const docInputEl = document.getElementById("doc-input");
 const attachBtn = document.getElementById("attach-btn");
 const attachmentPreviewEl = document.getElementById("attachment-preview");
+const chatAreaEl = document.getElementById("chat-area");
+const chatDropOverlay = document.getElementById("chat-drop-overlay");
 const summaryNowBtn = document.getElementById("summary-now-btn");
 const summaryUndoBtn = document.getElementById("summary-undo-btn");
 const kbSyncBtn = document.getElementById("kb-sync-btn");
@@ -76,6 +78,8 @@ const canvasClearBtn = document.getElementById("canvas-clear-btn");
 const canvasDownloadHtmlBtn = document.getElementById("canvas-download-html-btn");
 const canvasDownloadMdBtn = document.getElementById("canvas-download-md-btn");
 const canvasDownloadPdfBtn = document.getElementById("canvas-download-pdf-btn");
+const canvasMoreBtn = document.getElementById("canvas-more-btn");
+const canvasOverflowMenu = document.getElementById("canvas-overflow-menu");
 const canvasResizeHandle = document.getElementById("canvas-resize-handle");
 const canvasBtnIndicator = document.getElementById("canvas-btn-indicator");
 const canvasConfirmModal = document.getElementById("canvas-confirm-modal");
@@ -161,6 +165,9 @@ let activeSidebarRename = null;
 let collapsedCanvasFolders = new Set();
 let lastCanvasTreeTypeAheadValue = "";
 let lastCanvasTreeTypeAheadAt = 0;
+let nextToastId = 1;
+let activeToastTimers = new Map();
+let chatDragDepth = 0;
 const featureFlags = bootstrapData.features || appSettings.features || {};
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
@@ -252,6 +259,10 @@ function dedupeFiles(files) {
     deduped.push(file);
   });
   return deduped;
+}
+
+function hasDraggedFiles(dataTransfer) {
+  return Array.from(dataTransfer?.types || []).includes("Files");
 }
 
 function normalizeMessageAttachment(entry) {
@@ -1083,8 +1094,16 @@ function renderHighlightedCodeBlock(codeText, rawLang = null) {
     return `<span class="canvas-code-line"><span class="canvas-code-line__number">${index + 1}</span><span class="canvas-code-line__content">${highlightedLine}</span></span>`;
   }).join("");
   const langClass = lang ? ` language-${lang}` : "";
-  const langLabel = lang ? `<span class="canvas-code-lang">${escHtml(lang)}</span>` : "";
-  return `<pre class="canvas-code-block">${langLabel}<code class="hljs${langClass}">${renderedLines}</code></pre>`;
+  const langLabel = `<span class="canvas-code-lang">${escHtml(lang || "Code")}</span>`;
+  return (
+    `<div class="code-block-shell">` +
+      `<div class="code-block-toolbar">` +
+        `${langLabel}` +
+        `<button type="button" class="code-copy-btn" aria-label="Copy code">Copy code</button>` +
+      `</div>` +
+      `<pre class="canvas-code-block"><code class="hljs${langClass}">${renderedLines}</code></pre>` +
+    `</div>`
+  );
 }
 
 if (markdownEngine && typeof markdownEngine.use === "function") {
@@ -1798,6 +1817,7 @@ function updateCanvasActiveDocumentDisplay(renderState) {
   if (canvasDownloadPdfBtn) {
     canvasDownloadPdfBtn.disabled = isStreamingPreviewActive;
   }
+  closeCanvasOverflowMenu();
 }
 
 function renderCanvasPreviewFrame() {
@@ -2169,6 +2189,7 @@ function openCanvas(triggerEl = null) {
     : (document.activeElement instanceof HTMLElement ? document.activeElement : mobileToolsBtn);
   setCanvasAttention(false);
   applyCanvasPanelWidth(readCanvasWidthPreference(), false);
+  closeCanvasOverflowMenu();
   renderCanvasPanel();
   canvasClose?.focus();
 }
@@ -2179,6 +2200,7 @@ function closeCanvas() {
   canvasPanel?.classList.remove("open");
   canvasOverlay?.classList.remove("open");
   canvasPanel?.setAttribute("aria-hidden", "true");
+  closeCanvasOverflowMenu();
   syncCanvasToggleButton();
   if (canvasCopyBtn) {
     canvasCopyBtn.hidden = true;
@@ -2186,6 +2208,36 @@ function closeCanvas() {
   if (lastCanvasTriggerEl && typeof lastCanvasTriggerEl.focus === "function") {
     lastCanvasTriggerEl.focus();
   }
+}
+
+function isCanvasOverflowMenuOpen() {
+  return Boolean(canvasOverflowMenu && !canvasOverflowMenu.hidden);
+}
+
+function closeCanvasOverflowMenu() {
+  if (!canvasOverflowMenu || !canvasMoreBtn) {
+    return;
+  }
+  canvasOverflowMenu.hidden = true;
+  canvasOverflowMenu.classList.remove("open");
+  canvasMoreBtn.setAttribute("aria-expanded", "false");
+}
+
+function openCanvasOverflowMenu() {
+  if (!canvasOverflowMenu || !canvasMoreBtn) {
+    return;
+  }
+  canvasOverflowMenu.hidden = false;
+  canvasOverflowMenu.classList.add("open");
+  canvasMoreBtn.setAttribute("aria-expanded", "true");
+}
+
+function toggleCanvasOverflowMenu() {
+  if (isCanvasOverflowMenuOpen()) {
+    closeCanvasOverflowMenu();
+    return;
+  }
+  openCanvasOverflowMenu();
 }
 
 function openExportPanel(triggerEl = null) {
@@ -4024,6 +4076,7 @@ function createMessageActions(message, options = {}) {
         label: "Edit",
         title: "Edit message",
         icon: MESSAGE_ACTION_ICONS.edit,
+        showLabel: true,
         onClick: () => beginInlineEditingMessage(messageId),
         disabled: !isPersistedMessageId(messageId) || Number(savingEditedMessageId) === Number(messageId) || isDeletingThisMessage,
       });
@@ -4034,6 +4087,7 @@ function createMessageActions(message, options = {}) {
       label: "Copy",
       title: message.role === "assistant" ? "Copy as Markdown" : "Copy message",
       icon: MESSAGE_ACTION_ICONS.copy,
+      showLabel: true,
       onClick: () => {
         void (message.role === "assistant" ? copyAssistantMessageMarkdown(message) : copyUserMessageContent(message));
       },
@@ -4045,6 +4099,7 @@ function createMessageActions(message, options = {}) {
       label: isDeleteConfirmationOpen ? "Cancel delete" : "Delete",
       title: isDeleteConfirmationOpen ? "Cancel delete" : "Delete message",
       icon: MESSAGE_ACTION_ICONS.delete,
+      showLabel: true,
       onClick: () => {
         if (isDeleteConfirmationOpen) {
           clearPendingDeleteMessage({ preserveScroll: true });
@@ -4111,13 +4166,18 @@ function createMessageActions(message, options = {}) {
   return actions;
 }
 
-function createMessageActionButton({ label, title, icon, onClick, disabled = false }) {
+function createMessageActionButton({ label, title, icon, onClick, disabled = false, showLabel = false }) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "msg-action-btn msg-action-btn--icon";
+  if (showLabel) {
+    button.classList.add("msg-action-btn--with-label");
+  }
   button.title = title;
   button.setAttribute("aria-label", label);
-  button.innerHTML = `${icon}<span class="sr-only">${escHtml(label)}</span>`;
+  button.innerHTML = showLabel
+    ? `${icon}<span class="msg-action-btn__label">${escHtml(label)}</span>`
+    : `${icon}<span class="sr-only">${escHtml(label)}</span>`;
   button.disabled = disabled;
   if (onClick) {
     button.addEventListener("click", onClick);
@@ -4294,6 +4354,52 @@ async function copyMessageContent(content, messages) {
   }
 }
 
+function getCodeBlockCopyText(button) {
+  const shell = button.closest(".code-block-shell");
+  if (!(shell instanceof HTMLElement)) {
+    return "";
+  }
+
+  const lineNodes = shell.querySelectorAll(".canvas-code-line__content");
+  if (lineNodes.length) {
+    return Array.from(lineNodes).map((node) => node.textContent || "").join("\n");
+  }
+
+  return shell.querySelector("code")?.textContent || "";
+}
+
+function setCodeCopyButtonLabel(button, label) {
+  if (!(button instanceof HTMLButtonElement)) {
+    return;
+  }
+  button.textContent = label;
+}
+
+async function copyCodeBlock(button) {
+  if (!(button instanceof HTMLButtonElement)) {
+    return;
+  }
+
+  const codeText = getCodeBlockCopyText(button);
+  if (!codeText.trim()) {
+    showToast("No code to copy.", "warning");
+    return;
+  }
+
+  const originalLabel = button.textContent || "Copy code";
+  const copied = await copyTextToClipboard(codeText);
+  if (!copied) {
+    setCodeCopyButtonLabel(button, "Copy failed");
+    showToast("Clipboard is not available.", "warning");
+    window.setTimeout(() => setCodeCopyButtonLabel(button, originalLabel), 1800);
+    return;
+  }
+
+  setCodeCopyButtonLabel(button, "Copied");
+  showToast("Code copied to clipboard.", "success");
+  window.setTimeout(() => setCodeCopyButtonLabel(button, originalLabel), 1800);
+}
+
 function getPreviousUserMessage(messageId) {
   const index = getHistoryMessageIndex(messageId);
   if (index < 0) {
@@ -4340,7 +4446,7 @@ async function regenerateAssistantMessage(messageId) {
 
   const previousUserMessage = getPreviousUserMessage(messageId);
   if (!previousUserMessage) {
-    showToast("Yeniden oluşturulacak bir kullanıcı girdisi bulunamadı.", "warning");
+    showToast("No earlier user message is available to regenerate.", "warning");
     return;
   }
 
@@ -5175,6 +5281,7 @@ if (conversationExportPdfBtn) {
 }
 if (canvasCopyBtn) {
   canvasCopyBtn.addEventListener("click", async () => {
+    closeCanvasOverflowMenu();
     const document = getCanvasDocumentById(getCanvasRenderableDocuments(), activeCanvasDocumentId) || getActiveCanvasDocument();
     if (!document) {
       setCanvasStatus("Clipboard is not available.", "warning");
@@ -5217,22 +5324,39 @@ if (canvasResetFiltersBtn) {
 }
 if (canvasDeleteBtn) {
   canvasDeleteBtn.addEventListener("click", () => {
+    closeCanvasOverflowMenu();
     void deleteCanvasDocuments();
   });
 }
 if (canvasClearBtn) {
   canvasClearBtn.addEventListener("click", () => {
+    closeCanvasOverflowMenu();
     void deleteCanvasDocuments({ clearAll: true });
   });
 }
 if (canvasDownloadHtmlBtn) {
-  canvasDownloadHtmlBtn.addEventListener("click", () => downloadCanvasDocument("html"));
+  canvasDownloadHtmlBtn.addEventListener("click", () => {
+    closeCanvasOverflowMenu();
+    downloadCanvasDocument("html");
+  });
 }
 if (canvasDownloadMdBtn) {
-  canvasDownloadMdBtn.addEventListener("click", () => downloadCanvasDocument("md"));
+  canvasDownloadMdBtn.addEventListener("click", () => {
+    closeCanvasOverflowMenu();
+    downloadCanvasDocument("md");
+  });
 }
 if (canvasDownloadPdfBtn) {
-  canvasDownloadPdfBtn.addEventListener("click", () => downloadCanvasDocument("pdf"));
+  canvasDownloadPdfBtn.addEventListener("click", () => {
+    closeCanvasOverflowMenu();
+    downloadCanvasDocument("pdf");
+  });
+}
+if (canvasMoreBtn) {
+  canvasMoreBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleCanvasOverflowMenu();
+  });
 }
 if (canvasSearchInput) {
   canvasSearchInput.addEventListener("input", () => renderCanvasPanel());
@@ -5350,6 +5474,11 @@ window.addEventListener("keydown", (event) => {
     closeSummaryPanel();
     return;
   }
+  if (event.key === "Escape" && isCanvasOverflowMenuOpen()) {
+    closeCanvasOverflowMenu();
+    canvasMoreBtn?.focus();
+    return;
+  }
   if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "c") {
     event.preventDefault();
     if (isCanvasOpen()) {
@@ -5407,6 +5536,18 @@ window.addEventListener("keydown", (event) => {
   }
 });
 
+document.addEventListener("click", (event) => {
+  if (!isCanvasOverflowMenuOpen()) {
+    return;
+  }
+
+  const target = event.target;
+  const clickedInsideMenu = target instanceof Node && (canvasOverflowMenu?.contains(target) || canvasMoreBtn?.contains(target));
+  if (!clickedInsideMenu) {
+    closeCanvasOverflowMenu();
+  }
+});
+
 async function loadSidebar() {
   cancelSidebarRename();
   try {
@@ -5417,46 +5558,62 @@ async function loadSidebar() {
       sidebarList.innerHTML = '<p class="sidebar-empty">No conversations yet.</p>';
       return;
     }
-    list.forEach((conversation) => {
-      if (conversation.id === currentConvId) {
-        currentConvTitle = String(conversation.title || "New Chat").trim() || "New Chat";
-      }
-      const item = document.createElement("div");
-      item.className = "sidebar-item" + (conversation.id === currentConvId ? " active" : "");
-      item.dataset.id = conversation.id;
-      item.innerHTML =
-        `<span class="sidebar-title">${escHtml(conversation.title)}</span>` +
-        `<button class="sidebar-edit" title="Rename" aria-label="Rename" data-id="${conversation.id}">` +
-        `  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">` +
-        `    <path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>` +
-        `  </svg>` +
-        `</button>` +
-        `<button class="sidebar-del" title="Delete" data-id="${conversation.id}">` +
-        `  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">` +
-        `    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>` +
-        `  </svg>` +
-        `</button>`;
-      item.addEventListener("click", (event) => {
-        if (event.target.closest(".sidebar-del") || event.target.closest(".sidebar-edit")) {
-          return;
+    buildConversationSidebarSections(list).forEach(({ label, conversations }) => {
+      const section = document.createElement("section");
+      section.className = "sidebar-section";
+
+      const heading = document.createElement("div");
+      heading.className = "sidebar-section__heading";
+      heading.textContent = label;
+      section.appendChild(heading);
+
+      const items = document.createElement("div");
+      items.className = "sidebar-section__items";
+
+      conversations.forEach((conversation) => {
+        if (conversation.id === currentConvId) {
+          currentConvTitle = String(conversation.title || "New Chat").trim() || "New Chat";
         }
-        if (conversation.id !== currentConvId) {
-          openConversation(conversation.id);
-          closeSidebarOnMobile();
-        }
+        const item = document.createElement("div");
+        item.className = "sidebar-item" + (conversation.id === currentConvId ? " active" : "");
+        item.dataset.id = conversation.id;
+        item.innerHTML =
+          `<span class="sidebar-title">${escHtml(conversation.title)}</span>` +
+          `<button class="sidebar-edit" title="Rename" aria-label="Rename" data-id="${conversation.id}">` +
+          `  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">` +
+          `    <path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>` +
+          `  </svg>` +
+          `</button>` +
+          `<button class="sidebar-del" title="Delete" data-id="${conversation.id}">` +
+          `  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">` +
+          `    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>` +
+          `  </svg>` +
+          `</button>`;
+        item.addEventListener("click", (event) => {
+          if (event.target.closest(".sidebar-del") || event.target.closest(".sidebar-edit")) {
+            return;
+          }
+          if (conversation.id !== currentConvId) {
+            openConversation(conversation.id);
+            closeSidebarOnMobile();
+          }
+        });
+        item.querySelector(".sidebar-edit").addEventListener("click", (event) => {
+          event.stopPropagation();
+          startSidebarRename(conversation, item);
+        });
+        item.querySelector(".sidebar-del").addEventListener("click", (event) => {
+          event.stopPropagation();
+          if (!window.confirm("Are you sure you want to delete this conversation?")) {
+            return;
+          }
+          deleteConversation(conversation.id);
+        });
+        items.appendChild(item);
       });
-      item.querySelector(".sidebar-edit").addEventListener("click", (event) => {
-        event.stopPropagation();
-        startSidebarRename(conversation, item);
-      });
-      item.querySelector(".sidebar-del").addEventListener("click", (event) => {
-        event.stopPropagation();
-        if (!window.confirm("Are you sure you want to delete this conversation?")) {
-          return;
-        }
-        deleteConversation(conversation.id);
-      });
-      sidebarList.appendChild(item);
+
+      section.appendChild(items);
+      sidebarList.appendChild(section);
     });
   } catch (error) {
     if (sidebarList.childElementCount === 0) {
@@ -5583,6 +5740,58 @@ function startSidebarRename(conversation, item) {
   titleInput.select();
 }
 
+function parseConversationUpdatedAt(value) {
+  const date = new Date(String(value || "").trim());
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function getConversationSectionKey(updatedAt) {
+  const date = parseConversationUpdatedAt(updatedAt);
+  if (!date) {
+    return "older";
+  }
+
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const targetDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const diffDays = Math.round((today.getTime() - targetDay.getTime()) / 86400000);
+
+  if (diffDays <= 0) {
+    return "today";
+  }
+  if (diffDays === 1) {
+    return "yesterday";
+  }
+  if (diffDays < 7) {
+    return "week";
+  }
+  if (date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth()) {
+    return "month";
+  }
+  return "older";
+}
+
+function buildConversationSidebarSections(conversations) {
+  const order = ["today", "yesterday", "week", "month", "older"];
+  const labels = {
+    today: "Today",
+    yesterday: "Yesterday",
+    week: "This Week",
+    month: "This Month",
+    older: "Earlier",
+  };
+  const grouped = new Map(order.map((key) => [key, []]));
+
+  (Array.isArray(conversations) ? conversations : []).forEach((conversation) => {
+    const key = getConversationSectionKey(conversation?.updated_at);
+    grouped.get(key)?.push(conversation);
+  });
+
+  return order
+    .map((key) => ({ label: labels[key], conversations: grouped.get(key) || [] }))
+    .filter((entry) => entry.conversations.length > 0);
+}
+
 async function openConversation(id) {
   const response = await fetch(`/api/conversations/${id}`);
   const data = await response.json();
@@ -5656,7 +5865,7 @@ function startNewChat() {
   if (preferredModelId) {
     syncModelSelectors(preferredModelId, getKnownModelLabel(preferredModelId));
   }
-  errorArea.innerHTML = "";
+  clearToastRegion();
   loadSidebar();
   inputEl.focus();
   closeSidebarOnMobile();
@@ -6004,6 +6213,22 @@ sendBtn.addEventListener("click", () => {
     sendMessage();
   }
 });
+messagesEl.addEventListener("click", (event) => {
+  const button = event.target.closest(".code-copy-btn");
+  if (!(button instanceof HTMLButtonElement)) {
+    return;
+  }
+  event.preventDefault();
+  void copyCodeBlock(button);
+});
+canvasDocumentEl?.addEventListener("click", (event) => {
+  const button = event.target.closest(".code-copy-btn");
+  if (!(button instanceof HTMLButtonElement)) {
+    return;
+  }
+  event.preventDefault();
+  void copyCodeBlock(button);
+});
 fixBtn.addEventListener("click", () => {
   if (!isStreaming && !isFixing) {
     fixMessage();
@@ -6036,6 +6261,70 @@ docInputEl.addEventListener("change", () => {
   if (!files.length) return;
   handleSelectedFiles(files, { documentsOnly: true });
 });
+
+function setChatDropOverlayVisible(visible) {
+  if (!chatAreaEl || !chatDropOverlay) {
+    return;
+  }
+  chatAreaEl.classList.toggle("chat-area--dragover", visible);
+  chatDropOverlay.hidden = !visible;
+}
+
+function resetChatDragState() {
+  chatDragDepth = 0;
+  setChatDropOverlayVisible(false);
+}
+
+function handleChatDragEnter(event) {
+  if (isStreaming || isFixing || !hasDraggedFiles(event.dataTransfer)) {
+    return;
+  }
+  event.preventDefault();
+  chatDragDepth += 1;
+  setChatDropOverlayVisible(true);
+}
+
+function handleChatDragOver(event) {
+  if (isStreaming || isFixing || !hasDraggedFiles(event.dataTransfer)) {
+    return;
+  }
+  event.preventDefault();
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = "copy";
+  }
+  setChatDropOverlayVisible(true);
+}
+
+function handleChatDragLeave(event) {
+  if (!hasDraggedFiles(event.dataTransfer)) {
+    return;
+  }
+  event.preventDefault();
+  chatDragDepth = Math.max(0, chatDragDepth - 1);
+  if (chatDragDepth === 0) {
+    setChatDropOverlayVisible(false);
+  }
+}
+
+function handleChatDrop(event) {
+  if (isStreaming || isFixing || !hasDraggedFiles(event.dataTransfer)) {
+    return;
+  }
+  event.preventDefault();
+  const files = Array.from(event.dataTransfer?.files || []);
+  resetChatDragState();
+  if (!files.length) {
+    return;
+  }
+  handleSelectedFiles(files);
+}
+
+chatAreaEl?.addEventListener("dragenter", handleChatDragEnter);
+chatAreaEl?.addEventListener("dragover", handleChatDragOver);
+chatAreaEl?.addEventListener("dragleave", handleChatDragLeave);
+chatAreaEl?.addEventListener("drop", handleChatDrop);
+window.addEventListener("drop", resetChatDragState);
+window.addEventListener("dragend", resetChatDragState);
 
 function handleSelectedFiles(files, options = {}) {
   const documentsOnly = options.documentsOnly === true;
@@ -6107,10 +6396,48 @@ function setFixing(active) {
 }
 
 function showToast(message, tone = "error") {
-  errorArea.innerHTML = `<div class="error-toast" data-tone="${escHtml(String(tone || "error"))}">${escHtml(String(message || "An unexpected event occurred."))}</div>`;
-  setTimeout(() => {
-    errorArea.innerHTML = "";
+  if (!errorArea) {
+    return;
+  }
+
+  const toastId = nextToastId;
+  nextToastId += 1;
+
+  const toast = document.createElement("div");
+  toast.className = "error-toast";
+  toast.dataset.tone = String(tone || "error");
+  toast.dataset.toastId = String(toastId);
+  toast.setAttribute("role", tone === "error" ? "alert" : "status");
+  toast.textContent = String(message || "An unexpected event occurred.");
+  errorArea.appendChild(toast);
+
+  while (errorArea.childElementCount > 4) {
+    const oldestToast = errorArea.firstElementChild;
+    if (!(oldestToast instanceof HTMLElement)) {
+      break;
+    }
+    const oldestId = Number(oldestToast.dataset.toastId || 0);
+    const oldestTimer = activeToastTimers.get(oldestId);
+    if (oldestTimer) {
+      window.clearTimeout(oldestTimer);
+      activeToastTimers.delete(oldestId);
+    }
+    oldestToast.remove();
+  }
+
+  const timerId = window.setTimeout(() => {
+    toast.remove();
+    activeToastTimers.delete(toastId);
   }, 5000);
+  activeToastTimers.set(toastId, timerId);
+}
+
+function clearToastRegion() {
+  activeToastTimers.forEach((timerId) => window.clearTimeout(timerId));
+  activeToastTimers.clear();
+  if (errorArea) {
+    clearToastRegion();
+  }
 }
 
 function showError(message) {
@@ -7276,7 +7603,7 @@ async function fixMessage() {
     return;
   }
 
-  errorArea.innerHTML = "";
+  clearToastRegion();
   setFixing(true);
 
   try {
@@ -7338,7 +7665,7 @@ async function sendMessage(options = {}) {
     clearEditTarget();
   }
 
-  errorArea.innerHTML = "";
+  clearToastRegion();
   inputEl.value = "";
   inputEl.style.height = "auto";
   clearAllAttachments();

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ page_lang }}">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -42,9 +42,40 @@
 
       <p class="login-footnote">Timeout: {{ timeout_minutes }} minutes. Remembered devices keep access up to {{ remember_days }} days.</p>
       {% if lockout_seconds and lockout_seconds > 0 %}
-      <p class="login-footnote login-footnote--warn">Too many attempts temporarily lock PIN entry for {{ lockout_seconds }} seconds.</p>
+      <p
+        class="login-footnote login-footnote--warn"
+        id="login-lockout-countdown"
+        data-lockout-until="{{ lockout_until.isoformat() if lockout_until else '' }}"
+      >Too many attempts temporarily lock PIN entry for {{ lockout_seconds }} seconds.</p>
       {% endif %}
     </section>
   </main>
+  <script>
+    (function () {
+      const countdownEl = document.getElementById("login-lockout-countdown");
+      const lockoutUntil = countdownEl?.dataset.lockoutUntil;
+      if (!countdownEl || !lockoutUntil) {
+        return;
+      }
+
+      const lockoutDate = new Date(lockoutUntil);
+      if (Number.isNaN(lockoutDate.getTime())) {
+        return;
+      }
+
+      const renderCountdown = () => {
+        const remainingSeconds = Math.max(0, Math.ceil((lockoutDate.getTime() - Date.now()) / 1000));
+        countdownEl.textContent = remainingSeconds > 0
+          ? `Too many attempts temporarily lock PIN entry for ${remainingSeconds} second${remainingSeconds === 1 ? "" : "s"}.`
+          : "PIN entry is available again. Refresh or try again now.";
+        if (remainingSeconds <= 0) {
+          window.clearInterval(intervalId);
+        }
+      };
+
+      renderCountdown();
+      const intervalId = window.setInterval(renderCountdown, 1000);
+    })();
+  </script>
 </body>
 </html>

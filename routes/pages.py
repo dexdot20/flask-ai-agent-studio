@@ -368,6 +368,10 @@ def _static_asset_version(app, filename: str) -> str:
         return "1"
 
 
+def _resolve_page_lang() -> str:
+    return request.accept_languages.best_match(["tr", "en"]) or "en"
+
+
 def register_page_routes(app) -> None:
     @app.route("/")
     def index():
@@ -377,6 +381,7 @@ def register_page_routes(app) -> None:
             models=get_visible_chat_models(get_app_settings()),
             settings=settings,
             auth_enabled=is_login_pin_enabled(),
+            page_lang=_resolve_page_lang(),
             app_js_version=_static_asset_version(app, "app.js"),
         )
 
@@ -389,6 +394,7 @@ def register_page_routes(app) -> None:
             tool_sections=build_tool_permission_sections(),
             proxy_operation_options=PROXY_OPERATION_OPTIONS,
             auth_enabled=is_login_pin_enabled(),
+            page_lang=_resolve_page_lang(),
             settings_js_version=_static_asset_version(app, "settings.js"),
         )
 

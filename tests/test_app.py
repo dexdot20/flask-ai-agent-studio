@@ -1218,6 +1218,27 @@ class AppRoutesTestCase(unittest.TestCase):
             response = self.client.get("/")
             self.assertEqual(response.status_code, 200)
 
+    def test_pages_render_html_lang_from_accept_language(self):
+        headers = {"Accept-Language": "tr-TR,tr;q=0.9,en;q=0.8"}
+
+        response = self.client.get("/", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('<html lang="tr">', response.get_data(as_text=True))
+
+        response = self.client.get("/settings", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('<html lang="tr">', response.get_data(as_text=True))
+
+    def test_login_page_renders_html_lang_from_accept_language(self):
+        with patch("config.LOGIN_PIN", "2468"):
+            response = self.client.get(
+                "/login",
+                headers={"Accept-Language": "tr-TR,tr;q=0.9,en;q=0.8"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('<html lang="tr">', response.get_data(as_text=True))
+
     def test_login_pin_times_out_without_remember(self):
         with patch("config.LOGIN_PIN", "2468"), patch("config.LOGIN_SESSION_TIMEOUT_MINUTES", 1):
             response = self.client.post("/login", data={"pin": "2468"})

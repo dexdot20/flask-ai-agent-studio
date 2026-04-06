@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ page_lang }}">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -295,16 +295,23 @@
       <button class="btn-ghost" id="canvas-cancel-btn" type="button" hidden>Cancel</button>
       <button class="btn-ghost" id="canvas-copy-btn" type="button" hidden>Copy</button>
     </div>
-    <div id="canvas-actions-manage" class="canvas-action-group" role="group" aria-label="Canvas management actions">
-      <span class="canvas-action-group__label">Manage</span>
-      <button class="btn-ghost btn-ghost--danger" id="canvas-delete-btn" type="button">Delete current</button>
-      <button class="btn-ghost btn-ghost--danger" id="canvas-clear-btn" type="button">Clear all</button>
-    </div>
-    <div id="canvas-actions-export" class="canvas-action-group" role="group" aria-label="Canvas export actions">
-      <span class="canvas-action-group__label">Export</span>
-      <button class="btn-ghost" id="canvas-download-html-btn" type="button">Download .html</button>
-      <button class="btn-ghost" id="canvas-download-md-btn" type="button">Download .md</button>
-      <button class="btn-primary" id="canvas-download-pdf-btn" type="button">Download .pdf</button>
+    <div class="canvas-actions-overflow">
+      <button class="btn-ghost canvas-actions-overflow__toggle" id="canvas-more-btn" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="canvas-overflow-menu">
+        More
+      </button>
+      <div id="canvas-overflow-menu" class="canvas-overflow-menu" role="menu" aria-label="Canvas more actions" hidden>
+        <div id="canvas-actions-manage" class="canvas-action-group canvas-action-group--menu" role="group" aria-label="Canvas management actions">
+          <span class="canvas-action-group__label">Manage</span>
+          <button class="btn-ghost btn-ghost--danger" id="canvas-delete-btn" type="button" role="menuitem">Delete current</button>
+          <button class="btn-ghost btn-ghost--danger" id="canvas-clear-btn" type="button" role="menuitem">Clear all</button>
+        </div>
+        <div id="canvas-actions-export" class="canvas-action-group canvas-action-group--menu" role="group" aria-label="Canvas export actions">
+          <span class="canvas-action-group__label">Export</span>
+          <button class="btn-ghost" id="canvas-download-html-btn" type="button" role="menuitem">Download .html</button>
+          <button class="btn-ghost" id="canvas-download-md-btn" type="button" role="menuitem">Download .md</button>
+          <button class="btn-primary" id="canvas-download-pdf-btn" type="button" role="menuitem">Download .pdf</button>
+        </div>
+      </div>
     </div>
   </div>
   <div id="canvas-document-tabs" class="canvas-document-tabs" hidden></div>
@@ -391,12 +398,18 @@
     <nav class="sidebar-list" id="sidebar-list"></nav>
   </aside>
 
-  <div class="chat-area">
+  <div class="chat-area" id="chat-area">
     <div id="messages">
       <div class="empty-state" id="empty-state">
         <div class="empty-state-icon">✦</div>
         <h2>How can I help you?</h2>
         <p>Ask anything — I'll respond instantly using the selected model.</p>
+      </div>
+    </div>
+    <div id="chat-drop-overlay" class="chat-drop-overlay" hidden aria-hidden="true">
+      <div class="chat-drop-overlay__panel">
+        <strong>Drop files to attach</strong>
+        <span>Images and supported documents will be added to the next message.</span>
       </div>
     </div>
 
@@ -435,7 +448,7 @@
       <div id="attachment-preview" class="attachment-preview" hidden></div>
       <p id="vision-disabled-note" class="input-hint" hidden>Image uploads are disabled in .env. Document uploads (DOCX, PDF, TXT, CSV, MD) are still available.</p>
       <p class="input-hint">Press <kbd>Enter</kbd> to send &nbsp;·&nbsp; <kbd>Shift+Enter</kbd> for a new line</p>
-      <div id="error-area"></div>
+      <div id="error-area" aria-live="polite" aria-atomic="false"></div>
     </div>
   </div>
 </div>
