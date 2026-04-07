@@ -813,6 +813,20 @@ def _is_context_overflow_error(error_str) -> bool:
     return "token" in normalized and ("exceed" in normalized or "too long" in normalized)
 
 
+def _is_truncated_stream_disconnect_error(error_str) -> bool:
+    normalized = _extract_error_signal_text(error_str)
+    if not normalized:
+        return False
+
+    return any(
+        phrase in normalized
+        for phrase in (
+            "incomplete chunked read",
+            "peer closed connection without sending complete message body",
+        )
+    )
+
+
 def _is_retryable_model_error(error: Exception | str) -> bool:
     error_text = str(error or "").strip().lower()
     if not error_text:
@@ -6421,7 +6435,7 @@ def run_agent_stream(
                 if not answer_started:
                     for event in emit_answer(content_text):
                         yield event
-                if stream_error:
+                if stream_error and not _is_truncated_stream_disconnect_error(stream_error):
                     yield {"type": "tool_error", "step": step, "tool": "api", "error": stream_error}
                 if usage_totals["total_tokens"]:
                     yield usage_event()
@@ -7131,7 +7145,7 @@ def run_agent_stream(
                 final_text = FINAL_ANSWER_MISSING_TEXT
             else:
                 final_text = content_text
-            if stream_error:
+            if stream_error and not _is_truncated_stream_disconnect_error(stream_error):
                 yield {"type": "tool_error", "step": step, "tool": "final_answer", "error": stream_error}
             if not answer_emitted:
                 for event in emit_answer(final_text):

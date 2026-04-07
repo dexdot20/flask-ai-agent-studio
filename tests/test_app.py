@@ -11863,6 +11863,22 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(len(api_errors), 1)
         self.assertIn({"type": "answer_delta", "text": FINAL_ANSWER_ERROR_TEXT}, events)
 
+    def test_run_agent_stream_ignores_truncated_stream_after_content(self):
+        class TruncatedStreamResponse:
+            def __iter__(self):
+                yield AppRoutesTestCase._stream_chunk(content="Final answer.")
+                raise http_requests.exceptions.ChunkedEncodingError("incomplete chunked read")
+
+            def close(self):
+                return None
+
+        with patch("agent.client.chat.completions.create", return_value=TruncatedStreamResponse()):
+            events = list(run_agent_stream([{"role": "user", "content": "Test"}], "deepseek-chat", 1, []))
+
+        self.assertIn({"type": "answer_delta", "text": "Final answer."}, events)
+        self.assertFalse(any(event["type"] == "tool_error" for event in events))
+        self.assertIn({"type": "done"}, events)
+
     def test_extract_html_cleans_noise_and_whitespace(self):
         html = """
         <html>

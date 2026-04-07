@@ -1726,6 +1726,14 @@ function buildCanvasRenderState(documents = getCanvasRenderableDocuments()) {
 }
 
 function scheduleCanvasPreviewRender() {
+  if (isCanvasOpen()) {
+    if (pendingCanvasPreviewTimer) {
+      globalThis.clearTimeout(pendingCanvasPreviewTimer);
+      pendingCanvasPreviewTimer = 0;
+    }
+    renderCanvasPreviewFrame();
+    return;
+  }
   if (pendingCanvasPreviewTimer) {
     return;
   }
@@ -8626,12 +8634,13 @@ async function sendMessage(options = {}) {
           activeCanvasDocumentId = String(nextActiveCandidate?.id || "").trim() || streamingCanvasDocuments[streamingCanvasDocuments.length - 1].id;
           renderCanvasPanel();
           const pendingCanvasRequest = pendingDocumentCanvasOpen;
+          const canvasWasOpen = isCanvasOpen();
           const activeDocumentChangeMessage = describeCanvasActiveDocumentChange(previousSelectedDocument, nextActiveCandidate, requestedActiveId);
           if (pendingCanvasRequest) {
             consumePendingDocumentCanvasOpen();
           }
 
-          if (pendingCanvasRequest && event.auto_open && !isCanvasOpen()) {
+          if (pendingCanvasRequest && event.auto_open && !canvasWasOpen) {
             const requestLabel = Number(pendingCanvasRequest.fileCount || 1) > 1
               ? `${pendingCanvasRequest.fileCount} documents`
               : pendingCanvasRequest.fileName;
@@ -8645,11 +8654,17 @@ async function sendMessage(options = {}) {
                 setCanvasStatus(`${requestLabel} ${Number(pendingCanvasRequest.fileCount || 1) > 1 ? "are" : "is"} ready in Canvas. Open the panel when needed.`, "muted");
               },
             });
+          } else if (event.auto_open && !canvasWasOpen) {
+            openCanvas();
+            setCanvasStatus(activeDocumentChangeMessage || "Canvas updated.", "success");
           } else if (activeDocumentChangeMessage) {
-            if (!isCanvasOpen()) {
+            if (canvasWasOpen) {
+              setCanvasAttention(false);
+              setCanvasStatus(activeDocumentChangeMessage || "Canvas updated.", "success");
+            } else {
               setCanvasAttention(true);
+              setCanvasStatus(activeDocumentChangeMessage, "muted");
             }
-            setCanvasStatus(activeDocumentChangeMessage, "muted");
           } else if (isCanvasOpen()) {
             setCanvasAttention(false);
             setCanvasStatus("Canvas updated.", "success");
