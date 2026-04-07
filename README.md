@@ -426,6 +426,7 @@ The Settings page persists these values in `app_settings`:
 - `sub_agent_retry_attempts`
 - `sub_agent_retry_delay_seconds`
 - `sub_agent_max_parallel_tools`
+- `sub_agent_include_conversation_context`
 - `custom_models`
 - `visible_model_order`
 - `operation_model_preferences`

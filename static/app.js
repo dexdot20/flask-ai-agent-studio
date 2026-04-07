@@ -7336,7 +7336,7 @@ function updateAssistantSubAgentTrace(group, metadata) {
     if (shouldShowSubAgentInstructions(taskInstructions, taskHeading)) {
       const instructions = document.createElement("details");
       instructions.className = "sub-agent-run__instructions";
-      instructions.open = true;
+      instructions.open = entry.status === "running";
 
       const instructionsSummary = document.createElement("summary");
       instructionsSummary.className = "sub-agent-run__instructions-summary";

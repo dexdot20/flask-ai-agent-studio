@@ -38,6 +38,7 @@ const canvasExpandLinesEl = document.getElementById("canvas-expand-lines-input")
 const canvasScrollLinesEl = document.getElementById("canvas-scroll-lines-input");
 const subAgentTimeoutEl = document.getElementById("sub-agent-timeout-input");
 const subAgentMaxParallelToolsEl = document.getElementById("sub-agent-max-parallel-tools-input");
+const subAgentIncludeConversationContextEl = document.getElementById("sub-agent-include-conversation-context-toggle");
 const subAgentRetryAttemptsEl = document.getElementById("sub-agent-retry-attempts-input");
 const subAgentRetryDelayEl = document.getElementById("sub-agent-retry-delay-input");
 const customModelNameEl = document.getElementById("custom-model-name-input");
@@ -1457,6 +1458,9 @@ function applySettingsToForm() {
   if (canvasScrollLinesEl) canvasScrollLinesEl.value = String(appSettings.canvas_scroll_window_lines || 200);
   if (subAgentTimeoutEl) subAgentTimeoutEl.value = String(appSettings.sub_agent_timeout_seconds ?? 240);
   if (subAgentMaxParallelToolsEl) subAgentMaxParallelToolsEl.value = String(appSettings.sub_agent_max_parallel_tools ?? 2);
+  if (subAgentIncludeConversationContextEl) {
+    subAgentIncludeConversationContextEl.checked = Boolean(appSettings.sub_agent_include_conversation_context);
+  }
   if (subAgentRetryAttemptsEl) subAgentRetryAttemptsEl.value = String(appSettings.sub_agent_retry_attempts ?? 2);
   if (subAgentRetryDelayEl) subAgentRetryDelayEl.value = String(appSettings.sub_agent_retry_delay_seconds ?? 5);
   applySelectedTools(appSettings.active_tools || []);
@@ -1573,6 +1577,7 @@ function applyServerSettingsData(data) {
   appSettings.canvas_scroll_window_lines = data.canvas_scroll_window_lines || 200;
   appSettings.sub_agent_timeout_seconds = data.sub_agent_timeout_seconds ?? 240;
   appSettings.sub_agent_max_parallel_tools = data.sub_agent_max_parallel_tools ?? 2;
+  appSettings.sub_agent_include_conversation_context = Boolean(data.sub_agent_include_conversation_context);
   appSettings.sub_agent_retry_attempts = data.sub_agent_retry_attempts ?? 2;
   appSettings.sub_agent_retry_delay_seconds = data.sub_agent_retry_delay_seconds ?? 5;
   appSettings.active_tools = Array.isArray(data.active_tools) ? data.active_tools : [];
@@ -1631,6 +1636,7 @@ async function saveSettings() {
     canvas_scroll_window_lines: readNumericSetting(canvasScrollLinesEl, 200, { allowZero: false }),
     sub_agent_timeout_seconds: readNumericSetting(subAgentTimeoutEl, 240, { allowZero: false }),
     sub_agent_max_parallel_tools: readNumericSetting(subAgentMaxParallelToolsEl, 2, { allowZero: false }),
+    sub_agent_include_conversation_context: Boolean(subAgentIncludeConversationContextEl?.checked),
     sub_agent_retry_attempts: readNumericSetting(subAgentRetryAttemptsEl, 2),
     sub_agent_retry_delay_seconds: readNumericSetting(subAgentRetryDelayEl, 5),
     custom_models: draftCustomModels.map((model) => ({ ...model })),
@@ -2026,6 +2032,7 @@ function registerDirtyListeners() {
   canvasScrollLinesEl?.addEventListener("input", markDirty);
   subAgentTimeoutEl?.addEventListener("input", markDirty);
   subAgentMaxParallelToolsEl?.addEventListener("input", markDirty);
+  subAgentIncludeConversationContextEl?.addEventListener("change", markDirty);
   subAgentRetryAttemptsEl?.addEventListener("input", markDirty);
   subAgentRetryDelayEl?.addEventListener("input", markDirty);
   summaryModelPreferenceEl?.addEventListener("change", markDirty);

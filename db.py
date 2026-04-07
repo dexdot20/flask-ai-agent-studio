@@ -2495,6 +2495,15 @@ def get_sub_agent_retry_delay_seconds(settings: dict | None = None) -> int:
     return max(SUB_AGENT_RETRY_DELAY_MIN_SECONDS, min(SUB_AGENT_RETRY_DELAY_MAX_SECONDS, value))
 
 
+def get_sub_agent_include_conversation_context(settings: dict | None = None) -> bool:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get(
+        "sub_agent_include_conversation_context",
+        DEFAULT_SETTINGS["sub_agent_include_conversation_context"],
+    )
+    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def get_max_parallel_tools(settings: dict | None = None) -> int:
     source = settings if settings is not None else get_app_settings()
     raw_value = source.get("max_parallel_tools", DEFAULT_SETTINGS["max_parallel_tools"])

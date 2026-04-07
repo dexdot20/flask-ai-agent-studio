@@ -441,30 +441,13 @@ TOOL_SPECS = [
             "properties": {
                 "task": {
                     "type": "string",
-                    "description": "The delegated task for the helper agent. Rewrite the user's request into clear English instructions unless the task is explicitly language-specific.",
-                },
-                "context": {
-                    "type": "string",
-                    "description": "Optional extra parent context or goal framing that helps the helper understand why this delegated task matters.",
-                },
-                "allowed_tools": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Optional exact tool-name allowlist to narrow the helper's read-only tool set further.",
-                    "minItems": 1,
-                    "maxItems": 12,
+                    "description": "The delegated task for the helper agent. Rewrite the user's request into clear English instructions unless the task is explicitly language-specific, and include only research-relevant details in that instruction text.",
                 },
                 "max_steps": {
                     "type": "integer",
-                    "description": "Optional maximum helper-agent tool steps (1-8). Omit this to let the system size the budget dynamically from task complexity.",
+                    "description": "Optional maximum helper-agent tool steps (1-8). Set this when the parent has a strong reason to size the research budget explicitly; otherwise omit it to let the system size the budget dynamically from task complexity.",
                     "minimum": 1,
                     "maximum": 8,
-                },
-                "timeout_seconds": {
-                    "type": "integer",
-                    "description": "Total soft timeout budget for the helper-agent run across fallback attempts in seconds (5-900).",
-                    "minimum": 5,
-                    "maximum": 900,
                 },
             },
             "required": ["task"],
@@ -473,9 +456,7 @@ TOOL_SPECS = [
             "purpose": "Delegates a scoped research or inspection task to a bounded helper agent and returns a compact summary with artifacts.",
             "inputs": {
                 "task": "the delegated task and desired output",
-                "allowed_tools": "optional tool-name allowlist",
                 "max_steps": "optional helper-agent tool budget",
-                "timeout_seconds": "optional soft timeout",
             },
             "guidance": (
                 "Use this when the investigation genuinely benefits from a separate bounded pass and would otherwise require several tool steps or repeated context stitching in the parent agent. "
@@ -485,6 +466,8 @@ TOOL_SPECS = [
                 "Delegation does not bypass prompt-time tool scoping, and read-only does not mean offline-only. "
                 "Before calling this tool, rewrite the delegated task into concise English instructions for the helper, even if the user spoke Turkish or another language. "
                 "Use the user's original language only when the delegated task itself depends on that language, and otherwise expect the helper to work in English by default. "
+                "Do not pass separate user-profile or background context; put only the research-relevant details directly into the task instructions. "
+                "Sub-agent model choice, timeout, retries, parallelism, and whether recent conversation excerpts are shared are user-managed settings, not parent-agent knobs. "
                 "Keep it scoped: prefer one helper call over many, and do not delegate writes, clarifications, or recursive agent orchestration. "
                 "Leave max_steps unset unless you have a strong reason to constrain it manually; the runtime can size that budget dynamically for simple versus broad tasks. "
                 "If the helper uses web search, each search_web/search_news call must stay within the 1-5 query limit; split larger batches into separate calls."

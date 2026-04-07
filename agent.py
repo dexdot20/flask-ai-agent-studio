@@ -93,6 +93,7 @@ from db import (
     get_clarification_max_questions,
     get_model_temperature,
     get_rag_source_types,
+    get_sub_agent_include_conversation_context,
     get_sub_agent_max_parallel_tools,
     get_sub_agent_retry_attempts,
     get_sub_agent_retry_delay_seconds,
@@ -1374,7 +1375,6 @@ def _build_sub_agent_artifacts(transcript_messages: list[dict], tool_results: li
 
 def _build_sub_agent_messages(
     task: str,
-    parent_context: str,
     conversation_handoff: str,
     canvas_handoff: str,
     allowed_tools: list[str],
@@ -1385,6 +1385,7 @@ def _build_sub_agent_messages(
         "Complete the delegated task using only the tools that are exposed to you. Read-only still includes web search and URL fetch tools when they are available.",
         "You must not ask the user clarifying questions, mutate files, mutate canvas documents, or delegate to another sub-agent.",
         "Treat the delegated task and handoff as direct instructions from the parent assistant.",
+        "Assume the parent intentionally included only the research-relevant task details; do not invent hidden user background or missing personal context.",
         "If any task or handoff text is not in English, first rewrite it into clear English working notes for yourself, then continue in English.",
         "Use English for tool planning, reasoning, status updates, and the final answer unless told otherwise.",
         "When using read-only search tools like search_web or search_news, batch queries between 1 and 5 items per list and split broader searches into multiple calls.",
@@ -1400,8 +1401,6 @@ def _build_sub_agent_messages(
         )
 
     user_parts = [f"Delegated task from the parent assistant:\n{_clean_tool_text(task, limit=2_000)}"]
-    if parent_context:
-        user_parts.append(f"Parent context and goal:\n{_clean_tool_text(parent_context, limit=2_000)}")
     if conversation_handoff:
         user_parts.append(f"Current conversation summary:\n{conversation_handoff}")
     if canvas_handoff:
@@ -1418,14 +1417,13 @@ def _build_sub_agent_messages(
 
 def _estimate_sub_agent_max_steps(
     task: str,
-    parent_context: str,
     conversation_handoff: str,
     canvas_handoff: str,
     allowed_tools: list[str],
 ) -> int:
     combined_text = "\n".join(
         part.strip()
-        for part in (task, parent_context, conversation_handoff, canvas_handoff)
+        for part in (task, conversation_handoff, canvas_handoff)
         if str(part or "").strip()
     )
     word_count = len(re.findall(r"\w+", combined_text))
@@ -1474,7 +1472,6 @@ def _resolve_sub_agent_max_steps(
     tool_args: dict,
     *,
     task: str,
-    parent_context: str,
     conversation_handoff: str,
     canvas_handoff: str,
     allowed_tools: list[str],
@@ -1484,7 +1481,6 @@ def _resolve_sub_agent_max_steps(
         return _coerce_int_range(raw_max_steps, SUB_AGENT_DEFAULT_MAX_STEPS, 1, 8)
     return _estimate_sub_agent_max_steps(
         task,
-        parent_context,
         conversation_handoff,
         canvas_handoff,
         allowed_tools,
@@ -3623,14 +3619,13 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
     if not task:
         error = "sub_agent requires a non-empty task."
         return {"status": "error", "error": error}, f"Failed: {error}"
-    parent_context = str(tool_args.get("context") or "").strip()
 
     parent_visible_tools = _normalize_tool_name_list(
         agent_context.get("prompt_tool_names")
         if isinstance(agent_context.get("prompt_tool_names"), list)
         else agent_context.get("enabled_tool_names")
     )
-    child_tool_names = _resolve_sub_agent_tool_names(tool_args.get("allowed_tools"), parent_visible_tools)
+    child_tool_names = _resolve_sub_agent_tool_names(None, parent_visible_tools)
     if not child_tool_names:
         error = "No eligible read-only tools are available for sub-agent delegation."
         return {"status": "error", "error": error}, f"Failed: {error}"
@@ -3639,29 +3634,24 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
     parent_model = str(agent_context.get("model") or "").strip()
     child_model_candidates = get_operation_model_candidates("sub_agent", settings, fallback_model_id=parent_model)
     child_max_parallel_tools = get_sub_agent_max_parallel_tools(settings)
-    timeout_seconds = _coerce_int_range(
-        tool_args.get("timeout_seconds"),
-        get_sub_agent_timeout_seconds(settings),
-        SUB_AGENT_TIMEOUT_MIN_SECONDS,
-        SUB_AGENT_TIMEOUT_MAX_SECONDS,
-    )
+    timeout_seconds = get_sub_agent_timeout_seconds(settings)
     retry_attempts = get_sub_agent_retry_attempts(settings)
     retry_delay_seconds = get_sub_agent_retry_delay_seconds(settings)
     overall_deadline = time.monotonic() + timeout_seconds
 
-    conversation_handoff = str(agent_context.get("conversation_handoff") or "").strip()
+    conversation_handoff = ""
+    if get_sub_agent_include_conversation_context(settings):
+        conversation_handoff = str(agent_context.get("conversation_handoff") or "").strip()
     canvas_handoff = _build_sub_agent_canvas_handoff(runtime_state)
     child_max_steps = _resolve_sub_agent_max_steps(
         tool_args,
         task=task,
-        parent_context=parent_context,
         conversation_handoff=conversation_handoff,
         canvas_handoff=canvas_handoff,
         allowed_tools=child_tool_names,
     )
     child_messages = _build_sub_agent_messages(
         task,
-        parent_context,
         conversation_handoff,
         canvas_handoff,
         child_tool_names,
@@ -4639,11 +4629,7 @@ def _tool_input_preview(tool_name: str, tool_args: dict) -> str:
             target = "all canvas documents"
         return f"{query} @ {target}"[:300]
     if tool_name == "sub_agent":
-        task = str(tool_args.get("task") or "").strip()
-        context = str(tool_args.get("context") or "").strip()
-        if task and context:
-            return f"{task} | {context}"[:300]
-        return task[:300]
+        return str(tool_args.get("task") or "").strip()[:300]
     return ""
 
 
@@ -5110,7 +5096,7 @@ def _prefix_cross_turn_tool_memory_summary(summary: str, fallback: str) -> str:
 
 
 def _lookup_cross_turn_tool_memory(tool_name: str, tool_args: dict) -> tuple[object, str] | None:
-    if tool_name in {"fetch_url", "fetch_url_summarized", "sub_agent"}:
+    if tool_name in {"fetch_url", "fetch_url_summarized"}:
         url = _tool_input_preview(tool_name, tool_args)
         if not url:
             return None

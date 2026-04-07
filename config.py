@@ -121,6 +121,7 @@ MAX_PARALLEL_TOOLS_MIN = 1
 MAX_PARALLEL_TOOLS_MAX = 12
 DEFAULT_MAX_PARALLEL_TOOLS = 4
 SUB_AGENT_DEFAULT_MAX_PARALLEL_TOOLS = 2
+SUB_AGENT_DEFAULT_INCLUDE_CONVERSATION_CONTEXT = False
 CLARIFICATION_QUESTION_LIMIT_MIN = 1
 CLARIFICATION_QUESTION_LIMIT_MAX = 25
 CLARIFICATION_DEFAULT_MAX_QUESTIONS = 5
@@ -354,6 +355,7 @@ DEFAULT_SETTINGS = {
     "sub_agent_retry_attempts": str(SUB_AGENT_DEFAULT_RETRY_ATTEMPTS),
     "sub_agent_retry_delay_seconds": str(SUB_AGENT_DEFAULT_RETRY_DELAY_SECONDS),
     "sub_agent_max_parallel_tools": str(SUB_AGENT_DEFAULT_MAX_PARALLEL_TOOLS),
+    "sub_agent_include_conversation_context": "true" if SUB_AGENT_DEFAULT_INCLUDE_CONVERSATION_CONTEXT else "false",
     "custom_models": "[]",
     "visible_model_order": json.dumps(DEFAULT_VISIBLE_CHAT_MODEL_ORDER, ensure_ascii=False),
     "operation_model_preferences": json.dumps(DEFAULT_OPERATION_MODEL_PREFERENCES, ensure_ascii=False),

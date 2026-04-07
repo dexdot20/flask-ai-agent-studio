@@ -258,6 +258,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["canvas_scroll_window_lines"], 200)
         self.assertEqual(payload["sub_agent_timeout_seconds"], 240)
         self.assertEqual(payload["sub_agent_max_parallel_tools"], 2)
+        self.assertFalse(payload["sub_agent_include_conversation_context"])
         self.assertEqual(payload["sub_agent_retry_attempts"], 2)
         self.assertEqual(payload["sub_agent_retry_delay_seconds"], 5)
         self.assertEqual(payload["rag_auto_inject"], bool(payload["features"]["rag_enabled"]))
@@ -336,6 +337,7 @@ class AppRoutesTestCase(unittest.TestCase):
                 "canvas_scroll_window_lines": 150,
                 "sub_agent_timeout_seconds": 360,
                 "sub_agent_max_parallel_tools": 3,
+                "sub_agent_include_conversation_context": True,
                 "sub_agent_retry_attempts": 3,
                 "sub_agent_retry_delay_seconds": 7,
                 "custom_models": [
@@ -401,6 +403,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["canvas_scroll_window_lines"], 150)
         self.assertEqual(payload["sub_agent_timeout_seconds"], 360)
         self.assertEqual(payload["sub_agent_max_parallel_tools"], 3)
+        self.assertTrue(payload["sub_agent_include_conversation_context"])
         self.assertEqual(payload["sub_agent_retry_attempts"], 3)
         self.assertEqual(payload["sub_agent_retry_delay_seconds"], 7)
         self.assertEqual(
@@ -1020,6 +1023,7 @@ class AppRoutesTestCase(unittest.TestCase):
             "operation_model_preferences": {"sub_agent": ""},
             "operation_model_fallback_preferences": {"sub_agent": ["deepseek-reasoner", "deepseek-chat"]},
             "sub_agent_retry_attempts": 0,
+            "sub_agent_timeout_seconds": 20,
         }
 
         self.assertEqual(
@@ -3986,7 +3990,9 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertIn("clear English instructions", spec["parameters"]["properties"]["task"]["description"])
         self.assertIn("rewrite the delegated task into concise English instructions", spec["prompt"]["guidance"])
-        self.assertIn("5-900", spec["parameters"]["properties"]["timeout_seconds"]["description"])
+        self.assertNotIn("timeout_seconds", spec["parameters"]["properties"])
+        self.assertNotIn("allowed_tools", spec["parameters"]["properties"])
+        self.assertIn("user-managed settings", spec["prompt"]["guidance"])
         self.assertIn("dynamically", spec["parameters"]["properties"]["max_steps"]["description"])
 
     def test_clarification_tool_validator_accepts_stringified_question_objects(self):
@@ -5545,6 +5551,8 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn('id="rag-context-size-select"', html)
         self.assertIn('id="rag-sensitivity-hint"', html)
         self.assertIn('id="sub-agent-model-preference-select"', html)
+        self.assertIn('id="sub-agent-include-conversation-context-toggle"', html)
+        self.assertIn("Share recent conversation excerpts with the sub-agent", html)
         self.assertIn('id="custom-model-routing-mode-select"', html)
         self.assertIn("Pin a specific provider", html)
         self.assertIn('id="custom-model-provider-slug-input"', html)
@@ -5720,7 +5728,7 @@ class AppRoutesTestCase(unittest.TestCase):
                 runtime_state,
             )
 
-        self.assertEqual(mocked_run.call_args.args[3], ["read_file"])
+        self.assertEqual(mocked_run.call_args.args[3], ["search_web", "read_file"])
         self.assertEqual(result["status"], "ok")
         self.assertIn("README", result["summary"])
         self.assertEqual(result["tool_trace"][0]["tool_name"], "read_file")
@@ -5956,6 +5964,7 @@ class AppRoutesTestCase(unittest.TestCase):
             "operation_model_preferences": {"sub_agent": ""},
             "operation_model_fallback_preferences": {"sub_agent": ["deepseek-reasoner", "deepseek-chat"]},
             "sub_agent_retry_attempts": 0,
+            "sub_agent_timeout_seconds": 20,
         }
 
         attempts = [
@@ -6001,6 +6010,7 @@ class AppRoutesTestCase(unittest.TestCase):
             "operation_model_preferences": {"sub_agent": ""},
             "operation_model_fallback_preferences": {"sub_agent": ["deepseek-reasoner", "deepseek-chat"]},
             "sub_agent_retry_attempts": 0,
+            "sub_agent_timeout_seconds": 20,
         }
 
         attempts = [
@@ -6045,7 +6055,7 @@ class AppRoutesTestCase(unittest.TestCase):
             "agent.time.monotonic",
             side_effect=[0, 0, 2, 4, 6, 11] + [11] * 20,
         ):
-            events = list(_run_sub_agent_stream({"task": "Inspect README.md", "timeout_seconds": 20}, runtime_state))
+            events = list(_run_sub_agent_stream({"task": "Inspect README.md"}, runtime_state))
 
         self.assertEqual(mocked_run.call_args_list[0].args[1], "deepseek-reasoner")
         self.assertEqual(mocked_run.call_args_list[1].args[1], "deepseek-chat")
@@ -6193,7 +6203,7 @@ class AppRoutesTestCase(unittest.TestCase):
         )
 
     def test_build_sub_agent_messages_mentions_web_query_limit(self):
-        messages = _build_sub_agent_messages("Inspect the web", "", "", "", ["search_web"])
+        messages = _build_sub_agent_messages("Inspect the web", "", "", ["search_web"])
 
         self.assertIn("Use English for tool planning", messages[0]["content"])
         self.assertIn("rewrite it into clear English working notes", messages[0]["content"])
@@ -6201,32 +6211,60 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("1 and 5 items", messages[0]["content"])
         self.assertIn("split broader searches into multiple calls", messages[0]["content"])
 
-    def test_build_sub_agent_messages_includes_parent_context(self):
+    def test_build_sub_agent_messages_includes_conversation_handoff(self):
         messages = _build_sub_agent_messages(
             "Inspect the web",
-            "Parent needs a concise vendor comparison.",
             "Conversation is already narrowed to two providers.",
             "",
             ["search_web"],
         )
 
-        self.assertIn("Parent context and goal:", messages[1]["content"])
-        self.assertIn("Parent needs a concise vendor comparison.", messages[1]["content"])
+        self.assertIn("Current conversation summary:", messages[1]["content"])
+        self.assertIn("Conversation is already narrowed to two providers.", messages[1]["content"])
 
-    def test_lookup_cross_turn_tool_memory_supports_sub_agent_exact_matches(self):
-        with patch(
-            "agent.get_exact_tool_memory_match",
-            return_value={"content": "Summary:\nReusable answer", "summary": "Reusable answer"},
-        ) as mocked_lookup:
-            excerpt, summary = _lookup_cross_turn_tool_memory(
+    def test_lookup_cross_turn_tool_memory_does_not_exact_match_sub_agent(self):
+        with patch("agent.get_exact_tool_memory_match") as mocked_lookup:
+            result = _lookup_cross_turn_tool_memory(
                 "sub_agent",
-                {"task": "Inspect README", "context": "Focus on install steps"},
+                {"task": "Inspect README", "max_steps": 4},
             )
 
-        self.assertEqual(excerpt, "Summary:\nReusable answer")
-        self.assertIn("Cached from an earlier conversation", summary)
-        self.assertIn("Reusable answer", summary)
-        mocked_lookup.assert_called_once_with("sub_agent", "Inspect README | Focus on install steps")
+        self.assertIsNone(result)
+        mocked_lookup.assert_not_called()
+
+    def test_run_sub_agent_stream_omits_conversation_handoff_when_setting_is_off(self):
+        runtime_state = {
+            "agent_context": {
+                "model": "deepseek-chat",
+                "enabled_tool_names": ["sub_agent", "read_file"],
+                "conversation_handoff": "User: this contains profile details.",
+                "sub_agent_depth": 0,
+            },
+            "canvas": create_canvas_runtime_state(),
+            "canvas_limits": {"expand_max_lines": 800, "scroll_window_lines": 200},
+            "workspace": {"root_path": None},
+        }
+        settings = {
+            "operation_model_preferences": {"sub_agent": ""},
+            "operation_model_fallback_preferences": {"sub_agent": []},
+            "sub_agent_include_conversation_context": False,
+        }
+        fake_child_events = iter(
+            [
+                {"type": "answer_delta", "text": "Summary ready."},
+                {"type": "done"},
+            ]
+        )
+
+        with patch("agent.get_app_settings", return_value=settings), patch(
+            "agent.run_agent_stream",
+            return_value=fake_child_events,
+        ) as mocked_run:
+            list(_run_sub_agent_stream({"task": "Inspect README.md"}, runtime_state))
+
+        delegated_messages = mocked_run.call_args.args[0]
+        self.assertEqual(len(delegated_messages), 2)
+        self.assertNotIn("Current conversation summary:", delegated_messages[1]["content"])
 
     def test_build_final_answer_instruction_forbids_claiming_unconfirmed_actions(self):
         instruction = _build_final_answer_instruction()

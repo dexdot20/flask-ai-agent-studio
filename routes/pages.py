@@ -57,6 +57,7 @@ from db import (
     get_summary_skip_first,
     get_summary_skip_last,
     get_sub_agent_max_parallel_tools,
+    get_sub_agent_include_conversation_context,
     get_sub_agent_retry_attempts,
     get_sub_agent_retry_delay_seconds,
     get_sub_agent_timeout_seconds,
@@ -327,6 +328,7 @@ def build_settings_payload() -> dict:
         "canvas_scroll_window_lines": get_canvas_scroll_window_lines(raw),
         "sub_agent_timeout_seconds": get_sub_agent_timeout_seconds(raw),
         "sub_agent_max_parallel_tools": get_sub_agent_max_parallel_tools(raw),
+        "sub_agent_include_conversation_context": get_sub_agent_include_conversation_context(raw),
         "sub_agent_retry_attempts": get_sub_agent_retry_attempts(raw),
         "sub_agent_retry_delay_seconds": get_sub_agent_retry_delay_seconds(raw),
         "chat_summary_mode": get_chat_summary_mode(raw),
@@ -438,6 +440,7 @@ def register_page_routes(app) -> None:
         canvas_scroll_window_lines_raw = data.get("canvas_scroll_window_lines")
         sub_agent_timeout_seconds_raw = data.get("sub_agent_timeout_seconds")
         sub_agent_max_parallel_tools_raw = data.get("sub_agent_max_parallel_tools")
+        sub_agent_include_conversation_context_raw = data.get("sub_agent_include_conversation_context")
         sub_agent_retry_attempts_raw = data.get("sub_agent_retry_attempts")
         sub_agent_retry_delay_seconds_raw = data.get("sub_agent_retry_delay_seconds")
         scratchpad = data.get("scratchpad")
@@ -479,6 +482,7 @@ def register_page_routes(app) -> None:
             and canvas_scroll_window_lines_raw is None
             and sub_agent_timeout_seconds_raw is None
             and sub_agent_max_parallel_tools_raw is None
+            and sub_agent_include_conversation_context_raw is None
             and sub_agent_retry_attempts_raw is None
             and sub_agent_retry_delay_seconds_raw is None
         ):
@@ -854,6 +858,18 @@ def register_page_routes(app) -> None:
             if not (MAX_PARALLEL_TOOLS_MIN <= sub_agent_max_parallel_tools <= MAX_PARALLEL_TOOLS_MAX):
                 return jsonify({"error": f"sub_agent_max_parallel_tools must be between {MAX_PARALLEL_TOOLS_MIN} and {MAX_PARALLEL_TOOLS_MAX}."}), 400
             settings["sub_agent_max_parallel_tools"] = str(sub_agent_max_parallel_tools)
+
+        if sub_agent_include_conversation_context_raw is not None:
+            if isinstance(sub_agent_include_conversation_context_raw, bool):
+                settings["sub_agent_include_conversation_context"] = (
+                    "true" if sub_agent_include_conversation_context_raw else "false"
+                )
+            else:
+                settings["sub_agent_include_conversation_context"] = (
+                    "true"
+                    if str(sub_agent_include_conversation_context_raw).strip().lower() in {"1", "true", "yes", "on"}
+                    else "false"
+                )
 
         if sub_agent_retry_attempts_raw is not None:
             try:
