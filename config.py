@@ -122,6 +122,24 @@ MAX_PARALLEL_TOOLS_MAX = 12
 DEFAULT_MAX_PARALLEL_TOOLS = 4
 SUB_AGENT_DEFAULT_MAX_PARALLEL_TOOLS = 2
 SUB_AGENT_DEFAULT_INCLUDE_CONVERSATION_CONTEXT = False
+SUB_AGENT_DEFAULT_INCLUDE_CANVAS_CONTEXT = True
+SUB_AGENT_ALLOWED_TOOL_NAMES = [
+    "search_knowledge_base",
+    "search_tool_memory",
+    "read_scratchpad",
+    "search_web",
+    "fetch_url",
+    "fetch_url_summarized",
+    "grep_fetched_content",
+    "search_news_ddgs",
+    "search_news_google",
+    "expand_canvas_document",
+    "scroll_canvas_document",
+    "search_canvas_document",
+    "read_file",
+    "list_dir",
+    "search_files",
+]
 CHAT_SUMMARY_DEFAULT_DETAIL_LEVEL = "balanced"
 CHAT_SUMMARY_DETAIL_LEVELS = {"concise", "balanced", "detailed"}
 CLARIFICATION_QUESTION_LIMIT_MIN = 1
@@ -358,6 +376,8 @@ DEFAULT_SETTINGS = {
     "sub_agent_retry_delay_seconds": str(SUB_AGENT_DEFAULT_RETRY_DELAY_SECONDS),
     "sub_agent_max_parallel_tools": str(SUB_AGENT_DEFAULT_MAX_PARALLEL_TOOLS),
     "sub_agent_include_conversation_context": "true" if SUB_AGENT_DEFAULT_INCLUDE_CONVERSATION_CONTEXT else "false",
+    "sub_agent_include_canvas_context": "true" if SUB_AGENT_DEFAULT_INCLUDE_CANVAS_CONTEXT else "false",
+    "sub_agent_allowed_tool_names": json.dumps(SUB_AGENT_ALLOWED_TOOL_NAMES, ensure_ascii=False),
     "custom_models": "[]",
     "visible_model_order": json.dumps(DEFAULT_VISIBLE_CHAT_MODEL_ORDER, ensure_ascii=False),
     "operation_model_preferences": json.dumps(DEFAULT_OPERATION_MODEL_PREFERENCES, ensure_ascii=False),

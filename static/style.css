@@ -5274,24 +5274,24 @@ kbd {
 
 .settings-page-shell {
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr);
-  gap: 24px;
-  width: min(1260px, calc(100% - 48px));
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 20px;
+  width: min(1180px, calc(100% - 48px));
   margin: 0 auto;
-  padding: 24px 0 32px;
+  padding: 20px 0 28px;
   align-items: start;
 }
 
 .settings-page-sidebar {
   position: sticky;
-  top: 24px;
+  top: 20px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
 }
 
 .settings-page-sidebar__intro,
-.settings-page-banner,
+.settings-page-toolbar,
 .settings-page-section-card,
 .settings-stat-card {
   border: 1px solid var(--border);
@@ -5300,8 +5300,8 @@ kbd {
 }
 
 .settings-page-sidebar__intro {
-  padding: 20px;
-  border-radius: 20px;
+  padding: 18px;
+  border-radius: 18px;
 }
 
 .settings-page-sidebar__eyebrow,
@@ -5313,24 +5313,24 @@ kbd {
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #9fb0ff;
+  color: #b8c3f2;
 }
 
 .settings-page-sidebar__intro h2,
-.settings-page-banner h2,
+.settings-page-toolbar h2,
 .settings-page-section-card__header h3 {
-  font-size: 1.08rem;
+  font-size: 1rem;
   line-height: 1.3;
   letter-spacing: -0.02em;
 }
 
 .settings-page-sidebar__intro p,
-.settings-page-banner p,
+.settings-page-toolbar p,
 .settings-page-section-card__header p,
 .settings-page-note-block p {
   color: var(--text-secondary);
-  font-size: 0.84rem;
-  line-height: 1.6;
+  font-size: 0.82rem;
+  line-height: 1.55;
 }
 
 .settings-label {
@@ -5349,18 +5349,38 @@ kbd {
   line-height: 1.55;
 }
 
+.settings-copy-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+
+.settings-copy-list li + li {
+  margin-top: 6px;
+}
+
 .settings-page-stats {
   display: grid;
   gap: 10px;
 }
 
+.settings-page-stats--compact {
+  gap: 8px;
+}
+
 .settings-stat-card {
-  padding: 16px 18px;
-  border-radius: 16px;
+  padding: 14px 16px;
+  border-radius: 14px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+}
+
+.settings-stat-card--compact {
+  padding: 12px 14px;
 }
 
 .settings-stat-card span {
@@ -5375,19 +5395,19 @@ kbd {
 .settings-tabs {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .settings-tab-btn {
   width: 100%;
   border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.025);
+  background: rgba(255, 255, 255, 0.02);
   color: var(--text-secondary);
-  border-radius: 16px;
-  padding: 13px 16px 13px 18px;
+  border-radius: 12px;
+  padding: 11px 14px 11px 16px;
   text-align: left;
   font: inherit;
-  font-size: 0.9rem;
+  font-size: 0.86rem;
   font-weight: 600;
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s, color 0.15s;
@@ -5408,20 +5428,20 @@ kbd {
 .settings-page-content {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
   min-width: 0;
 }
 
-.settings-page-banner {
-  border-radius: 24px;
-  padding: 24px;
+.settings-page-toolbar {
+  border-radius: 18px;
+  padding: 18px 20px;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 20px;
+  gap: 16px;
 }
 
-.settings-page-banner__actions {
+.settings-page-toolbar__actions {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -5433,13 +5453,13 @@ kbd {
 .settings-tab-panels {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
 }
 
 .settings-tab-panel {
   display: none;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
 }
 
 .settings-tab-panel.active {
@@ -5448,7 +5468,7 @@ kbd {
 
 .settings-page-grid {
   display: grid;
-  gap: 20px;
+  gap: 16px;
 }
 
 .settings-page-grid--two {
@@ -5464,15 +5484,15 @@ kbd {
 .settings-page-stack {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
 }
 
 .settings-page-section-card {
-  border-radius: 22px;
-  padding: 22px;
+  border-radius: 18px;
+  padding: 18px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
 }
 
 .settings-page-section-card__header {
@@ -5492,10 +5512,10 @@ kbd {
 }
 
 .settings-page-note-block {
-  padding: 14px 16px;
-  border-radius: 16px;
-  border: 1px solid rgba(79, 110, 247, 0.16);
-  background: rgba(255, 255, 255, 0.02);
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.015);
 }
 
 .settings-page-note-block strong {
@@ -5515,12 +5535,12 @@ kbd {
 .tool-permission-sections {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .tool-permission-section {
-  padding: 14px;
-  border-radius: 18px;
+  padding: 12px;
+  border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.015);
 }
@@ -5922,12 +5942,12 @@ body.login-page-body {
     grid-template-columns: 1fr;
   }
 
-  .settings-page-banner,
+  .settings-page-toolbar,
   .settings-page-section-card__header {
     flex-direction: column;
   }
 
-  .settings-page-banner__actions {
+  .settings-page-toolbar__actions {
     width: 100%;
     justify-content: space-between;
   }
@@ -5944,14 +5964,14 @@ body.login-page-body {
     gap: 16px;
   }
 
-  .settings-page-banner,
+  .settings-page-toolbar,
   .settings-page-section-card,
   .settings-page-sidebar__intro {
     padding: 18px;
     border-radius: 18px;
   }
 
-  .settings-page-banner__actions,
+  .settings-page-toolbar__actions,
   .header-controls {
     flex-wrap: wrap;
   }
@@ -5977,7 +5997,7 @@ body.login-page-body {
     width: 100%;
   }
 
-  .settings-page-banner__actions {
+  .settings-page-toolbar__actions {
     width: 100%;
   }
 

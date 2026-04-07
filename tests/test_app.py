@@ -22,6 +22,7 @@ import model_registry
 import prune_service
 from docx import Document
 from proxy_settings import DEFAULT_PROXY_ENABLED_OPERATIONS, PROXY_OPERATION_FETCH_URL
+from config import SUB_AGENT_ALLOWED_TOOL_NAMES
 from agent import (
     CANVAS_MUTATION_TOOL_NAMES,
     CANVAS_TOOL_NAMES,
@@ -155,7 +156,7 @@ from routes.chat import (
     build_summary_prompt_messages,
     maybe_create_conversation_summary,
 )
-from routes.pages import build_tool_permission_options, build_tool_permission_sections
+from routes.pages import build_sub_agent_tool_permission_sections, build_tool_permission_options, build_tool_permission_sections
 from token_utils import estimate_text_tokens
 from tool_registry import TOOL_SPEC_BY_NAME, get_enabled_tool_specs, get_openai_tool_specs, resolve_runtime_tool_names
 from vision import normalize_image_analysis
@@ -258,7 +259,9 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["canvas_scroll_window_lines"], 200)
         self.assertEqual(payload["sub_agent_timeout_seconds"], 240)
         self.assertEqual(payload["sub_agent_max_parallel_tools"], 2)
+        self.assertEqual(set(payload["sub_agent_allowed_tool_names"]), set(SUB_AGENT_ALLOWED_TOOL_NAMES))
         self.assertFalse(payload["sub_agent_include_conversation_context"])
+        self.assertTrue(payload["sub_agent_include_canvas_context"])
         self.assertEqual(payload["chat_summary_detail_level"], "balanced")
         self.assertEqual(payload["sub_agent_retry_attempts"], 2)
         self.assertEqual(payload["sub_agent_retry_delay_seconds"], 5)
@@ -339,7 +342,9 @@ class AppRoutesTestCase(unittest.TestCase):
                 "canvas_scroll_window_lines": 150,
                 "sub_agent_timeout_seconds": 360,
                 "sub_agent_max_parallel_tools": 3,
+                "sub_agent_allowed_tool_names": ["read_file", "search_web"],
                 "sub_agent_include_conversation_context": True,
+                "sub_agent_include_canvas_context": False,
                 "sub_agent_retry_attempts": 3,
                 "sub_agent_retry_delay_seconds": 7,
                 "custom_models": [
@@ -406,7 +411,9 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["canvas_scroll_window_lines"], 150)
         self.assertEqual(payload["sub_agent_timeout_seconds"], 360)
         self.assertEqual(payload["sub_agent_max_parallel_tools"], 3)
+        self.assertEqual(payload["sub_agent_allowed_tool_names"], ["read_file", "search_web"])
         self.assertTrue(payload["sub_agent_include_conversation_context"])
+        self.assertFalse(payload["sub_agent_include_canvas_context"])
         self.assertEqual(payload["sub_agent_retry_attempts"], 3)
         self.assertEqual(payload["sub_agent_retry_delay_seconds"], 7)
         self.assertEqual(
@@ -3772,9 +3779,10 @@ class AppRoutesTestCase(unittest.TestCase):
         response = self.client.get("/settings")
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
-        self.assertIn("Separate page, grouped controls, less noise", html)
-        self.assertIn('data-settings-tab="assistant"', html)
-        self.assertIn('data-settings-tab="memory"', html)
+        self.assertIn("Minimal, grouped settings", html)
+        self.assertIn('data-settings-tab="general"', html)
+        self.assertIn('data-settings-tab="models"', html)
+        self.assertIn('data-settings-tab="context"', html)
         self.assertIn('data-settings-tab="tools"', html)
         self.assertIn('data-settings-tab="knowledge"', html)
         self.assertIn("This is separate from generic RAG retrieval", html)
@@ -3806,6 +3814,20 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("read_file", [tool["name"] for tool in workspace_tools])
         self.assertIn("validate_project_workspace", [tool["name"] for tool in workspace_tools])
         self.assertIn("search_canvas_document", [tool["name"] for tool in canvas_tools])
+
+    def test_sub_agent_tool_permission_sections_are_read_only(self):
+        sections = build_sub_agent_tool_permission_sections()
+        section_titles = [section["title"] for section in sections]
+
+        self.assertEqual(
+            section_titles,
+            ["Assistant & Memory", "Web Research", "Canvas Editing", "Workspace Sandbox"],
+        )
+
+        tool_names = [tool["name"] for section in sections for tool in section["tools"]]
+        self.assertNotIn("create_file", tool_names)
+        self.assertIn("read_file", tool_names)
+        self.assertIn("search_web", tool_names)
 
     def test_settings_api_roundtrip_preserves_all_tool_permissions(self):
         response = self.client.patch(
@@ -5536,7 +5558,7 @@ class AppRoutesTestCase(unittest.TestCase):
 
     def test_settings_ui_exposes_fetch_threshold_input(self):
         html = self.client.get("/settings").get_data(as_text=True)
-        self.assertIn("Tool step budget", html)
+        self.assertIn("Tool budgets", html)
         self.assertIn("Tool step limit (1-50)", html)
         self.assertIn("Parent model max parallel tools (1-12)", html)
         self.assertIn('id="max-parallel-tools-input"', html)
@@ -5560,7 +5582,10 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn('id="sub-agent-model-preference-select"', html)
         self.assertIn('id="summary-detail-level-select"', html)
         self.assertIn('id="sub-agent-include-conversation-context-toggle"', html)
-        self.assertIn("Share recent conversation excerpts with the sub-agent", html)
+        self.assertIn('id="sub-agent-include-canvas-context-toggle"', html)
+        self.assertIn('id="sub-agent-tool-toggles"', html)
+        self.assertIn('name="sub-agent-allowed-tool"', html)
+        self.assertIn("Share available canvas document metadata", html)
         self.assertIn('id="custom-model-routing-mode-select"', html)
         self.assertIn("Pin a specific provider", html)
         self.assertIn('id="custom-model-provider-slug-input"', html)
@@ -5694,6 +5719,7 @@ class AppRoutesTestCase(unittest.TestCase):
             "canvas_limits": {"expand_max_lines": 800, "scroll_window_lines": 200},
             "workspace": {"root_path": None},
         }
+        settings = {"sub_agent_allowed_tool_names": ["search_web", "read_file"], "sub_agent_include_canvas_context": False}
 
         fake_child_events = iter(
             [
@@ -5725,18 +5751,21 @@ class AppRoutesTestCase(unittest.TestCase):
             ]
         )
 
-        with patch("agent.run_agent_stream", return_value=fake_child_events) as mocked_run:
+        with patch("agent.get_app_settings", return_value=settings), patch(
+            "agent.run_agent_stream",
+            return_value=fake_child_events,
+        ) as mocked_run:
             result, summary = _execute_tool(
                 "sub_agent",
                 {
                     "task": "Inspect the README and summarize the setup steps.",
-                    "allowed_tools": ["create_file", "read_file"],
                     "max_steps": 2,
                 },
                 runtime_state,
             )
 
         self.assertEqual(mocked_run.call_args.args[3], ["search_web", "read_file"])
+        self.assertEqual(mocked_run.call_args.kwargs["prompt_tool_names"], ["search_web", "read_file"])
         self.assertEqual(result["status"], "ok")
         self.assertIn("README", result["summary"])
         self.assertEqual(result["tool_trace"][0]["tool_name"], "read_file")
@@ -5744,7 +5773,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(runtime_state["sub_agent_traces"][0]["messages"][-1]["role"], "assistant")
         self.assertIn("Sub-agent completed", summary)
 
-    def test_execute_tool_scopes_sub_agent_to_parent_prompt_tools(self):
+    def test_execute_tool_scopes_sub_agent_to_user_selected_tools(self):
         runtime_state = {
             "agent_context": {
                 "model": "deepseek-chat",
@@ -5757,6 +5786,7 @@ class AppRoutesTestCase(unittest.TestCase):
             "canvas_limits": {"expand_max_lines": 800, "scroll_window_lines": 200},
             "workspace": {"root_path": None},
         }
+        settings = {"sub_agent_allowed_tool_names": ["search_web", "read_file"]}
 
         fake_child_events = iter(
             [
@@ -5765,19 +5795,30 @@ class AppRoutesTestCase(unittest.TestCase):
             ]
         )
 
-        with patch("agent.run_agent_stream", return_value=fake_child_events) as mocked_run:
+        with patch("agent.get_app_settings", return_value=settings), patch("agent.run_agent_stream", return_value=fake_child_events) as mocked_run:
             result, _ = _execute_tool(
                 "sub_agent",
                 {
                     "task": "Inspect the README and summarize the setup steps.",
-                    "allowed_tools": ["search_web", "read_file"],
                 },
                 runtime_state,
             )
 
-        self.assertEqual(mocked_run.call_args.args[3], ["read_file"])
-        self.assertEqual(mocked_run.call_args.kwargs["prompt_tool_names"], ["read_file"])
+        self.assertEqual(mocked_run.call_args.args[3], ["search_web", "read_file"])
+        self.assertEqual(mocked_run.call_args.kwargs["prompt_tool_names"], ["search_web", "read_file"])
         self.assertEqual(result["status"], "ok")
+
+    def test_execute_tool_accepts_google_search_alias(self):
+        with patch(
+            "agent.search_web_tool",
+            return_value=[{"title": "A", "url": "https://example.com", "snippet": "alpha"}],
+        ) as mocked_search:
+            result, summary = _execute_tool("google_search", {"queries": ["repo overview"]})
+
+        self.assertEqual(mocked_search.call_count, 1)
+        self.assertEqual(mocked_search.call_args.args[0], ["repo overview"])
+        self.assertEqual(summary, "1 web results found")
+        self.assertEqual(result[0]["title"], "A")
 
     def test_execute_tool_blocks_recursive_sub_agent_calls(self):
         result, summary = _execute_tool(
@@ -5885,7 +5926,7 @@ class AppRoutesTestCase(unittest.TestCase):
             events = list(_run_sub_agent_stream({"task": "Inspect README.md"}, runtime_state))
 
         self.assertEqual(mocked_run.call_args.kwargs["max_parallel_tools"], 1)
-        self.assertEqual(mocked_run.call_args.kwargs["prompt_tool_names"], ["read_file"])
+        self.assertEqual(mocked_run.call_args.kwargs["prompt_tool_names"], SUB_AGENT_ALLOWED_TOOL_NAMES)
         self.assertEqual(events[-1]["entry"]["status"], "ok")
 
     def test_run_sub_agent_stream_sizes_max_steps_from_task_complexity(self):
@@ -5907,8 +5948,6 @@ class AppRoutesTestCase(unittest.TestCase):
                     }
                 ]
             ),
-            "canvas_limits": {"expand_max_lines": 800, "scroll_window_lines": 200},
-            "workspace": {"root_path": None},
         }
         fake_child_events = iter(
             [

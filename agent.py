@@ -77,6 +77,7 @@ from config import (
     RAG_TOOL_RESULT_SUMMARY_MAX_CHARS,
     SCRATCHPAD_SECTION_METADATA,
     SCRATCHPAD_SECTION_ORDER,
+    SUB_AGENT_ALLOWED_TOOL_NAMES as CONFIG_SUB_AGENT_ALLOWED_TOOL_NAMES,
     SUB_AGENT_DEFAULT_TIMEOUT_SECONDS,
     SUB_AGENT_TIMEOUT_MAX_SECONDS,
     SUB_AGENT_TIMEOUT_MIN_SECONDS,
@@ -93,6 +94,8 @@ from db import (
     get_clarification_max_questions,
     get_model_temperature,
     get_rag_source_types,
+    get_sub_agent_allowed_tool_names,
+    get_sub_agent_include_canvas_context,
     get_sub_agent_include_conversation_context,
     get_sub_agent_max_parallel_tools,
     get_sub_agent_retry_attempts,
@@ -233,23 +236,7 @@ PARALLEL_SAFE_TOOL_NAMES = WEB_TOOL_NAMES | {
     # Delegated read-only helper
     "sub_agent",
 }
-SUB_AGENT_ALLOWED_TOOL_NAMES = {
-    "search_knowledge_base",
-    "search_tool_memory",
-    "read_scratchpad",
-    "search_web",
-    "fetch_url",
-    "fetch_url_summarized",
-    "grep_fetched_content",
-    "search_news_ddgs",
-    "search_news_google",
-    "expand_canvas_document",
-    "scroll_canvas_document",
-    "search_canvas_document",
-    "read_file",
-    "list_dir",
-    "search_files",
-}
+SUB_AGENT_ALLOWED_TOOL_NAMES = set(CONFIG_SUB_AGENT_ALLOWED_TOOL_NAMES)
 SUB_AGENT_DEFAULT_MAX_STEPS = 6
 SUB_AGENT_MAX_TRANSCRIPT_MESSAGES = 24
 SUB_AGENT_MAX_MESSAGE_CONTENT_CHARS = 4_000
@@ -865,6 +852,7 @@ def _normalize_tool_args_for_cache(value):
 
 
 def build_tool_cache_key(tool_name: str, tool_args: dict) -> str:
+    tool_name = _normalize_tool_name(tool_name)
     normalized_args = _normalize_tool_args_for_cache(tool_args if isinstance(tool_args, dict) else {})
     payload = json.dumps(normalized_args, ensure_ascii=False, sort_keys=True)
     digest = hashlib.sha1(f"{tool_name}|{payload}".encode("utf-8")).hexdigest()
@@ -1067,6 +1055,16 @@ def _normalize_tool_name_list(values) -> list[str]:
     return normalized
 
 
+_TOOL_NAME_ALIASES = {
+    "google_search": "search_web",
+}
+
+
+def _normalize_tool_name(tool_name: str) -> str:
+    name = str(tool_name or "").strip()
+    return _TOOL_NAME_ALIASES.get(name, name)
+
+
 def _build_sub_agent_conversation_handoff(messages: list[dict], max_messages: int = 8, max_chars: int = 2_400) -> str:
     visible_entries = []
     for message in messages or []:
@@ -1117,17 +1115,12 @@ def _build_sub_agent_canvas_handoff(runtime_state: dict) -> str:
     return _clean_tool_text("\n".join(lines), limit=1_500)
 
 
-def _resolve_sub_agent_tool_names(requested_tools, parent_visible_tool_names: list[str]) -> list[str]:
-    available = [
-        name
-        for name in _normalize_tool_name_list(parent_visible_tool_names)
-        if name in SUB_AGENT_ALLOWED_TOOL_NAMES
-    ]
+def _resolve_sub_agent_tool_names(requested_tools) -> list[str]:
     if not isinstance(requested_tools, list):
-        return available
+        return []
 
     requested = _normalize_tool_name_list(requested_tools)
-    return [name for name in requested if name in available]
+    return [name for name in requested if name in SUB_AGENT_ALLOWED_TOOL_NAMES]
 
 
 def _normalize_sub_agent_tool_calls(tool_calls) -> list[dict]:
@@ -1139,7 +1132,7 @@ def _normalize_sub_agent_tool_calls(tool_calls) -> list[dict]:
         if not isinstance(tool_call, dict):
             continue
         function = tool_call.get("function") if isinstance(tool_call.get("function"), dict) else {}
-        name = str(function.get("name") or tool_call.get("name") or "").strip()
+        name = _normalize_tool_name(str(function.get("name") or tool_call.get("name") or "").strip())
         if not name:
             continue
         raw_arguments = function.get("arguments")
@@ -1356,7 +1349,7 @@ def _build_sub_agent_artifacts(transcript_messages: list[dict], tool_results: li
         for tool_call in tool_calls:
             if not isinstance(tool_call, dict):
                 continue
-            tool_name = str(tool_call.get("name") or "").strip()
+            tool_name = _normalize_tool_name(str(tool_call.get("name") or "").strip())
             preview = str(tool_call.get("preview") or "").strip()
             if tool_name and preview:
                 add_artifact("tool_input", tool_name.replace("_", " ").title(), preview)
@@ -3026,7 +3019,7 @@ def _build_assistant_tool_call_message(content_text: str, tool_calls: list[dict]
                 "id": tool_call_id,
                 "type": "function",
                 "function": {
-                    "name": str(tool_call.get("name") or "").strip(),
+                    "name": _normalize_tool_name(str(tool_call.get("name") or "").strip()),
                     "arguments": json.dumps(tool_call.get("arguments") or {}, ensure_ascii=False),
                 },
             }
@@ -3109,6 +3102,7 @@ def _coerce_clarification_question_item(raw_question):
 
 
 def _validate_tool_arguments(tool_name: str, tool_args: dict) -> str | None:
+    tool_name = _normalize_tool_name(tool_name)
     spec = TOOL_SPEC_BY_NAME.get(tool_name)
     if not spec:
         return f"Unknown tool: {tool_name}"
@@ -3620,16 +3614,6 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
         error = "sub_agent requires a non-empty task."
         return {"status": "error", "error": error}, f"Failed: {error}"
 
-    parent_visible_tools = _normalize_tool_name_list(
-        agent_context.get("prompt_tool_names")
-        if isinstance(agent_context.get("prompt_tool_names"), list)
-        else agent_context.get("enabled_tool_names")
-    )
-    child_tool_names = _resolve_sub_agent_tool_names(None, parent_visible_tools)
-    if not child_tool_names:
-        error = "No eligible read-only tools are available for sub-agent delegation."
-        return {"status": "error", "error": error}, f"Failed: {error}"
-
     settings = get_app_settings()
     parent_model = str(agent_context.get("model") or "").strip()
     child_model_candidates = get_operation_model_candidates("sub_agent", settings, fallback_model_id=parent_model)
@@ -3637,12 +3621,17 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
     timeout_seconds = get_sub_agent_timeout_seconds(settings)
     retry_attempts = get_sub_agent_retry_attempts(settings)
     retry_delay_seconds = get_sub_agent_retry_delay_seconds(settings)
+    child_tool_names = _resolve_sub_agent_tool_names(get_sub_agent_allowed_tool_names(settings))
+    if not child_tool_names:
+        error = "No eligible read-only tools are available for sub-agent delegation."
+        return {"status": "error", "error": error}, f"Failed: {error}"
+
     overall_deadline = time.monotonic() + timeout_seconds
 
     conversation_handoff = ""
     if get_sub_agent_include_conversation_context(settings):
         conversation_handoff = str(agent_context.get("conversation_handoff") or "").strip()
-    canvas_handoff = _build_sub_agent_canvas_handoff(runtime_state)
+    canvas_handoff = _build_sub_agent_canvas_handoff(runtime_state) if get_sub_agent_include_canvas_context(settings) else ""
     child_max_steps = _resolve_sub_agent_max_steps(
         tool_args,
         task=task,
@@ -4537,6 +4526,7 @@ _TOOL_EXECUTORS = {
 
 def _execute_tool(tool_name: str, tool_args: dict, runtime_state: dict | None = None):
     runtime_state = runtime_state if isinstance(runtime_state, dict) else {}
+    tool_name = _normalize_tool_name(tool_name)
     handler = _TOOL_EXECUTORS.get(tool_name)
     if handler is not None:
         return handler(tool_args if isinstance(tool_args, dict) else {}, runtime_state)
@@ -4589,6 +4579,7 @@ def collect_agent_response(
 
 
 def _tool_input_preview(tool_name: str, tool_args: dict) -> str:
+    tool_name = _normalize_tool_name(tool_name)
     tool_args = tool_args if isinstance(tool_args, dict) else {}
     if tool_name in {"search_web", "search_news_ddgs", "search_news_google"}:
         values = tool_args.get("queries")
@@ -5210,7 +5201,7 @@ def _append_reasoning_replay_entry(reasoning_state: dict, step: int, reasoning_t
 
     entries = reasoning_state.setdefault("entries", [])
     tool_names = [
-        str(tool_call.get("name") or "").strip()
+        _normalize_tool_name(str(tool_call.get("name") or "").strip())
         for tool_call in (tool_calls or [])
         if str(tool_call.get("name") or "").strip()
     ]
@@ -6195,7 +6186,7 @@ def run_agent_stream(
                 step=step,
                 chars=len(reasoning_text),
                 tool_names=[
-                    str(tool_call.get("name") or "").strip()
+                    _normalize_tool_name(str(tool_call.get("name") or "").strip())
                     for tool_call in (tool_calls or [])
                     if str(tool_call.get("name") or "").strip()
                 ],
@@ -6212,7 +6203,7 @@ def run_agent_stream(
         # ---- Phase 1: validate, pre-check, build execution slots (sequential) ----
         slots = []
         for call_index, tool_call in enumerate(tool_calls, start=1):
-            tool_name = tool_call["name"]
+            tool_name = _normalize_tool_name(tool_call["name"])
             tool_args = tool_call["arguments"]
             call_id = str(tool_call.get("id") or f"step-{step}-call-{call_index}-{tool_name}")
             slot = {

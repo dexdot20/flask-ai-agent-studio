@@ -467,7 +467,7 @@ TOOL_SPECS = [
                 "Before calling this tool, rewrite the delegated task into concise English instructions for the helper, even if the user spoke Turkish or another language. "
                 "Use the user's original language only when the delegated task itself depends on that language, and otherwise expect the helper to work in English by default. "
                 "Do not pass separate user-profile or background context; put only the research-relevant details directly into the task instructions. "
-                "Sub-agent model choice, timeout, retries, parallelism, and whether recent conversation excerpts are shared are user-managed settings, not parent-agent knobs. "
+                "Sub-agent model choice, timeout, retries, parallelism, tool allowlist, and whether conversation or canvas context is shared are user-managed settings, not parent-agent knobs. "
                 "Keep it scoped: prefer one helper call over many, and do not delegate writes, clarifications, or recursive agent orchestration. "
                 "Leave max_steps unset unless you have a strong reason to constrain it manually; the runtime can size that budget dynamically for simple versus broad tasks. "
                 "If the helper uses web search, each search_web/search_news call must stay within the 1-5 query limit; split larger batches into separate calls."

@@ -40,6 +40,7 @@ const canvasScrollLinesEl = document.getElementById("canvas-scroll-lines-input")
 const subAgentTimeoutEl = document.getElementById("sub-agent-timeout-input");
 const subAgentMaxParallelToolsEl = document.getElementById("sub-agent-max-parallel-tools-input");
 const subAgentIncludeConversationContextEl = document.getElementById("sub-agent-include-conversation-context-toggle");
+const subAgentIncludeCanvasContextEl = document.getElementById("sub-agent-include-canvas-context-toggle");
 const subAgentRetryAttemptsEl = document.getElementById("sub-agent-retry-attempts-input");
 const subAgentRetryDelayEl = document.getElementById("sub-agent-retry-delay-input");
 const customModelNameEl = document.getElementById("custom-model-name-input");
@@ -85,6 +86,7 @@ const ragSensitivityHintEl = document.getElementById("rag-sensitivity-hint");
 const ragContextSizeEl = document.getElementById("rag-context-size-select");
 const ragSourceTypeEls = Array.from(document.querySelectorAll("input[name='rag-source-type']"));
 const proxyOperationEls = Array.from(document.querySelectorAll("input[name='proxy-enabled-operation']"));
+const subAgentToolToggleEls = Array.from(document.querySelectorAll("input[name='sub-agent-allowed-tool']"));
 const ragSourceSummaryEl = document.getElementById("rag-source-summary");
 const toolMemoryAutoInjectEl = document.getElementById("tool-memory-auto-inject-toggle");
 const toolMemoryDisabledNoteEl = document.getElementById("tool-memory-disabled-note");
@@ -108,6 +110,10 @@ const statToolsEl = document.getElementById("settings-stat-tools");
 const statRagEl = document.getElementById("settings-stat-rag");
 const tabButtons = Array.from(document.querySelectorAll("[data-settings-tab]"));
 const tabPanels = Array.from(document.querySelectorAll("[data-settings-panel]"));
+const SETTINGS_TAB_ALIASES = {
+  assistant: "general",
+  memory: "context",
+};
 
 const RAG_SENSITIVITY_HINTS = {
   flexible: "Flexible: lower threshold around 0.20, so the system injects broader matches.",
@@ -1371,6 +1377,10 @@ function getSelectedProxyOperations() {
   return proxyOperationEls.filter((element) => element.checked).map((element) => element.value);
 }
 
+function getSelectedSubAgentTools() {
+  return subAgentToolToggleEls.filter((element) => element.checked).map((element) => element.value);
+}
+
 function applySelectedTools(selected) {
   const active = new Set(Array.isArray(selected) ? selected : []);
   toolToggleEls.forEach((element) => {
@@ -1389,6 +1399,13 @@ function applySelectedRagSourceTypes(selected) {
 function applySelectedProxyOperations(selected) {
   const active = new Set(Array.isArray(selected) ? selected : []);
   proxyOperationEls.forEach((element) => {
+    element.checked = active.has(element.value);
+  });
+}
+
+function applySelectedSubAgentTools(selected) {
+  const active = new Set(Array.isArray(selected) ? selected : []);
+  subAgentToolToggleEls.forEach((element) => {
     element.checked = active.has(element.value);
   });
 }
@@ -1463,9 +1480,13 @@ function applySettingsToForm() {
   if (subAgentIncludeConversationContextEl) {
     subAgentIncludeConversationContextEl.checked = Boolean(appSettings.sub_agent_include_conversation_context);
   }
+  if (subAgentIncludeCanvasContextEl) {
+    subAgentIncludeCanvasContextEl.checked = Boolean(appSettings.sub_agent_include_canvas_context);
+  }
   if (subAgentRetryAttemptsEl) subAgentRetryAttemptsEl.value = String(appSettings.sub_agent_retry_attempts ?? 2);
   if (subAgentRetryDelayEl) subAgentRetryDelayEl.value = String(appSettings.sub_agent_retry_delay_seconds ?? 5);
   applySelectedTools(appSettings.active_tools || []);
+  applySelectedSubAgentTools(appSettings.sub_agent_allowed_tool_names || []);
   applySelectedProxyOperations(appSettings.proxy_enabled_operations || []);
   if (ragAutoInjectEl) {
     ragAutoInjectEl.checked = Boolean(featureFlags.rag_enabled ? appSettings.rag_auto_inject : false);
@@ -1580,7 +1601,9 @@ function applyServerSettingsData(data) {
   appSettings.canvas_scroll_window_lines = data.canvas_scroll_window_lines || 200;
   appSettings.sub_agent_timeout_seconds = data.sub_agent_timeout_seconds ?? 240;
   appSettings.sub_agent_max_parallel_tools = data.sub_agent_max_parallel_tools ?? 2;
+  appSettings.sub_agent_allowed_tool_names = Array.isArray(data.sub_agent_allowed_tool_names) ? data.sub_agent_allowed_tool_names : [];
   appSettings.sub_agent_include_conversation_context = Boolean(data.sub_agent_include_conversation_context);
+  appSettings.sub_agent_include_canvas_context = Boolean(data.sub_agent_include_canvas_context);
   appSettings.sub_agent_retry_attempts = data.sub_agent_retry_attempts ?? 2;
   appSettings.sub_agent_retry_delay_seconds = data.sub_agent_retry_delay_seconds ?? 5;
   appSettings.active_tools = Array.isArray(data.active_tools) ? data.active_tools : [];
@@ -1640,7 +1663,9 @@ async function saveSettings() {
     canvas_scroll_window_lines: readNumericSetting(canvasScrollLinesEl, 200, { allowZero: false }),
     sub_agent_timeout_seconds: readNumericSetting(subAgentTimeoutEl, 240, { allowZero: false }),
     sub_agent_max_parallel_tools: readNumericSetting(subAgentMaxParallelToolsEl, 2, { allowZero: false }),
+    sub_agent_allowed_tool_names: getSelectedSubAgentTools(),
     sub_agent_include_conversation_context: Boolean(subAgentIncludeConversationContextEl?.checked),
+    sub_agent_include_canvas_context: Boolean(subAgentIncludeCanvasContextEl?.checked),
     sub_agent_retry_attempts: readNumericSetting(subAgentRetryAttemptsEl, 2),
     sub_agent_retry_delay_seconds: readNumericSetting(subAgentRetryDelayEl, 5),
     custom_models: draftCustomModels.map((model) => ({ ...model })),
@@ -1984,7 +2009,8 @@ async function syncKnowledgeBaseConversations() {
 }
 
 function activateTab(tabId, updateHash = true) {
-  const nextId = String(tabId || "assistant");
+  const normalizedTabId = String(tabId || "general");
+  const nextId = SETTINGS_TAB_ALIASES[normalizedTabId] || normalizedTabId;
 
   tabButtons.forEach((button) => {
     const isActive = button.dataset.settingsTab === nextId;
@@ -2009,7 +2035,8 @@ function initializeTabs() {
   });
 
   const hash = String(window.location.hash || "").replace(/^#/, "");
-  const initialTab = tabButtons.some((button) => button.dataset.settingsTab === hash) ? hash : "assistant";
+  const resolvedHash = SETTINGS_TAB_ALIASES[hash] || hash;
+  const initialTab = tabButtons.some((button) => button.dataset.settingsTab === resolvedHash) ? resolvedHash : "general";
   activateTab(initialTab, false);
 }
 
@@ -2038,6 +2065,7 @@ function registerDirtyListeners() {
   subAgentTimeoutEl?.addEventListener("input", markDirty);
   subAgentMaxParallelToolsEl?.addEventListener("input", markDirty);
   subAgentIncludeConversationContextEl?.addEventListener("change", markDirty);
+  subAgentIncludeCanvasContextEl?.addEventListener("change", markDirty);
   subAgentRetryAttemptsEl?.addEventListener("input", markDirty);
   subAgentRetryDelayEl?.addEventListener("input", markDirty);
   summaryModelPreferenceEl?.addEventListener("change", markDirty);
@@ -2069,6 +2097,9 @@ function registerDirtyListeners() {
     });
   });
   proxyOperationEls.forEach((element) => {
+    element.addEventListener("change", markDirty);
+  });
+  subAgentToolToggleEls.forEach((element) => {
     element.addEventListener("change", markDirty);
   });
 }

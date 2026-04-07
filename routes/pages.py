@@ -20,6 +20,7 @@ from config import (
     SCRATCHPAD_SECTION_METADATA,
     SCRATCHPAD_SECTION_ORDER,
     SCRATCHPAD_SECTION_SETTING_KEYS,
+    SUB_AGENT_ALLOWED_TOOL_NAMES,
     SUB_AGENT_RETRY_ATTEMPTS_MAX,
     SUB_AGENT_RETRY_ATTEMPTS_MIN,
     SUB_AGENT_RETRY_DELAY_MAX_SECONDS,
@@ -58,6 +59,8 @@ from db import (
     get_summary_skip_first,
     get_summary_skip_last,
     get_sub_agent_max_parallel_tools,
+    get_sub_agent_allowed_tool_names,
+    get_sub_agent_include_canvas_context,
     get_sub_agent_include_conversation_context,
     get_sub_agent_retry_attempts,
     get_sub_agent_retry_delay_seconds,
@@ -297,6 +300,17 @@ def build_tool_permission_sections() -> list[dict[str, object]]:
     return sections
 
 
+def build_sub_agent_tool_permission_sections() -> list[dict[str, object]]:
+    allowed_tools = set(SUB_AGENT_ALLOWED_TOOL_NAMES)
+    sections: list[dict[str, object]] = []
+    for section in build_tool_permission_sections():
+        filtered_tools = [tool for tool in section["tools"] if tool["name"] in allowed_tools]
+        if not filtered_tools:
+            continue
+        sections.append({**section, "tools": filtered_tools})
+    return sections
+
+
 def build_settings_payload() -> dict:
     raw = get_app_settings()
     available_models = get_all_models(raw)
@@ -329,7 +343,9 @@ def build_settings_payload() -> dict:
         "canvas_scroll_window_lines": get_canvas_scroll_window_lines(raw),
         "sub_agent_timeout_seconds": get_sub_agent_timeout_seconds(raw),
         "sub_agent_max_parallel_tools": get_sub_agent_max_parallel_tools(raw),
+        "sub_agent_allowed_tool_names": get_sub_agent_allowed_tool_names(raw),
         "sub_agent_include_conversation_context": get_sub_agent_include_conversation_context(raw),
+        "sub_agent_include_canvas_context": get_sub_agent_include_canvas_context(raw),
         "sub_agent_retry_attempts": get_sub_agent_retry_attempts(raw),
         "sub_agent_retry_delay_seconds": get_sub_agent_retry_delay_seconds(raw),
         "chat_summary_detail_level": get_chat_summary_detail_level(raw),
@@ -344,6 +360,7 @@ def build_settings_payload() -> dict:
         "fetch_url_token_threshold": get_fetch_url_token_threshold(raw),
         "fetch_url_clip_aggressiveness": get_fetch_url_clip_aggressiveness(raw),
         "features": get_feature_flags(),
+        "sub_agent_tool_sections": build_sub_agent_tool_permission_sections(),
     }
 
 
@@ -396,6 +413,7 @@ def register_page_routes(app) -> None:
             "settings.html",
             settings=settings,
             tool_sections=build_tool_permission_sections(),
+            sub_agent_tool_sections=build_sub_agent_tool_permission_sections(),
             proxy_operation_options=PROXY_OPERATION_OPTIONS,
             auth_enabled=is_login_pin_enabled(),
             page_lang=_resolve_page_lang(),
@@ -443,7 +461,9 @@ def register_page_routes(app) -> None:
         canvas_scroll_window_lines_raw = data.get("canvas_scroll_window_lines")
         sub_agent_timeout_seconds_raw = data.get("sub_agent_timeout_seconds")
         sub_agent_max_parallel_tools_raw = data.get("sub_agent_max_parallel_tools")
+        sub_agent_allowed_tool_names_raw = data.get("sub_agent_allowed_tool_names")
         sub_agent_include_conversation_context_raw = data.get("sub_agent_include_conversation_context")
+        sub_agent_include_canvas_context_raw = data.get("sub_agent_include_canvas_context")
         sub_agent_retry_attempts_raw = data.get("sub_agent_retry_attempts")
         sub_agent_retry_delay_seconds_raw = data.get("sub_agent_retry_delay_seconds")
         scratchpad = data.get("scratchpad")
@@ -486,7 +506,9 @@ def register_page_routes(app) -> None:
             and canvas_scroll_window_lines_raw is None
             and sub_agent_timeout_seconds_raw is None
             and sub_agent_max_parallel_tools_raw is None
+            and sub_agent_allowed_tool_names_raw is None
             and sub_agent_include_conversation_context_raw is None
+            and sub_agent_include_canvas_context_raw is None
             and sub_agent_retry_attempts_raw is None
             and sub_agent_retry_delay_seconds_raw is None
         ):
@@ -869,6 +891,16 @@ def register_page_routes(app) -> None:
                 return jsonify({"error": f"sub_agent_max_parallel_tools must be between {MAX_PARALLEL_TOOLS_MIN} and {MAX_PARALLEL_TOOLS_MAX}."}), 400
             settings["sub_agent_max_parallel_tools"] = str(sub_agent_max_parallel_tools)
 
+        if sub_agent_allowed_tool_names_raw is not None:
+            if not isinstance(sub_agent_allowed_tool_names_raw, list):
+                return jsonify({"error": "sub_agent_allowed_tool_names must be an array."}), 400
+            normalized_sub_agent_tools = [
+                tool_name
+                for tool_name in normalize_active_tool_names(sub_agent_allowed_tool_names_raw)
+                if tool_name in SUB_AGENT_ALLOWED_TOOL_NAMES
+            ]
+            settings["sub_agent_allowed_tool_names"] = json.dumps(normalized_sub_agent_tools, ensure_ascii=False)
+
         if sub_agent_include_conversation_context_raw is not None:
             if isinstance(sub_agent_include_conversation_context_raw, bool):
                 settings["sub_agent_include_conversation_context"] = (
@@ -878,6 +910,18 @@ def register_page_routes(app) -> None:
                 settings["sub_agent_include_conversation_context"] = (
                     "true"
                     if str(sub_agent_include_conversation_context_raw).strip().lower() in {"1", "true", "yes", "on"}
+                    else "false"
+                )
+
+        if sub_agent_include_canvas_context_raw is not None:
+            if isinstance(sub_agent_include_canvas_context_raw, bool):
+                settings["sub_agent_include_canvas_context"] = (
+                    "true" if sub_agent_include_canvas_context_raw else "false"
+                )
+            else:
+                settings["sub_agent_include_canvas_context"] = (
+                    "true"
+                    if str(sub_agent_include_canvas_context_raw).strip().lower() in {"1", "true", "yes", "on"}
                     else "false"
                 )
 

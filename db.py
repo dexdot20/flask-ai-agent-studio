@@ -60,6 +60,8 @@ from config import (
     MAX_PARALLEL_TOOLS_MIN,
     SUB_AGENT_DEFAULT_RETRY_ATTEMPTS,
     SUB_AGENT_DEFAULT_MAX_PARALLEL_TOOLS,
+    SUB_AGENT_ALLOWED_TOOL_NAMES,
+    SUB_AGENT_DEFAULT_INCLUDE_CANVAS_CONTEXT,
     SUB_AGENT_DEFAULT_RETRY_DELAY_SECONDS,
     SUB_AGENT_DEFAULT_TIMEOUT_SECONDS,
     SUB_AGENT_RETRY_ATTEMPTS_MAX,
@@ -2242,6 +2244,26 @@ def normalize_active_tool_names(raw_value) -> list[str]:
     return normalized
 
 
+def normalize_sub_agent_allowed_tool_names(raw_value) -> list[str]:
+    if raw_value in (None, ""):
+        return []
+
+    if isinstance(raw_value, list):
+        names = raw_value
+    else:
+        try:
+            names = json.loads(raw_value or "[]")
+        except Exception:
+            names = []
+
+    normalized = []
+    allowed = set(SUB_AGENT_ALLOWED_TOOL_NAMES)
+    for name in names:
+        if isinstance(name, str) and name in allowed and name not in normalized:
+            normalized.append(name)
+    return normalized
+
+
 def normalize_rag_source_types(raw_value) -> list[str]:
     if raw_value in (None, ""):
         return list(RAG_SOURCE_TYPE_SETTING_OPTIONS)
@@ -2511,6 +2533,22 @@ def get_sub_agent_include_conversation_context(settings: dict | None = None) -> 
         DEFAULT_SETTINGS["sub_agent_include_conversation_context"],
     )
     return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def get_sub_agent_include_canvas_context(settings: dict | None = None) -> bool:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get(
+        "sub_agent_include_canvas_context",
+        DEFAULT_SETTINGS["sub_agent_include_canvas_context"],
+    )
+    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def get_sub_agent_allowed_tool_names(settings: dict | None = None) -> list[str]:
+    source = settings if settings is not None else get_app_settings()
+    if source.get("sub_agent_allowed_tool_names") is None:
+        return list(SUB_AGENT_ALLOWED_TOOL_NAMES)
+    return normalize_sub_agent_allowed_tool_names(source.get("sub_agent_allowed_tool_names"))
 
 
 def get_max_parallel_tools(settings: dict | None = None) -> int:

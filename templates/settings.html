@@ -37,73 +37,122 @@
   <main class="settings-page-shell">
     <aside class="settings-page-sidebar" aria-label="Settings sections">
       <div class="settings-page-sidebar__intro">
-        <span class="settings-page-sidebar__eyebrow">Global settings</span>
-        <h2>Control center</h2>
-        <p>Global behavior lives here. Each tab groups a single operational area so the chat view stays focused.</p>
+        <span class="settings-page-sidebar__eyebrow">Workspace settings</span>
+        <h2>Global runtime policy</h2>
+        <p>Each tab keeps one decision area together so the page stays readable and the chat view stays clean.</p>
       </div>
 
-      <div class="settings-page-stats" aria-label="Settings overview">
-        <div class="settings-stat-card">
+      <nav class="settings-tabs" id="settings-tabs" aria-label="Settings tabs">
+        <button class="settings-tab-btn active" id="general-tab" type="button" data-settings-tab="general">General</button>
+        <button class="settings-tab-btn" id="models-tab" type="button" data-settings-tab="models">Models</button>
+        <button class="settings-tab-btn" id="context-tab" type="button" data-settings-tab="context">Context</button>
+        <button class="settings-tab-btn" id="tools-tab" type="button" data-settings-tab="tools">Tools</button>
+        <button class="settings-tab-btn" id="knowledge-tab" type="button" data-settings-tab="knowledge">Knowledge Base</button>
+      </nav>
+
+      <div class="settings-page-stats settings-page-stats--compact" aria-label="Settings overview">
+        <div class="settings-stat-card settings-stat-card--compact">
           <span>Scratchpad</span>
           <strong id="settings-stat-scratchpad">0 notes</strong>
         </div>
-        <div class="settings-stat-card">
+        <div class="settings-stat-card settings-stat-card--compact">
           <span>Active tools</span>
           <strong id="settings-stat-tools">0 enabled</strong>
         </div>
-        <div class="settings-stat-card">
+        <div class="settings-stat-card settings-stat-card--compact">
           <span>RAG</span>
           <strong id="settings-stat-rag">Checking</strong>
         </div>
       </div>
-
-      <nav class="settings-tabs" id="settings-tabs" aria-label="Settings tabs">
-        <button class="settings-tab-btn active" id="assistant-tab" type="button" data-settings-tab="assistant">Assistant</button>
-        <button class="settings-tab-btn" id="memory-tab" type="button" data-settings-tab="memory">Memory & Context</button>
-        <button class="settings-tab-btn" id="tools-tab" type="button" data-settings-tab="tools">Tools</button>
-        <button class="settings-tab-btn" id="knowledge-tab" type="button" data-settings-tab="knowledge">Knowledge Base</button>
-      </nav>
     </aside>
 
     <section class="settings-page-content">
-      <div class="settings-page-banner">
+      <div class="settings-page-toolbar">
         <div>
-          <span class="settings-page-banner__eyebrow">Operational controls</span>
-          <h2>Separate page, grouped controls, less noise</h2>
-          <p>Use tabs to move between behavior, memory, tools, and RAG maintenance without stacking panels over chat.</p>
+          <span class="settings-page-banner__eyebrow">Global controls</span>
+          <h2>Minimal, grouped settings</h2>
+          <p>Adjust behavior once here. All changes apply across conversations.</p>
         </div>
-        <div class="settings-page-banner__actions">
+        <div class="settings-page-toolbar__actions">
           <span id="settings-status" class="settings-status">Ready</span>
           <button class="btn-primary settings-save-trigger" type="button">Save</button>
         </div>
       </div>
 
       <div class="settings-tab-panels">
-        <section class="settings-tab-panel active" data-settings-panel="assistant" aria-labelledby="assistant-tab">
-          <div class="settings-page-section-card">
-            <div class="settings-page-section-card__header">
-              <div>
-                <span class="settings-section-kicker">Assistant behavior</span>
-                <h3>Default response style</h3>
+        <section class="settings-tab-panel active" data-settings-panel="general" aria-labelledby="general-tab">
+          <div class="settings-page-grid settings-page-grid--two">
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Assistant behavior</span>
+                  <h3>Response defaults</h3>
+                </div>
+                <p>Saved once and injected into every conversation automatically.</p>
               </div>
-              <p>Saved once and injected into every conversation automatically.</p>
+              <label class="settings-label" for="preferences-input">Response preferences</label>
+              <textarea id="preferences-input" rows="8" placeholder="Example: Reply in English, keep answers concise, and use bullet points when useful."></textarea>
+              <label class="settings-label" for="temperature-input">Response temperature (0.0-2.0)</label>
+              <input type="number" class="settings-number" id="temperature-input" min="0" max="2" step="0.1" value="0.7" />
+              <p class="settings-copy">Lower values are more deterministic; higher values add more variation to assistant replies.</p>
             </div>
-            <label class="settings-label" for="preferences-input">Response preferences</label>
-            <textarea id="preferences-input" rows="8" placeholder="Example: Reply in English, keep answers concise, and use bullet points when useful."></textarea>
-            <label class="settings-label" for="temperature-input">Response temperature (0.0-2.0)</label>
-            <input type="number" class="settings-number" id="temperature-input" min="0" max="2" step="0.1" value="0.7" />
-            <p class="settings-copy">Lower values are more deterministic; higher values add more variation to assistant replies.</p>
-          </div>
 
-          <div class="settings-page-section-card">
-            <div class="settings-page-section-card__header">
-              <div>
-                <span class="settings-section-kicker">Model providers</span>
-                <h3>OpenRouter catalog</h3>
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Clarification</span>
+                  <h3>Question limit</h3>
+                </div>
+                <p>Control how many clarification questions the assistant may ask in one turn.</p>
               </div>
-              <p>Add OpenRouter models, declare their capabilities, and make them available to the rest of the settings UI.</p>
+              <label class="settings-label" for="clarification-max-questions-input">Max clarification questions (1-25)</label>
+              <input type="number" class="settings-number" id="clarification-max-questions-input" min="1" max="25" value="5" />
+              <p class="settings-copy">Higher values allow broader clarification turns, but the assistant should still ask only the minimum needed.</p>
             </div>
-            <div class="settings-page-grid settings-page-grid--two settings-page-grid--model-catalog">
+
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Assistant output</span>
+                  <h3>Reasoning display</h3>
+                </div>
+                <p>Choose how reasoning panels behave after a streamed answer finishes.</p>
+              </div>
+              <label class="tool-toggle"><input type="checkbox" id="reasoning-auto-collapse-toggle" /> <span>Auto-collapse reasoning panels after the answer completes</span></label>
+              <p class="settings-copy">Reasoning stays available on each assistant message and can still be expanded manually.</p>
+            </div>
+
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Image analysis</span>
+                  <h3>Preferred processing method</h3>
+                </div>
+                <p>Choose whether uploaded images should use the active LLM when available, local OCR, local visual analysis, or a combined local pipeline.</p>
+              </div>
+              <label class="settings-label" for="image-processing-method-select">Image processing method</label>
+              <select id="image-processing-method-select">
+                <option value="auto">Auto</option>
+                <option value="llm">LLM via active chat model</option>
+                <option value="local_ocr">Local OCR only</option>
+                <option value="local_vl">Local vision model only</option>
+                <option value="local_both">Local OCR + local vision</option>
+              </select>
+              <p class="settings-copy">OCR-only and vision-only choices stay strict. Auto, active-model, and combined local modes can still fall back to the closest supported method.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-tab-panel" data-settings-panel="models" aria-labelledby="models-tab">
+          <div class="settings-page-grid settings-page-grid--two settings-page-grid--model-catalog">
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Model providers</span>
+                  <h3>OpenRouter catalog</h3>
+                </div>
+                <p>Add OpenRouter models, declare their capabilities, and make them available to the rest of the settings UI.</p>
+              </div>
               <div class="settings-model-catalog-form">
                 <label class="settings-label" for="custom-model-name-input">Display name</label>
                 <input id="custom-model-name-input" class="settings-text" type="text" placeholder="Example: Claude Sonnet 4.5" />
@@ -144,11 +193,17 @@
                 </div>
                 <p class="settings-copy">You can add the same base model more than once if the reasoning mode, provider route, or capability flags differ.</p>
               </div>
-              <div class="settings-model-catalog-summary">
-                <div class="settings-label">Configured OpenRouter models</div>
-                <div id="custom-model-list" class="model-management-list"></div>
-                <p class="settings-copy">OpenRouter models are saved in settings; built-in DeepSeek models remain available automatically.</p>
+            </div>
+
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Configured catalog</span>
+                  <h3>Available custom models</h3>
+                </div>
+                <p>OpenRouter models are saved in settings; built-in DeepSeek models remain available automatically.</p>
               </div>
+              <div id="custom-model-list" class="model-management-list"></div>
             </div>
           </div>
 
@@ -261,213 +316,9 @@
               </div>
             </div>
           </div>
-
-          <div class="settings-page-section-card">
-            <div class="settings-page-section-card__header">
-              <div>
-                <span class="settings-section-kicker">Image analysis</span>
-                <h3>Preferred processing method</h3>
-              </div>
-              <p>Choose whether uploaded images should use the active LLM when available, local OCR, local visual analysis, or a combined local pipeline.</p>
-            </div>
-            <label class="settings-label" for="image-processing-method-select">Image processing method</label>
-            <select id="image-processing-method-select">
-              <option value="auto">Auto</option>
-              <option value="llm">LLM via active chat model</option>
-              <option value="local_ocr">Local OCR only</option>
-              <option value="local_vl">Local vision model only</option>
-              <option value="local_both">Local OCR + local vision</option>
-            </select>
-            <p class="settings-copy">OCR-only and vision-only choices stay strict. Auto, active-model, and combined local modes can still fall back to the closest supported method.</p>
-          </div>
-
-          <div class="settings-page-grid settings-page-grid--two">
-            <div class="settings-page-section-card">
-              <div class="settings-page-section-card__header">
-                <div>
-                  <span class="settings-section-kicker">Tool execution</span>
-                  <h3>Tool step budget</h3>
-                </div>
-                <p>Limit how many tool rounds the assistant can spend on one request. This also sets the default per-tool retry budget for tools without a dedicated cap.</p>
-              </div>
-              <label class="settings-label" for="max-steps-input">Tool step limit (1-50)</label>
-              <input type="number" class="settings-number" id="max-steps-input" min="1" max="50" value="5" />
-            </div>
-
-            <div class="settings-page-section-card">
-              <div class="settings-page-section-card__header">
-                <div>
-                  <span class="settings-section-kicker">Parallelism</span>
-                  <h3>Concurrent tool calls</h3>
-                </div>
-                <p>Cap how many parallel-safe tool calls can run at once. Lower limits reduce overload and usually make long sub-agent investigations more stable.</p>
-              </div>
-              <div class="settings-page-grid settings-page-grid--two">
-                <div>
-                  <label class="settings-label" for="max-parallel-tools-input">Parent model max parallel tools (1-12)</label>
-                  <input type="number" class="settings-number" id="max-parallel-tools-input" min="1" max="12" value="4" />
-                </div>
-                <div>
-                  <label class="settings-label" for="sub-agent-max-parallel-tools-input">Sub-agent max parallel tools (1-12)</label>
-                  <input type="number" class="settings-number" id="sub-agent-max-parallel-tools-input" min="1" max="12" value="2" />
-                </div>
-              </div>
-              <p class="settings-copy">Parallel-safe calls above the limit stay in the same assistant turn but queue instead of starting together.</p>
-            </div>
-
-            <div class="settings-page-section-card">
-              <div class="settings-page-section-card__header">
-                <div>
-                  <span class="settings-section-kicker">Clarification</span>
-                  <h3>Question limit</h3>
-                </div>
-                <p>Control how many clarification questions the assistant may ask in one turn.</p>
-              </div>
-              <label class="settings-label" for="clarification-max-questions-input">Max clarification questions (1-25)</label>
-              <input type="number" class="settings-number" id="clarification-max-questions-input" min="1" max="25" value="5" />
-              <p class="settings-copy">Higher values allow broader clarification turns, but the assistant should still ask only the minimum needed.</p>
-            </div>
-
-            <div class="settings-page-section-card">
-              <div class="settings-page-section-card__header">
-                <div>
-                  <span class="settings-section-kicker">Sub-agent</span>
-                  <h3>Timeout and retries</h3>
-                </div>
-                <p>Give helper runs more time, then retry the same model a few times before switching to the next fallback.</p>
-              </div>
-              <div class="settings-page-grid settings-page-grid--three settings-page-grid--sub-agent-controls">
-                <div>
-                  <label class="settings-label" for="sub-agent-timeout-input">Soft timeout (seconds)</label>
-                  <input type="number" class="settings-number" id="sub-agent-timeout-input" min="5" max="900" value="240" />
-                </div>
-                <div>
-                  <label class="settings-label" for="sub-agent-retry-attempts-input">Retry attempts</label>
-                  <input type="number" class="settings-number" id="sub-agent-retry-attempts-input" min="0" max="5" value="2" />
-                </div>
-                <div>
-                  <label class="settings-label" for="sub-agent-retry-delay-input">Retry delay (seconds)</label>
-                  <input type="number" class="settings-number" id="sub-agent-retry-delay-input" min="0" max="60" value="5" />
-                </div>
-              </div>
-              <p class="settings-copy">Retries stay on the current model first. Fallback only begins after those retries are exhausted.</p>
-            </div>
-
-            <div class="settings-page-section-card">
-              <div class="settings-page-section-card__header">
-                <div>
-                  <span class="settings-section-kicker">Sub-agent</span>
-                  <h3>Delegation handoff</h3>
-                </div>
-                <p>The assistant only prepares the research brief and optional step budget. Runtime policy stays here in settings.</p>
-              </div>
-              <label class="tool-toggle"><input type="checkbox" id="sub-agent-include-conversation-context-toggle" /> <span>Share recent conversation excerpts with the sub-agent when local chat context is necessary</span></label>
-              <p class="settings-copy">Turn this off to keep delegation focused on the prepared research instructions only. Canvas metadata is still shared separately when canvas documents are available.</p>
-            </div>
-
-            <div class="settings-page-section-card">
-              <div class="settings-page-section-card__header">
-                <div>
-                  <span class="settings-section-kicker">Fetch clipping</span>
-                  <h3>URL ingestion limits</h3>
-                </div>
-                <p>Control when fetched pages get clipped and how aggressively they are compressed.</p>
-              </div>
-              <label class="settings-label" for="fetch-threshold-input">Clipping threshold in tokens (400-20000)</label>
-              <input type="number" class="settings-number" id="fetch-threshold-input" min="400" max="20000" value="3500" />
-              <label class="settings-label" for="fetch-aggressiveness-input">Clipping aggressiveness (0-100)</label>
-              <input type="number" class="settings-number" id="fetch-aggressiveness-input" min="0" max="100" value="50" />
-            </div>
-          </div>
-
-          <div class="settings-page-section-card">
-            <div class="settings-page-section-card__header">
-              <div>
-                <span class="settings-section-kicker">Canvas visibility</span>
-                <h3>Canvas limits</h3>
-              </div>
-              <p>Control how much of large canvas files the assistant can see by default and per targeted read.</p>
-            </div>
-            <div class="settings-page-grid settings-page-grid--two">
-              <div>
-                <label class="settings-label" for="canvas-prompt-lines-input">Prompt max lines (100-3000)</label>
-                <input type="number" class="settings-number" id="canvas-prompt-lines-input" min="100" max="3000" value="800" />
-                <p class="settings-copy">Injected automatically into each turn for the active canvas document.</p>
-              </div>
-              <div>
-                <label class="settings-label" for="canvas-prompt-tokens-input">Prompt token budget (500-20000)</label>
-                <input type="number" class="settings-number" id="canvas-prompt-tokens-input" min="500" max="20000" value="2000" />
-                <p class="settings-copy">Hard cap on canvas visible-content tokens per turn. Reduce for Unicode-heavy documents (Turkish, Arabic, CJK) that tokenise at a higher rate than ASCII.</p>
-              </div>
-              <div>
-                <label class="settings-label" for="canvas-expand-lines-input">Expand max lines (100-4000)</label>
-                <input type="number" class="settings-number" id="canvas-expand-lines-input" min="100" max="4000" value="1600" />
-                <p class="settings-copy">Used when the assistant calls the larger canvas expansion tool.</p>
-              </div>
-              <div>
-                <label class="settings-label" for="canvas-scroll-lines-input">Scroll window lines (50-800)</label>
-                <input type="number" class="settings-number" id="canvas-scroll-lines-input" min="50" max="800" value="200" />
-                <p class="settings-copy">Caps how many lines a single targeted canvas scroll can return.</p>
-              </div>
-            </div>
-          </div>
-
-          <div class="settings-page-section-card">
-            <div class="settings-page-section-card__header">
-              <div>
-                <span class="settings-section-kicker">Conversation compression</span>
-                <h3>Summary policy</h3>
-              </div>
-              <p>These settings govern automatic summarization of long conversations.</p>
-            </div>
-            <div class="settings-page-grid settings-page-grid--two">
-              <div>
-                <label class="settings-label" for="summary-mode-select">Conversation summary mode</label>
-                <select id="summary-mode-select">
-                  <option value="auto">Auto</option>
-                  <option value="never">Never</option>
-                  <option value="aggressive">Aggressive</option>
-                </select>
-                <label class="settings-label" for="summary-detail-level-select">Summary detail level</label>
-                <select id="summary-detail-level-select">
-                  <option value="balanced">Balanced</option>
-                  <option value="concise">Concise</option>
-                  <option value="detailed">Detailed</option>
-                </select>
-              </div>
-              <div>
-                <label class="settings-label" for="summary-trigger-input">Summary trigger in visible tokens (1000-200000)</label>
-                <input type="number" class="settings-number" id="summary-trigger-input" min="1000" max="200000" value="80000" />
-              </div>
-              <div>
-                <label class="settings-label" for="summary-skip-first-input">Protect first N messages (0-20)</label>
-                <input type="number" class="settings-number" id="summary-skip-first-input" min="0" max="20" value="2" />
-              </div>
-              <div>
-                <label class="settings-label" for="summary-skip-last-input">Protect last N messages (0-20)</label>
-                <input type="number" class="settings-number" id="summary-skip-last-input" min="0" max="20" value="1" />
-              </div>
-            </div>
-            <div class="settings-page-note-block">
-              <strong>Why this is here</strong>
-              <p>Summary controls are global behavior settings. Manual summarize or undo actions remain conversation-level operations and stay out of this page to keep management cleaner.</p>
-            </div>
-          </div>
-
-          <div class="settings-page-section-card">
-            <div class="settings-page-section-card__header">
-              <div>
-                <span class="settings-section-kicker">Assistant output</span>
-                <h3>Reasoning display</h3>
-              </div>
-              <p>Choose how reasoning panels behave after a streamed answer finishes.</p>
-            </div>
-            <label class="tool-toggle"><input type="checkbox" id="reasoning-auto-collapse-toggle" /> <span>Auto-collapse reasoning panels after the answer completes</span></label>
-            <p class="settings-copy">Reasoning stays available on each assistant message and can still be expanded manually.</p>
-          </div>
         </section>
 
-        <section class="settings-tab-panel" data-settings-panel="memory" aria-labelledby="memory-tab">
+        <section class="settings-tab-panel" data-settings-panel="context" aria-labelledby="context-tab">
           <div class="settings-page-grid settings-page-grid--two">
             <div class="settings-page-section-card">
               <div class="settings-page-section-card__header">
@@ -485,7 +336,6 @@
                 <span id="scratchpad-count" class="scratchpad-count">0 notes</span>
               </div>
             </div>
-
             <div class="settings-page-stack">
               <div class="settings-page-section-card">
                 <div class="settings-page-section-card__header">
@@ -591,9 +441,181 @@
               </div>
             </div>
           </div>
+
+          <div class="settings-page-grid settings-page-grid--two">
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Conversation compression</span>
+                  <h3>Summary policy</h3>
+                </div>
+                <p>These settings govern automatic summarization of long conversations.</p>
+              </div>
+              <div class="settings-page-grid settings-page-grid--two">
+                <div>
+                  <label class="settings-label" for="summary-mode-select">Conversation summary mode</label>
+                  <select id="summary-mode-select">
+                    <option value="auto">Auto</option>
+                    <option value="never">Never</option>
+                    <option value="aggressive">Aggressive</option>
+                  </select>
+                  <label class="settings-label" for="summary-detail-level-select">Summary detail level</label>
+                  <select id="summary-detail-level-select">
+                    <option value="balanced">Balanced</option>
+                    <option value="concise">Concise</option>
+                    <option value="detailed">Detailed</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="settings-label" for="summary-trigger-input">Summary trigger in visible tokens (1000-200000)</label>
+                  <input type="number" class="settings-number" id="summary-trigger-input" min="1000" max="200000" value="80000" />
+                </div>
+                <div>
+                  <label class="settings-label" for="summary-skip-first-input">Protect first N messages (0-20)</label>
+                  <input type="number" class="settings-number" id="summary-skip-first-input" min="0" max="20" value="2" />
+                </div>
+                <div>
+                  <label class="settings-label" for="summary-skip-last-input">Protect last N messages (0-20)</label>
+                  <input type="number" class="settings-number" id="summary-skip-last-input" min="0" max="20" value="1" />
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Canvas visibility</span>
+                  <h3>Canvas limits</h3>
+                </div>
+                <p>Control how much of large canvas files the assistant can see by default and per targeted read.</p>
+              </div>
+              <div class="settings-page-grid settings-page-grid--two">
+                <div>
+                  <label class="settings-label" for="canvas-prompt-lines-input">Prompt max lines (100-3000)</label>
+                  <input type="number" class="settings-number" id="canvas-prompt-lines-input" min="100" max="3000" value="800" />
+                  <p class="settings-copy">Injected automatically into each turn for the active canvas document.</p>
+                </div>
+                <div>
+                  <label class="settings-label" for="canvas-prompt-tokens-input">Prompt token budget (500-20000)</label>
+                  <input type="number" class="settings-number" id="canvas-prompt-tokens-input" min="500" max="20000" value="2000" />
+                  <p class="settings-copy">Hard cap on canvas visible-content tokens per turn. Reduce for Unicode-heavy documents (Turkish, Arabic, CJK) that tokenise at a higher rate than ASCII.</p>
+                </div>
+                <div>
+                  <label class="settings-label" for="canvas-expand-lines-input">Expand max lines (100-4000)</label>
+                  <input type="number" class="settings-number" id="canvas-expand-lines-input" min="100" max="4000" value="1600" />
+                  <p class="settings-copy">Used when the assistant calls the larger canvas expansion tool.</p>
+                </div>
+                <div>
+                  <label class="settings-label" for="canvas-scroll-lines-input">Scroll window lines (50-800)</label>
+                  <input type="number" class="settings-number" id="canvas-scroll-lines-input" min="50" max="800" value="200" />
+                  <p class="settings-copy">Caps how many lines a single targeted canvas scroll can return.</p>
+                </div>
+              </div>
+            </div>
+          </div>
         </section>
 
         <section class="settings-tab-panel" data-settings-panel="tools" aria-labelledby="tools-tab">
+          <div class="settings-page-grid settings-page-grid--two">
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Tool execution</span>
+                  <h3>Tool budgets</h3>
+                </div>
+                <p>Control how much tool work the assistant and helper can perform per request.</p>
+              </div>
+              <div class="settings-page-grid settings-page-grid--two">
+                <div>
+                  <label class="settings-label" for="max-steps-input">Tool step limit (1-50)</label>
+                  <input type="number" class="settings-number" id="max-steps-input" min="1" max="50" value="5" />
+                </div>
+                <div>
+                  <label class="settings-label" for="max-parallel-tools-input">Parent model max parallel tools (1-12)</label>
+                  <input type="number" class="settings-number" id="max-parallel-tools-input" min="1" max="12" value="4" />
+                </div>
+                <div>
+                  <label class="settings-label" for="sub-agent-max-parallel-tools-input">Sub-agent max parallel tools (1-12)</label>
+                  <input type="number" class="settings-number" id="sub-agent-max-parallel-tools-input" min="1" max="12" value="2" />
+                </div>
+                <div>
+                  <label class="settings-label" for="fetch-threshold-input">Clipping threshold in tokens (400-20000)</label>
+                  <input type="number" class="settings-number" id="fetch-threshold-input" min="400" max="20000" value="3500" />
+                </div>
+                <div>
+                  <label class="settings-label" for="fetch-aggressiveness-input">Clipping aggressiveness (0-100)</label>
+                  <input type="number" class="settings-number" id="fetch-aggressiveness-input" min="0" max="100" value="50" />
+                </div>
+              </div>
+              <p class="settings-copy">Parallel-safe calls above the limit stay in the same assistant turn but queue instead of starting together.</p>
+            </div>
+
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Sub-agent runtime</span>
+                  <h3>Timeout and handoff</h3>
+                </div>
+                <p>These controls decide how long helper runs last and what context they can receive.</p>
+              </div>
+              <div class="settings-page-grid settings-page-grid--three settings-page-grid--sub-agent-controls">
+                <div>
+                  <label class="settings-label" for="sub-agent-timeout-input">Soft timeout (seconds)</label>
+                  <input type="number" class="settings-number" id="sub-agent-timeout-input" min="5" max="900" value="240" />
+                </div>
+                <div>
+                  <label class="settings-label" for="sub-agent-retry-attempts-input">Retry attempts</label>
+                  <input type="number" class="settings-number" id="sub-agent-retry-attempts-input" min="0" max="5" value="2" />
+                </div>
+                <div>
+                  <label class="settings-label" for="sub-agent-retry-delay-input">Retry delay (seconds)</label>
+                  <input type="number" class="settings-number" id="sub-agent-retry-delay-input" min="0" max="60" value="5" />
+                </div>
+              </div>
+              <label class="tool-toggle"><input type="checkbox" id="sub-agent-include-conversation-context-toggle" /> <span>Share recent conversation excerpts when local chat context is necessary</span></label>
+              <label class="tool-toggle"><input type="checkbox" id="sub-agent-include-canvas-context-toggle" /> <span>Share available canvas document metadata when canvas context is relevant</span></label>
+              <p class="settings-copy">Keep both toggles off if the helper should work from the brief alone. Turning either on only shares that specific data source.</p>
+            </div>
+          </div>
+
+          <div class="settings-page-section-card">
+            <div class="settings-page-section-card__header">
+              <div>
+                <span class="settings-section-kicker">Sub-agent</span>
+                <h3>Allowed tools</h3>
+              </div>
+              <p>Choose the read-only tools the helper may use. The parent still only prepares the research brief and optional step budget.</p>
+            </div>
+            <ul class="settings-copy-list">
+              <li>Unchecked tools are never exposed to the helper, even if the parent turn can see them.</li>
+              <li>The runtime still intersects this choice with the tools visible in the current assistant turn.</li>
+            </ul>
+            <div class="tool-permission-sections" id="sub-agent-tool-toggles">
+              {% for section in sub_agent_tool_sections %}
+              <section class="tool-permission-section">
+                <div class="tool-permission-section__header">
+                  <div>
+                    <div class="settings-label">{{ section.title }}</div>
+                    <p class="settings-copy">{{ section.description }}</p>
+                  </div>
+                  <p class="settings-copy">{{ section.note }}</p>
+                </div>
+                <div class="tool-toggles tool-toggles--page tool-permission-section__tools">
+                  {% for tool in section.tools %}
+                  <label class="tool-toggle">
+                    <input type="checkbox" name="sub-agent-allowed-tool" value="{{ tool.name }}" />
+                    <span>
+                      <strong>{{ tool.label }}</strong>
+                      {% if tool.description %}<br /><small>{{ tool.description }}</small>{% endif %}
+                    </span>
+                  </label>
+                  {% endfor %}
+                </div>
+              </section>
+              {% endfor %}
+            </div>
+          </div>
+
           <div class="settings-page-section-card">
             <div class="settings-page-section-card__header">
               <div>
