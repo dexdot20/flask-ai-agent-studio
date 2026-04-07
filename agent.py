@@ -36,6 +36,7 @@ from canvas_service import (
     get_canvas_runtime_documents,
     get_canvas_runtime_snapshot,
     insert_canvas_lines,
+    join_canvas_lines,
     list_canvas_lines,
     _find_canvas_document,
     preview_canvas_changes,
@@ -187,6 +188,11 @@ CANVAS_STREAM_OPEN_TOOL_NAMES = {
 CANVAS_STREAM_CONTENT_TOOL_NAMES = {
     "create_canvas_document",
     "rewrite_canvas_document",
+}
+CANVAS_STREAM_REPLACE_CONTENT_TOOL_NAMES = {
+    "replace_canvas_lines",
+    "insert_canvas_lines",
+    "delete_canvas_lines",
 }
 DSML_INVOKE_TAG_RE = re.compile(r'<[^>]*invoke\s+name="(?P<name>[^"]+)"[^>]*>', re.IGNORECASE)
 DSML_FUNCTION_CALLS_TAG_RE = re.compile(r'<[^>]*function_calls[^>]*>', re.IGNORECASE)
@@ -1897,58 +1903,153 @@ def _normalize_fetch_clip_aggressiveness(value) -> int:
     return max(0, min(100, aggressiveness))
 
 
-def _clip_text_preserving_ends(text: str, target_chars: int) -> str:
+def _shrink_excerpt_lengths(lengths: list[int], minimums: list[int], overflow: int) -> list[int]:
+    adjusted = list(lengths)
+    remaining_overflow = max(0, int(overflow or 0))
+    for index in (1, 2, 0):
+        if remaining_overflow <= 0:
+            break
+        reducible = max(0, adjusted[index] - minimums[index])
+        if reducible <= 0:
+            continue
+        delta = min(reducible, remaining_overflow)
+        adjusted[index] -= delta
+        remaining_overflow -= delta
+    return adjusted
+
+
+def _build_head_tail_excerpt(text: str, target_chars: int) -> tuple[str, dict]:
     cleaned = str(text or "")
     normalized_target = max(0, int(target_chars or 0))
     if not cleaned or normalized_target <= 0 or len(cleaned) <= normalized_target:
-        return cleaned
-
-    if normalized_target < 240:
-        return _clean_tool_text(cleaned, limit=normalized_target)
+        return cleaned, {"strategy": "full_text", "excerpt_count": 1}
 
     marker = "\n\n[... middle content omitted ...]\n\n"
     available = normalized_target - len(marker)
     if available < 1_200:
-        return _clean_tool_text(cleaned, limit=normalized_target)
+        return _clean_tool_text(cleaned, limit=normalized_target), {"strategy": "truncated_excerpt", "excerpt_count": 1}
 
     head_chars = max(700, int(available * 0.72))
     tail_chars = max(320, available - head_chars)
     if head_chars + tail_chars >= len(cleaned):
-        return cleaned
+        return cleaned, {"strategy": "full_text", "excerpt_count": 1}
 
     omitted_chars = max(0, len(cleaned) - head_chars - tail_chars)
     dynamic_marker = f"\n\n[... {omitted_chars:,} middle characters omitted ...]\n\n"
     available = normalized_target - len(dynamic_marker)
     if available < 1_000:
-        return _clean_tool_text(cleaned, limit=normalized_target)
+        return _clean_tool_text(cleaned, limit=normalized_target), {"strategy": "truncated_excerpt", "excerpt_count": 1}
 
     head_chars = max(600, int(available * 0.72))
     tail_chars = max(280, available - head_chars)
     if head_chars + tail_chars >= len(cleaned):
-        return cleaned
+        return cleaned, {"strategy": "full_text", "excerpt_count": 1}
 
     head = cleaned[:head_chars].rstrip()
     tail = cleaned[-tail_chars:].lstrip()
     if not head or not tail:
-        return _clean_tool_text(cleaned, limit=normalized_target)
-    return f"{head}{dynamic_marker}{tail}"
+        return _clean_tool_text(cleaned, limit=normalized_target), {"strategy": "truncated_excerpt", "excerpt_count": 1}
+    return f"{head}{dynamic_marker}{tail}", {"strategy": "head_tail_excerpt", "excerpt_count": 2}
 
 
-def _build_fetch_clipped_text(result: dict, token_threshold: int, clip_aggressiveness: int) -> tuple[str, int]:
+def _clip_text_preserving_ends(text: str, target_chars: int) -> tuple[str, dict]:
+    cleaned = str(text or "")
+    normalized_target = max(0, int(target_chars or 0))
+    if not cleaned or normalized_target <= 0 or len(cleaned) <= normalized_target:
+        return cleaned, {"strategy": "full_text", "excerpt_count": 1}
+
+    if normalized_target < 240:
+        return _clean_tool_text(cleaned, limit=normalized_target), {"strategy": "truncated_excerpt", "excerpt_count": 1}
+
+    if normalized_target < 2_000:
+        return _build_head_tail_excerpt(cleaned, normalized_target)
+
+    base_marker_one = "\n\n[... middle excerpt follows ...]\n\n"
+    base_marker_two = "\n\n[... final excerpt follows ...]\n\n"
+    available = normalized_target - len(base_marker_one) - len(base_marker_two)
+    if available < 1_500:
+        return _build_head_tail_excerpt(cleaned, normalized_target)
+
+    lengths = [
+        max(520, int(available * 0.42)),
+        max(360, int(available * 0.20)),
+        max(420, available - max(520, int(available * 0.42)) - max(360, int(available * 0.20))),
+    ]
+    minimums = [420, 260, 320]
+
+    def _compose_excerpt(current_lengths: list[int]):
+        head_chars, middle_chars, tail_chars = current_lengths
+        middle_start = max(head_chars, (len(cleaned) - middle_chars) // 2)
+        middle_end = middle_start + middle_chars
+        tail_start = max(middle_end, len(cleaned) - tail_chars)
+        if middle_start <= head_chars or tail_start <= middle_end:
+            return None
+        omitted_before = max(0, middle_start - head_chars)
+        omitted_after = max(0, tail_start - middle_end)
+        marker_one = f"\n\n[... {omitted_before:,} characters omitted before middle excerpt ...]\n\n"
+        marker_two = f"\n\n[... {omitted_after:,} characters omitted before final excerpt ...]\n\n"
+        total_len = head_chars + middle_chars + tail_chars + len(marker_one) + len(marker_two)
+        return {
+            "head_chars": head_chars,
+            "middle_start": middle_start,
+            "middle_end": middle_end,
+            "tail_start": tail_start,
+            "marker_one": marker_one,
+            "marker_two": marker_two,
+            "overflow": max(0, total_len - normalized_target),
+        }
+
+    composed = _compose_excerpt(lengths)
+    if not composed:
+        return _build_head_tail_excerpt(cleaned, normalized_target)
+    if composed["overflow"] > 0:
+        lengths = _shrink_excerpt_lengths(lengths, minimums, composed["overflow"])
+        composed = _compose_excerpt(lengths)
+    if not composed:
+        return _build_head_tail_excerpt(cleaned, normalized_target)
+
+    head = cleaned[: composed["head_chars"]].rstrip()
+    middle = cleaned[composed["middle_start"] : composed["middle_end"]].strip()
+    tail = cleaned[composed["tail_start"] :].lstrip()
+    if not head or not middle or not tail:
+        return _build_head_tail_excerpt(cleaned, normalized_target)
+    return (
+        f"{head}{composed['marker_one']}{middle}{composed['marker_two']}{tail}",
+        {"strategy": "head_middle_tail_excerpt", "excerpt_count": 3},
+    )
+
+
+def _build_fetch_clipped_text(result: dict, token_threshold: int, clip_aggressiveness: int) -> tuple[str, int, dict]:
     raw_content = _clean_tool_text(result.get("content") or "")
     token_estimate = _estimate_text_tokens(raw_content)
     if not raw_content:
-        return "", token_estimate
+        return "", token_estimate, {"strategy": "empty_content", "excerpt_count": 0}
 
     if token_estimate <= token_threshold:
-        return raw_content, token_estimate
+        return raw_content, token_estimate, {"strategy": "full_text", "excerpt_count": 1}
 
     clip_ratio = min(1.0, token_threshold / max(token_estimate, 1))
     preserve_multiplier = min(1.0, 1.8 - (_normalize_fetch_clip_aggressiveness(clip_aggressiveness) / 100) * 1.0)
     target_chars = max(2000, min(FETCH_SUMMARY_MAX_CHARS, int(len(raw_content) * clip_ratio * preserve_multiplier)))
-    clipped_content = _clip_text_preserving_ends(raw_content, target_chars)
+    clipped_content, clip_details = _clip_text_preserving_ends(raw_content, target_chars)
     result_text = clipped_content or raw_content
-    return result_text, _estimate_text_tokens(result_text)
+    return result_text, _estimate_text_tokens(result_text), clip_details
+
+
+def _describe_fetch_content_mode(content_mode: str, clip_strategy: str) -> str:
+    normalized_mode = str(content_mode or "").strip()
+    normalized_strategy = str(clip_strategy or "").strip()
+    if normalized_mode == "cleaned_full_text":
+        return "Full cleaned page text."
+    if normalized_mode == "clipped_text":
+        if normalized_strategy == "head_middle_tail_excerpt":
+            return "Excerpted page text with preserved leading, middle, and trailing sections."
+        return "Excerpted page text with preserved leading and trailing sections."
+    if normalized_mode == "budget_compact":
+        return "Tool result was compacted further to fit the prompt budget."
+    if normalized_mode == "budget_brief":
+        return "Tool result was heavily compacted to fit the prompt budget."
+    return "Page text excerpt."
 
 
 def _build_fetch_diagnostic_fields(result: dict) -> dict:
@@ -1995,6 +2096,100 @@ def _build_fetch_diagnostic_fields(result: dict) -> dict:
     }
 
 
+def _normalize_fetch_content_source(value) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"main", "article", "body", "root"}:
+        return normalized
+    return ""
+
+
+def _build_fetch_context_summary(result: dict, limit: int = 420) -> str:
+    if not isinstance(result, dict):
+        return ""
+
+    parts: list[str] = []
+    content_source = _normalize_fetch_content_source(result.get("content_source_element"))
+    meta_description = _clean_tool_text(result.get("meta_description") or "", limit=180)
+    structured_data = _clean_tool_text(result.get("structured_data") or "", limit=220)
+    outline = result.get("outline") if isinstance(result.get("outline"), list) else []
+
+    if content_source:
+        parts.append(f"Primary container: {content_source}.")
+    if meta_description:
+        parts.append(f"Description: {meta_description}")
+    if outline:
+        headings = "; ".join(_clean_tool_text(item, limit=80) for item in outline[:4] if _clean_tool_text(item, limit=80))
+        if headings:
+            parts.append(f"Outline anchors: {headings}")
+    if structured_data:
+        parts.append(f"Structured hints: {structured_data}")
+
+    return _clean_tool_text(" ".join(parts), limit=limit)
+
+
+def _infer_fetch_summary_profile(result: dict) -> dict:
+    url = _clean_tool_text(result.get("url") or "", limit=280).casefold()
+    title = _clean_tool_text(result.get("title") or "", limit=200).casefold()
+    meta_description = _clean_tool_text(result.get("meta_description") or "", limit=200).casefold()
+    content_format = str(result.get("content_format") or "").strip().lower()
+    content_source = _normalize_fetch_content_source(result.get("content_source_element"))
+    outline = result.get("outline") if isinstance(result.get("outline"), list) else []
+    outline_text = " ".join(_clean_tool_text(item, limit=80).casefold() for item in outline[:10])
+    haystack = " ".join(part for part in [url, title, meta_description, outline_text] if part)
+
+    technical_terms = (
+        "docs",
+        "documentation",
+        "api",
+        "reference",
+        "sdk",
+        "guide",
+        "manual",
+        "developer",
+        "endpoint",
+        "configuration",
+        "config",
+        "parameter",
+    )
+    news_terms = (
+        "news",
+        "breaking",
+        "reported",
+        "announced",
+        "press release",
+        "headline",
+        "today",
+        "yesterday",
+        "update",
+    )
+
+    if content_format in {"json", "xml"} or any(term in haystack for term in technical_terms):
+        return {
+            "name": "technical_documentation",
+            "section_labels": "Summary, Key APIs or configuration, Important details, Constraints or caveats",
+            "guidance": (
+                "Preserve exact terminology, endpoint names, configuration keys, defaults, version numbers, and explicit limitations."
+            ),
+        }
+    if any(term in haystack for term in news_terms) or (content_source == "article" and "blog" not in haystack):
+        return {
+            "name": "news_or_update",
+            "section_labels": "Headline, What happened, Key facts, Why it matters, Open questions or uncertainty",
+            "guidance": "Preserve timelines, named entities, attributed claims, and what is still unverified.",
+        }
+    return {
+        "name": "general_web_page",
+        "section_labels": "Overview, Key points, Important details, Constraints or uncertainty",
+        "guidance": "Preserve the page's main claims, exact figures, limitations, and actionable details.",
+    }
+
+
+def _estimate_fetch_summary_max_tokens(source_text: str) -> int:
+    source_char_count = len(_clean_tool_text(source_text))
+    dynamic_target = max(FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS, source_char_count // 32)
+    return max(200, min(4_000, dynamic_target))
+
+
 def _summarize_fetch_result(result: dict, fallback_url: str = "") -> str:
     if not isinstance(result, dict):
         return fallback_url[:60]
@@ -2038,6 +2233,7 @@ def _build_fetch_summary_source_text(result: dict) -> str:
     parts: list[str] = []
     title = _clean_tool_text(result.get("title") or "", limit=200)
     url = _clean_tool_text(result.get("url") or "", limit=240)
+    content_source = _normalize_fetch_content_source(result.get("content_source_element"))
     meta_description = _clean_tool_text(result.get("meta_description") or "", limit=600)
     structured_data = _clean_tool_text(result.get("structured_data") or "", limit=2_000)
     outline = result.get("outline") if isinstance(result.get("outline"), list) else []
@@ -2046,6 +2242,8 @@ def _build_fetch_summary_source_text(result: dict) -> str:
         parts.append(f"Title: {title}")
     if url:
         parts.append(f"URL: {url}")
+    if content_source:
+        parts.append(f"Primary content source: {content_source}")
     if meta_description:
         parts.append(f"Meta description: {meta_description}")
     if structured_data:
@@ -2068,16 +2266,21 @@ def _summarize_fetched_page_result(result: dict, focus: str, parent_model: str =
         raise ValueError("Fetched page did not contain enough text to summarize.")
 
     focus_text = _clean_tool_text(focus, limit=600)
+    summary_profile = _infer_fetch_summary_profile(result)
     system_prompt = (
         "You are a precise web-page summarizer working for another AI assistant. "
-        "Produce a clean factual summary of the fetched page. Remove navigation chrome, repeated boilerplate, cookie banners, and low-signal filler. "
-        "If a focus question is provided, prioritize only the information relevant to that focus and state clearly when the page does not answer it. "
-        "Return plain text only."
+        "Produce a dense factual summary of the fetched page using short section headers and flat bullet lists when they improve scanning. "
+        "Keep exact numbers, dates, version names, URLs, constraints, and caveats when present. "
+        "If a focus question is provided, begin with 'Focus answer:' and prioritize only the information relevant to that focus; say clearly when the page does not answer it. "
+        f"For this page, prefer these section labels when relevant: {summary_profile['section_labels']}. "
+        f"{summary_profile['guidance']} "
+        "Return only the summary."
     )
     user_parts = []
     if focus_text:
         user_parts.append(f"Focus:\n{focus_text}")
     user_parts.append(source_text)
+    max_output_tokens = _estimate_fetch_summary_max_tokens(source_text)
     request_kwargs = apply_model_target_request_options(
         {
             "model": target["api_model"],
@@ -2085,7 +2288,7 @@ def _summarize_fetched_page_result(result: dict, focus: str, parent_model: str =
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": "\n\n".join(user_parts)},
             ],
-            "max_tokens": FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS,
+            "max_tokens": max_output_tokens,
             "temperature": 0.2,
         },
         target,
@@ -2101,6 +2304,7 @@ def _summarize_fetched_page_result(result: dict, focus: str, parent_model: str =
         "summary": summary_text,
         "model": _clean_tool_text(summarizer_model, limit=120),
         "content_char_count": len(_clean_tool_text(result.get("content") or "")),
+        "summary_profile": summary_profile["name"],
     }
     if focus_text:
         summarized_result["focus"] = focus_text
@@ -2117,11 +2321,14 @@ def _prepare_fetch_result_for_model(
 
     content = _clean_tool_text(result.get("content") or "")
     prepared = dict(result)
+    content_source = _normalize_fetch_content_source(result.get("content_source_element"))
     meta_description = _clean_tool_text(result.get("meta_description") or "", limit=400)
-    structured_data = _clean_tool_text(result.get("structured_data") or "", limit=1_200)
+    structured_data = _clean_tool_text(result.get("structured_data") or "", limit=1_600)
     recovery_hint = _build_recovery_hint_for_tool("fetch_url", {"url": result.get("url")})
     prepared["cleanup_applied"] = True
     prepared["content_token_estimate"] = _estimate_text_tokens(content)
+    if content_source:
+        prepared["content_source_element"] = content_source
     if meta_description:
         prepared["meta_description"] = meta_description
     if structured_data:
@@ -2140,20 +2347,31 @@ def _prepare_fetch_result_for_model(
         return prepared
 
     clip_aggressiveness = _normalize_fetch_clip_aggressiveness(fetch_url_clip_aggressiveness)
-    clipped_text, token_estimate = _build_fetch_clipped_text(prepared, token_threshold, clip_aggressiveness)
+    clipped_text, token_estimate, clip_details = _build_fetch_clipped_text(prepared, token_threshold, clip_aggressiveness)
     if not clipped_text or clipped_text == content:
         return prepared
 
     raw_char_count = len(content)
     clipped_char_count = len(clipped_text)
     clipped_pct = int(100 * clipped_char_count / max(raw_char_count, 1))
+    clip_strategy = str(clip_details.get("strategy") or "head_tail_excerpt")
+    coverage_note = (
+        "Leading, middle, and trailing excerpts are preserved."
+        if clip_strategy == "head_middle_tail_excerpt"
+        else "The leading and trailing excerpts are preserved; the middle portion is omitted."
+    )
     prepared["content"] = clipped_text
     prepared["content_mode"] = "clipped_text"
-    prepared["clip_strategy"] = "head_tail_excerpt"
+    prepared["clip_strategy"] = clip_strategy
+    prepared["excerpt_count"] = max(1, int(clip_details.get("excerpt_count") or 1))
+    context_summary = _build_fetch_context_summary(prepared)
+    if context_summary:
+        prepared["context_summary"] = context_summary
     prepared["summary_notice"] = (
         f"Content was clipped: showing {clipped_char_count:,} of {raw_char_count:,} characters "
         f"({clipped_pct}% of the page, approximately {token_estimate:,} tokens). "
-        "The leading and trailing excerpts are preserved; the middle portion is omitted. "
+        f"{coverage_note} "
+        f"{('Context anchors: ' + context_summary + ' ') if context_summary else ''}"
         f"{recovery_hint or 'Use grep_fetched_content for exact text and search_tool_memory for semantic recall.'}"
     )
     prepared["content_token_estimate"] = token_estimate
@@ -2168,21 +2386,27 @@ def _build_fetch_tool_message_content(tool_args: dict, summary: str, transcript_
     notice = _clean_tool_text(transcript_result.get("summary_notice") or "", limit=500)
     diagnostic = _clean_tool_text(transcript_result.get("fetch_diagnostic") or "", limit=280)
     content_format = str(transcript_result.get("content_format") or "").strip()
+    content_source = _normalize_fetch_content_source(transcript_result.get("content_source_element"))
     outline = transcript_result.get("outline")
+    context_summary = _clean_tool_text(transcript_result.get("context_summary") or "", limit=380)
     meta_description = _clean_tool_text(transcript_result.get("meta_description") or "", limit=260)
     structured_data = _clean_tool_text(transcript_result.get("structured_data") or "", limit=700)
     recovery_hint = _clean_tool_text(transcript_result.get("recovery_hint") or "", limit=280)
     budget_notice = _clean_tool_text(transcript_result.get("budget_notice") or "", limit=220)
     pages_extracted = transcript_result.get("pages_extracted")
     page_count = transcript_result.get("page_count")
-    body = _clean_tool_text(transcript_result.get("content") or "", limit=FETCH_SUMMARY_MAX_CHARS)
     content_mode = str(transcript_result.get("content_mode") or "").strip()
+    clip_strategy = str(transcript_result.get("clip_strategy") or "").strip()
+    body_limit = None if content_mode in {"clipped_text", "budget_compact", "budget_brief"} else FETCH_SUMMARY_MAX_CHARS
+    body = _clean_tool_text(transcript_result.get("content") or "", limit=body_limit)
 
     source_lines = []
     if title:
         source_lines.append(f"Title: {title}")
     if url:
         source_lines.append(f"URL: {url}")
+    if content_source:
+        source_lines.append(f"Primary content source: {content_source}")
     if content_format and content_format != "html":
         fmt_info = f"Format: {content_format}"
         if content_format == "pdf" and isinstance(pages_extracted, int) and isinstance(page_count, int):
@@ -2194,6 +2418,16 @@ def _build_fetch_tool_message_content(tool_args: dict, summary: str, transcript_
         source_lines.append(f"Description: {meta_description}")
     if source_lines:
         parts.append("## Source Metadata\n" + "\n".join(source_lines))
+
+    coverage_lines = []
+    if body:
+        coverage_lines.append(f"Coverage: {_describe_fetch_content_mode(content_mode, clip_strategy)}")
+    if transcript_result.get("raw_content_available") is True:
+        coverage_lines.append("Exact-text recovery: Full raw page text remains available via grep_fetched_content.")
+    if content_mode in {"clipped_text", "budget_compact", "budget_brief"} and url:
+        coverage_lines.append(f'Exact-text lookup example: grep_fetched_content(url="{url}", pattern="keyword")')
+    if coverage_lines:
+        parts.append("## Content Coverage\n" + "\n".join(coverage_lines))
 
     if summary:
         parts.append("## Fetch Summary\n" + f"Summary: {_clean_tool_text(summary, limit=300)}")
@@ -2207,18 +2441,20 @@ def _build_fetch_tool_message_content(tool_args: dict, summary: str, transcript_
         note_lines.append(f"Budget note: {budget_notice}")
     if recovery_hint:
         note_lines.append(f"Recovery: {recovery_hint}")
+    if context_summary:
+        note_lines.append(f"Context anchors: {context_summary}")
     if note_lines:
         parts.append("## Retrieval Notes\n" + "\n".join(note_lines))
 
     if outline and isinstance(outline, list):
-        heading_lines = [f"- {_clean_tool_text(str(h), limit=120)}" for h in outline[:30] if str(h).strip()]
+        heading_lines = [f"- {_clean_tool_text(str(h), limit=120)}" for h in outline[:50] if str(h).strip()]
         if heading_lines:
             parts.append("## Page Outline\n" + "\n".join(heading_lines))
 
     if structured_data:
         parts.append("## Structured Data\n" + structured_data)
     if body:
-        body_heading = "## Page Content Excerpt" if content_mode in {"clipped_text", "budget_compact", "budget_brief"} else "## Page Content"
+        body_heading = "## Page Content [Excerpted]" if content_mode in {"clipped_text", "budget_compact", "budget_brief"} else "## Page Content [Full]"
         parts.append(body_heading + "\n" + body)
     return "\n\n".join(parts).strip()
 
@@ -2888,7 +3124,70 @@ def _extract_partial_json_string_value(arguments_text: str, field_name: str) -> 
     return "".join(value_chars)
 
 
-def _build_streaming_canvas_tool_preview(tool_call_parts: list[dict]) -> dict | None:
+def _coerce_streaming_canvas_preview_int(value) -> int | None:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_streaming_canvas_preview_lines(value) -> list[str] | None:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        return None
+    return [str(line) for line in value]
+
+
+def _build_streaming_canvas_line_edit_preview(
+    canvas_state: dict | None,
+    tool_name: str,
+    tool_args: dict,
+) -> tuple[str | None, dict | None]:
+    if not isinstance(canvas_state, dict) or not isinstance(tool_args, dict):
+        return None, None
+
+    document_id = str(tool_args.get("document_id") or "").strip() or None
+    document_path = str(tool_args.get("document_path") or "").strip() or None
+    try:
+        _, document = _find_canvas_document(canvas_state, document_id=document_id, document_path=document_path)
+    except Exception:
+        return None, None
+
+    existing_lines = list_canvas_lines(document.get("content") or "")
+    next_lines: list[str] | None = None
+
+    if tool_name == "insert_canvas_lines":
+        after_line = _coerce_streaming_canvas_preview_int(tool_args.get("after_line"))
+        additions = _normalize_streaming_canvas_preview_lines(tool_args.get("lines"))
+        if after_line is None or additions is None or after_line < 0 or after_line > len(existing_lines):
+            return None, document
+        next_lines = [*existing_lines[:after_line], *additions, *existing_lines[after_line:]]
+    else:
+        start_line = _coerce_streaming_canvas_preview_int(tool_args.get("start_line"))
+        end_line = _coerce_streaming_canvas_preview_int(tool_args.get("end_line"))
+        if (
+            start_line is None
+            or end_line is None
+            or start_line < 1
+            or end_line < start_line
+            or start_line > len(existing_lines)
+            or end_line > len(existing_lines)
+        ):
+            return None, document
+
+        replacement = [] if tool_name == "delete_canvas_lines" else _normalize_streaming_canvas_preview_lines(tool_args.get("lines"))
+        if replacement is None:
+            return None, document
+        next_lines = [*existing_lines[: start_line - 1], *replacement, *existing_lines[end_line:]]
+
+    return join_canvas_lines(next_lines), document
+
+
+def _build_streaming_canvas_tool_preview(
+    tool_call_parts: list[dict],
+    canvas_state: dict | None = None,
+) -> dict | None:
     for reverse_index, raw_call in enumerate(reversed(tool_call_parts)):
         tool_name = str(raw_call.get("name") or "").strip()
         if tool_name not in CANVAS_STREAM_OPEN_TOOL_NAMES:
@@ -2904,14 +3203,40 @@ def _build_streaming_canvas_tool_preview(tool_call_parts: list[dict]) -> dict | 
                 snapshot[field_name] = value
 
         content = None
+        content_mode = "append"
+        parsed_arguments, parse_error = _parse_tool_call_arguments(arguments_text, tool_name)
+        if parse_error is None and isinstance(parsed_arguments, dict):
+            for field_name in ("title", "format", "language", "path", "role", "document_id", "document_path"):
+                value = parsed_arguments.get(field_name)
+                if value is not None:
+                    snapshot[field_name] = str(value).strip()
         if tool_name in CANVAS_STREAM_CONTENT_TOOL_NAMES:
-            content = _extract_partial_json_string_value(arguments_text, "content")
+            if parse_error is None and isinstance(parsed_arguments, dict) and parsed_arguments.get("content") is not None:
+                content = str(parsed_arguments.get("content") or "")
+            else:
+                content = _extract_partial_json_string_value(arguments_text, "content")
+        elif tool_name in CANVAS_STREAM_REPLACE_CONTENT_TOOL_NAMES:
+            content, resolved_document = _build_streaming_canvas_line_edit_preview(canvas_state, tool_name, parsed_arguments or {})
+            if resolved_document:
+                resolved_document_id = str(resolved_document.get("id") or "").strip()
+                resolved_document_path = str(resolved_document.get("path") or "").strip()
+                if resolved_document_id:
+                    snapshot.setdefault("document_id", resolved_document_id)
+                if resolved_document_path:
+                    snapshot.setdefault("document_path", resolved_document_path)
+                for field_name in ("title", "path", "role", "format", "language"):
+                    value = resolved_document.get(field_name)
+                    if value is not None and not snapshot.get(field_name):
+                        snapshot[field_name] = str(value).strip()
+            if content is not None:
+                content_mode = "replace"
 
         return {
             "tool": tool_name,
             "preview_key": f"canvas-call-{preview_index}",
             "snapshot": snapshot,
             "content": content,
+            "content_mode": content_mode,
         }
     return None
 
@@ -3967,6 +4292,7 @@ def _run_grep_fetched_content(tool_args: dict, runtime_state: dict):
         pattern=tool_args.get("pattern", ""),
         context_lines=tool_args.get("context_lines", 2),
         max_matches=tool_args.get("max_matches", 20),
+        refresh_if_missing=tool_args.get("refresh_if_missing", True),
     )
     match_count = result.get("match_count", 0)
     if result.get("error"):
@@ -4605,9 +4931,6 @@ def _build_compact_tool_message_content(
         if content:
             return content
 
-    if tool_name == "fetch_url" and isinstance(transcript_result, dict):
-        return _build_fetch_tool_message_content(tool_args, summary, transcript_result)
-
     if isinstance(transcript_result, str):
         return _clean_tool_text(transcript_result, limit=RAG_TOOL_RESULT_MAX_TEXT_CHARS)
 
@@ -4822,6 +5145,7 @@ def _build_budget_compacted_transcript_result(entry: dict, char_limit: int, ultr
             "fetch_diagnostic": _clean_tool_text(source_result.get("fetch_diagnostic") or "", limit=260),
             "budget_notice": "Prompt budget required extra compaction for this tool result.",
         }
+        clip_strategy = _clean_tool_text(source_result.get("clip_strategy") or "", limit=80)
         meta_description = _clean_tool_text(
             source_result.get("meta_description") or result.get("meta_description") or "",
             limit=220,
@@ -4837,6 +5161,8 @@ def _build_budget_compacted_transcript_result(entry: dict, char_limit: int, ultr
             compacted["structured_data"] = structured_data
         if outline and not ultra_compact:
             compacted["outline"] = outline[:8]
+        if clip_strategy:
+            compacted["clip_strategy"] = clip_strategy
         if recovery_hint:
             compacted["recovery_hint"] = recovery_hint
         return compacted
@@ -5829,6 +6155,7 @@ def run_agent_stream(
             stream_error = None
             announced_canvas_preview_key = None
             streamed_canvas_content_length = 0
+            streamed_canvas_preview_content = None
 
             try:
                 for chunk in response:
@@ -5843,13 +6170,14 @@ def run_agent_stream(
                         delta = getattr(chunk.choices[0], "delta", None)
                         if delta is not None:
                             _merge_stream_tool_call_delta(tool_call_parts, delta)
-                            canvas_preview = _build_streaming_canvas_tool_preview(tool_call_parts)
+                            canvas_preview = _build_streaming_canvas_tool_preview(tool_call_parts, runtime_state.get("canvas"))
                             if canvas_preview is not None:
                                 preview_tool_name = canvas_preview["tool"]
                                 preview_key = str(canvas_preview.get("preview_key") or "").strip()
                                 if announced_canvas_preview_key != preview_key:
                                     announced_canvas_preview_key = preview_key
                                     streamed_canvas_content_length = 0
+                                    streamed_canvas_preview_content = None
                                     yield {
                                         "type": "canvas_tool_starting",
                                         "tool": preview_tool_name,
@@ -5857,17 +6185,32 @@ def run_agent_stream(
                                         "snapshot": canvas_preview["snapshot"],
                                     }
                                 preview_content = canvas_preview.get("content")
-                                if preview_content is not None and len(preview_content) > streamed_canvas_content_length:
-                                    next_content_delta = preview_content[streamed_canvas_content_length:]
-                                    streamed_canvas_content_length = len(preview_content)
-                                    if next_content_delta:
-                                        yield {
-                                            "type": "canvas_content_delta",
-                                            "tool": preview_tool_name,
-                                            "preview_key": preview_key,
-                                            "delta": next_content_delta,
-                                            "snapshot": canvas_preview["snapshot"],
-                                        }
+                                preview_content_mode = str(canvas_preview.get("content_mode") or "append").strip().lower()
+                                if preview_content is not None:
+                                    if preview_content_mode == "replace":
+                                        if preview_content != streamed_canvas_preview_content:
+                                            streamed_canvas_preview_content = preview_content
+                                            streamed_canvas_content_length = len(preview_content)
+                                            yield {
+                                                "type": "canvas_content_delta",
+                                                "tool": preview_tool_name,
+                                                "preview_key": preview_key,
+                                                "delta": preview_content,
+                                                "snapshot": canvas_preview["snapshot"],
+                                                "replace_content": True,
+                                            }
+                                    elif len(preview_content) > streamed_canvas_content_length:
+                                        next_content_delta = preview_content[streamed_canvas_content_length:]
+                                        streamed_canvas_content_length = len(preview_content)
+                                        streamed_canvas_preview_content = preview_content
+                                        if next_content_delta:
+                                            yield {
+                                                "type": "canvas_content_delta",
+                                                "tool": preview_tool_name,
+                                                "preview_key": preview_key,
+                                                "delta": next_content_delta,
+                                                "snapshot": canvas_preview["snapshot"],
+                                            }
                     if content_delta:
                         content_parts.append(content_delta)
                         if buffer_answer:

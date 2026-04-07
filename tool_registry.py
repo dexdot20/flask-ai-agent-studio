@@ -623,7 +623,7 @@ TOOL_SPECS = [
             "Fetch and read the content of a specific web page. Returns cleaned text, metadata, and a page outline. "
             "Use after search_web to read the full content of a relevant page. "
             "For very large pages the content may be clipped to fit the token budget; "
-            "when that happens the result includes an outline of the page sections and a note explaining how many characters were shown. "
+            "when that happens the result includes an outline of the page sections plus preserved leading, middle, and trailing excerpts when space allows. "
             "If you need to find a specific term or passage in a clipped page, use grep_fetched_content after this tool."
         ),
         "parameters": {
@@ -642,6 +642,7 @@ TOOL_SPECS = [
             "guidance": (
                 "Large pages are automatically clipped to stay within the token budget. "
                 "When content is clipped the result shows a Page Outline of the section headings. "
+                "The tool also tries to preserve a middle excerpt so important details are not biased toward only the start or end of the page. "
                 "Do not repeat the same URL in the same turn. "
                 "To locate specific text in a clipped page use grep_fetched_content. "
                 "To recall content from a previously fetched URL across turns use search_tool_memory."
@@ -653,7 +654,7 @@ TOOL_SPECS = [
         "description": (
             "Fetch a specific web page, send the cleaned page text to a dedicated summarizer model, and return only the resulting clean summary. "
             "Use this when the parent assistant needs a concise distilled page summary instead of raw page text. "
-            "The returned tool result intentionally hides the full fetched content from the parent assistant."
+            "The returned tool result intentionally hides the full fetched content from the parent assistant and favors dense sectioned summaries over raw excerpts."
         ),
         "parameters": {
             "type": "object",
@@ -675,6 +676,7 @@ TOOL_SPECS = [
             "guidance": (
                 "Use this when you want the page distilled before it reaches you, such as long articles where only the key points matter. "
                 "If focus is given, the summary should prioritize that question or angle. "
+                "Expect short labeled sections with key facts, constraints, and any unresolved uncertainty the source still leaves open. "
                 "Use fetch_url instead when you need raw extracted text, metadata, page outline details, or exact wording from the source page."
             ),
         },
@@ -683,7 +685,7 @@ TOOL_SPECS = [
         "name": "grep_fetched_content",
         "description": (
             "Search for a keyword, phrase, or regex pattern inside the content of a previously fetched URL. "
-            "Only works for URLs that were already fetched with fetch_url or fetch_url_summarized in this session or stored in tool memory. "
+            "Prefers already-fetched raw page text, but can also re-fetch the page live when cached content is unavailable. "
             "Returns matching lines with surrounding context. "
             "Use this instead of re-fetching the same URL when you need to find a specific value, code snippet, heading, or term."
         ),
@@ -692,7 +694,7 @@ TOOL_SPECS = [
             "properties": {
                 "url": {
                     "type": "string",
-                    "description": "The URL whose cached content to search (must have been fetched earlier with fetch_url).",
+                    "description": "The URL whose content to search; the tool can use cached content or re-fetch the page live when needed.",
                 },
                 "pattern": {
                     "type": "string",
@@ -710,22 +712,27 @@ TOOL_SPECS = [
                     "minimum": 1,
                     "maximum": 30,
                 },
+                "refresh_if_missing": {
+                    "type": "boolean",
+                    "description": "When true, automatically re-fetch the URL live if cached raw content is unavailable (default true).",
+                },
             },
             "required": ["url", "pattern"],
         },
         "prompt": {
             "purpose": "Searches cached fetch_url content for a keyword, phrase, or regex.",
             "inputs": {
-                "url": "URL that was previously fetched",
+                "url": "URL to search; cached content is preferred and live refetch can be used when needed",
                 "pattern": "keyword or regex",
                 "context_lines": "0-5 lines of context (default 2)",
                 "max_matches": "1-30 max results (default 20)",
+                "refresh_if_missing": "whether to re-fetch the page live when cached raw content is missing",
             },
             "guidance": (
-                "Only works for URLs already fetched in this session via fetch_url or stored in tool memory. "
-                "Call fetch_url first if the URL has not been fetched yet. "
+                "Prefer this over repeating fetch_url when you need exact wording from a page you already inspected. "
+                "If raw cached content is missing, the tool can refresh the page live unless you explicitly disable refresh_if_missing. "
                 "Use simple keywords for broad matches or anchored regex (e.g. r'price:\\s*\\d+') for precise values. "
-                "Prefer this over re-fetching the same URL to save tokens."
+                "Use refresh_if_missing=false only when you explicitly need cache-only behavior."
             ),
         },
     },

@@ -2910,6 +2910,7 @@ def register_chat_routes(app) -> None:
                                 "preview_key": str(event.get("preview_key") or "").strip(),
                                 "delta": str(event.get("delta") or ""),
                                 "snapshot": event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {},
+                                "replace_content": event.get("replace_content") is True,
                             },
                             ensure_ascii=False,
                         ) + "\n"

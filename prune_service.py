@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from db import (
@@ -32,7 +33,10 @@ PRUNING_SYSTEM_PROMPT = (
 )
 PRUNING_TARGET_REDUCTION_RATIO = 0.65
 PRUNING_MIN_TARGET_TOKENS = 160
-PRUNING_CONTEXT_MESSAGE_MAX_CHARS = 280
+PRUNING_CONTEXT_MESSAGE_MAX_CHARS = 700
+PRUNING_CONTEXT_NEIGHBOR_COUNT = 2
+PRUNING_MAX_ATTEMPTS = 2
+LOGGER = logging.getLogger(__name__)
 
 
 def _extract_response_text(response: Any) -> str:
@@ -90,23 +94,31 @@ def _build_pruning_context_hint(conversation_id: int, message_id: int) -> str:
         return f"{label} ({role}): {content}"
 
     context_lines: list[str] = []
+    previous_lines: list[str] = []
     for index in range(current_index - 1, -1, -1):
         neighbor = visible_messages[index]
         if not str(neighbor.get("content") or "").strip():
             continue
         snippet = format_neighbor("Previous visible message", neighbor)
         if snippet:
-            context_lines.append(snippet)
-            break
+            previous_lines.append(snippet)
+            if len(previous_lines) >= PRUNING_CONTEXT_NEIGHBOR_COUNT:
+                break
 
+    context_lines.extend(reversed(previous_lines))
+
+    next_lines: list[str] = []
     for index in range(current_index + 1, len(visible_messages)):
         neighbor = visible_messages[index]
         if not str(neighbor.get("content") or "").strip():
             continue
         snippet = format_neighbor("Next visible message", neighbor)
         if snippet:
-            context_lines.append(snippet)
-            break
+            next_lines.append(snippet)
+            if len(next_lines) >= PRUNING_CONTEXT_NEIGHBOR_COUNT:
+                break
+
+    context_lines.extend(next_lines)
 
     return "\n".join(context_lines).strip()
 
@@ -120,14 +132,21 @@ def _build_pruning_messages(
     content: str,
     target_tokens: int | None = None,
     context_hint: str = "",
+    role: str = "",
+    retry_instruction: str = "",
 ) -> list[dict[str, str]]:
     normalized_target_tokens = max(1, int(target_tokens or _estimate_pruning_target_tokens(content)))
     normalized_context_hint = str(context_hint or "").strip()
+    normalized_role = str(role or "").strip() or "message"
+    normalized_retry_instruction = str(retry_instruction or "").strip()
     user_prompt_parts = [
         "Preserve the message's core idea, critical details, technical accuracy, unresolved questions, user constraints, and action items; only reduce unnecessary repetition, indirect phrasing, and filler.",
         "Code blocks, logs, JSON, tables, numbers, commands, URLs, and other sensitive technical data must be kept verbatim; do not rewrite, summarize, or delete those sections.",
+        f"Target message role: {normalized_role}.",
         f"Aim for roughly {normalized_target_tokens} tokens while keeping the message faithful and readable.",
     ]
+    if normalized_retry_instruction:
+        user_prompt_parts.append(f"Retry instruction:\n{normalized_retry_instruction}")
     if normalized_context_hint:
         user_prompt_parts.append(
             "Conversation context below is reference-only. Do not rewrite it; use it only to judge which details in the target message must survive pruning."
@@ -201,21 +220,33 @@ def prune_message(message_id: int) -> dict:
     pruning_model = get_operation_model("prune", settings, fallback_model_id=PRUNING_MODEL)
     target = resolve_model_target(pruning_model, settings)
 
-    request_kwargs = apply_model_target_request_options(
-        {
-            "model": target["api_model"],
-            "messages": _build_pruning_messages(
-                original_content,
-                target_tokens=target_tokens,
-                context_hint=context_hint,
-            ),
-            "max_tokens": _estimate_pruning_max_output_tokens(target_tokens),
-            "temperature": 0.2,
-        },
-        target,
-    )
-    response = target["client"].chat.completions.create(**request_kwargs)
-    pruned_content = _extract_response_text(response)
+    pruned_content = ""
+    retry_instruction = ""
+    for attempt in range(PRUNING_MAX_ATTEMPTS):
+        request_kwargs = apply_model_target_request_options(
+            {
+                "model": target["api_model"],
+                "messages": _build_pruning_messages(
+                    original_content,
+                    target_tokens=target_tokens,
+                    context_hint=context_hint,
+                    role=message.get("role") or "",
+                    retry_instruction=retry_instruction,
+                ),
+                "max_tokens": _estimate_pruning_max_output_tokens(target_tokens),
+                "temperature": 0.15 if attempt > 0 else 0.2,
+            },
+            target,
+        )
+        response = target["client"].chat.completions.create(**request_kwargs)
+        pruned_content = _extract_response_text(response)
+        if pruned_content:
+            break
+        retry_instruction = (
+            "The previous attempt returned empty content. Return only a faithful pruned rewrite of the target "
+            "message and keep all technical details intact."
+        )
+
     if not pruned_content:
         raise ValueError("Pruning model returned empty content.")
 
@@ -246,7 +277,11 @@ def prune_conversation_batch(conversation_id: int, batch_size: int) -> int:
 
     pruned_count = 0
     for message_id in candidate_ids:
-        prune_message(message_id)
+        try:
+            prune_message(message_id)
+        except Exception:
+            LOGGER.exception("Failed to prune message %s during batch pruning.", message_id)
+            continue
         pruned_count += 1
 
     if pruned_count:

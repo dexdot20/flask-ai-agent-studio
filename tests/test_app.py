@@ -1791,6 +1791,67 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(preview["snapshot"]["title"], "second.py")
         self.assertEqual(preview["content"], "print(2)")
 
+    def test_build_streaming_canvas_tool_preview_synthesizes_replace_canvas_preview_content(self):
+        canvas_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "doc-1",
+                    "title": "notes.md",
+                    "path": "docs/notes.md",
+                    "format": "markdown",
+                    "content": "alpha\nbeta\ngamma",
+                }
+            ],
+            active_document_id="doc-1",
+        )
+        tool_call_parts = [
+            {
+                "name": "replace_canvas_lines",
+                "arguments_parts": [
+                    '{"document_id":"doc-1","start_line":2,"end_line":2,"lines":["beta updated"]',
+                ],
+            }
+        ]
+
+        preview = _build_streaming_canvas_tool_preview(tool_call_parts, canvas_state)
+
+        self.assertEqual(preview["tool"], "replace_canvas_lines")
+        self.assertEqual(preview["snapshot"]["document_id"], "doc-1")
+        self.assertEqual(preview["snapshot"]["path"], "docs/notes.md")
+        self.assertEqual(preview["content_mode"], "replace")
+        self.assertEqual(preview["content"], "alpha\nbeta updated\ngamma")
+
+    def test_build_streaming_canvas_tool_preview_synthesizes_insert_canvas_preview_content(self):
+        canvas_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "doc-1",
+                    "title": "script.py",
+                    "path": "src/script.py",
+                    "format": "code",
+                    "language": "python",
+                    "content": "print(1)\nprint(3)",
+                }
+            ],
+            active_document_id="doc-1",
+        )
+        tool_call_parts = [
+            {
+                "name": "insert_canvas_lines",
+                "arguments_parts": [
+                    '{"document_path":"src/script.py","after_line":1,"lines":["print(2)"]',
+                ],
+            }
+        ]
+
+        preview = _build_streaming_canvas_tool_preview(tool_call_parts, canvas_state)
+
+        self.assertEqual(preview["tool"], "insert_canvas_lines")
+        self.assertEqual(preview["snapshot"]["document_path"], "src/script.py")
+        self.assertEqual(preview["snapshot"]["language"], "python")
+        self.assertEqual(preview["content_mode"], "replace")
+        self.assertEqual(preview["content"], "print(1)\nprint(2)\nprint(3)")
+
     def test_create_conversation_rejects_invalid_model(self):
         response = self.client.post(
             "/api/conversations",
@@ -2329,6 +2390,16 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertIn("roughly 123 tokens", prompt_messages[1]["content"])
 
+    def test_pruning_prompt_includes_role_and_retry_instruction(self):
+        prompt_messages = _build_pruning_messages(
+            "Detaylı teknik açıklama",
+            role="assistant",
+            retry_instruction="Empty response returned previously.",
+        )
+
+        self.assertIn("Target message role: assistant.", prompt_messages[1]["content"])
+        self.assertIn("Empty response returned previously.", prompt_messages[1]["content"])
+
     def test_pruning_target_tokens_do_not_expand_short_messages(self):
         short_message = "Kısa not"
         target_tokens = _estimate_pruning_target_tokens(short_message)
@@ -2355,6 +2426,26 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(pruned_count, 2)
         self.assertEqual(pruned_ids, [large_id, medium_id])
         self.assertNotIn(small_id, pruned_ids)
+
+    def test_prune_conversation_batch_skips_failed_messages(self):
+        conversation_id = self._create_conversation()
+        with get_db() as conn:
+            first_id = insert_message(conn, conversation_id, "assistant", "İlk büyük mesaj " * 60)
+            second_id = insert_message(conn, conversation_id, "user", "İkinci büyük mesaj " * 55)
+
+        seen_ids = []
+
+        def fake_prune_message(message_id):
+            seen_ids.append(message_id)
+            if message_id == first_id:
+                raise RuntimeError("temporary failure")
+            return {"id": message_id}
+
+        with patch("prune_service.prune_message", side_effect=fake_prune_message):
+            pruned_count = prune_service.prune_conversation_batch(conversation_id, 2)
+
+        self.assertEqual(pruned_count, 1)
+        self.assertEqual(set(seen_ids), {first_id, second_id})
 
     def test_is_prunable_message_allows_plain_assistant_messages(self):
         self.assertTrue(prune_service.is_prunable_message({"role": "assistant", "content": "Detaylı ama araçsız yanıt"}))
@@ -6570,6 +6661,7 @@ class AppRoutesTestCase(unittest.TestCase):
                 "title": "Example Page",
                 "content": "Pricing details and limitations.",
                 "meta_description": "Example metadata",
+                "content_source_element": "main",
                 "outline": ["Pricing", "Limits"],
             },
         ), patch("agent.get_app_settings", return_value={}), patch(
@@ -6587,10 +6679,13 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(result["summary"], "Focused summary output.")
         self.assertEqual(result["focus"], "pricing limits")
         self.assertEqual(result["model"], "openrouter:summary-model")
+        self.assertEqual(result["summary_profile"], "general_web_page")
         self.assertIn("Page summarized:", summary)
         request_kwargs = fake_create.call_args.kwargs
-        self.assertEqual(request_kwargs["max_tokens"], 800)
+        self.assertEqual(request_kwargs["max_tokens"], 2400)
         self.assertIn("Focus:\npricing limits", request_kwargs["messages"][1]["content"])
+        self.assertIn("Focus answer:", request_kwargs["messages"][0]["content"])
+        self.assertIn("section headers and flat bullet lists", request_kwargs["messages"][0]["content"])
 
     def test_sub_agent_tool_spec_mentions_exposed_web_search_tools(self):
         spec = TOOL_SPEC_BY_NAME["sub_agent"]
@@ -7680,6 +7775,46 @@ class AppRoutesTestCase(unittest.TestCase):
         messages = conversation_response.get_json()["messages"]
         assistant_messages = [message for message in messages if message["role"] == "assistant"]
         self.assertEqual(assistant_messages[-1]["metadata"]["canvas_documents"][0]["id"], "canvas-1")
+
+    def test_chat_forwards_replace_mode_canvas_preview_updates(self):
+        conversation_id = self._create_conversation()
+        fake_events = iter(
+            [
+                {
+                    "type": "canvas_tool_starting",
+                    "tool": "replace_canvas_lines",
+                    "preview_key": "canvas-call-0",
+                    "snapshot": {"document_id": "canvas-1", "path": "docs/draft.md"},
+                },
+                {
+                    "type": "canvas_content_delta",
+                    "tool": "replace_canvas_lines",
+                    "preview_key": "canvas-call-0",
+                    "delta": "# Draft\n\nUpdated",
+                    "snapshot": {"document_id": "canvas-1", "path": "docs/draft.md"},
+                    "replace_content": True,
+                },
+                {"type": "done"},
+            ]
+        )
+
+        with patch("routes.chat.run_agent_stream", return_value=fake_events):
+            response = self.client.post(
+                "/chat",
+                json={
+                    "conversation_id": conversation_id,
+                    "model": "deepseek-chat",
+                    "user_content": "Update the draft",
+                    "messages": [{"role": "user", "content": "Update the draft"}],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        events = [json.loads(line) for line in response.get_data(as_text=True).strip().splitlines()]
+        preview_event = next((event for event in events if event["type"] == "canvas_content_delta"), None)
+        self.assertIsNotNone(preview_event)
+        self.assertTrue(preview_event["replace_content"])
+        self.assertEqual(preview_event["delta"], "# Draft\n\nUpdated")
 
     def test_chat_does_not_auto_open_canvas_when_state_is_unchanged(self):
         conversation_id = self._create_conversation()
@@ -11779,7 +11914,8 @@ class AppRoutesTestCase(unittest.TestCase):
 
         result = _extract_html(html, "https://example.com/outline")
 
-        self.assertEqual(result["outline"], ["Main Title", "Section A"])
+        self.assertEqual(result["outline"], ["[h1] Main Title", "[h2] Section A"])
+        self.assertEqual(result["content_source_element"], "main")
 
     def test_extract_html_falls_back_to_meta_noscript_and_json_ld_when_body_is_thin(self):
         html = """
@@ -11796,6 +11932,7 @@ class AppRoutesTestCase(unittest.TestCase):
                 </script>
             </head>
             <body>
+                <aside>Supplemental rate notes from the sidebar.</aside>
                 <main><div></div></main>
                 <noscript>Fallback rate summary shown without JavaScript.</noscript>
             </body>
@@ -11807,9 +11944,37 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(result["title"], "Rates Page")
         self.assertEqual(result["title"], "Rates Page")
         self.assertIn("Current market summary for dollars and euros.", result["content"])
+        self.assertIn("Supplemental rate notes from the sidebar.", result["content"])
         self.assertIn("Fallback rate summary shown without JavaScript.", result["content"])
         self.assertIn("Live USD/TRY and EUR/TRY data", result["content"])
         self.assertIn("Live USD/TRY and EUR/TRY data", result["content"])
+
+    def test_combine_distinct_text_blocks_removes_contained_longer_duplicates(self):
+        combined = web_tools._combine_distinct_text_blocks(
+            [
+                "This API requires authentication and explicit version headers for every request.",
+                "This API requires authentication and explicit version headers for every request. Extra rollout details are also included.",
+            ]
+        )
+
+        self.assertIn("Extra rollout details are also included.", combined)
+        self.assertEqual(combined.count("This API requires authentication and explicit version headers for every request."), 1)
+
+    def test_infer_fetch_summary_profile_detects_technical_docs(self):
+        from agent import _infer_fetch_summary_profile
+
+        profile = _infer_fetch_summary_profile(
+            {
+                "url": "https://docs.example.com/api/reference",
+                "title": "API Reference",
+                "content_format": "html",
+                "content_source_element": "main",
+                "outline": ["[h1] Authentication", "[h2] Configuration"],
+            }
+        )
+
+        self.assertEqual(profile["name"], "technical_documentation")
+        self.assertIn("Key APIs or configuration", profile["section_labels"])
 
     def test_extract_html_surfaces_structured_metadata_even_when_body_is_long(self):
         html = """
@@ -11888,6 +12053,28 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertEqual(result["match_count"], 1)
         self.assertIn("needle in summary", result["matches"][0]["line"])
+        self.assertEqual(result["searched_source"], "tool_memory_summary")
+
+    def test_grep_fetched_content_tool_refetches_when_cache_is_missing(self):
+        with patch("web_tools.cache_get", return_value=None), patch(
+            "rag_service.get_exact_tool_memory_match",
+            return_value=None,
+        ), patch(
+            "web_tools.fetch_url_tool",
+            return_value={
+                "url": "https://example.com/page",
+                "content": "alpha\nneedle\nomega",
+                "status": 200,
+            },
+        ):
+            result = web_tools.grep_fetched_content_tool(
+                "https://example.com/page",
+                "needle",
+            )
+
+        self.assertEqual(result["match_count"], 1)
+        self.assertEqual(result["searched_source"], "live_refetch")
+        self.assertTrue(result["refetched"])
 
     def test_fetch_url_tool_recovers_partial_chunked_content(self):
         class FakeResponse:
@@ -12438,6 +12625,58 @@ class AppRoutesTestCase(unittest.TestCase):
         )
 
         self.assertGreater(len(less_aggressive["content"]), len(more_aggressive["content"]))
+
+    def test_prepare_fetch_result_for_model_preserves_middle_excerpt_when_clipped(self):
+        from agent import _prepare_fetch_result_for_model
+
+        result = {
+            "url": "https://example.com/long",
+            "title": "Long Example",
+            "meta_description": "Implementation guidance for the long example page.",
+            "content_source_element": "main",
+            "outline": ["[h1] Header", "[h2] Middle", "[h2] Footer"],
+            "content": (
+                ("HEADER section. " * 120)
+                + ("MIDDLE UNIQUE MARKER with implementation details. " * 60)
+                + ("FOOTER section. " * 120)
+            ),
+            "status": 200,
+            "content_format": "html",
+            "cleanup_applied": True,
+        }
+
+        prepared = _prepare_fetch_result_for_model(
+            result,
+            fetch_url_token_threshold=300,
+            fetch_url_clip_aggressiveness=50,
+        )
+
+        self.assertEqual(prepared["content_mode"], "clipped_text")
+        self.assertEqual(prepared["clip_strategy"], "head_middle_tail_excerpt")
+        self.assertIn("MIDDLE UNIQUE MARKER", prepared["content"])
+        self.assertIn("leading, middle, and trailing excerpts", prepared["summary_notice"].lower())
+        self.assertIn("Context anchors:", prepared["summary_notice"])
+        self.assertIn("Primary container: main.", prepared["context_summary"])
+        self.assertIn("Outline anchors:", prepared["context_summary"])
+
+    def test_build_fetch_tool_message_content_keeps_full_clipped_excerpt(self):
+        from agent import _build_fetch_tool_message_content
+
+        clipped_content = ("HEAD " * 900) + "TAIL-MARKER"
+        with patch("agent.FETCH_SUMMARY_MAX_CHARS", 1000):
+            message = _build_fetch_tool_message_content(
+                {"url": "https://example.com/clipped"},
+                "Page content extracted",
+                {
+                    "url": "https://example.com/clipped",
+                    "title": "Clipped Example",
+                    "content": clipped_content,
+                    "content_mode": "clipped_text",
+                    "clip_strategy": "head_middle_tail_excerpt",
+                },
+            )
+
+        self.assertIn("TAIL-MARKER", message)
 
     def test_run_agent_stream_executes_native_tool_call_without_content_fallback(self):
         responses = [

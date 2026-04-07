@@ -81,12 +81,10 @@ _proxy_cache: list[str] | None = None
 _proxy_cache_mtime: float | None = None
 _FETCH_RETRYABLE_STATUS_CODES = {401, 403, 408, 425, 429, 500, 502, 503, 504}
 _THIN_CONTENT_MIN_CHARS = 80
-_HTML_NOISE_TAGS = (
+_LOW_PRIORITY_BLOCK_MIN_CHARS = 30
+_HTML_HARD_NOISE_TAGS = (
     "script",
     "style",
-    "nav",
-    "footer",
-    "aside",
     "iframe",
     "form",
     "button",
@@ -95,8 +93,14 @@ _HTML_NOISE_TAGS = (
     "textarea",
     "svg",
     "canvas",
+)
+_HTML_LOW_PRIORITY_TAGS = (
+    "nav",
+    "footer",
+    "aside",
     "header",
 )
+_HTML_NOISE_TAGS = _HTML_HARD_NOISE_TAGS + _HTML_LOW_PRIORITY_TAGS
 _ZERO_WIDTH_TRANSLATION = dict.fromkeys(map(ord, "\u200b\u200c\u200d\ufeff"), None)
 
 
@@ -321,6 +325,20 @@ def _combine_distinct_text_blocks(blocks: list[str]) -> str:
         key = cleaned.casefold()
         if key in seen:
             continue
+        skip_current = False
+        replaced_indexes = []
+        for index, existing in enumerate(combined):
+            existing_key = existing.casefold()
+            if len(key) >= 40 and key in existing_key:
+                skip_current = True
+                break
+            if len(existing_key) >= 40 and existing_key in key:
+                replaced_indexes.append(index)
+        if skip_current:
+            continue
+        for index in reversed(replaced_indexes):
+            seen.discard(combined[index].casefold())
+            combined.pop(index)
         seen.add(key)
         combined.append(cleaned)
     return "\n\n".join(combined)
@@ -330,9 +348,40 @@ def _extract_html_outline(root) -> list[str]:
     headings = []
     for tag in root.find_all(["h1", "h2", "h3", "h4"]):
         text = _clean_extracted_text(tag.get_text(separator=" "))
-        if text and len(headings) < 30:
-            headings.append(text[:120])
+        if text and len(headings) < 50:
+            headings.append(f"[{tag.name.lower()}] {text[:120]}")
     return headings
+
+
+def _collect_low_priority_html_blocks(soup: BeautifulSoup) -> list[str]:
+    blocks: list[str] = []
+    for tag in soup.find_all(list(_HTML_LOW_PRIORITY_TAGS)):
+        text = _clean_extracted_text(tag.get_text(separator="\n"))
+        if text and len(text) >= _LOW_PRIORITY_BLOCK_MIN_CHARS:
+            blocks.append(text)
+    return blocks
+
+
+def _pick_html_content_root(soup: BeautifulSoup):
+    root = soup.find("main")
+    if root is not None:
+        return root, "main"
+    root = soup.find("article")
+    if root is not None:
+        return root, "article"
+    if soup.body is not None:
+        return soup.body, "body"
+    return soup, "root"
+
+
+def _coerce_bool(value, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value in (None, ""):
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 def _extract_html(html: str, url: str) -> dict:
@@ -350,20 +399,29 @@ def _extract_html(html: str, url: str) -> dict:
         ("name", "twitter:description"),
     )
     structured_text = _extract_json_ld_text(soup)
+    low_priority_blocks = _collect_low_priority_html_blocks(soup)
 
-    for tag in soup(_HTML_NOISE_TAGS):
+    for tag in soup(_HTML_HARD_NOISE_TAGS):
+        tag.decompose()
+    for tag in soup(_HTML_LOW_PRIORITY_TAGS):
         tag.decompose()
 
-    content_root = soup.find("main") or soup.find("article") or soup.body or soup
+    content_root, content_source_element = _pick_html_content_root(soup)
     outline = _extract_html_outline(content_root)
     primary_text = _clean_extracted_text(content_root.get_text(separator="\n"))
     reusable_summary = _combine_distinct_text_blocks([meta_description, structured_text])
     text = _combine_distinct_text_blocks([reusable_summary, primary_text]) if reusable_summary else primary_text
     if len(primary_text) < _THIN_CONTENT_MIN_CHARS:
-        text = _combine_distinct_text_blocks([reusable_summary, primary_text, noscript_text])
+        text = _combine_distinct_text_blocks([reusable_summary, primary_text, *low_priority_blocks, noscript_text])
     if not text:
-        text = _combine_distinct_text_blocks([reusable_summary, noscript_text])
-    result = {"url": url, "title": title, "content": _truncate_content(text), "content_format": "html"}
+        text = _combine_distinct_text_blocks([reusable_summary, *low_priority_blocks, noscript_text])
+    result = {
+        "url": url,
+        "title": title,
+        "content": _truncate_content(text),
+        "content_format": "html",
+        "content_source_element": content_source_element,
+    }
     if outline:
         result["outline"] = outline
     if meta_description:
@@ -817,6 +875,7 @@ def grep_fetched_content_tool(
     pattern: str,
     context_lines: int = 2,
     max_matches: int = 20,
+    refresh_if_missing: bool = True,
 ) -> dict:
     """Search for a pattern in the cached content of a previously fetched URL.
 
@@ -833,12 +892,17 @@ def grep_fetched_content_tool(
 
     context_lines = _coerce_grep_int(context_lines, default=2, minimum=0, maximum=_GREP_CONTEXT_MAX_LINES)
     max_matches = _coerce_grep_int(max_matches, default=20, minimum=1, maximum=_GREP_MAX_MATCHES)
+    refresh_if_missing = _coerce_bool(refresh_if_missing, default=True)
+    searched_source = ""
+    refetch_error = ""
 
     # 1. Try the in-process fetch cache first (fastest, same session)
     cache_key = f"fetch:{hashlib.md5(url.encode()).hexdigest()}"
     cached = cache_get(cache_key)
     if isinstance(cached, dict):
         raw_text = cached.get("content") or ""
+        if raw_text:
+            searched_source = "fetch_cache"
     else:
         raw_text = ""
 
@@ -849,10 +913,22 @@ def grep_fetched_content_tool(
             match = get_exact_tool_memory_match("fetch_url", url)
             if isinstance(match, dict):
                 raw_text = _strip_tool_memory_record_prefix(match.get("content") or "")
+                if raw_text:
+                    searched_source = "tool_memory_raw"
         except Exception:
             raw_text = ""
 
-    # 3. Fallback to summarized fetch tool memory when only the distilled summary exists.
+    # 3. Re-fetch live when no raw page text is available.
+    if not raw_text and refresh_if_missing:
+        refreshed = fetch_url_tool(url)
+        refreshed_text = _clean_extracted_text(refreshed.get("content") or "")
+        if refreshed_text and not refreshed.get("error"):
+            raw_text = refreshed_text
+            searched_source = "live_refetch"
+        else:
+            refetch_error = str(refreshed.get("error") or refreshed.get("fetch_warning") or "").strip()
+
+    # 4. Fallback to summarized fetch tool memory when only the distilled summary exists.
     if not raw_text:
         try:
             from rag_service import get_exact_tool_memory_match, search_tool_memory  # lazy import – avoids circular deps
@@ -860,6 +936,8 @@ def grep_fetched_content_tool(
             summarized_match = get_exact_tool_memory_match("fetch_url_summarized", url)
             if isinstance(summarized_match, dict):
                 raw_text = _strip_tool_memory_record_prefix(summarized_match.get("content") or "")
+                if raw_text:
+                    searched_source = "tool_memory_summary"
 
             if not raw_text:
                 search_matches = (search_tool_memory(url, top_k=5).get("matches") or [])[:5]
@@ -871,16 +949,20 @@ def grep_fetched_content_tool(
                         continue
                     raw_text = _strip_tool_memory_record_prefix(match.get("text") or "")
                     if raw_text:
+                        searched_source = "tool_memory_summary"
                         break
         except Exception:
             raw_text = ""
 
     if not raw_text:
+        error_message = (
+            "URL content not found in cache, live fetch, or tool memory. "
+            "Call fetch_url for this URL first, then use grep_fetched_content."
+        )
+        if refetch_error:
+            error_message += f" Live refetch also failed: {refetch_error}"
         return {
-            "error": (
-                "URL content not found in cache or tool memory. "
-                "Call fetch_url for this URL first, then use grep_fetched_content."
-            ),
+            "error": error_message,
             "url": url,
             "match_count": 0,
             "matches": [],
@@ -918,10 +1000,17 @@ def grep_fetched_content_tool(
         "pattern": pattern,
         "match_count": len(matches),
         "matches": matches,
+        "searched_source": searched_source or "unknown",
     }
+    if searched_source == "live_refetch":
+        result["refetched"] = True
     if truncated:
         result["truncated"] = True
         result["note"] = f"Results limited to {max_matches} matches. Refine the pattern or increase max_matches to see more."
     if not matches:
         result["note"] = "No matches found. The pattern may not appear in the fetched content, or the content was not cached."
+    if searched_source == "tool_memory_summary":
+        summary_note = "Search ran against a summarized page snapshot because full raw page text was unavailable."
+        existing_note = str(result.get("note") or "").strip()
+        result["note"] = f"{existing_note} {summary_note}".strip() if existing_note else summary_note
     return result

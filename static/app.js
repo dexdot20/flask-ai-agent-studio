@@ -500,6 +500,37 @@ function isCanvasStreamingPreviewTool(toolName) {
   return CANVAS_STREAMING_PREVIEW_TOOLS.has(String(toolName || "").trim());
 }
 
+function getCanvasStreamingPreviewLabel(document) {
+  return getCanvasDocumentDisplayName(document) || "Canvas";
+}
+
+function getCanvasStreamingStatusMessage(toolName, document, phase = "loading") {
+  const normalizedToolName = String(toolName || "").trim();
+  const label = getCanvasStreamingPreviewLabel(document);
+  if (phase === "streaming") {
+    if (normalizedToolName === "create_canvas_document") {
+      return `Drafting ${label} live...`;
+    }
+    if (normalizedToolName === "rewrite_canvas_document") {
+      return `Rewriting ${label} live...`;
+    }
+    if (CANVAS_EDIT_PREVIEW_TOOLS.has(normalizedToolName)) {
+      return `Previewing edits in ${label}...`;
+    }
+    return `Updating ${label} live...`;
+  }
+  if (normalizedToolName === "create_canvas_document") {
+    return `Preparing live draft for ${label}...`;
+  }
+  if (normalizedToolName === "rewrite_canvas_document") {
+    return `Preparing live rewrite for ${label}...`;
+  }
+  if (CANVAS_EDIT_PREVIEW_TOOLS.has(normalizedToolName)) {
+    return `Preparing live edit preview for ${label}...`;
+  }
+  return `Preparing live Canvas preview for ${label}...`;
+}
+
 function normalizeCanvasDocument(document) {
   if (!document || typeof document !== "object") {
     return null;
@@ -1608,10 +1639,14 @@ function ensureStreamingCanvasPreview(toolName, previewKey = "", snapshot = {}) 
     return null;
   }
   const existing = streamingCanvasPreviews.get(normalizedPreviewKey);
-  const isNewPreview = !existing || existing.tool !== normalizedToolName;
+  const rebuiltPreview = buildStreamingCanvasPreviewDocument(normalizedToolName, normalizedPreviewKey, snapshot);
+  const shouldRebuild = !existing
+    || existing.tool !== normalizedToolName
+    || (rebuiltPreview && rebuiltPreview.id && rebuiltPreview.id !== existing.id);
+  const isNewPreview = !existing || shouldRebuild;
   let preview = existing;
-  if (isNewPreview) {
-    preview = buildStreamingCanvasPreviewDocument(normalizedToolName, normalizedPreviewKey, snapshot);
+  if (shouldRebuild) {
+    preview = rebuiltPreview;
     if (preview) {
       streamingCanvasPreviews.set(normalizedPreviewKey, preview);
     }
@@ -1936,7 +1971,15 @@ function updateCanvasActiveDocumentDisplay(renderState) {
   renderCanvasMetaBar(renderState);
   const promptLineLimit = Number(appSettings.canvas_prompt_max_lines || 100);
   const expandLineLimit = Number(appSettings.canvas_expand_max_lines || 1600);
-  if (Number.isFinite(activeDocument.line_count) && activeDocument.line_count > promptLineLimit) {
+  if (isStreamingPreviewActive) {
+    const previewTool = String(activeDocument.tool || "").trim();
+    setCanvasHint(
+      CANVAS_EDIT_PREVIEW_TOOLS.has(previewTool)
+        ? "Live Canvas edit preview. The preview updates as tool arguments stream in and is replaced by the committed document when the tool finishes."
+        : "Live Canvas preview. The preview updates as the assistant streams content and is replaced by the committed document when the tool finishes.",
+      "muted"
+    );
+  } else if (Number.isFinite(activeDocument.line_count) && activeDocument.line_count > promptLineLimit) {
     const hasExpandedRoom = activeDocument.line_count > expandLineLimit;
     setCanvasHint(
       hasExpandedRoom
@@ -8530,26 +8573,29 @@ async function sendMessage(options = {}) {
         if (!isCanvasStreamingPreviewTool(event.tool)) {
           return;
         }
-        ensureStreamingCanvasPreview(event.tool, event.preview_key, event.snapshot);
+        const previewDocument = ensureStreamingCanvasPreview(event.tool, event.preview_key, event.snapshot);
         if (!isCanvasOpen()) {
           setCanvasAttention(true);
         } else {
           renderCanvasPanel();
         }
-        const isEditTool = CANVAS_EDIT_PREVIEW_TOOLS.has(String(event.tool || "").trim());
-        setCanvasStatus(isEditTool ? "Updating canvas..." : "Preparing canvas...", "muted");
+        setCanvasStatus(getCanvasStreamingStatusMessage(event.tool, previewDocument, "loading"), "muted");
       } else if (event.type === "canvas_content_delta") {
         if (!isCanvasStreamingPreviewTool(event.tool)) {
           return;
         }
         const previewDocument = ensureStreamingCanvasPreview(event.tool, event.preview_key, event.snapshot);
         if (previewDocument) {
-          previewDocument.content += String(event.delta || "");
+          if (event.replace_content) {
+            previewDocument.content = String(event.delta || "");
+          } else {
+            previewDocument.content += String(event.delta || "");
+          }
           previewDocument.line_count = previewDocument.content ? previewDocument.content.split("\n").length : 0;
           if (!isCanvasOpen()) {
             setCanvasAttention(true);
           }
-          setCanvasStatus("Generating live canvas...", "muted");
+          setCanvasStatus(getCanvasStreamingStatusMessage(event.tool, previewDocument, "streaming"), "muted");
           scheduleCanvasPreviewRender();
         }
       } else if (event.type === "canvas_sync") {
