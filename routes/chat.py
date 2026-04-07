@@ -58,6 +58,7 @@ from db import (
     get_app_settings,
     get_clarification_max_questions,
     get_chat_summary_mode,
+    get_chat_summary_detail_level,
     get_chat_summary_trigger_token_count,
     get_conversation_messages,
     get_db,
@@ -489,16 +490,32 @@ def _get_summary_lock(conversation_id: int) -> Lock:
 
 
 def _normalize_summary_items(values, *, max_items: int, item_limit: int) -> list[str]:
-    if not isinstance(values, list):
+    if values is None:
         return []
 
+    if isinstance(values, dict):
+        candidate_values = list(values.values())
+    elif isinstance(values, (list, tuple, set)):
+        candidate_values = list(values)
+    else:
+        candidate_values = [values]
+
     normalized: list[str] = []
-    for value in values[:max_items]:
+    for value in candidate_values[:max_items]:
         text = re.sub(r"\s+", " ", str(value or "")).strip()
         if not text or text in normalized:
             continue
         normalized.append(text[:item_limit])
     return normalized
+
+
+def _build_summary_detail_instruction(summary_detail_level: str) -> str:
+    normalized = str(summary_detail_level or "").strip().lower()
+    if normalized == "concise":
+        return "Write a concise summary that keeps only the highest-value reusable facts, decisions, and open questions."
+    if normalized == "detailed":
+        return "Write a more detailed summary that preserves important context while staying compact and continuation-oriented."
+    return "Write a balanced summary that keeps the most important reusable facts, decisions, and open questions."
 
 
 def _parse_structured_summary_payload(summary_text: str) -> dict | None:
@@ -1709,6 +1726,7 @@ def _get_summary_message_level(message: dict) -> int:
 def _select_hierarchical_summary_source_messages(
     canonical_messages: list[dict],
     settings: dict,
+    user_preferences: str,
     continuation_focus: str = "",
 ) -> list[dict]:
     summary_messages = [
@@ -1731,7 +1749,7 @@ def _select_hierarchical_summary_source_messages(
         canonical_messages,
         candidate_summaries,
         target_tokens=get_summary_source_target_tokens(settings),
-        user_preferences=settings.get("user_preferences", ""),
+        user_preferences=user_preferences,
         continuation_focus=continuation_focus,
     )
 
@@ -1767,6 +1785,7 @@ def maybe_create_conversation_summary(
 
     try:
         summary_mode = get_chat_summary_mode(settings)
+        summary_detail_level = get_chat_summary_detail_level(settings)
         canonical_messages = get_conversation_messages(conversation_id)
         visible_token_count = count_visible_message_tokens(canonical_messages)
         trigger_token_count = _get_effective_summary_trigger_token_count(settings)
@@ -1777,6 +1796,11 @@ def maybe_create_conversation_summary(
             " ",
             str(continuation_focus or _extract_summary_continuation_focus(canonical_messages) or ""),
         ).strip()[:400]
+        summary_user_preferences_parts = [str(settings.get("user_preferences") or "").strip()]
+        detail_instruction = _build_summary_detail_instruction(summary_detail_level)
+        if detail_instruction:
+            summary_user_preferences_parts.append(detail_instruction)
+        summary_user_preferences = "\n\n".join(part for part in summary_user_preferences_parts if part).strip()
 
         def build_outcome(**extra) -> dict:
             return {
@@ -1834,13 +1858,14 @@ def maybe_create_conversation_summary(
                 canonical_messages,
                 all_candidates,
                 target_tokens=attempt_token_target,
-                user_preferences=settings.get("user_preferences", ""),
+                user_preferences=summary_user_preferences,
                 continuation_focus=resolved_continuation_focus,
             )
             if not candidate_source_messages:
                 candidate_source_messages = _select_hierarchical_summary_source_messages(
                     canonical_messages,
                     settings,
+                    summary_user_preferences,
                     continuation_focus=resolved_continuation_focus,
                 )
                 if candidate_source_messages:
@@ -1867,7 +1892,7 @@ def maybe_create_conversation_summary(
             summary_source_messages = _expand_summary_source_messages(canonical_messages, source_messages, all_candidates)
             prompt_messages, prompt_stats = _build_summary_prompt_payload(
                 summary_source_messages,
-                settings.get("user_preferences", ""),
+                summary_user_preferences,
                 continuation_focus=resolved_continuation_focus,
             )
             if prompt_stats["prompt_message_count"] == 0:
@@ -3209,29 +3234,12 @@ def register_chat_routes(app) -> None:
         skip_last_override = data.get("skip_last")
         summary_focus = str(data.get("summary_focus") or "").strip()
         summary_detail_level = str(data.get("summary_detail_level") or "balanced").strip().lower()
-        summary_preferences = str(data.get("summary_preferences") or "").strip()
+        if summary_detail_level not in {"concise", "balanced", "detailed"}:
+            summary_detail_level = "balanced"
 
         settings = get_app_settings()
-
-        user_preferences_parts = [str(settings.get("user_preferences") or "").strip()]
-        preference_notes = []
-        if summary_detail_level == "concise":
-            preference_notes.append("Write a concise summary that keeps only the highest-value reusable facts, decisions, and open questions.")
-        elif summary_detail_level == "detailed":
-            preference_notes.append("Write a more detailed summary that preserves important context while staying compact and continuation-oriented.")
-        else:
-            preference_notes.append("Write a balanced summary that keeps the most important reusable facts, decisions, and open questions.")
-
-        if summary_focus:
-            preference_notes.append(f"Focus especially on: {summary_focus}")
-        if summary_preferences:
-            preference_notes.append(summary_preferences)
-
-        merged_summary_preferences = "\n".join(part for part in preference_notes if part).strip()
-        if merged_summary_preferences:
-            user_preferences_parts.append(merged_summary_preferences)
         effective_settings = dict(settings)
-        effective_settings["user_preferences"] = "\n\n".join(part for part in user_preferences_parts if part).strip()
+        effective_settings["chat_summary_detail_level"] = summary_detail_level
 
         if skip_first_override is not None:
             try:

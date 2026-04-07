@@ -39,6 +39,7 @@ from db import (
     get_canvas_prompt_max_tokens,
     get_canvas_scroll_window_lines,
     get_chat_summary_mode,
+    get_chat_summary_detail_level,
     get_chat_summary_trigger_token_count,
     get_clarification_max_questions,
     get_fetch_url_clip_aggressiveness,
@@ -331,6 +332,7 @@ def build_settings_payload() -> dict:
         "sub_agent_include_conversation_context": get_sub_agent_include_conversation_context(raw),
         "sub_agent_retry_attempts": get_sub_agent_retry_attempts(raw),
         "sub_agent_retry_delay_seconds": get_sub_agent_retry_delay_seconds(raw),
+        "chat_summary_detail_level": get_chat_summary_detail_level(raw),
         "chat_summary_mode": get_chat_summary_mode(raw),
         "chat_summary_trigger_token_count": get_chat_summary_trigger_token_count(raw),
         "summary_skip_first": get_summary_skip_first(raw),
@@ -425,6 +427,7 @@ def register_page_routes(app) -> None:
         rag_source_types = data.get("rag_source_types")
         tool_memory_auto_inject = data.get("tool_memory_auto_inject")
         chat_summary_mode_raw = data.get("chat_summary_mode")
+        chat_summary_detail_level_raw = data.get("chat_summary_detail_level")
         chat_summary_trigger_raw = data.get("chat_summary_trigger_token_count")
         summary_skip_first_raw = data.get("summary_skip_first")
         summary_skip_last_raw = data.get("summary_skip_last")
@@ -467,6 +470,7 @@ def register_page_routes(app) -> None:
             and rag_source_types is None
             and tool_memory_auto_inject is None
             and chat_summary_mode_raw is None
+            and chat_summary_detail_level_raw is None
             and chat_summary_trigger_raw is None
             and summary_skip_first_raw is None
             and summary_skip_last_raw is None
@@ -725,6 +729,12 @@ def register_page_routes(app) -> None:
             if normalized_summary_mode not in CHAT_SUMMARY_ALLOWED_MODES:
                 return jsonify({"error": "chat_summary_mode must be one of auto, never, or aggressive."}), 400
             settings["chat_summary_mode"] = normalized_summary_mode
+
+        if chat_summary_detail_level_raw is not None:
+            normalized_summary_detail_level = str(chat_summary_detail_level_raw or "").strip().lower()
+            if normalized_summary_detail_level not in {"concise", "balanced", "detailed"}:
+                return jsonify({"error": "chat_summary_detail_level must be one of concise, balanced, or detailed."}), 400
+            settings["chat_summary_detail_level"] = normalized_summary_detail_level
 
         if chat_summary_trigger_raw is not None:
             try:

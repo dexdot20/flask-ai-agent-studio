@@ -122,6 +122,8 @@ MAX_PARALLEL_TOOLS_MAX = 12
 DEFAULT_MAX_PARALLEL_TOOLS = 4
 SUB_AGENT_DEFAULT_MAX_PARALLEL_TOOLS = 2
 SUB_AGENT_DEFAULT_INCLUDE_CONVERSATION_CONTEXT = False
+CHAT_SUMMARY_DEFAULT_DETAIL_LEVEL = "balanced"
+CHAT_SUMMARY_DETAIL_LEVELS = {"concise", "balanced", "detailed"}
 CLARIFICATION_QUESTION_LIMIT_MIN = 1
 CLARIFICATION_QUESTION_LIMIT_MAX = 25
 CLARIFICATION_DEFAULT_MAX_QUESTIONS = 5
@@ -384,6 +386,7 @@ DEFAULT_SETTINGS = {
     "canvas_scroll_window_lines": str(CANVAS_SCROLL_WINDOW_LINES),
     "chat_summary_trigger_token_count": str(CHAT_SUMMARY_TRIGGER_TOKEN_COUNT),
     "chat_summary_mode": CHAT_SUMMARY_MODE if CHAT_SUMMARY_MODE in CHAT_SUMMARY_ALLOWED_MODES else "auto",
+    "chat_summary_detail_level": CHAT_SUMMARY_DEFAULT_DETAIL_LEVEL,
     "summary_skip_first": "2",
     "summary_skip_last": "1",
     "reasoning_auto_collapse": "false",

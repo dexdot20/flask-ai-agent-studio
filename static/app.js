@@ -124,6 +124,10 @@ const conversationExportMdBtn = document.getElementById("conversation-export-md-
 const conversationExportDocxBtn = document.getElementById("conversation-export-docx-btn");
 const conversationExportPdfBtn = document.getElementById("conversation-export-pdf-btn");
 
+if (summaryDetailSelect) {
+  summaryDetailSelect.value = String(appSettings.chat_summary_detail_level || "balanced").trim();
+}
+
 let history = [];
 let isStreaming = false;
 let isFixing = false;
@@ -2491,26 +2495,6 @@ function isSummaryPanelOpen() {
   return Boolean(summaryPanel?.classList.contains("open"));
 }
 
-function getSummaryPreferenceInstructions() {
-  const detailLevel = String(summaryDetailSelect?.value || "balanced").trim().toLowerCase();
-  const focusText = String(summaryFocusInput?.value || "").trim();
-  const instructions = [];
-
-  if (detailLevel === "concise") {
-    instructions.push("Write a concise summary that keeps only the highest-value reusable facts, decisions, and open questions.");
-  } else if (detailLevel === "detailed") {
-    instructions.push("Write a more detailed summary that preserves important context while staying compact and continuation-oriented.");
-  } else {
-    instructions.push("Write a balanced summary that keeps the most important reusable facts, decisions, and open questions.");
-  }
-
-  if (focusText) {
-    instructions.push(`Focus especially on: ${focusText}`);
-  }
-
-  return instructions.join("\n");
-}
-
 function openSummaryPanel(triggerEl = null) {
   closeMobileTools();
   closeStats();
@@ -2547,10 +2531,6 @@ async function runConversationSummary({ triggerButton = null, closePanel = false
     summary_focus: String(summaryFocusInput?.value || "").trim(),
     summary_detail_level: String(summaryDetailSelect?.value || "balanced").trim(),
   };
-  const preferenceInstructions = getSummaryPreferenceInstructions();
-  if (preferenceInstructions) {
-    requestBody.summary_preferences = preferenceInstructions;
-  }
 
   if (triggerButton) {
     triggerButton.disabled = true;

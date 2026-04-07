@@ -259,6 +259,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["sub_agent_timeout_seconds"], 240)
         self.assertEqual(payload["sub_agent_max_parallel_tools"], 2)
         self.assertFalse(payload["sub_agent_include_conversation_context"])
+        self.assertEqual(payload["chat_summary_detail_level"], "balanced")
         self.assertEqual(payload["sub_agent_retry_attempts"], 2)
         self.assertEqual(payload["sub_agent_retry_delay_seconds"], 5)
         self.assertEqual(payload["rag_auto_inject"], bool(payload["features"]["rag_enabled"]))
@@ -324,6 +325,7 @@ class AppRoutesTestCase(unittest.TestCase):
                 "temperature": 1.1,
                 "clarification_max_questions": 4,
                 "chat_summary_mode": "aggressive",
+                "chat_summary_detail_level": "detailed",
                 "chat_summary_trigger_token_count": 9000,
                 "reasoning_auto_collapse": True,
                 "pruning_enabled": True,
@@ -390,6 +392,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["clarification_max_questions"], 4)
         self.assertAlmostEqual(payload["temperature"], 1.1)
         self.assertEqual(payload["chat_summary_mode"], "aggressive")
+        self.assertEqual(payload["chat_summary_detail_level"], "detailed")
         self.assertEqual(payload["chat_summary_trigger_token_count"], 9000)
         self.assertTrue(payload["reasoning_auto_collapse"])
         self.assertTrue(payload["pruning_enabled"])
@@ -2612,11 +2615,12 @@ class AppRoutesTestCase(unittest.TestCase):
         settings = get_app_settings()
         settings.update({
             "chat_summary_mode": "auto",
+            "chat_summary_detail_level": "detailed",
             "summary_skip_first": 0,
             "summary_skip_last": 0,
         })
 
-        with patch("routes.chat.collect_agent_response", return_value=summary_payload):
+        with patch("routes.chat.collect_agent_response", return_value=summary_payload) as mocked_collect:
             outcome = maybe_create_conversation_summary(
                 conversation_id,
                 "deepseek-chat",
@@ -2628,6 +2632,9 @@ class AppRoutesTestCase(unittest.TestCase):
             )
 
         self.assertTrue(outcome["applied"])
+        prompt_messages = mocked_collect.call_args.args[0]
+        prompt_text = "\n".join(str(message.get("content") or "") for message in prompt_messages)
+        self.assertIn("more detailed summary", prompt_text)
         stored_entries = get_user_profile_entries()
         self.assertTrue(any("concise answers" in entry["value"].lower() for entry in stored_entries))
         self.assertGreaterEqual(outcome.get("stored_profile_fact_count", 0), 1)
@@ -5551,6 +5558,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn('id="rag-context-size-select"', html)
         self.assertIn('id="rag-sensitivity-hint"', html)
         self.assertIn('id="sub-agent-model-preference-select"', html)
+        self.assertIn('id="summary-detail-level-select"', html)
         self.assertIn('id="sub-agent-include-conversation-context-toggle"', html)
         self.assertIn("Share recent conversation excerpts with the sub-agent", html)
         self.assertIn('id="custom-model-routing-mode-select"', html)
@@ -12880,7 +12888,7 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertEqual([message["role"] for message in selected], ["user"])
         prompt_messages = build_summary_prompt_messages(selected, "")
-        self.assertLessEqual(_estimate_prompt_tokens(prompt_messages), 240)
+        self.assertLessEqual(_estimate_prompt_tokens(prompt_messages), 400)
 
     def test_chat_summary_status_reports_detailed_failure_stage(self):
         conversation_id = self._create_conversation()
@@ -13748,9 +13756,10 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.get_json()["applied"])
         prompt_messages = mocked_collect.call_args.args[0]
-        system_prompt = prompt_messages[0]["content"]
-        self.assertIn("concise summary", system_prompt)
-        self.assertIn("Focus especially on: action items and decisions", system_prompt)
+        prompt_text = "\n".join(str(message.get("content") or "") for message in prompt_messages)
+        self.assertIn("concise summary", prompt_text)
+        self.assertIn("Current continuation focus:", prompt_text)
+        self.assertIn("action items and decisions", prompt_text)
 
     def test_manual_summarize_endpoint_honors_false_force_strings(self):
         conversation_id = self._create_conversation()

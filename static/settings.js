@@ -23,6 +23,7 @@ const maxStepsEl = document.getElementById("max-steps-input");
 const maxParallelToolsEl = document.getElementById("max-parallel-tools-input");
 const clarificationMaxQuestionsEl = document.getElementById("clarification-max-questions-input");
 const summaryModeEl = document.getElementById("summary-mode-select");
+const summaryDetailLevelEl = document.getElementById("summary-detail-level-select");
 const summaryTriggerEl = document.getElementById("summary-trigger-input");
 const summarySkipFirstEl = document.getElementById("summary-skip-first-input");
 const summarySkipLastEl = document.getElementById("summary-skip-last-input");
@@ -1443,6 +1444,7 @@ function applySettingsToForm() {
   if (maxParallelToolsEl) maxParallelToolsEl.value = String(appSettings.max_parallel_tools ?? 4);
   if (clarificationMaxQuestionsEl) clarificationMaxQuestionsEl.value = String(appSettings.clarification_max_questions || 5);
   if (summaryModeEl) summaryModeEl.value = appSettings.chat_summary_mode || "auto";
+  if (summaryDetailLevelEl) summaryDetailLevelEl.value = appSettings.chat_summary_detail_level || "balanced";
   if (summaryTriggerEl) summaryTriggerEl.value = String(appSettings.chat_summary_trigger_token_count || 80000);
   if (summarySkipFirstEl) summarySkipFirstEl.value = String(appSettings.summary_skip_first ?? 2);
   if (summarySkipLastEl) summarySkipLastEl.value = String(appSettings.summary_skip_last ?? 1);
@@ -1562,6 +1564,7 @@ function applyServerSettingsData(data) {
     : {};
   appSettings.image_processing_method = data.image_processing_method || "auto";
   appSettings.chat_summary_mode = data.chat_summary_mode || "auto";
+  appSettings.chat_summary_detail_level = data.chat_summary_detail_level || "balanced";
   appSettings.chat_summary_trigger_token_count = data.chat_summary_trigger_token_count || 80000;
   appSettings.summary_skip_first = data.summary_skip_first ?? 2;
   appSettings.summary_skip_last = data.summary_skip_last ?? 1;
@@ -1621,6 +1624,7 @@ async function saveSettings() {
     max_parallel_tools: readNumericSetting(maxParallelToolsEl, 4, { allowZero: false }),
     clarification_max_questions: readNumericSetting(clarificationMaxQuestionsEl, 5, { allowZero: false }),
     chat_summary_mode: summaryModeEl?.value || "auto",
+    chat_summary_detail_level: summaryDetailLevelEl?.value || "balanced",
     chat_summary_trigger_token_count: readNumericSetting(summaryTriggerEl, 80000, { allowZero: false }),
     summary_skip_first: readNumericSetting(summarySkipFirstEl, 0),
     summary_skip_last: readNumericSetting(summarySkipLastEl, 1),
@@ -2018,6 +2022,7 @@ function registerDirtyListeners() {
   maxParallelToolsEl?.addEventListener("input", markDirty);
   clarificationMaxQuestionsEl?.addEventListener("input", markDirty);
   summaryModeEl?.addEventListener("change", markDirty);
+  summaryDetailLevelEl?.addEventListener("change", markDirty);
   summaryTriggerEl?.addEventListener("input", markDirty);
   summarySkipFirstEl?.addEventListener("input", markDirty);
   summarySkipLastEl?.addEventListener("input", markDirty);

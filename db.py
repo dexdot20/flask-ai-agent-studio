@@ -18,6 +18,7 @@ from config import (
     CANVAS_PROMPT_DEFAULT_MAX_TOKENS,
     CANVAS_SCROLL_WINDOW_LINES,
     CHAT_SUMMARY_ALLOWED_MODES,
+    CHAT_SUMMARY_DETAIL_LEVELS,
     CHAT_SUMMARY_MODE,
     CHAT_SUMMARY_TRIGGER_TOKEN_COUNT,
     CONTENT_MAX_CHARS,
@@ -2393,6 +2394,14 @@ def get_chat_summary_trigger_token_count(settings: dict | None = None) -> int:
     except (TypeError, ValueError):
         value = CHAT_SUMMARY_TRIGGER_TOKEN_COUNT
     return max(1_000, min(200_000, value))
+
+
+def get_chat_summary_detail_level(settings: dict | None = None) -> str:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = str(source.get("chat_summary_detail_level", DEFAULT_SETTINGS["chat_summary_detail_level"]) or "").strip().lower()
+    if raw_value in CHAT_SUMMARY_DETAIL_LEVELS:
+        return raw_value
+    return DEFAULT_SETTINGS["chat_summary_detail_level"]
 
 
 def get_summary_skip_first(settings: dict | None = None) -> int:
