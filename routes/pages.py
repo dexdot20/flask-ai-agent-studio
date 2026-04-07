@@ -60,6 +60,10 @@ from db import (
     get_rag_sensitivity,
     get_sub_agent_allowed_tool_names,
     get_sub_agent_max_steps,
+    get_sub_agent_max_parallel_tools,
+    get_sub_agent_retry_attempts,
+    get_sub_agent_retry_delay_seconds,
+    get_sub_agent_timeout_seconds,
     get_summary_skip_first,
     get_summary_skip_last,
     get_tool_memory_auto_inject_enabled,
@@ -345,6 +349,10 @@ def build_settings_payload() -> dict:
         "canvas_expand_max_lines": get_canvas_expand_max_lines(raw),
         "canvas_scroll_window_lines": get_canvas_scroll_window_lines(raw),
         "sub_agent_max_steps": get_sub_agent_max_steps(raw),
+        "sub_agent_timeout_seconds": get_sub_agent_timeout_seconds(raw),
+        "sub_agent_retry_attempts": get_sub_agent_retry_attempts(raw),
+        "sub_agent_retry_delay_seconds": get_sub_agent_retry_delay_seconds(raw),
+        "sub_agent_max_parallel_tools": get_sub_agent_max_parallel_tools(raw),
         "sub_agent_allowed_tool_names": get_sub_agent_allowed_tool_names(raw),
         "web_cache_ttl_hours": get_web_cache_ttl_hours(raw),
         "openrouter_prompt_cache_enabled": get_openrouter_prompt_cache_enabled(raw),
@@ -460,6 +468,10 @@ def register_page_routes(app) -> None:
         canvas_expand_max_lines_raw = data.get("canvas_expand_max_lines")
         canvas_scroll_window_lines_raw = data.get("canvas_scroll_window_lines")
         sub_agent_max_steps_raw = data.get("sub_agent_max_steps")
+        sub_agent_timeout_seconds_raw = data.get("sub_agent_timeout_seconds")
+        sub_agent_retry_attempts_raw = data.get("sub_agent_retry_attempts")
+        sub_agent_retry_delay_seconds_raw = data.get("sub_agent_retry_delay_seconds")
+        sub_agent_max_parallel_tools_raw = data.get("sub_agent_max_parallel_tools")
         sub_agent_allowed_tool_names_raw = data.get("sub_agent_allowed_tool_names")
         web_cache_ttl_hours_raw = data.get("web_cache_ttl_hours")
         openrouter_prompt_cache_enabled_raw = data.get("openrouter_prompt_cache_enabled")
@@ -503,6 +515,10 @@ def register_page_routes(app) -> None:
             and canvas_expand_max_lines_raw is None
             and canvas_scroll_window_lines_raw is None
             and sub_agent_max_steps_raw is None
+            and sub_agent_timeout_seconds_raw is None
+            and sub_agent_retry_attempts_raw is None
+            and sub_agent_retry_delay_seconds_raw is None
+            and sub_agent_max_parallel_tools_raw is None
             and sub_agent_allowed_tool_names_raw is None
             and web_cache_ttl_hours_raw is None
             and openrouter_prompt_cache_enabled_raw is None
@@ -886,6 +902,42 @@ def register_page_routes(app) -> None:
             if not (SUB_AGENT_MAX_STEPS_MIN <= sub_agent_max_steps <= SUB_AGENT_MAX_STEPS_MAX):
                 return jsonify({"error": f"sub_agent_max_steps must be between {SUB_AGENT_MAX_STEPS_MIN} and {SUB_AGENT_MAX_STEPS_MAX}."}), 400
             settings["sub_agent_max_steps"] = str(sub_agent_max_steps)
+
+        if sub_agent_timeout_seconds_raw is not None:
+            try:
+                sub_agent_timeout_seconds = int(sub_agent_timeout_seconds_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "sub_agent_timeout_seconds must be an integer."}), 400
+            if not (5 <= sub_agent_timeout_seconds <= 900):
+                return jsonify({"error": "sub_agent_timeout_seconds must be between 5 and 900."}), 400
+            settings["sub_agent_timeout_seconds"] = str(sub_agent_timeout_seconds)
+
+        if sub_agent_retry_attempts_raw is not None:
+            try:
+                sub_agent_retry_attempts = int(sub_agent_retry_attempts_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "sub_agent_retry_attempts must be an integer."}), 400
+            if not (0 <= sub_agent_retry_attempts <= 5):
+                return jsonify({"error": "sub_agent_retry_attempts must be between 0 and 5."}), 400
+            settings["sub_agent_retry_attempts"] = str(sub_agent_retry_attempts)
+
+        if sub_agent_retry_delay_seconds_raw is not None:
+            try:
+                sub_agent_retry_delay_seconds = int(sub_agent_retry_delay_seconds_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "sub_agent_retry_delay_seconds must be an integer."}), 400
+            if not (0 <= sub_agent_retry_delay_seconds <= 60):
+                return jsonify({"error": "sub_agent_retry_delay_seconds must be between 0 and 60."}), 400
+            settings["sub_agent_retry_delay_seconds"] = str(sub_agent_retry_delay_seconds)
+
+        if sub_agent_max_parallel_tools_raw is not None:
+            try:
+                sub_agent_max_parallel_tools = int(sub_agent_max_parallel_tools_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "sub_agent_max_parallel_tools must be an integer."}), 400
+            if not (MAX_PARALLEL_TOOLS_MIN <= sub_agent_max_parallel_tools <= MAX_PARALLEL_TOOLS_MAX):
+                return jsonify({"error": f"sub_agent_max_parallel_tools must be between {MAX_PARALLEL_TOOLS_MIN} and {MAX_PARALLEL_TOOLS_MAX}."}), 400
+            settings["sub_agent_max_parallel_tools"] = str(sub_agent_max_parallel_tools)
 
         if sub_agent_allowed_tool_names_raw is not None:
             if not isinstance(sub_agent_allowed_tool_names_raw, list):

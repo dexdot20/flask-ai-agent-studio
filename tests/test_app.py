@@ -258,6 +258,10 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["canvas_expand_max_lines"], 1600)
         self.assertEqual(payload["canvas_scroll_window_lines"], 200)
         self.assertEqual(payload["sub_agent_max_steps"], 6)
+        self.assertEqual(payload["sub_agent_timeout_seconds"], 240)
+        self.assertEqual(payload["sub_agent_retry_attempts"], 2)
+        self.assertEqual(payload["sub_agent_retry_delay_seconds"], 5)
+        self.assertEqual(payload["sub_agent_max_parallel_tools"], 4)
         self.assertEqual(payload["sub_agent_allowed_tool_names"], SUB_AGENT_ALLOWED_TOOL_NAMES)
         self.assertEqual(payload["web_cache_ttl_hours"], 24)
         self.assertTrue(payload["openrouter_prompt_cache_enabled"])
@@ -342,6 +346,10 @@ class AppRoutesTestCase(unittest.TestCase):
                 "canvas_expand_max_lines": 2200,
                 "canvas_scroll_window_lines": 150,
                 "sub_agent_max_steps": 9,
+                "sub_agent_timeout_seconds": 300,
+                "sub_agent_retry_attempts": 3,
+                "sub_agent_retry_delay_seconds": 7,
+                "sub_agent_max_parallel_tools": 5,
                 "sub_agent_allowed_tool_names": ["search_web", "fetch_url_summarized"],
                 "web_cache_ttl_hours": 12,
                 "openrouter_prompt_cache_enabled": False,
@@ -409,6 +417,10 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["canvas_expand_max_lines"], 2200)
         self.assertEqual(payload["canvas_scroll_window_lines"], 150)
         self.assertEqual(payload["sub_agent_max_steps"], 9)
+        self.assertEqual(payload["sub_agent_timeout_seconds"], 300)
+        self.assertEqual(payload["sub_agent_retry_attempts"], 3)
+        self.assertEqual(payload["sub_agent_retry_delay_seconds"], 7)
+        self.assertEqual(payload["sub_agent_max_parallel_tools"], 5)
         self.assertEqual(payload["sub_agent_allowed_tool_names"], ["search_web", "fetch_url_summarized"])
         self.assertEqual(payload["web_cache_ttl_hours"], 12)
         self.assertFalse(payload["openrouter_prompt_cache_enabled"])
@@ -2162,7 +2174,7 @@ class AppRoutesTestCase(unittest.TestCase):
             {
                 "user_preferences": "",
                 "max_steps": "1",
-                "active_tools": json.dumps(["append_scratchpad", "search_web"], ensure_ascii=False),
+                "active_tools": json.dumps(["append_scratchpad", "search_web", "rewrite_canvas_document"], ensure_ascii=False),
                 "rag_auto_inject": "false",
             }
         )
@@ -2202,6 +2214,15 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("append_scratchpad", captured["prompt_tool_names"])
         self.assertIn("replace_scratchpad", captured["prompt_tool_names"])
         self.assertNotIn("search_web", captured["prompt_tool_names"])
+        system_text = "\n\n".join(
+            str(message.get("content") or "")
+            for message in captured["api_messages"]
+            if message.get("role") == "system"
+        )
+        self.assertIn("Callable tools:", system_text)
+        self.assertIn("`append_scratchpad`", system_text)
+        self.assertIn("`search_web`", system_text)
+        self.assertNotIn("`rewrite_canvas_document`", system_text)
 
     def test_chat_route_defers_postprocess_outside_testing(self):
         fake_events = iter(
@@ -3424,7 +3445,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("- Working mode: project", content)
         self.assertIn("- Project label: demo-app", content)
         self.assertIn("- Active file: src/app.py", content)
-        self.assertIn("- Other documents: src/config.py", content)
+        self.assertIn("- Other files: src/config.py", content)
         self.assertNotIn("- Path: src/app.py", content)
         self.assertIn("- Role: source", content)
         self.assertIn("- Active document id: canvas-1", content)
@@ -3441,6 +3462,36 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertNotIn("## Canvas Project Manifest", content)
         self.assertNotIn("## Canvas Relationship Map", content)
         self.assertNotIn("## Other Canvas Documents", content)
+
+    def test_runtime_system_message_uses_document_titles_when_canvas_paths_are_missing(self):
+        message = build_runtime_system_message(
+            active_tool_names=[
+                "create_canvas_document",
+                "rewrite_canvas_document",
+                "replace_canvas_lines",
+            ],
+            canvas_documents=[
+                {
+                    "id": "canvas-1",
+                    "title": "Research Notes",
+                    "format": "markdown",
+                    "content": "One\nTwo",
+                },
+                {
+                    "id": "canvas-2",
+                    "title": "Ricky - Career Profile and Preferences",
+                    "format": "markdown",
+                    "content": "Profile",
+                },
+            ],
+            canvas_active_document_id="canvas-1",
+        )
+
+        content = message["content"]
+        self.assertIn("- Active document: Research Notes", content)
+        self.assertIn("- Other canvas documents: Ricky - Career Profile and Preferences", content)
+        self.assertIn("use document_path only when an explicit project path is shown", content)
+        self.assertIn("otherwise do not invent a path", content)
 
     def test_runtime_system_message_includes_pinned_canvas_viewports(self):
         runtime_state = create_canvas_runtime_state(
@@ -4096,8 +4147,8 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("rewrite the delegated task into concise English instructions", spec["prompt"]["guidance"])
         self.assertNotIn("timeout_seconds", spec["parameters"]["properties"])
         self.assertNotIn("allowed_tools", spec["parameters"]["properties"])
-        self.assertIn("user-managed settings", spec["prompt"]["guidance"])
-        self.assertIn("dynamically", spec["parameters"]["properties"]["max_steps"]["description"])
+        self.assertIn("The user controls both the helper's web-tool allowlist and its maximum step budget from Settings", spec["prompt"]["guidance"])
+        self.assertIn("Legacy optional helper-agent tool budget", spec["parameters"]["properties"]["max_steps"]["description"])
 
     def test_clarification_tool_validator_accepts_stringified_question_objects(self):
         from agent import _validate_tool_arguments
@@ -5495,6 +5546,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn('task_full: String(entry.task_full || "").trim()', script_text)
         self.assertIn('sub-agent-run__note', script_text)
         self.assertIn('sub-agent-run__instructions-body', script_text)
+        self.assertIn('Should the research be saved to the Canvas?', script_text)
         self.assertIn('summaryText !== fallbackNote', script_text)
         self.assertIn("function createAssistantMessageActions(message)", script_text)
         self.assertIn("Edit message", script_text)
@@ -5573,6 +5625,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("visibleAnswer = fullAnswer.slice(0, visibleAnswer.length + stepSize);", script_text)
         self.assertIn("function confirmCanvasOpenForDocument(", script_text)
         self.assertIn("function openCanvasConfirmModal(options = {})", script_text)
+        self.assertIn("function findPersistedAssistantEntryForSubAgentPrompt(preferredAssistantId = null)", script_text)
         self.assertIn("function getConversationSignature(entries = history)", script_text)
         self.assertIn("function scheduleConversationRefreshAfterStream()", script_text)
         self.assertIn("async function refreshConversationFromServer()", script_text)
@@ -6030,6 +6083,38 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(mocked_run.call_args.kwargs["prompt_tool_names"], ["fetch_url"])
         self.assertEqual(events[-1]["entry"]["status"], "ok")
 
+    def test_run_sub_agent_stream_inherits_parent_parallel_limit_when_child_limit_unset(self):
+        runtime_state = {
+            "agent_context": {
+                "model": "deepseek-chat",
+                "enabled_tool_names": ["sub_agent", "read_file"],
+                "sub_agent_depth": 0,
+            },
+            "canvas": create_canvas_runtime_state(),
+            "canvas_limits": {"expand_max_lines": 800, "scroll_window_lines": 200},
+            "workspace": {"root_path": None},
+        }
+        settings = {
+            "operation_model_preferences": {"sub_agent": ""},
+            "operation_model_fallback_preferences": {"sub_agent": []},
+            "max_parallel_tools": 4,
+            "sub_agent_allowed_tool_names": ["fetch_url"],
+        }
+        fake_child_events = iter(
+            [
+                {"type": "answer_delta", "text": "Summary ready."},
+                {"type": "done"},
+            ]
+        )
+
+        with patch("agent.get_app_settings", return_value=settings), patch(
+            "agent.run_agent_stream",
+            return_value=fake_child_events,
+        ) as mocked_run:
+            list(_run_sub_agent_stream({"task": "Inspect README.md"}, runtime_state))
+
+        self.assertEqual(mocked_run.call_args.kwargs["max_parallel_tools"], 4)
+
     def test_run_sub_agent_stream_uses_configured_max_steps(self):
         runtime_state = {
             "agent_context": {
@@ -6147,7 +6232,9 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(final_update["entry"]["model"], "deepseek-chat")
         self.assertEqual(final_update["entry"]["summary"], "Recovered on fallback model.")
         self.assertTrue(runtime_state["sub_agent_traces"])
+        self.assertEqual(len(runtime_state["sub_agent_traces"]), 1)
         self.assertEqual(runtime_state["sub_agent_traces"][-1]["model"], "deepseek-chat")
+        self.assertEqual(runtime_state["sub_agent_traces"][-1]["fallback_note"], "Continued on deepseek-chat after model error.")
 
     def test_run_sub_agent_stream_retries_timed_out_attempts_with_fallback_models(self):
         runtime_state = {
@@ -6207,7 +6294,7 @@ class AppRoutesTestCase(unittest.TestCase):
             "agent.run_agent_stream", side_effect=attempts
         ) as mocked_run, patch(
             "agent.time.monotonic",
-            side_effect=[0, 0, 2, 4, 6, 11] + [11] * 20,
+            side_effect=[0, 0, 2, 4, 6, 16] + [16] * 20,
         ):
             events = list(_run_sub_agent_stream({"task": "Inspect README.md"}, runtime_state))
 
@@ -6237,10 +6324,18 @@ class AppRoutesTestCase(unittest.TestCase):
                 self.assertNotIn("arguments", tool_call)
         self.assertEqual(events[-1]["entry"]["model"], "deepseek-chat")
         self.assertEqual(events[-1]["entry"]["summary"], "Recovered after timeout.")
-        self.assertEqual(runtime_state["sub_agent_traces"][0]["status"], "partial")
+        self.assertEqual(len(runtime_state["sub_agent_traces"]), 1)
+        self.assertEqual(runtime_state["sub_agent_traces"][0]["status"], "ok")
         self.assertTrue(runtime_state["sub_agent_traces"][0]["timed_out"])
         self.assertIn("Continued on deepseek-chat after timeout.", runtime_state["sub_agent_traces"][0]["fallback_note"])
-        self.assertEqual(runtime_state["sub_agent_traces"][-1]["model"], "deepseek-chat")
+        self.assertEqual(runtime_state["sub_agent_traces"][0]["model"], "deepseek-chat")
+        self.assertTrue(
+            any(
+                message.get("role") == "assistant"
+                and "This arrives too late." in str(message.get("content") or "")
+                for message in runtime_state["sub_agent_traces"][0].get("messages") or []
+            )
+        )
 
     def test_run_sub_agent_stream_retries_same_model_before_fallback(self):
         runtime_state = {
@@ -6285,6 +6380,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertTrue(mocked_sleep.called)
         self.assertEqual(events[-1]["entry"]["model"], "deepseek-reasoner")
         self.assertEqual(events[-1]["entry"]["summary"], "Recovered on the retry.")
+        self.assertEqual(len(runtime_state["sub_agent_traces"]), 1)
         self.assertEqual(runtime_state["sub_agent_traces"][-1]["model"], "deepseek-reasoner")
         self.assertNotIn("fallback_note", runtime_state["sub_agent_traces"][-1])
 
@@ -6350,10 +6446,11 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(mocked_run.call_count, 3)
         self.assertEqual(events[-1]["entry"]["model"], "deepseek-chat")
         self.assertEqual(events[-1]["entry"]["summary"], "Recovered on the third model.")
+        self.assertEqual(len(runtime_state["sub_agent_traces"]), 1)
         self.assertEqual(runtime_state["sub_agent_traces"][-1]["model"], "deepseek-chat")
         self.assertEqual(
             runtime_state["sub_agent_traces"][0]["fallback_note"],
-            "Continued on openrouter:anthropic/claude-sonnet-4.5@@v=1;s=1 after model error.",
+            "Continued on deepseek-chat after model error.",
         )
 
     def test_build_sub_agent_messages_mentions_web_query_limit(self):
@@ -6500,7 +6597,7 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertIn("web search and URL fetch tools", spec["description"])
         self.assertIn("search_web", spec["prompt"]["guidance"])
-        self.assertIn("read-only does not mean offline-only", spec["prompt"]["guidance"])
+        self.assertIn("Remember that the helper only receives fixed web-research tools", spec["prompt"]["guidance"])
 
     def test_run_agent_stream_emits_clarification_request_and_stops(self):
         responses = [

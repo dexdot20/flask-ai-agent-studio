@@ -1387,11 +1387,16 @@ def _build_budgeted_prompt_messages(
     user_profile_context = build_user_profile_system_context(max_tokens=500)
     scratchpad_sections = get_all_scratchpad_sections(settings)
     max_parallel_tools = get_max_parallel_tools(settings)
+    runtime_tool_names = resolve_runtime_tool_names(
+        active_tool_names,
+        canvas_documents=canvas_documents,
+        workspace_root=workspace_root,
+    )
     prompt_budget = max(2_000, get_prompt_max_input_tokens(settings) - get_prompt_response_token_reserve(settings))
     base_runtime_messages = prepend_runtime_context(
         [],
         settings["user_preferences"],
-        active_tool_names,
+        runtime_tool_names,
         retrieved_context=None,
         user_profile_context=user_profile_context,
         tool_trace_context=tool_trace_context,
@@ -1405,6 +1410,7 @@ def _build_budgeted_prompt_messages(
         workspace_root=workspace_root,
         clarification_max_questions=get_clarification_max_questions(settings),
         max_parallel_tools=max_parallel_tools,
+        runtime_tool_names=runtime_tool_names,
     )
     base_system_tokens = _estimate_prompt_tokens(base_runtime_messages)
     history_budget = max(1_000, prompt_budget - base_system_tokens)
@@ -1465,7 +1471,7 @@ def _build_budgeted_prompt_messages(
     )
 
     current_context_injection = build_runtime_context_injection(
-        active_tool_names=active_tool_names,
+        active_tool_names=runtime_tool_names,
         clarification_response=clarification_response,
         all_clarification_rounds=all_clarification_rounds,
         retrieved_context=rag_context,
@@ -1477,6 +1483,7 @@ def _build_budgeted_prompt_messages(
         canvas_prompt_max_lines=canvas_prompt_max_lines,
         canvas_prompt_max_tokens=canvas_prompt_max_tokens,
         workspace_root=workspace_root,
+        runtime_tool_names=runtime_tool_names,
         summary_count=len(selected_summaries),
         include_time_context=True,
     )
@@ -1484,7 +1491,7 @@ def _build_budgeted_prompt_messages(
     api_messages = prepend_runtime_context(
         prompt_history_api,
         settings["user_preferences"],
-        active_tool_names,
+        runtime_tool_names,
         clarification_response=clarification_response,
         all_clarification_rounds=all_clarification_rounds,
         retrieved_context=rag_context,
@@ -1501,6 +1508,7 @@ def _build_budgeted_prompt_messages(
         clarification_max_questions=get_clarification_max_questions(settings),
         max_parallel_tools=max_parallel_tools,
         current_context_injection=current_context_injection,
+        runtime_tool_names=runtime_tool_names,
         summary_count=len(selected_summaries),
     )
 

@@ -801,6 +801,19 @@ def _build_canvas_workspace_summary(canvas_payload: dict) -> list[str]:
     if int(canvas_payload.get("document_count") or 0) <= 1 and (canvas_payload.get("mode") or "document") != "project":
         return []
 
+    is_project_mode = str(canvas_payload.get("mode") or "document").strip().lower() == "project"
+    has_explicit_paths = any(
+        str(entry.get("path") or "").strip()
+        for entry in (canvas_payload.get("other_documents") or [])
+    ) or str(active_document.get("path") or "").strip() != ""
+
+    def _document_label(entry: dict) -> str:
+        if not isinstance(entry, dict):
+            return "Canvas"
+        if is_project_mode and has_explicit_paths:
+            return str(entry.get("path") or entry.get("title") or entry.get("id") or "Canvas").strip() or "Canvas"
+        return str(entry.get("title") or entry.get("path") or entry.get("id") or "Canvas").strip() or "Canvas"
+
     lines = ["## Canvas Workspace Summary"]
     lines.append(f"- Working mode: {canvas_payload.get('mode') or 'document'}")
 
@@ -808,8 +821,8 @@ def _build_canvas_workspace_summary(canvas_payload: dict) -> list[str]:
     if project_name:
         lines.append(f"- Project label: {project_name}")
 
-    active_label = str(active_document.get("path") or active_document.get("title") or active_document.get("id") or "Canvas").strip()
-    lines.append(f"- Active file: {active_label}")
+    active_label = _document_label(active_document)
+    lines.append(f"- {'Active file' if is_project_mode and has_explicit_paths else 'Active document'}: {active_label}")
 
     total_lines = int(active_document.get("line_count") or 0)
     total_pages = int(active_document.get("page_count") or 0)
@@ -830,13 +843,13 @@ def _build_canvas_workspace_summary(canvas_payload: dict) -> list[str]:
 
     other_documents = canvas_payload.get("other_documents") if isinstance(canvas_payload.get("other_documents"), list) else []
     other_labels = [
-        str(entry.get("path") or entry.get("title") or entry.get("id") or "Canvas").strip()
+        _document_label(entry)
         for entry in other_documents
-        if str(entry.get("path") or entry.get("title") or entry.get("id") or "").strip()
+        if _document_label(entry)
     ]
     if other_labels:
         shown_labels = other_labels[:4]
-        lines.append(f"- Other documents: {', '.join(shown_labels)}")
+        lines.append(f"- {'Other files' if is_project_mode and has_explicit_paths else 'Other canvas documents'}: {', '.join(shown_labels)}")
         if len(other_labels) > len(shown_labels):
             lines.append(f"- Additional documents omitted: {len(other_labels) - len(shown_labels)}")
 
@@ -863,7 +876,7 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
         "- If the target lines are not visible yet, inspect first with scroll_canvas_document or expand_canvas_document.",
         "- When multiple files or canvas regions are involved, batch independent inspection calls together in one answer instead of requesting them one by one.",
         "- Read-only canvas inspections can run in parallel, so prefer one answer that includes every needed search_canvas_document, scroll_canvas_document, or expand_canvas_document call before the edit turn.",
-        "- If you do not know the document_id, use the document_path from the workspace summary, active file label, or manifest; document_id is optional.",
+        "- If you do not know the document_id, use document_path only when an explicit project path is shown in the Canvas Workspace Summary or Active Canvas Document block; otherwise do not invent a path and target the active document or use document_id.",
         "- Use rewrite_canvas_document when most of the document should change or when you already know the complete intended replacement content.",
         "- When you already know the required edits across multiple canvas documents, emit all of those edit tool calls in a single answer instead of editing one document, waiting, and then editing the next.",
         "- Preferred pattern for multi-file canvas work: batch inspections first, then batch all known edits in one answer.",
@@ -1125,7 +1138,7 @@ def _build_runtime_volatile_parts(
         if canvas_payload["is_truncated"]:
             volatile_parts.append(
                 "- Guidance: This canvas excerpt is truncated. Use visible line numbers for line-level canvas edits. "
-                "If you do not know the document_id, target by document_path from the workspace summary or active file label instead. "
+                "If an explicit document_path is listed in the workspace summary or active document block, use that exact value. Otherwise do not invent a path; target the active document or use document_id instead. "
                 "Call expand_canvas_document for a larger view or scroll_canvas_document for a targeted range before editing. "
                 "Never guess line numbers outside the visible excerpt."
             )
@@ -1135,7 +1148,7 @@ def _build_runtime_volatile_parts(
             )
         if canvas_payload["mode"] == "project":
             volatile_parts.append(
-                "- In project mode, prefer document_path for targeting, even when you do not know the document_id yet."
+                "- In project mode, prefer the explicit document_path shown in the prompt for targeting, even when you do not know the document_id yet."
             )
         if int(active_document.get("page_count") or 0) > 1:
             volatile_parts.append(
@@ -1162,7 +1175,9 @@ def _build_runtime_volatile_parts(
                 )
                 visible_lines = viewport.get("visible_lines") if isinstance(viewport.get("visible_lines"), list) else []
                 if visible_lines:
-                    volatile_parts.append("```text\n" + "\n".join(str(line) for line in visible_lines) + "\n```")
+                        runtime_tool_names: list[str] | None = None,
+                        current_context_injection: str | None = None,
+                        summary_count: int | None = None,
             volatile_parts.append("")
 
     if summary_count:
@@ -1427,15 +1442,18 @@ def prepend_runtime_context(
     workspace_root: str | None = None,
     clarification_max_questions: int | None = None,
     max_parallel_tools: int | None = None,
+    runtime_tool_names: list[str] | None = None,
     current_context_injection: str | None = None,
     summary_count: int | None = None,
 ):
     now = datetime.now().astimezone()
-    resolved_runtime_tool_names = resolve_runtime_tool_names(
-        _normalize_tool_name_list(active_tool_names),
-        canvas_documents=canvas_documents,
-        workspace_root=workspace_root,
-    )
+    resolved_runtime_tool_names = _normalize_tool_name_list(runtime_tool_names)
+    if not resolved_runtime_tool_names:
+        resolved_runtime_tool_names = resolve_runtime_tool_names(
+            _normalize_tool_name_list(active_tool_names),
+            canvas_documents=canvas_documents,
+            workspace_root=workspace_root,
+        )
     canvas_payload = _build_canvas_prompt_payload(
         canvas_documents,
         active_document_id=canvas_active_document_id,

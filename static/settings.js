@@ -22,6 +22,10 @@ const scratchpadReadonlyNoteEl = document.getElementById("scratchpad-readonly-no
 const maxStepsEl = document.getElementById("max-steps-input");
 const maxParallelToolsEl = document.getElementById("max-parallel-tools-input");
 const subAgentMaxStepsEl = document.getElementById("sub-agent-max-steps-input");
+const subAgentTimeoutSecondsEl = document.getElementById("sub-agent-timeout-seconds-input");
+const subAgentRetryAttemptsEl = document.getElementById("sub-agent-retry-attempts-input");
+const subAgentRetryDelaySecondsEl = document.getElementById("sub-agent-retry-delay-seconds-input");
+const subAgentMaxParallelToolsEl = document.getElementById("sub-agent-max-parallel-tools-input");
 const webCacheTtlHoursEl = document.getElementById("web-cache-ttl-hours-input");
 const openrouterPromptCacheEnabledEl = document.getElementById("openrouter-prompt-cache-enabled-toggle");
 const clarificationMaxQuestionsEl = document.getElementById("clarification-max-questions-input");
@@ -1516,6 +1520,10 @@ function applySettingsToForm() {
   if (maxStepsEl) maxStepsEl.value = String(appSettings.max_steps || 5);
   if (maxParallelToolsEl) maxParallelToolsEl.value = String(appSettings.max_parallel_tools ?? 4);
   if (subAgentMaxStepsEl) subAgentMaxStepsEl.value = String(appSettings.sub_agent_max_steps ?? 6);
+  if (subAgentTimeoutSecondsEl) subAgentTimeoutSecondsEl.value = String(appSettings.sub_agent_timeout_seconds ?? 240);
+  if (subAgentRetryAttemptsEl) subAgentRetryAttemptsEl.value = String(appSettings.sub_agent_retry_attempts ?? 2);
+  if (subAgentRetryDelaySecondsEl) subAgentRetryDelaySecondsEl.value = String(appSettings.sub_agent_retry_delay_seconds ?? 5);
+  if (subAgentMaxParallelToolsEl) subAgentMaxParallelToolsEl.value = String(appSettings.sub_agent_max_parallel_tools ?? appSettings.max_parallel_tools ?? 2);
   if (webCacheTtlHoursEl) webCacheTtlHoursEl.value = String(appSettings.web_cache_ttl_hours ?? 24);
   if (openrouterPromptCacheEnabledEl) openrouterPromptCacheEnabledEl.checked = Boolean(appSettings.openrouter_prompt_cache_enabled ?? true);
   if (clarificationMaxQuestionsEl) clarificationMaxQuestionsEl.value = String(appSettings.clarification_max_questions || 5);
@@ -1615,6 +1623,10 @@ function applyServerSettingsData(data) {
   appSettings.max_steps = data.max_steps || 5;
   appSettings.max_parallel_tools = data.max_parallel_tools ?? 4;
   appSettings.sub_agent_max_steps = data.sub_agent_max_steps ?? 6;
+  appSettings.sub_agent_timeout_seconds = data.sub_agent_timeout_seconds ?? 240;
+  appSettings.sub_agent_retry_attempts = data.sub_agent_retry_attempts ?? 2;
+  appSettings.sub_agent_retry_delay_seconds = data.sub_agent_retry_delay_seconds ?? 5;
+  appSettings.sub_agent_max_parallel_tools = data.sub_agent_max_parallel_tools ?? data.max_parallel_tools ?? 2;
   appSettings.web_cache_ttl_hours = data.web_cache_ttl_hours ?? 24;
   appSettings.openrouter_prompt_cache_enabled = Boolean(data.openrouter_prompt_cache_enabled ?? true);
   appSettings.temperature = data.temperature ?? 0.7;
@@ -1688,6 +1700,10 @@ async function saveSettings() {
     max_steps: readNumericSetting(maxStepsEl, 5, { allowZero: false }),
     max_parallel_tools: readNumericSetting(maxParallelToolsEl, 4, { allowZero: false }),
     sub_agent_max_steps: readNumericSetting(subAgentMaxStepsEl, 6, { allowZero: false }),
+    sub_agent_timeout_seconds: readNumericSetting(subAgentTimeoutSecondsEl, 240, { allowZero: false }),
+    sub_agent_retry_attempts: readNumericSetting(subAgentRetryAttemptsEl, 2),
+    sub_agent_retry_delay_seconds: readNumericSetting(subAgentRetryDelaySecondsEl, 5),
+    sub_agent_max_parallel_tools: readNumericSetting(subAgentMaxParallelToolsEl, 2, { allowZero: false }),
     web_cache_ttl_hours: readNumericSetting(webCacheTtlHoursEl, 24),
     openrouter_prompt_cache_enabled: Boolean(openrouterPromptCacheEnabledEl?.checked),
     clarification_max_questions: readNumericSetting(clarificationMaxQuestionsEl, 5, { allowZero: false }),
@@ -2088,6 +2104,10 @@ function registerDirtyListeners() {
   maxStepsEl?.addEventListener("input", markDirty);
   maxParallelToolsEl?.addEventListener("input", markDirty);
   subAgentMaxStepsEl?.addEventListener("input", markDirty);
+  subAgentTimeoutSecondsEl?.addEventListener("input", markDirty);
+  subAgentRetryAttemptsEl?.addEventListener("input", markDirty);
+  subAgentRetryDelaySecondsEl?.addEventListener("input", markDirty);
+  subAgentMaxParallelToolsEl?.addEventListener("input", markDirty);
   webCacheTtlHoursEl?.addEventListener("input", markDirty);
   openrouterPromptCacheEnabledEl?.addEventListener("change", markDirty);
   clarificationMaxQuestionsEl?.addEventListener("input", markDirty);

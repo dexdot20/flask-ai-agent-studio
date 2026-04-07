@@ -617,7 +617,36 @@
               <div class="settings-page-section-card__header">
                 <div>
                   <span class="settings-section-kicker">Sub-agent</span>
-                  <h3>Allowed web tools</h3>
+                  <h3>Runtime limits</h3>
+                </div>
+                <p>Control how long the delegated helper can run, how often it may retry, and how much parallel work it can do before falling back.</p>
+              </div>
+              <div class="settings-page-grid settings-page-grid--two settings-page-grid--compact">
+                <div>
+                  <label class="settings-label" for="sub-agent-timeout-seconds-input">Timeout in seconds (5-900)</label>
+                  <input type="number" class="settings-number" id="sub-agent-timeout-seconds-input" min="5" max="900" value="240" />
+                  <p class="settings-copy">If the helper exceeds this limit, it pauses and may continue on a fallback model when available.</p>
+                </div>
+                <div>
+                  <label class="settings-label" for="sub-agent-retry-attempts-input">Retry attempts (0-5)</label>
+                  <input type="number" class="settings-number" id="sub-agent-retry-attempts-input" min="0" max="5" value="2" />
+                  <p class="settings-copy">Retries stay on the same model before moving to the next fallback candidate.</p>
+                </div>
+                <div>
+                  <label class="settings-label" for="sub-agent-retry-delay-seconds-input">Retry delay in seconds (0-60)</label>
+                  <input type="number" class="settings-number" id="sub-agent-retry-delay-seconds-input" min="0" max="60" value="5" />
+                  <p class="settings-copy">A short delay can help recover from transient provider pressure without losing the run.</p>
+                </div>
+                <div>
+                  <label class="settings-label" for="sub-agent-max-parallel-tools-input">Max parallel tools (1-12)</label>
+                  <input type="number" class="settings-number" id="sub-agent-max-parallel-tools-input" min="1" max="12" value="2" />
+                  <p class="settings-copy">Limits how many read-only sub-agent calls can run at once. Use the same value as the parent limit if you want both to behave identically.</p>
+                </div>
+              </div>
+              <div class="settings-page-section-card__header settings-page-section-card__header--nested">
+                <div>
+                  <span class="settings-section-kicker">Allowed tools</span>
+                  <h3>Web-only research scope</h3>
                 </div>
                 <p>Choose which web-only tools the delegated helper may use during research. This does not grant file, canvas, or memory access.</p>
               </div>

@@ -1209,6 +1209,62 @@ def _build_sub_agent_retry_messages(child_history: list[dict]) -> list[dict]:
     return retry_messages
 
 
+def _append_sub_agent_history_entries(accumulator: list[dict], entries: list[dict]) -> list[dict]:
+    if not isinstance(accumulator, list):
+        accumulator = []
+    if not isinstance(entries, list):
+        return accumulator[:SUB_AGENT_MAX_TRANSCRIPT_MESSAGES]
+
+    for entry in entries:
+        normalized_entry = _normalize_sub_agent_history_message(entry)
+        if normalized_entry is None:
+            continue
+        accumulator.append(normalized_entry)
+        if len(accumulator) > SUB_AGENT_MAX_TRANSCRIPT_MESSAGES:
+            accumulator[:] = accumulator[-SUB_AGENT_MAX_TRANSCRIPT_MESSAGES:]
+    return accumulator
+
+
+def _append_sub_agent_tool_results(accumulator: list[dict], entries: list[dict]) -> list[dict]:
+    if not isinstance(accumulator, list):
+        accumulator = []
+    if not isinstance(entries, list):
+        return accumulator[:SUB_AGENT_MAX_ARTIFACTS]
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        accumulator.append(entry)
+        if len(accumulator) > SUB_AGENT_MAX_ARTIFACTS:
+            accumulator[:] = accumulator[-SUB_AGENT_MAX_ARTIFACTS:]
+    return accumulator
+
+
+def _append_sub_agent_tool_trace_entries(accumulator: list[dict], entries: list[dict]) -> list[dict]:
+    if not isinstance(accumulator, list):
+        accumulator = []
+    if not isinstance(entries, list):
+        return accumulator[:32]
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        accumulator.append(entry)
+        if len(accumulator) > 32:
+            accumulator[:] = accumulator[-32:]
+    return accumulator
+
+
+def _combine_sub_agent_reasoning(existing: str, incoming: str) -> str:
+    cleaned_existing = _clean_tool_text(existing or "", limit=SUB_AGENT_MAX_REASONING_CHARS)
+    cleaned_incoming = _clean_tool_text(incoming or "", limit=SUB_AGENT_MAX_REASONING_CHARS)
+    if not cleaned_incoming:
+        return cleaned_existing
+    if not cleaned_existing:
+        return cleaned_incoming
+    return _clean_tool_text(f"{cleaned_existing}\n\n{cleaned_incoming}", limit=SUB_AGENT_MAX_REASONING_CHARS)
+
+
 def _upsert_sub_agent_tool_trace(entries: list[dict], call_map: dict[str, int], event: dict) -> None:
     tool_name = str(event.get("tool") or "").strip()
     if not tool_name:
@@ -3521,6 +3577,12 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
     fallback_attempts: list[dict[str, str]] = []
     final_result: dict | None = None
     final_summary = ""
+    aggregate_tool_trace: list[dict] = []
+    aggregate_history: list[dict] = []
+    aggregate_tool_results: list[dict] = []
+    aggregate_reasoning = ""
+    saw_timeout = False
+    latest_fallback_note = ""
 
     for attempt_index, child_model in enumerate(child_model_candidates, start=1):
         retry_messages = [*child_messages, *resume_messages]
@@ -3543,10 +3605,14 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
                     final_result["fallback_attempts"] = list(fallback_attempts)
                 return final_result, f"Failed: {timeout_error}"
 
-            remaining_attempts = len(child_model_candidates) - attempt_index + 1
-            attempt_timeout_seconds = max(1, int(math.ceil(remaining_overall_seconds / max(1, remaining_attempts))))
-            attempt_deadline = min(overall_deadline, attempt_started_at + attempt_timeout_seconds)
-            attempt_timeout_seconds = max(1, int(math.ceil(max(0.0, attempt_deadline - attempt_started_at))))
+            remaining_candidate_count = max(0, len(child_model_candidates) - attempt_index)
+            reserve_per_candidate_seconds = min(60, max(5, timeout_seconds // 4))
+            reserved_fallback_seconds = min(
+                max(0.0, remaining_overall_seconds - 1.0),
+                float(remaining_candidate_count * reserve_per_candidate_seconds),
+            )
+            attempt_timeout_seconds = max(1, int(math.ceil(remaining_overall_seconds - reserved_fallback_seconds)))
+            attempt_deadline = attempt_started_at + attempt_timeout_seconds
 
             child_tool_trace: list[dict] = []
             child_tool_trace_map: dict[str, int] = {}
@@ -3561,7 +3627,7 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
 
             yield {
                 "type": "sub_agent_trace_update",
-                "entry": _build_sub_agent_stream_entry(task, child_model, child_tool_trace, status="running"),
+                "entry": _build_sub_agent_stream_entry(task, child_model, aggregate_tool_trace, status="running"),
             }
 
             try:
@@ -3598,7 +3664,12 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
                             _upsert_sub_agent_tool_trace(child_tool_trace, child_tool_trace_map, event)
                             yield {
                                 "type": "sub_agent_trace_update",
-                                "entry": _build_sub_agent_stream_entry(task, child_model, child_tool_trace, status="running"),
+                                "entry": _build_sub_agent_stream_entry(
+                                    task,
+                                    child_model,
+                                    [*aggregate_tool_trace, *_normalize_sub_agent_tool_trace(child_tool_trace)],
+                                    status="running",
+                                ),
                             }
                             if event_type == "tool_error":
                                 error_text = _clean_tool_text(event.get("error") or "", limit=SUB_AGENT_MAX_ERROR_CHARS)
@@ -3631,6 +3702,12 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
             if child_answer:
                 child_history.append({"role": "assistant", "content": child_answer})
             normalized_tool_trace = _normalize_sub_agent_tool_trace(child_tool_trace)
+            aggregate_tool_trace = _append_sub_agent_tool_trace_entries(aggregate_tool_trace, normalized_tool_trace)
+            aggregate_history = _append_sub_agent_history_entries(aggregate_history, child_history)
+            aggregate_tool_results = _append_sub_agent_tool_results(aggregate_tool_results, child_tool_results)
+            aggregate_reasoning = _combine_sub_agent_reasoning(aggregate_reasoning, child_reasoning)
+            if timed_out:
+                saw_timeout = True
             trace_error_text = next(
                 (
                     _clean_tool_text(entry.get("summary") or f"{entry.get('tool_name', 'tool')} failed.", limit=SUB_AGENT_MAX_ERROR_CHARS)
@@ -3644,17 +3721,17 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
 
             error_text = _clean_tool_text(child_errors[-1], limit=SUB_AGENT_MAX_ERROR_CHARS) if child_errors else ""
 
-            artifacts = _build_sub_agent_artifacts(child_history, child_tool_results)
+            artifacts = _build_sub_agent_artifacts(aggregate_history, aggregate_tool_results)
             summary_text = child_answer or error_text or "Sub-agent finished without a final summary."
 
-            has_partial_output = bool(child_answer or normalized_tool_trace or artifacts or child_history)
+            has_partial_output = bool(child_answer or aggregate_tool_trace or artifacts or aggregate_history)
             result_status = "ok"
             if timed_out or error_text or retryable_model_error:
                 result_status = "partial" if has_partial_output else "error"
 
             if (timed_out or retryable_model_error) and retry_count < retry_attempts and time.monotonic() < overall_deadline:
                 retry_reason = "a timeout" if timed_out else "a model error"
-                resume_messages.extend(_build_sub_agent_retry_messages(child_history))
+                resume_messages.extend(_build_sub_agent_retry_messages(aggregate_history))
                 resume_messages.append(_build_sub_agent_resume_message(child_model, retry_reason))
                 retry_count += 1
                 sleep_for = min(float(retry_delay_seconds), max(0.0, overall_deadline - time.monotonic()))
@@ -3671,10 +3748,11 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
                 reason_label = "timeout" if timed_out else "model error"
                 prompt_reason_label = "a timeout" if timed_out else "a model error"
                 fallback_note = f"Continued on {next_model} after {reason_label}."
+                latest_fallback_note = fallback_note
                 if not fallback_attempt_logged:
                     fallback_attempts.append({"model": child_model, "error": error_text or fallback_note or "Retryable model failure."})
                     fallback_attempt_logged = True
-                resume_messages.extend(_build_sub_agent_retry_messages(child_history))
+                resume_messages.extend(_build_sub_agent_retry_messages(aggregate_history))
                 resume_messages.append(_build_sub_agent_resume_message(child_model, prompt_reason_label))
                 result_status = "partial"
 
@@ -3686,9 +3764,9 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
                 "status": result_status,
                 "summary": summary_text,
                 "model": _clean_tool_text(child_model, limit=120),
-                "tool_trace": normalized_tool_trace,
+                "tool_trace": aggregate_tool_trace,
                 "artifacts": artifacts,
-                "messages": child_history[:SUB_AGENT_MAX_TRANSCRIPT_MESSAGES],
+                "messages": aggregate_history[:SUB_AGENT_MAX_TRANSCRIPT_MESSAGES],
             }
             if cleaned_task:
                 trace_entry["task"] = cleaned_task
@@ -3696,23 +3774,21 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
                 trace_entry["task_full"] = full_task
             if fallback_attempts:
                 trace_entry["fallback_attempts"] = list(fallback_attempts)
-            if fallback_note:
-                trace_entry["fallback_note"] = fallback_note
-            if child_reasoning:
-                trace_entry["reasoning"] = child_reasoning
-            if timed_out:
+            if fallback_note or latest_fallback_note:
+                trace_entry["fallback_note"] = fallback_note or latest_fallback_note
+            if aggregate_reasoning:
+                trace_entry["reasoning"] = aggregate_reasoning
+            if timed_out or saw_timeout:
                 trace_entry["timed_out"] = True
             if fallback_continues:
                 error_text = ""
             if error_text:
                 trace_entry["error"] = error_text
-            _append_sub_agent_trace(runtime_state, trace_entry)
-            yield {"type": "sub_agent_trace_update", "entry": trace_entry}
 
             final_result = {
                 "status": result_status,
                 "summary": summary_text,
-                "tool_trace": normalized_tool_trace,
+                "tool_trace": aggregate_tool_trace,
             }
             if artifacts:
                 final_result["artifacts"] = artifacts
@@ -3720,10 +3796,10 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
                 final_result["fallback_attempts"] = list(fallback_attempts)
             if error_text:
                 final_result["error"] = error_text
-            if timed_out:
+            if timed_out or saw_timeout:
                 final_result["timed_out"] = True
-            if fallback_note:
-                final_result["fallback_note"] = fallback_note
+            if fallback_note or latest_fallback_note:
+                final_result["fallback_note"] = fallback_note or latest_fallback_note
             final_result["model"] = _clean_tool_text(child_model, limit=120)
             final_summary = (
                 f"Sub-agent continued: {_clean_tool_text(final_result['summary'], limit=180)}"
@@ -3735,10 +3811,14 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
                 else f"Sub-agent completed: {_clean_tool_text(final_result['summary'], limit=180)}"
             )
             if result_status == "ok":
+                _append_sub_agent_trace(runtime_state, trace_entry)
+                yield {"type": "sub_agent_trace_update", "entry": trace_entry}
                 return final_result, final_summary
 
             if fallback_continues:
                 break
+            _append_sub_agent_trace(runtime_state, trace_entry)
+            yield {"type": "sub_agent_trace_update", "entry": trace_entry}
             return final_result, final_summary
 
     if final_result is None:

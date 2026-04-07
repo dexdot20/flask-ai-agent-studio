@@ -7311,6 +7311,37 @@ function getLatestUnsavedCompletedSubAgentTrace(metadata) {
   return null;
 }
 
+function findPersistedAssistantEntryForSubAgentPrompt(preferredAssistantId = null) {
+  const normalizedPreferredId = Number(preferredAssistantId || 0);
+  if (isPersistedMessageId(normalizedPreferredId)) {
+    for (let index = history.length - 1; index >= 0; index -= 1) {
+      const entry = history[index];
+      if (!entry || entry.role !== "assistant") {
+        continue;
+      }
+      if (Number(entry.id || 0) !== normalizedPreferredId) {
+        continue;
+      }
+      if (getLatestUnsavedCompletedSubAgentTrace(entry.metadata)) {
+        return entry;
+      }
+      break;
+    }
+  }
+
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const entry = history[index];
+    if (!entry || entry.role !== "assistant") {
+      continue;
+    }
+    if (getLatestUnsavedCompletedSubAgentTrace(entry.metadata)) {
+      return entry;
+    }
+  }
+
+  return null;
+}
+
 function buildSubAgentResearchCanvasTitle(entry) {
   const taskInstructions = String(entry?.task_full || entry?.task || "").trim();
   const taskHeading = getSubAgentTaskHeading(taskInstructions || entry?.summary || "Research");
@@ -7398,11 +7429,15 @@ async function saveSubAgentResearchToCanvas(assistantMessageId, traceIndex, trac
 }
 
 function maybePromptToSaveSubAgentResearch(assistantEntry) {
-  if (!assistantEntry || !isPersistedMessageId(assistantEntry.id) || !currentConvId) {
+  const resolvedEntry = isPersistedMessageId(assistantEntry?.id)
+    ? assistantEntry
+    : findPersistedAssistantEntryForSubAgentPrompt(assistantEntry?.id);
+
+  if (!resolvedEntry || !isPersistedMessageId(resolvedEntry.id) || !currentConvId) {
     return;
   }
 
-  const pendingTrace = getLatestUnsavedCompletedSubAgentTrace(assistantEntry.metadata);
+  const pendingTrace = getLatestUnsavedCompletedSubAgentTrace(resolvedEntry.metadata);
   if (!pendingTrace) {
     return;
   }
@@ -7412,13 +7447,13 @@ function maybePromptToSaveSubAgentResearch(assistantEntry) {
   );
 
   openCanvasConfirmModal({
-    title: "Save research to Canvas?",
-    message: `${taskHeading} is ready. Save it to Canvas so it stays editable and future turns can rely on the Canvas copy instead of the raw sub-agent trace?`,
+    title: "Should the research be saved to the Canvas?",
+    message: `${taskHeading} is ready. If you save it to the Canvas, future turns can rely on the Canvas copy instead of the raw sub-agent research text.`,
     confirmLabel: "Save to Canvas",
     cancelLabel: "Not now",
     onConfirm: async () => {
       try {
-        await saveSubAgentResearchToCanvas(assistantEntry.id, pendingTrace.index, pendingTrace.entry);
+        await saveSubAgentResearchToCanvas(resolvedEntry.id, pendingTrace.index, pendingTrace.entry);
       } catch (error) {
         showError(error.message || "Research could not be saved to Canvas.");
       }
@@ -8649,7 +8684,11 @@ async function sendMessage(options = {}) {
       applyPersistedMessageIds(persistedMessageIds, assistantEntry);
     }
     finalizeAssistantStreamingGroup(asstGroup, stepLog, assistantEntry.metadata);
-    maybePromptToSaveSubAgentResearch(assistantEntry);
+    maybePromptToSaveSubAgentResearch(
+      receivedHistorySync
+        ? findPersistedAssistantEntryForSubAgentPrompt(persistedMessageIds?.assistant_message_id)
+        : assistantEntry
+    );
     clearEditTarget();
     renderSummaryInspector();
 
@@ -8689,7 +8728,11 @@ async function sendMessage(options = {}) {
         applyPersistedMessageIds(persistedMessageIds, assistantEntry);
       }
       finalizeAssistantStreamingGroup(asstGroup, stepLog, assistantEntry.metadata);
-      maybePromptToSaveSubAgentResearch(assistantEntry);
+      maybePromptToSaveSubAgentResearch(
+        receivedHistorySync
+          ? findPersistedAssistantEntryForSubAgentPrompt(persistedMessageIds?.assistant_message_id)
+          : assistantEntry
+      );
       clearEditTarget();
       renderSummaryInspector();
       loadSidebar();

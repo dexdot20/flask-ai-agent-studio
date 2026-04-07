@@ -2600,7 +2600,9 @@ def get_max_parallel_tools(settings: dict | None = None) -> int:
 
 def get_sub_agent_max_parallel_tools(settings: dict | None = None) -> int:
     source = settings if settings is not None else get_app_settings()
-    raw_value = source.get("sub_agent_max_parallel_tools", SUB_AGENT_DEFAULT_MAX_PARALLEL_TOOLS)
+    raw_value = source.get("sub_agent_max_parallel_tools")
+    if raw_value in (None, ""):
+        raw_value = source.get("max_parallel_tools", SUB_AGENT_DEFAULT_MAX_PARALLEL_TOOLS)
     try:
         value = int(raw_value)
     except (TypeError, ValueError):
