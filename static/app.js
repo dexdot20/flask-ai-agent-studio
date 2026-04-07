@@ -57,6 +57,7 @@ const canvasPathFilter = document.getElementById("canvas-path-filter");
 const canvasTreePanel = document.getElementById("canvas-tree-panel");
 const canvasTreeCount = document.getElementById("canvas-tree-count");
 const canvasTreeEl = document.getElementById("canvas-tree");
+const canvasTreeToggleBtn = document.getElementById("canvas-tree-toggle");
 const canvasSubtitle = document.getElementById("canvas-subtitle");
 const canvasStatus = document.getElementById("canvas-status");
 const canvasHint = document.getElementById("canvas-hint");
@@ -174,6 +175,7 @@ let lastCanvasTreeTypeAheadAt = 0;
 let nextToastId = 1;
 let activeToastTimers = new Map();
 let chatDragDepth = 0;
+let isCanvasMobileTreeOpen = false;
 const featureFlags = bootstrapData.features || appSettings.features || {};
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
@@ -1146,8 +1148,15 @@ function renderCanvasTreeFile(document, depth, activeDocument) {
   button.title = getCanvasDocumentLabel(document);
   button.addEventListener("click", () => {
     activeCanvasDocumentId = document.id;
+    if (isMobileViewport()) {
+      setCanvasMobileTreeOpen(false);
+    }
     renderCanvasPanel();
-    restoreCanvasTreeFocus({ documentId: document.id });
+    if (isMobileViewport()) {
+      canvasSearchInput?.focus();
+    } else {
+      restoreCanvasTreeFocus({ documentId: document.id });
+    }
   });
   button.addEventListener("keydown", handleCanvasTreeItemKeydown);
   return button;
@@ -1161,12 +1170,19 @@ function renderCanvasTree(documents, activeDocument) {
   const shouldShowTree = getCanvasMode(documents) === "project" || (documents || []).length > 1;
   canvasTreePanel.hidden = !shouldShowTree;
   if (!shouldShowTree) {
+    setCanvasMobileTreeOpen(false);
     canvasTreeEl.innerHTML = "";
     if (canvasTreeCount) {
       canvasTreeCount.textContent = "";
     }
     return;
   }
+
+  if (!isMobileViewport()) {
+    isCanvasMobileTreeOpen = false;
+    canvasPanel?.classList.remove("canvas-panel--tree-open");
+  }
+  syncCanvasTreeToggleButton();
 
   const visibleDocuments = getCanvasVisibleDocuments(documents);
   if (canvasTreeCount) {
@@ -2133,6 +2149,31 @@ function syncCanvasToggleButton() {
   canvasToggleBtn.setAttribute("aria-expanded", String(isCanvasOpen()));
 }
 
+function canToggleCanvasTreeOnMobile() {
+  return Boolean(isMobileViewport() && canvasTreePanel && !canvasTreePanel.hidden);
+}
+
+function syncCanvasTreeToggleButton() {
+  if (!canvasTreeToggleBtn) {
+    return;
+  }
+  const isAvailable = canToggleCanvasTreeOnMobile();
+  if (!isAvailable) {
+    isCanvasMobileTreeOpen = false;
+    canvasPanel?.classList.remove("canvas-panel--tree-open");
+  }
+  canvasTreeToggleBtn.hidden = !isAvailable;
+  canvasTreeToggleBtn.setAttribute("aria-expanded", isAvailable && isCanvasMobileTreeOpen ? "true" : "false");
+  canvasTreeToggleBtn.textContent = isAvailable && isCanvasMobileTreeOpen ? "Hide files" : "Files";
+}
+
+function setCanvasMobileTreeOpen(isOpen) {
+  const shouldOpen = Boolean(canToggleCanvasTreeOnMobile() && isOpen);
+  isCanvasMobileTreeOpen = shouldOpen;
+  canvasPanel?.classList.toggle("canvas-panel--tree-open", shouldOpen);
+  syncCanvasTreeToggleButton();
+}
+
 function getCanvasFocusableElements() {
   if (!canvasPanel) {
     return [];
@@ -2367,6 +2408,7 @@ function openCanvas(triggerEl = null) {
     ? triggerEl
     : (document.activeElement instanceof HTMLElement ? document.activeElement : mobileToolsBtn);
   setCanvasAttention(false);
+  setCanvasMobileTreeOpen(false);
   applyCanvasPanelWidth(readCanvasWidthPreference(), false);
   closeCanvasOverflowMenu();
   renderCanvasPanel();
@@ -2376,6 +2418,7 @@ function openCanvas(triggerEl = null) {
 function closeCanvas() {
   isCanvasEditing = false;
   editingCanvasDocumentId = null;
+  setCanvasMobileTreeOpen(false);
   canvasPanel?.classList.remove("open");
   canvasOverlay?.classList.remove("open");
   canvasPanel?.setAttribute("aria-hidden", "true");
@@ -5513,6 +5556,11 @@ if (canvasMoreBtn) {
     toggleCanvasOverflowMenu();
   });
 }
+if (canvasTreeToggleBtn) {
+  canvasTreeToggleBtn.addEventListener("click", () => {
+    setCanvasMobileTreeOpen(!isCanvasMobileTreeOpen);
+  });
+}
 if (canvasSearchInput) {
   canvasSearchInput.addEventListener("input", () => renderCanvasPanel());
 }
@@ -5601,6 +5649,7 @@ window.addEventListener("resize", () => {
   if (!isMobileViewport()) {
     closeMobileTools();
   }
+  setCanvasMobileTreeOpen(false);
   applyCanvasPanelWidth(readCanvasWidthPreference(), false);
   syncCanvasToggleButton();
 }, { passive: true });
