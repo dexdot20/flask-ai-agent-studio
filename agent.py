@@ -77,10 +77,7 @@ from config import (
     RAG_TOOL_RESULT_SUMMARY_MAX_CHARS,
     SCRATCHPAD_SECTION_METADATA,
     SCRATCHPAD_SECTION_ORDER,
-    SUB_AGENT_ALLOWED_TOOL_NAMES as CONFIG_SUB_AGENT_ALLOWED_TOOL_NAMES,
-    SUB_AGENT_DEFAULT_TIMEOUT_SECONDS,
-    SUB_AGENT_TIMEOUT_MAX_SECONDS,
-    SUB_AGENT_TIMEOUT_MIN_SECONDS,
+    SUB_AGENT_ALLOWED_TOOL_NAMES,
 )
 from db import (
     MESSAGE_USAGE_BREAKDOWN_PROTECTED_KEYS,
@@ -95,8 +92,7 @@ from db import (
     get_model_temperature,
     get_rag_source_types,
     get_sub_agent_allowed_tool_names,
-    get_sub_agent_include_canvas_context,
-    get_sub_agent_include_conversation_context,
+    get_sub_agent_max_steps,
     get_sub_agent_max_parallel_tools,
     get_sub_agent_retry_attempts,
     get_sub_agent_retry_delay_seconds,
@@ -236,8 +232,6 @@ PARALLEL_SAFE_TOOL_NAMES = WEB_TOOL_NAMES | {
     # Delegated read-only helper
     "sub_agent",
 }
-SUB_AGENT_ALLOWED_TOOL_NAMES = set(CONFIG_SUB_AGENT_ALLOWED_TOOL_NAMES)
-SUB_AGENT_DEFAULT_MAX_STEPS = 6
 SUB_AGENT_MAX_TRANSCRIPT_MESSAGES = 24
 SUB_AGENT_MAX_MESSAGE_CONTENT_CHARS = 4_000
 SUB_AGENT_MAX_REASONING_CHARS = 4_000
@@ -1006,6 +1000,14 @@ def _iter_search_query_batches(raw_queries, *, batch_size: int = SEARCH_TOOL_QUE
         yield normalized_queries[index:index + batch_size]
 
 
+def _get_search_tool_queries(tool_args: dict):
+    if not isinstance(tool_args, dict):
+        return []
+    if "queries" in tool_args:
+        return tool_args.get("queries")
+    return tool_args.get("query", [])
+
+
 def _merge_batched_search_results(result_batches: list[list]) -> list:
     merged_results: list = []
     seen_references: set[str] = set()
@@ -1065,62 +1067,8 @@ def _normalize_tool_name(tool_name: str) -> str:
     return _TOOL_NAME_ALIASES.get(name, name)
 
 
-def _build_sub_agent_conversation_handoff(messages: list[dict], max_messages: int = 8, max_chars: int = 2_400) -> str:
-    visible_entries = []
-    for message in messages or []:
-        if not isinstance(message, dict):
-            continue
-        role = str(message.get("role") or "").strip()
-        if role not in {"user", "assistant", "summary"}:
-            continue
-        if role == "assistant":
-            tool_calls = message.get("tool_calls") if isinstance(message.get("tool_calls"), list) else []
-            if tool_calls:
-                continue
-        content = _clean_tool_text(message.get("content") or "", limit=700)
-        if not content:
-            continue
-        label = "User" if role == "user" else "Assistant" if role == "assistant" else "Summary"
-        visible_entries.append(f"{label}: {content}")
-
-    if len(visible_entries) > max_messages:
-        visible_entries = visible_entries[-max_messages:]
-    return _clean_tool_text("\n\n".join(visible_entries), limit=max_chars)
-
-
-def _build_sub_agent_canvas_handoff(runtime_state: dict) -> str:
-    documents = get_canvas_runtime_documents(runtime_state.get("canvas"))
-    if not documents:
-        return ""
-
-    active_document_id = get_canvas_runtime_active_document_id(runtime_state.get("canvas"))
-    lines = ["Canvas documents available to inspect:"]
-    for document in documents[:12]:
-        if not isinstance(document, dict):
-            continue
-        title = _clean_tool_text(document.get("title") or "Untitled", limit=120)
-        path = _clean_tool_text(document.get("path") or document.get("document_path") or "", limit=160)
-        role = _clean_tool_text(document.get("role") or "", limit=40)
-        format_name = _clean_tool_text(document.get("format") or "", limit=20)
-        marker = "*" if str(document.get("id") or "").strip() == str(active_document_id or "").strip() else "-"
-        details = []
-        if path:
-            details.append(path)
-        if role:
-            details.append(role)
-        if format_name:
-            details.append(format_name)
-        suffix = f" ({', '.join(details)})" if details else ""
-        lines.append(f"{marker} {title}{suffix}")
-    return _clean_tool_text("\n".join(lines), limit=1_500)
-
-
-def _resolve_sub_agent_tool_names(requested_tools) -> list[str]:
-    if not isinstance(requested_tools, list):
-        return []
-
-    requested = _normalize_tool_name_list(requested_tools)
-    return [name for name in requested if name in SUB_AGENT_ALLOWED_TOOL_NAMES]
+def _resolve_sub_agent_tool_names(settings: dict) -> list[str]:
+    return get_sub_agent_allowed_tool_names(settings)
 
 
 def _normalize_sub_agent_tool_calls(tool_calls) -> list[dict]:
@@ -1368,8 +1316,6 @@ def _build_sub_agent_artifacts(transcript_messages: list[dict], tool_results: li
 
 def _build_sub_agent_messages(
     task: str,
-    conversation_handoff: str,
-    canvas_handoff: str,
     allowed_tools: list[str],
     max_parallel_tools: int | None = None,
 ) -> list[dict]:
@@ -1377,9 +1323,9 @@ def _build_sub_agent_messages(
         "You are an advanced delegated helper agent for a larger AI assistant system.",
         "Complete the delegated task using only the tools that are exposed to you. Read-only still includes web search and URL fetch tools when they are available.",
         "You must not ask the user clarifying questions, mutate files, mutate canvas documents, or delegate to another sub-agent.",
-        "Treat the delegated task and handoff as direct instructions from the parent assistant.",
-        "Assume the parent intentionally included only the research-relevant task details; do not invent hidden user background or missing personal context.",
-        "If any task or handoff text is not in English, first rewrite it into clear English working notes for yourself, then continue in English.",
+        "Treat the delegated task text as the complete instruction from the parent assistant.",
+        "Do not infer, restate, or rely on hidden user background, personal details, prior conversation summaries, or canvas context unless they are explicitly written in that task text.",
+        "If the task text is not in English, first rewrite it into clear English working notes for yourself, then continue in English.",
         "Use English for tool planning, reasoning, status updates, and the final answer unless told otherwise.",
         "When using read-only search tools like search_web or search_news, batch queries between 1 and 5 items per list and split broader searches into multiple calls.",
         "Synthesize your findings and return a concise, definitive final answer that directly helps the parent assistant continue."
@@ -1394,10 +1340,6 @@ def _build_sub_agent_messages(
         )
 
     user_parts = [f"Delegated task from the parent assistant:\n{_clean_tool_text(task, limit=2_000)}"]
-    if conversation_handoff:
-        user_parts.append(f"Current conversation summary:\n{conversation_handoff}")
-    if canvas_handoff:
-        user_parts.append(f"Canvas context:\n{canvas_handoff}")
     user_parts.append(
         "Return the best final answer you can. Include the most useful findings and concrete references from the tools you used."
     )
@@ -1408,76 +1350,8 @@ def _build_sub_agent_messages(
     ]
 
 
-def _estimate_sub_agent_max_steps(
-    task: str,
-    conversation_handoff: str,
-    canvas_handoff: str,
-    allowed_tools: list[str],
-) -> int:
-    combined_text = "\n".join(
-        part.strip()
-        for part in (task, conversation_handoff, canvas_handoff)
-        if str(part or "").strip()
-    )
-    word_count = len(re.findall(r"\w+", combined_text))
-    keyword_hits = sum(
-        1
-        for keyword in (
-            "compare",
-            "across",
-            "multiple",
-            "thorough",
-            "analyze",
-            "analysis",
-            "synthesize",
-            "investigate",
-            "repo",
-            "codebase",
-            "files",
-            "sources",
-            "evidence",
-            "trace",
-            "cross-file",
-        )
-        if keyword in combined_text.casefold()
-    )
-
-    score = 0
-    if word_count >= 80:
-        score += 1
-    if word_count >= 180:
-        score += 1
-    if len(allowed_tools) >= 4:
-        score += 1
-    if len(allowed_tools) >= 8:
-        score += 1
-    if keyword_hits >= 2:
-        score += 1
-    if keyword_hits >= 5:
-        score += 1
-    if canvas_handoff:
-        score += 1
-
-    return max(3, min(8, 4 + score))
-
-
-def _resolve_sub_agent_max_steps(
-    tool_args: dict,
-    *,
-    task: str,
-    conversation_handoff: str,
-    canvas_handoff: str,
-    allowed_tools: list[str],
-) -> int:
-    raw_max_steps = tool_args.get("max_steps")
-    if raw_max_steps not in (None, ""):
-        return _coerce_int_range(raw_max_steps, SUB_AGENT_DEFAULT_MAX_STEPS, 1, 8)
-    return _estimate_sub_agent_max_steps(
-        task,
-        conversation_handoff,
-        canvas_handoff,
-        allowed_tools,
-    )
+def _resolve_sub_agent_max_steps(settings: dict) -> int:
+    return get_sub_agent_max_steps(settings)
 
 
 def _build_canvas_expected_context(
@@ -1765,7 +1639,7 @@ def _extract_compaction_tool_call_preview(tool_call: dict) -> str:
     arguments = parsed_arguments if isinstance(parsed_arguments, dict) else {}
 
     if tool_name in {"search_web", "search_news_ddgs", "search_news_google"}:
-        queries = arguments.get("queries")
+        queries = _get_search_tool_queries(arguments)
         if isinstance(queries, list):
             preview = ", ".join(str(item).strip() for item in queries if str(item).strip())
             if preview:
@@ -3114,6 +2988,10 @@ def _validate_tool_arguments(tool_name: str, tool_args: dict) -> str | None:
         tool_args["notes"] = [legacy_note]
     if tool_name in {"append_scratchpad", "replace_scratchpad"} and "section" not in tool_args:
         tool_args["section"] = "notes"
+    if tool_name in {"search_web", "search_news_ddgs", "search_news_google"} and "queries" not in tool_args:
+        legacy_query = tool_args.pop("query", None)
+        if legacy_query is not None:
+            tool_args["queries"] = legacy_query if isinstance(legacy_query, list) else [legacy_query]
 
     schema = spec.get("parameters") or {}
     properties = schema.get("properties") or {}
@@ -3621,28 +3499,15 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
     timeout_seconds = get_sub_agent_timeout_seconds(settings)
     retry_attempts = get_sub_agent_retry_attempts(settings)
     retry_delay_seconds = get_sub_agent_retry_delay_seconds(settings)
-    child_tool_names = _resolve_sub_agent_tool_names(get_sub_agent_allowed_tool_names(settings))
+    child_tool_names = _resolve_sub_agent_tool_names(settings)
     if not child_tool_names:
         error = "No eligible read-only tools are available for sub-agent delegation."
         return {"status": "error", "error": error}, f"Failed: {error}"
 
     overall_deadline = time.monotonic() + timeout_seconds
-
-    conversation_handoff = ""
-    if get_sub_agent_include_conversation_context(settings):
-        conversation_handoff = str(agent_context.get("conversation_handoff") or "").strip()
-    canvas_handoff = _build_sub_agent_canvas_handoff(runtime_state) if get_sub_agent_include_canvas_context(settings) else ""
-    child_max_steps = _resolve_sub_agent_max_steps(
-        tool_args,
-        task=task,
-        conversation_handoff=conversation_handoff,
-        canvas_handoff=canvas_handoff,
-        allowed_tools=child_tool_names,
-    )
+    child_max_steps = _resolve_sub_agent_max_steps(settings)
     child_messages = _build_sub_agent_messages(
         task,
-        conversation_handoff,
-        canvas_handoff,
         child_tool_names,
         max_parallel_tools=child_max_parallel_tools,
     )
@@ -3945,7 +3810,7 @@ def _run_search_tool_memory(tool_args: dict, runtime_state: dict):
 
 def _run_search_web(tool_args: dict, runtime_state: dict):
     del runtime_state
-    result = _merge_batched_search_results([search_web_tool(batch) for batch in _iter_search_query_batches(tool_args.get("queries", []))])
+    result = _merge_batched_search_results([search_web_tool(batch) for batch in _iter_search_query_batches(_get_search_tool_queries(tool_args))])
     ok_count = sum(1 for row in result if "error" not in row)
     return result, f"{ok_count} web results found"
 
@@ -3959,7 +3824,7 @@ def _run_search_news_ddgs(tool_args: dict, runtime_state: dict):
                 lang=tool_args.get("lang", "tr"),
                 when=tool_args.get("when"),
             )
-            for batch in _iter_search_query_batches(tool_args.get("queries", []))
+            for batch in _iter_search_query_batches(_get_search_tool_queries(tool_args))
         ]
     )
     ok_count = sum(1 for row in result if "error" not in row)
@@ -3975,7 +3840,7 @@ def _run_search_news_google(tool_args: dict, runtime_state: dict):
                 lang=tool_args.get("lang", "tr"),
                 when=tool_args.get("when"),
             )
-            for batch in _iter_search_query_batches(tool_args.get("queries", []))
+            for batch in _iter_search_query_batches(_get_search_tool_queries(tool_args))
         ]
     )
     ok_count = sum(1 for row in result if "error" not in row)
@@ -4582,7 +4447,7 @@ def _tool_input_preview(tool_name: str, tool_args: dict) -> str:
     tool_name = _normalize_tool_name(tool_name)
     tool_args = tool_args if isinstance(tool_args, dict) else {}
     if tool_name in {"search_web", "search_news_ddgs", "search_news_google"}:
-        values = tool_args.get("queries")
+        values = _get_search_tool_queries(tool_args)
         if isinstance(values, list):
             return ", ".join(str(value).strip() for value in values if str(value).strip())[:300]
     if tool_name in {"search_knowledge_base", "search_tool_memory"}:
@@ -5408,7 +5273,6 @@ def run_agent_stream(
         "prompt_tool_names": normalized_prompt_tool_names,
         "max_parallel_tools": normalized_parallel_tool_limit,
         "sub_agent_depth": _coerce_int_range((agent_context or {}).get("sub_agent_depth"), 0, 0, 8),
-        "conversation_handoff": _build_sub_agent_conversation_handoff(messages),
     }
     working_state = {
         "current_goal": _extract_initial_goal(messages),
@@ -5740,6 +5604,7 @@ def run_agent_stream(
         cache_estimate_context = build_openrouter_cache_estimate_context(
             request_kwargs.get("messages"),
             model_target.get("record") if isinstance(model_target, dict) else None,
+            model_settings,
         )
         try:
             response = model_target["client"].chat.completions.create(**request_kwargs)
@@ -5759,6 +5624,7 @@ def run_agent_stream(
             cache_estimate_context = build_openrouter_cache_estimate_context(
                 request_kwargs.get("messages"),
                 model_target.get("record") if isinstance(model_target, dict) else None,
+                model_settings,
             )
             response = model_target["client"].chat.completions.create(**request_kwargs)
 
@@ -5991,7 +5857,6 @@ def run_agent_stream(
     pending_step_retry_reason: str | None = None
     while step < max_steps:
         step += 1
-        runtime_state["agent_context"]["conversation_handoff"] = _build_sub_agent_conversation_handoff(messages)
         runtime_state["agent_context"]["current_step"] = step
         yield {"type": "step_started", "step": step, "max_steps": max_steps}
         _trace_agent_event("agent_step_started", trace_id=trace_id, step=step, max_steps=max_steps)

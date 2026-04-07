@@ -9,10 +9,12 @@ from config import (
     CHAT_SUMMARY_ALLOWED_MODES,
     CLARIFICATION_QUESTION_LIMIT_MAX,
     CLARIFICATION_QUESTION_LIMIT_MIN,
+    DEFAULT_WEB_CACHE_TTL_HOURS,
     DEFAULT_SETTINGS,
     MAX_PARALLEL_TOOLS_MAX,
     MAX_PARALLEL_TOOLS_MIN,
     MAX_USER_PREFERENCES_LENGTH,
+    OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED,
     RAG_CONTEXT_SIZE_PRESETS,
     RAG_ENABLED,
     RAG_SENSITIVITY_PRESETS,
@@ -21,12 +23,10 @@ from config import (
     SCRATCHPAD_SECTION_ORDER,
     SCRATCHPAD_SECTION_SETTING_KEYS,
     SUB_AGENT_ALLOWED_TOOL_NAMES,
-    SUB_AGENT_RETRY_ATTEMPTS_MAX,
-    SUB_AGENT_RETRY_ATTEMPTS_MIN,
-    SUB_AGENT_RETRY_DELAY_MAX_SECONDS,
-    SUB_AGENT_RETRY_DELAY_MIN_SECONDS,
-    SUB_AGENT_TIMEOUT_MAX_SECONDS,
-    SUB_AGENT_TIMEOUT_MIN_SECONDS,
+    SUB_AGENT_MAX_STEPS_MAX,
+    SUB_AGENT_MAX_STEPS_MIN,
+    WEB_CACHE_TTL_HOURS_MAX,
+    WEB_CACHE_TTL_HOURS_MIN,
     get_feature_flags,
 )
 from routes.auth import is_login_pin_enabled
@@ -47,6 +47,7 @@ from db import (
     get_fetch_url_token_threshold,
     get_max_parallel_tools,
     get_model_temperature,
+    get_openrouter_prompt_cache_enabled,
     get_proxy_enabled_operations,
     get_pruning_batch_size,
     get_pruning_enabled,
@@ -56,18 +57,15 @@ from db import (
     get_rag_context_size,
     get_rag_source_types,
     get_rag_sensitivity,
+    get_sub_agent_allowed_tool_names,
+    get_sub_agent_max_steps,
     get_summary_skip_first,
     get_summary_skip_last,
-    get_sub_agent_max_parallel_tools,
-    get_sub_agent_allowed_tool_names,
-    get_sub_agent_include_canvas_context,
-    get_sub_agent_include_conversation_context,
-    get_sub_agent_retry_attempts,
-    get_sub_agent_retry_delay_seconds,
-    get_sub_agent_timeout_seconds,
     get_tool_memory_auto_inject_enabled,
+    get_web_cache_ttl_hours,
     normalize_active_tool_names,
     normalize_rag_source_types,
+    normalize_sub_agent_allowed_tool_names,
     normalize_scratchpad_text,
     save_app_settings,
 )
@@ -300,7 +298,7 @@ def build_tool_permission_sections() -> list[dict[str, object]]:
     return sections
 
 
-def build_sub_agent_tool_permission_sections() -> list[dict[str, object]]:
+def build_sub_agent_web_tool_sections() -> list[dict[str, object]]:
     allowed_tools = set(SUB_AGENT_ALLOWED_TOOL_NAMES)
     sections: list[dict[str, object]] = []
     for section in build_tool_permission_sections():
@@ -341,13 +339,10 @@ def build_settings_payload() -> dict:
         "canvas_prompt_max_tokens": get_canvas_prompt_max_tokens(raw),
         "canvas_expand_max_lines": get_canvas_expand_max_lines(raw),
         "canvas_scroll_window_lines": get_canvas_scroll_window_lines(raw),
-        "sub_agent_timeout_seconds": get_sub_agent_timeout_seconds(raw),
-        "sub_agent_max_parallel_tools": get_sub_agent_max_parallel_tools(raw),
+        "sub_agent_max_steps": get_sub_agent_max_steps(raw),
         "sub_agent_allowed_tool_names": get_sub_agent_allowed_tool_names(raw),
-        "sub_agent_include_conversation_context": get_sub_agent_include_conversation_context(raw),
-        "sub_agent_include_canvas_context": get_sub_agent_include_canvas_context(raw),
-        "sub_agent_retry_attempts": get_sub_agent_retry_attempts(raw),
-        "sub_agent_retry_delay_seconds": get_sub_agent_retry_delay_seconds(raw),
+        "web_cache_ttl_hours": get_web_cache_ttl_hours(raw),
+        "openrouter_prompt_cache_enabled": get_openrouter_prompt_cache_enabled(raw),
         "chat_summary_detail_level": get_chat_summary_detail_level(raw),
         "chat_summary_mode": get_chat_summary_mode(raw),
         "chat_summary_trigger_token_count": get_chat_summary_trigger_token_count(raw),
@@ -360,7 +355,6 @@ def build_settings_payload() -> dict:
         "fetch_url_token_threshold": get_fetch_url_token_threshold(raw),
         "fetch_url_clip_aggressiveness": get_fetch_url_clip_aggressiveness(raw),
         "features": get_feature_flags(),
-        "sub_agent_tool_sections": build_sub_agent_tool_permission_sections(),
     }
 
 
@@ -413,7 +407,7 @@ def register_page_routes(app) -> None:
             "settings.html",
             settings=settings,
             tool_sections=build_tool_permission_sections(),
-            sub_agent_tool_sections=build_sub_agent_tool_permission_sections(),
+            sub_agent_tool_sections=build_sub_agent_web_tool_sections(),
             proxy_operation_options=PROXY_OPERATION_OPTIONS,
             auth_enabled=is_login_pin_enabled(),
             page_lang=_resolve_page_lang(),
@@ -459,13 +453,10 @@ def register_page_routes(app) -> None:
         canvas_prompt_max_tokens_raw = data.get("canvas_prompt_max_tokens")
         canvas_expand_max_lines_raw = data.get("canvas_expand_max_lines")
         canvas_scroll_window_lines_raw = data.get("canvas_scroll_window_lines")
-        sub_agent_timeout_seconds_raw = data.get("sub_agent_timeout_seconds")
-        sub_agent_max_parallel_tools_raw = data.get("sub_agent_max_parallel_tools")
+        sub_agent_max_steps_raw = data.get("sub_agent_max_steps")
         sub_agent_allowed_tool_names_raw = data.get("sub_agent_allowed_tool_names")
-        sub_agent_include_conversation_context_raw = data.get("sub_agent_include_conversation_context")
-        sub_agent_include_canvas_context_raw = data.get("sub_agent_include_canvas_context")
-        sub_agent_retry_attempts_raw = data.get("sub_agent_retry_attempts")
-        sub_agent_retry_delay_seconds_raw = data.get("sub_agent_retry_delay_seconds")
+        web_cache_ttl_hours_raw = data.get("web_cache_ttl_hours")
+        openrouter_prompt_cache_enabled_raw = data.get("openrouter_prompt_cache_enabled")
         scratchpad = data.get("scratchpad")
         scratchpad_sections_raw = data.get("scratchpad_sections")
 
@@ -504,13 +495,10 @@ def register_page_routes(app) -> None:
             and canvas_prompt_max_tokens_raw is None
             and canvas_expand_max_lines_raw is None
             and canvas_scroll_window_lines_raw is None
-            and sub_agent_timeout_seconds_raw is None
-            and sub_agent_max_parallel_tools_raw is None
+            and sub_agent_max_steps_raw is None
             and sub_agent_allowed_tool_names_raw is None
-            and sub_agent_include_conversation_context_raw is None
-            and sub_agent_include_canvas_context_raw is None
-            and sub_agent_retry_attempts_raw is None
-            and sub_agent_retry_delay_seconds_raw is None
+            and web_cache_ttl_hours_raw is None
+            and openrouter_prompt_cache_enabled_raw is None
         ):
             return jsonify({"error": "No settings provided."}), 400
 
@@ -873,75 +861,40 @@ def register_page_routes(app) -> None:
                 return jsonify({"error": "canvas_scroll_window_lines must be between 50 and 800."}), 400
             settings["canvas_scroll_window_lines"] = str(canvas_scroll_window_lines)
 
-        if sub_agent_timeout_seconds_raw is not None:
+        if sub_agent_max_steps_raw is not None:
             try:
-                sub_agent_timeout_seconds = int(sub_agent_timeout_seconds_raw)
+                sub_agent_max_steps = int(sub_agent_max_steps_raw)
             except (TypeError, ValueError):
-                return jsonify({"error": "sub_agent_timeout_seconds must be an integer."}), 400
-            if not (SUB_AGENT_TIMEOUT_MIN_SECONDS <= sub_agent_timeout_seconds <= SUB_AGENT_TIMEOUT_MAX_SECONDS):
-                return jsonify({"error": f"sub_agent_timeout_seconds must be between {SUB_AGENT_TIMEOUT_MIN_SECONDS} and {SUB_AGENT_TIMEOUT_MAX_SECONDS}."}), 400
-            settings["sub_agent_timeout_seconds"] = str(sub_agent_timeout_seconds)
-
-        if sub_agent_max_parallel_tools_raw is not None:
-            try:
-                sub_agent_max_parallel_tools = int(sub_agent_max_parallel_tools_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "sub_agent_max_parallel_tools must be an integer."}), 400
-            if not (MAX_PARALLEL_TOOLS_MIN <= sub_agent_max_parallel_tools <= MAX_PARALLEL_TOOLS_MAX):
-                return jsonify({"error": f"sub_agent_max_parallel_tools must be between {MAX_PARALLEL_TOOLS_MIN} and {MAX_PARALLEL_TOOLS_MAX}."}), 400
-            settings["sub_agent_max_parallel_tools"] = str(sub_agent_max_parallel_tools)
+                return jsonify({"error": "sub_agent_max_steps must be an integer."}), 400
+            if not (SUB_AGENT_MAX_STEPS_MIN <= sub_agent_max_steps <= SUB_AGENT_MAX_STEPS_MAX):
+                return jsonify({"error": f"sub_agent_max_steps must be between {SUB_AGENT_MAX_STEPS_MIN} and {SUB_AGENT_MAX_STEPS_MAX}."}), 400
+            settings["sub_agent_max_steps"] = str(sub_agent_max_steps)
 
         if sub_agent_allowed_tool_names_raw is not None:
             if not isinstance(sub_agent_allowed_tool_names_raw, list):
                 return jsonify({"error": "sub_agent_allowed_tool_names must be an array."}), 400
-            normalized_sub_agent_tools = [
-                tool_name
-                for tool_name in normalize_active_tool_names(sub_agent_allowed_tool_names_raw)
-                if tool_name in SUB_AGENT_ALLOWED_TOOL_NAMES
-            ]
+            normalized_sub_agent_tools = normalize_sub_agent_allowed_tool_names(sub_agent_allowed_tool_names_raw)
             settings["sub_agent_allowed_tool_names"] = json.dumps(normalized_sub_agent_tools, ensure_ascii=False)
 
-        if sub_agent_include_conversation_context_raw is not None:
-            if isinstance(sub_agent_include_conversation_context_raw, bool):
-                settings["sub_agent_include_conversation_context"] = (
-                    "true" if sub_agent_include_conversation_context_raw else "false"
-                )
+        if web_cache_ttl_hours_raw is not None:
+            try:
+                web_cache_ttl_hours = int(web_cache_ttl_hours_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "web_cache_ttl_hours must be an integer."}), 400
+            if not (WEB_CACHE_TTL_HOURS_MIN <= web_cache_ttl_hours <= WEB_CACHE_TTL_HOURS_MAX):
+                return jsonify({"error": f"web_cache_ttl_hours must be between {WEB_CACHE_TTL_HOURS_MIN} and {WEB_CACHE_TTL_HOURS_MAX}."}), 400
+            settings["web_cache_ttl_hours"] = str(web_cache_ttl_hours)
+
+        if openrouter_prompt_cache_enabled_raw is not None:
+            if isinstance(openrouter_prompt_cache_enabled_raw, bool):
+                settings["openrouter_prompt_cache_enabled"] = "true" if openrouter_prompt_cache_enabled_raw else "false"
             else:
-                settings["sub_agent_include_conversation_context"] = (
+                normalized_prompt_cache = str(openrouter_prompt_cache_enabled_raw).strip().lower()
+                settings["openrouter_prompt_cache_enabled"] = (
                     "true"
-                    if str(sub_agent_include_conversation_context_raw).strip().lower() in {"1", "true", "yes", "on"}
+                    if normalized_prompt_cache in {"1", "true", "yes", "on"}
                     else "false"
                 )
-
-        if sub_agent_include_canvas_context_raw is not None:
-            if isinstance(sub_agent_include_canvas_context_raw, bool):
-                settings["sub_agent_include_canvas_context"] = (
-                    "true" if sub_agent_include_canvas_context_raw else "false"
-                )
-            else:
-                settings["sub_agent_include_canvas_context"] = (
-                    "true"
-                    if str(sub_agent_include_canvas_context_raw).strip().lower() in {"1", "true", "yes", "on"}
-                    else "false"
-                )
-
-        if sub_agent_retry_attempts_raw is not None:
-            try:
-                sub_agent_retry_attempts = int(sub_agent_retry_attempts_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "sub_agent_retry_attempts must be an integer."}), 400
-            if not (SUB_AGENT_RETRY_ATTEMPTS_MIN <= sub_agent_retry_attempts <= SUB_AGENT_RETRY_ATTEMPTS_MAX):
-                return jsonify({"error": f"sub_agent_retry_attempts must be between {SUB_AGENT_RETRY_ATTEMPTS_MIN} and {SUB_AGENT_RETRY_ATTEMPTS_MAX}."}), 400
-            settings["sub_agent_retry_attempts"] = str(sub_agent_retry_attempts)
-
-        if sub_agent_retry_delay_seconds_raw is not None:
-            try:
-                sub_agent_retry_delay_seconds = int(sub_agent_retry_delay_seconds_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "sub_agent_retry_delay_seconds must be an integer."}), 400
-            if not (SUB_AGENT_RETRY_DELAY_MIN_SECONDS <= sub_agent_retry_delay_seconds <= SUB_AGENT_RETRY_DELAY_MAX_SECONDS):
-                return jsonify({"error": f"sub_agent_retry_delay_seconds must be between {SUB_AGENT_RETRY_DELAY_MIN_SECONDS} and {SUB_AGENT_RETRY_DELAY_MAX_SECONDS}."}), 400
-            settings["sub_agent_retry_delay_seconds"] = str(sub_agent_retry_delay_seconds)
 
         save_app_settings(settings)
         return jsonify(build_settings_payload())

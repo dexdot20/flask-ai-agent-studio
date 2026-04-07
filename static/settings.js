@@ -21,6 +21,9 @@ const scratchpadCountEl = document.getElementById("scratchpad-count");
 const scratchpadReadonlyNoteEl = document.getElementById("scratchpad-readonly-note");
 const maxStepsEl = document.getElementById("max-steps-input");
 const maxParallelToolsEl = document.getElementById("max-parallel-tools-input");
+const subAgentMaxStepsEl = document.getElementById("sub-agent-max-steps-input");
+const webCacheTtlHoursEl = document.getElementById("web-cache-ttl-hours-input");
+const openrouterPromptCacheEnabledEl = document.getElementById("openrouter-prompt-cache-enabled-toggle");
 const clarificationMaxQuestionsEl = document.getElementById("clarification-max-questions-input");
 const summaryModeEl = document.getElementById("summary-mode-select");
 const summaryDetailLevelEl = document.getElementById("summary-detail-level-select");
@@ -37,12 +40,6 @@ const canvasPromptLinesEl = document.getElementById("canvas-prompt-lines-input")
 const canvasPromptTokensEl = document.getElementById("canvas-prompt-tokens-input");
 const canvasExpandLinesEl = document.getElementById("canvas-expand-lines-input");
 const canvasScrollLinesEl = document.getElementById("canvas-scroll-lines-input");
-const subAgentTimeoutEl = document.getElementById("sub-agent-timeout-input");
-const subAgentMaxParallelToolsEl = document.getElementById("sub-agent-max-parallel-tools-input");
-const subAgentIncludeConversationContextEl = document.getElementById("sub-agent-include-conversation-context-toggle");
-const subAgentIncludeCanvasContextEl = document.getElementById("sub-agent-include-canvas-context-toggle");
-const subAgentRetryAttemptsEl = document.getElementById("sub-agent-retry-attempts-input");
-const subAgentRetryDelayEl = document.getElementById("sub-agent-retry-delay-input");
 const customModelNameEl = document.getElementById("custom-model-name-input");
 const customModelApiModelEl = document.getElementById("custom-model-api-model-input");
 const customModelRoutingModeEl = document.getElementById("custom-model-routing-mode-select");
@@ -1459,6 +1456,9 @@ function applySettingsToForm() {
   if (temperatureEl) temperatureEl.value = String(appSettings.temperature ?? 0.7);
   if (maxStepsEl) maxStepsEl.value = String(appSettings.max_steps || 5);
   if (maxParallelToolsEl) maxParallelToolsEl.value = String(appSettings.max_parallel_tools ?? 4);
+  if (subAgentMaxStepsEl) subAgentMaxStepsEl.value = String(appSettings.sub_agent_max_steps ?? 6);
+  if (webCacheTtlHoursEl) webCacheTtlHoursEl.value = String(appSettings.web_cache_ttl_hours ?? 24);
+  if (openrouterPromptCacheEnabledEl) openrouterPromptCacheEnabledEl.checked = Boolean(appSettings.openrouter_prompt_cache_enabled ?? true);
   if (clarificationMaxQuestionsEl) clarificationMaxQuestionsEl.value = String(appSettings.clarification_max_questions || 5);
   if (summaryModeEl) summaryModeEl.value = appSettings.chat_summary_mode || "auto";
   if (summaryDetailLevelEl) summaryDetailLevelEl.value = appSettings.chat_summary_detail_level || "balanced";
@@ -1475,16 +1475,6 @@ function applySettingsToForm() {
   if (canvasPromptTokensEl) canvasPromptTokensEl.value = String(appSettings.canvas_prompt_max_tokens || 2000);
   if (canvasExpandLinesEl) canvasExpandLinesEl.value = String(appSettings.canvas_expand_max_lines || 1600);
   if (canvasScrollLinesEl) canvasScrollLinesEl.value = String(appSettings.canvas_scroll_window_lines || 200);
-  if (subAgentTimeoutEl) subAgentTimeoutEl.value = String(appSettings.sub_agent_timeout_seconds ?? 240);
-  if (subAgentMaxParallelToolsEl) subAgentMaxParallelToolsEl.value = String(appSettings.sub_agent_max_parallel_tools ?? 2);
-  if (subAgentIncludeConversationContextEl) {
-    subAgentIncludeConversationContextEl.checked = Boolean(appSettings.sub_agent_include_conversation_context);
-  }
-  if (subAgentIncludeCanvasContextEl) {
-    subAgentIncludeCanvasContextEl.checked = Boolean(appSettings.sub_agent_include_canvas_context);
-  }
-  if (subAgentRetryAttemptsEl) subAgentRetryAttemptsEl.value = String(appSettings.sub_agent_retry_attempts ?? 2);
-  if (subAgentRetryDelayEl) subAgentRetryDelayEl.value = String(appSettings.sub_agent_retry_delay_seconds ?? 5);
   applySelectedTools(appSettings.active_tools || []);
   applySelectedSubAgentTools(appSettings.sub_agent_allowed_tool_names || []);
   applySelectedProxyOperations(appSettings.proxy_enabled_operations || []);
@@ -1571,6 +1561,9 @@ function applyServerSettingsData(data) {
     : {};
   appSettings.max_steps = data.max_steps || 5;
   appSettings.max_parallel_tools = data.max_parallel_tools ?? 4;
+  appSettings.sub_agent_max_steps = data.sub_agent_max_steps ?? 6;
+  appSettings.web_cache_ttl_hours = data.web_cache_ttl_hours ?? 24;
+  appSettings.openrouter_prompt_cache_enabled = Boolean(data.openrouter_prompt_cache_enabled ?? true);
   appSettings.temperature = data.temperature ?? 0.7;
   appSettings.clarification_max_questions = data.clarification_max_questions || 5;
   appSettings.available_models = Array.isArray(data.available_models) ? data.available_models : [];
@@ -1599,13 +1592,7 @@ function applyServerSettingsData(data) {
   appSettings.canvas_prompt_max_tokens = data.canvas_prompt_max_tokens || 2000;
   appSettings.canvas_expand_max_lines = data.canvas_expand_max_lines || 1600;
   appSettings.canvas_scroll_window_lines = data.canvas_scroll_window_lines || 200;
-  appSettings.sub_agent_timeout_seconds = data.sub_agent_timeout_seconds ?? 240;
-  appSettings.sub_agent_max_parallel_tools = data.sub_agent_max_parallel_tools ?? 2;
   appSettings.sub_agent_allowed_tool_names = Array.isArray(data.sub_agent_allowed_tool_names) ? data.sub_agent_allowed_tool_names : [];
-  appSettings.sub_agent_include_conversation_context = Boolean(data.sub_agent_include_conversation_context);
-  appSettings.sub_agent_include_canvas_context = Boolean(data.sub_agent_include_canvas_context);
-  appSettings.sub_agent_retry_attempts = data.sub_agent_retry_attempts ?? 2;
-  appSettings.sub_agent_retry_delay_seconds = data.sub_agent_retry_delay_seconds ?? 5;
   appSettings.active_tools = Array.isArray(data.active_tools) ? data.active_tools : [];
   appSettings.proxy_enabled_operations = Array.isArray(data.proxy_enabled_operations) ? data.proxy_enabled_operations : [];
   appSettings.rag_auto_inject = Boolean(data.rag_auto_inject);
@@ -1645,6 +1632,9 @@ async function saveSettings() {
     temperature: readFloatSetting(temperatureEl, 0.7, { min: 0, max: 2 }),
     max_steps: readNumericSetting(maxStepsEl, 5, { allowZero: false }),
     max_parallel_tools: readNumericSetting(maxParallelToolsEl, 4, { allowZero: false }),
+    sub_agent_max_steps: readNumericSetting(subAgentMaxStepsEl, 6, { allowZero: false }),
+    web_cache_ttl_hours: readNumericSetting(webCacheTtlHoursEl, 24),
+    openrouter_prompt_cache_enabled: Boolean(openrouterPromptCacheEnabledEl?.checked),
     clarification_max_questions: readNumericSetting(clarificationMaxQuestionsEl, 5, { allowZero: false }),
     chat_summary_mode: summaryModeEl?.value || "auto",
     chat_summary_detail_level: summaryDetailLevelEl?.value || "balanced",
@@ -1661,19 +1651,13 @@ async function saveSettings() {
     canvas_prompt_max_tokens: readNumericSetting(canvasPromptTokensEl, 2000, { allowZero: false }),
     canvas_expand_max_lines: readNumericSetting(canvasExpandLinesEl, 1600, { allowZero: false }),
     canvas_scroll_window_lines: readNumericSetting(canvasScrollLinesEl, 200, { allowZero: false }),
-    sub_agent_timeout_seconds: readNumericSetting(subAgentTimeoutEl, 240, { allowZero: false }),
-    sub_agent_max_parallel_tools: readNumericSetting(subAgentMaxParallelToolsEl, 2, { allowZero: false }),
-    sub_agent_allowed_tool_names: getSelectedSubAgentTools(),
-    sub_agent_include_conversation_context: Boolean(subAgentIncludeConversationContextEl?.checked),
-    sub_agent_include_canvas_context: Boolean(subAgentIncludeCanvasContextEl?.checked),
-    sub_agent_retry_attempts: readNumericSetting(subAgentRetryAttemptsEl, 2),
-    sub_agent_retry_delay_seconds: readNumericSetting(subAgentRetryDelayEl, 5),
     custom_models: draftCustomModels.map((model) => ({ ...model })),
     visible_model_order: getDraftVisibleModelOrder(),
     operation_model_preferences: getOperationModelPreferencesDraft(),
     operation_model_fallback_preferences: getOperationModelFallbackPreferencesDraft(),
     image_processing_method: imageProcessingMethodEl?.value || "auto",
     active_tools: getSelectedTools(),
+    sub_agent_allowed_tool_names: getSelectedSubAgentTools(),
     proxy_enabled_operations: getSelectedProxyOperations(),
     rag_auto_inject: featureFlags.rag_enabled ? Boolean(ragAutoInjectEl?.checked) : false,
     rag_sensitivity: ragSensitivityEl?.value || "normal",
@@ -2047,6 +2031,9 @@ function registerDirtyListeners() {
   });
   maxStepsEl?.addEventListener("input", markDirty);
   maxParallelToolsEl?.addEventListener("input", markDirty);
+  subAgentMaxStepsEl?.addEventListener("input", markDirty);
+  webCacheTtlHoursEl?.addEventListener("input", markDirty);
+  openrouterPromptCacheEnabledEl?.addEventListener("change", markDirty);
   clarificationMaxQuestionsEl?.addEventListener("input", markDirty);
   summaryModeEl?.addEventListener("change", markDirty);
   summaryDetailLevelEl?.addEventListener("change", markDirty);
@@ -2062,12 +2049,6 @@ function registerDirtyListeners() {
   canvasPromptTokensEl?.addEventListener("input", markDirty);
   canvasExpandLinesEl?.addEventListener("input", markDirty);
   canvasScrollLinesEl?.addEventListener("input", markDirty);
-  subAgentTimeoutEl?.addEventListener("input", markDirty);
-  subAgentMaxParallelToolsEl?.addEventListener("input", markDirty);
-  subAgentIncludeConversationContextEl?.addEventListener("change", markDirty);
-  subAgentIncludeCanvasContextEl?.addEventListener("change", markDirty);
-  subAgentRetryAttemptsEl?.addEventListener("input", markDirty);
-  subAgentRetryDelayEl?.addEventListener("input", markDirty);
   summaryModelPreferenceEl?.addEventListener("change", markDirty);
   fetchSummarizeModelPreferenceEl?.addEventListener("change", markDirty);
   pruneModelPreferenceEl?.addEventListener("change", markDirty);

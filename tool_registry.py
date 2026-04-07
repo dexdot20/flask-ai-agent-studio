@@ -445,9 +445,9 @@ TOOL_SPECS = [
                 },
                 "max_steps": {
                     "type": "integer",
-                    "description": "Optional maximum helper-agent tool steps (1-8). Set this when the parent has a strong reason to size the research budget explicitly; otherwise omit it to let the system size the budget dynamically from task complexity.",
+                    "description": "Legacy optional helper-agent tool budget (1-12). The runtime uses the user-configured Settings value instead, so this field is ignored when present.",
                     "minimum": 1,
-                    "maximum": 8,
+                    "maximum": 12,
                 },
             },
             "required": ["task"],
@@ -462,14 +462,13 @@ TOOL_SPECS = [
                 "Use this when the investigation genuinely benefits from a separate bounded pass and would otherwise require several tool steps or repeated context stitching in the parent agent. "
                 "Do not let the token cost warning block delegation when the task is complex; the sub-agent exists for exactly those multi-tool cases. "
                 "Give the helper a concrete task, expected deliverable, and any important constraints. "
-                "Remember that the helper only receives the read-only tools currently exposed to the parent in this turn; that set can include search_web, search_news_ddgs, search_news_google, fetch_url, fetch_url_summarized, read_file, list_dir, search_files, search_knowledge_base, search_tool_memory, read_scratchpad, and canvas inspection tools. "
-                "Delegation does not bypass prompt-time tool scoping, and read-only does not mean offline-only. "
+                "Remember that the helper only receives fixed web-research tools: search_web, search_news_ddgs, search_news_google, fetch_url, fetch_url_summarized, and grep_fetched_content. "
+                "The user controls both the helper's web-tool allowlist and its maximum step budget from Settings, so do not try to manage that budget yourself. "
                 "Before calling this tool, rewrite the delegated task into concise English instructions for the helper, even if the user spoke Turkish or another language. "
                 "Use the user's original language only when the delegated task itself depends on that language, and otherwise expect the helper to work in English by default. "
-                "Do not pass separate user-profile or background context; put only the research-relevant details directly into the task instructions. "
-                "Sub-agent model choice, timeout, retries, parallelism, tool allowlist, and whether conversation or canvas context is shared are user-managed settings, not parent-agent knobs. "
+                "Do not pass separate user-profile, background, conversation-summary, or canvas context; put only the research instruction text itself in the task. "
                 "Keep it scoped: prefer one helper call over many, and do not delegate writes, clarifications, or recursive agent orchestration. "
-                "Leave max_steps unset unless you have a strong reason to constrain it manually; the runtime can size that budget dynamically for simple versus broad tasks. "
+                "The helper may still stop before reaching its configured budget when it already has enough evidence. "
                 "If the helper uses web search, each search_web/search_news call must stay within the 1-5 query limit; split larger batches into separate calls."
             ),
         },

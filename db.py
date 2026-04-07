@@ -26,7 +26,9 @@ from config import (
     CLARIFICATION_QUESTION_LIMIT_MAX,
     CLARIFICATION_QUESTION_LIMIT_MIN,
     DB_PATH,
+    DEFAULT_WEB_CACHE_TTL_HOURS,
     DEFAULT_SETTINGS,
+    OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED,
     SCRATCHPAD_DEFAULT_SECTION,
     SCRATCHPAD_SECTION_ORDER,
     SCRATCHPAD_SECTION_SETTING_KEYS,
@@ -58,12 +60,14 @@ from config import (
     SUMMARY_SOURCE_TARGET_TOKENS,
     MAX_PARALLEL_TOOLS_MAX,
     MAX_PARALLEL_TOOLS_MIN,
-    SUB_AGENT_DEFAULT_RETRY_ATTEMPTS,
-    SUB_AGENT_DEFAULT_MAX_PARALLEL_TOOLS,
     SUB_AGENT_ALLOWED_TOOL_NAMES,
-    SUB_AGENT_DEFAULT_INCLUDE_CANVAS_CONTEXT,
+    SUB_AGENT_DEFAULT_RETRY_ATTEMPTS,
+    SUB_AGENT_DEFAULT_MAX_STEPS,
+    SUB_AGENT_DEFAULT_MAX_PARALLEL_TOOLS,
     SUB_AGENT_DEFAULT_RETRY_DELAY_SECONDS,
     SUB_AGENT_DEFAULT_TIMEOUT_SECONDS,
+    SUB_AGENT_MAX_STEPS_MAX,
+    SUB_AGENT_MAX_STEPS_MIN,
     SUB_AGENT_RETRY_ATTEMPTS_MAX,
     SUB_AGENT_RETRY_ATTEMPTS_MIN,
     SUB_AGENT_RETRY_DELAY_MAX_SECONDS,
@@ -71,6 +75,8 @@ from config import (
     SUB_AGENT_TIMEOUT_MAX_SECONDS,
     SUB_AGENT_TIMEOUT_MIN_SECONDS,
     VISION_ENABLED,
+    WEB_CACHE_TTL_HOURS_MAX,
+    WEB_CACHE_TTL_HOURS_MIN,
 )
 from proxy_settings import normalize_proxy_enabled_operations
 from tool_registry import TOOL_SPEC_BY_NAME
@@ -2202,10 +2208,13 @@ def save_app_settings(settings: dict) -> None:
 
 
 def cache_get(key: str):
+    ttl_hours = get_web_cache_ttl_hours()
+    if ttl_hours <= 0:
+        return None
     with get_db() as conn:
         row = conn.execute(
             "SELECT value FROM web_cache WHERE key = ? AND cached_at > datetime('now', ?)",
-            (key, f"-{CACHE_TTL_HOURS} hours"),
+            (key, f"-{ttl_hours} hours"),
         ).fetchone()
     if row:
         try:
@@ -2216,6 +2225,8 @@ def cache_get(key: str):
 
 
 def cache_set(key: str, value) -> None:
+    if get_web_cache_ttl_hours() <= 0:
+        return
     with get_db() as conn:
         conn.execute(
             """INSERT INTO web_cache (key, value, cached_at)
@@ -2246,7 +2257,7 @@ def normalize_active_tool_names(raw_value) -> list[str]:
 
 def normalize_sub_agent_allowed_tool_names(raw_value) -> list[str]:
     if raw_value in (None, ""):
-        return []
+        return list(SUB_AGENT_ALLOWED_TOOL_NAMES)
 
     if isinstance(raw_value, list):
         names = raw_value
@@ -2496,9 +2507,42 @@ def get_canvas_scroll_window_lines(settings: dict | None = None) -> int:
     return max(50, min(800, value))
 
 
+def get_sub_agent_max_steps(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get("sub_agent_max_steps", SUB_AGENT_DEFAULT_MAX_STEPS)
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        value = SUB_AGENT_DEFAULT_MAX_STEPS
+    return max(SUB_AGENT_MAX_STEPS_MIN, min(SUB_AGENT_MAX_STEPS_MAX, value))
+
+
+def get_sub_agent_allowed_tool_names(settings: dict | None = None) -> list[str]:
+    source = settings if settings is not None else get_app_settings()
+    return normalize_sub_agent_allowed_tool_names(source.get("sub_agent_allowed_tool_names"))
+
+
+def get_web_cache_ttl_hours(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get("web_cache_ttl_hours", DEFAULT_WEB_CACHE_TTL_HOURS)
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        value = DEFAULT_WEB_CACHE_TTL_HOURS
+    return max(WEB_CACHE_TTL_HOURS_MIN, min(WEB_CACHE_TTL_HOURS_MAX, value))
+
+
+def get_openrouter_prompt_cache_enabled(settings: dict | None = None) -> bool:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get("openrouter_prompt_cache_enabled")
+    if raw_value is None:
+        return OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED
+    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def get_sub_agent_timeout_seconds(settings: dict | None = None) -> int:
     source = settings if settings is not None else get_app_settings()
-    raw_value = source.get("sub_agent_timeout_seconds", DEFAULT_SETTINGS["sub_agent_timeout_seconds"])
+    raw_value = source.get("sub_agent_timeout_seconds", SUB_AGENT_DEFAULT_TIMEOUT_SECONDS)
     try:
         value = int(raw_value)
     except (TypeError, ValueError):
@@ -2508,7 +2552,7 @@ def get_sub_agent_timeout_seconds(settings: dict | None = None) -> int:
 
 def get_sub_agent_retry_attempts(settings: dict | None = None) -> int:
     source = settings if settings is not None else get_app_settings()
-    raw_value = source.get("sub_agent_retry_attempts", DEFAULT_SETTINGS["sub_agent_retry_attempts"])
+    raw_value = source.get("sub_agent_retry_attempts", SUB_AGENT_DEFAULT_RETRY_ATTEMPTS)
     try:
         value = int(raw_value)
     except (TypeError, ValueError):
@@ -2518,37 +2562,12 @@ def get_sub_agent_retry_attempts(settings: dict | None = None) -> int:
 
 def get_sub_agent_retry_delay_seconds(settings: dict | None = None) -> int:
     source = settings if settings is not None else get_app_settings()
-    raw_value = source.get("sub_agent_retry_delay_seconds", DEFAULT_SETTINGS["sub_agent_retry_delay_seconds"])
+    raw_value = source.get("sub_agent_retry_delay_seconds", SUB_AGENT_DEFAULT_RETRY_DELAY_SECONDS)
     try:
         value = int(raw_value)
     except (TypeError, ValueError):
         value = SUB_AGENT_DEFAULT_RETRY_DELAY_SECONDS
     return max(SUB_AGENT_RETRY_DELAY_MIN_SECONDS, min(SUB_AGENT_RETRY_DELAY_MAX_SECONDS, value))
-
-
-def get_sub_agent_include_conversation_context(settings: dict | None = None) -> bool:
-    source = settings if settings is not None else get_app_settings()
-    raw_value = source.get(
-        "sub_agent_include_conversation_context",
-        DEFAULT_SETTINGS["sub_agent_include_conversation_context"],
-    )
-    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def get_sub_agent_include_canvas_context(settings: dict | None = None) -> bool:
-    source = settings if settings is not None else get_app_settings()
-    raw_value = source.get(
-        "sub_agent_include_canvas_context",
-        DEFAULT_SETTINGS["sub_agent_include_canvas_context"],
-    )
-    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def get_sub_agent_allowed_tool_names(settings: dict | None = None) -> list[str]:
-    source = settings if settings is not None else get_app_settings()
-    if source.get("sub_agent_allowed_tool_names") is None:
-        return list(SUB_AGENT_ALLOWED_TOOL_NAMES)
-    return normalize_sub_agent_allowed_tool_names(source.get("sub_agent_allowed_tool_names"))
 
 
 def get_max_parallel_tools(settings: dict | None = None) -> int:
@@ -2563,7 +2582,7 @@ def get_max_parallel_tools(settings: dict | None = None) -> int:
 
 def get_sub_agent_max_parallel_tools(settings: dict | None = None) -> int:
     source = settings if settings is not None else get_app_settings()
-    raw_value = source.get("sub_agent_max_parallel_tools", DEFAULT_SETTINGS["sub_agent_max_parallel_tools"])
+    raw_value = source.get("sub_agent_max_parallel_tools", SUB_AGENT_DEFAULT_MAX_PARALLEL_TOOLS)
     try:
         value = int(raw_value)
     except (TypeError, ValueError):

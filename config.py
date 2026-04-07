@@ -117,28 +117,20 @@ SUB_AGENT_DEFAULT_RETRY_ATTEMPTS = 2
 SUB_AGENT_RETRY_DELAY_MIN_SECONDS = 0
 SUB_AGENT_RETRY_DELAY_MAX_SECONDS = 60
 SUB_AGENT_DEFAULT_RETRY_DELAY_SECONDS = 5
+SUB_AGENT_MAX_STEPS_MIN = 1
+SUB_AGENT_MAX_STEPS_MAX = 12
+SUB_AGENT_DEFAULT_MAX_STEPS = 6
 MAX_PARALLEL_TOOLS_MIN = 1
 MAX_PARALLEL_TOOLS_MAX = 12
 DEFAULT_MAX_PARALLEL_TOOLS = 4
 SUB_AGENT_DEFAULT_MAX_PARALLEL_TOOLS = 2
-SUB_AGENT_DEFAULT_INCLUDE_CONVERSATION_CONTEXT = False
-SUB_AGENT_DEFAULT_INCLUDE_CANVAS_CONTEXT = True
 SUB_AGENT_ALLOWED_TOOL_NAMES = [
-    "search_knowledge_base",
-    "search_tool_memory",
-    "read_scratchpad",
     "search_web",
     "fetch_url",
     "fetch_url_summarized",
     "grep_fetched_content",
     "search_news_ddgs",
     "search_news_google",
-    "expand_canvas_document",
-    "scroll_canvas_document",
-    "search_canvas_document",
-    "read_file",
-    "list_dir",
-    "search_files",
 ]
 CHAT_SUMMARY_DEFAULT_DETAIL_LEVEL = "balanced"
 CHAT_SUMMARY_DETAIL_LEVELS = {"concise", "balanced", "detailed"}
@@ -146,10 +138,15 @@ CLARIFICATION_QUESTION_LIMIT_MIN = 1
 CLARIFICATION_QUESTION_LIMIT_MAX = 25
 CLARIFICATION_DEFAULT_MAX_QUESTIONS = 5
 
+WEB_CACHE_TTL_HOURS_MIN = 0
+WEB_CACHE_TTL_HOURS_MAX = 168
+DEFAULT_WEB_CACHE_TTL_HOURS = 24
+OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED = True
+
 FETCH_TIMEOUT = 20
 FETCH_MAX_SIZE = 5 * 1024 * 1024
 FETCH_MAX_REDIRECTS = 5
-CACHE_TTL_HOURS = 24
+CACHE_TTL_HOURS = DEFAULT_WEB_CACHE_TTL_HOURS
 SEARCH_MAX_RESULTS = 5
 CONTENT_MAX_CHARS = 100_000
 FETCH_SUMMARY_TOKEN_THRESHOLD = max(400, _parse_int_env("FETCH_SUMMARY_TOKEN_THRESHOLD", 3500))
@@ -371,13 +368,10 @@ DEFAULT_SETTINGS = {
     "max_parallel_tools": str(DEFAULT_MAX_PARALLEL_TOOLS),
     "temperature": "0.7",
     "clarification_max_questions": str(CLARIFICATION_DEFAULT_MAX_QUESTIONS),
-    "sub_agent_timeout_seconds": str(SUB_AGENT_DEFAULT_TIMEOUT_SECONDS),
-    "sub_agent_retry_attempts": str(SUB_AGENT_DEFAULT_RETRY_ATTEMPTS),
-    "sub_agent_retry_delay_seconds": str(SUB_AGENT_DEFAULT_RETRY_DELAY_SECONDS),
-    "sub_agent_max_parallel_tools": str(SUB_AGENT_DEFAULT_MAX_PARALLEL_TOOLS),
-    "sub_agent_include_conversation_context": "true" if SUB_AGENT_DEFAULT_INCLUDE_CONVERSATION_CONTEXT else "false",
-    "sub_agent_include_canvas_context": "true" if SUB_AGENT_DEFAULT_INCLUDE_CANVAS_CONTEXT else "false",
+    "sub_agent_max_steps": str(SUB_AGENT_DEFAULT_MAX_STEPS),
     "sub_agent_allowed_tool_names": json.dumps(SUB_AGENT_ALLOWED_TOOL_NAMES, ensure_ascii=False),
+    "web_cache_ttl_hours": str(DEFAULT_WEB_CACHE_TTL_HOURS),
+    "openrouter_prompt_cache_enabled": "true" if OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED else "false",
     "custom_models": "[]",
     "visible_model_order": json.dumps(DEFAULT_VISIBLE_CHAT_MODEL_ORDER, ensure_ascii=False),
     "operation_model_preferences": json.dumps(DEFAULT_OPERATION_MODEL_PREFERENCES, ensure_ascii=False),

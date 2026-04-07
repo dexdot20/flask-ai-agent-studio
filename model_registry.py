@@ -50,6 +50,15 @@ _OPENROUTER_GEMINI_CACHE_BREAKPOINT_MIN_TOKENS_DEFAULT = 1028
 _OPENROUTER_GEMINI_CACHE_BREAKPOINT_MIN_TOKENS_PRO = 2048
 
 
+def _is_openrouter_prompt_cache_enabled(settings: dict[str, Any] | None) -> bool:
+    if not isinstance(settings, dict):
+        return True
+    raw_value = settings.get("openrouter_prompt_cache_enabled")
+    if raw_value is None:
+        return True
+    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 class _OpenRouterChatCompletionsProxy:
     def __init__(self, owner: "_OpenRouterClientProxy"):
         self._owner = owner
@@ -482,11 +491,17 @@ def _extract_openrouter_breakpoint_prefix(messages: Any) -> str:
     return ""
 
 
-def build_openrouter_cache_estimate_context(messages: Any, record: dict[str, Any] | None) -> dict[str, Any] | None:
+def build_openrouter_cache_estimate_context(messages: Any, record: dict[str, Any] | None, settings: dict[str, Any] | None = None) -> dict[str, Any] | None:
     if not isinstance(record, dict):
         return None
     if str(record.get("provider") or "").strip() != OPENROUTER_PROVIDER:
         return None
+    if not _is_openrouter_prompt_cache_enabled(settings):
+        return {
+            "supports_prompt_cache": False,
+            "strategy": "disabled",
+            "cacheable_text": "",
+        }
 
     api_model = str(record.get("api_model") or "").strip()
     if _openrouter_supports_top_level_prompt_cache(api_model):
@@ -510,10 +525,12 @@ def build_openrouter_cache_estimate_context(messages: Any, record: dict[str, Any
     }
 
 
-def _prepare_model_request_messages(messages: Any, record: dict[str, Any] | None) -> Any:
+def _prepare_model_request_messages(messages: Any, record: dict[str, Any] | None, settings: dict[str, Any] | None = None) -> Any:
     if not isinstance(messages, list) or not isinstance(record, dict):
         return messages
     if str(record.get("provider") or "").strip() != OPENROUTER_PROVIDER:
+        return messages
+    if not _is_openrouter_prompt_cache_enabled(settings):
         return messages
 
     api_model = str(record.get("api_model") or "").strip()
@@ -895,13 +912,14 @@ def resolve_model_target(model_id: str, settings: dict | None = None) -> dict[st
         raise ValueError(f"Unsupported model: {model_id}")
     return {
         "record": record,
+        "settings": settings,
         "client": get_provider_client(str(record["provider"])),
         "api_model": str(record["api_model"]),
-        "extra_body": build_model_request_extra_body(record),
+        "extra_body": build_model_request_extra_body(record, settings),
     }
 
 
-def build_model_request_extra_body(record: dict[str, Any] | None) -> dict[str, Any]:
+def build_model_request_extra_body(record: dict[str, Any] | None, settings: dict[str, Any] | None = None) -> dict[str, Any]:
     if not isinstance(record, dict):
         return {}
     if str(record.get("provider") or "").strip() != OPENROUTER_PROVIDER:
@@ -921,7 +939,7 @@ def build_model_request_extra_body(record: dict[str, Any] | None) -> dict[str, A
     extra_body["provider"] = provider_options
 
     api_model = str(record.get("api_model") or "").strip()
-    if _openrouter_supports_top_level_prompt_cache(api_model):
+    if _is_openrouter_prompt_cache_enabled(settings) and _openrouter_supports_top_level_prompt_cache(api_model):
         extra_body["cache_control"] = {"type": "ephemeral"}
 
     reasoning_mode, reasoning_effort = normalize_openrouter_reasoning_preferences(
@@ -939,7 +957,8 @@ def build_model_request_extra_body(record: dict[str, Any] | None) -> dict[str, A
 def apply_model_target_request_options(request_kwargs: dict[str, Any], target: dict[str, Any] | None) -> dict[str, Any]:
     merged_request_kwargs = dict(request_kwargs)
     record = target.get("record") if isinstance(target, dict) else None
-    prepared_messages = _prepare_model_request_messages(merged_request_kwargs.get("messages"), record)
+    settings = target.get("settings") if isinstance(target, dict) else None
+    prepared_messages = _prepare_model_request_messages(merged_request_kwargs.get("messages"), record, settings)
     if prepared_messages is not merged_request_kwargs.get("messages"):
         merged_request_kwargs["messages"] = prepared_messages
     extra_body = target.get("extra_body") if isinstance(target, dict) else None

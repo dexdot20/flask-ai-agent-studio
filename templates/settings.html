@@ -535,8 +535,8 @@
                   <input type="number" class="settings-number" id="max-parallel-tools-input" min="1" max="12" value="4" />
                 </div>
                 <div>
-                  <label class="settings-label" for="sub-agent-max-parallel-tools-input">Sub-agent max parallel tools (1-12)</label>
-                  <input type="number" class="settings-number" id="sub-agent-max-parallel-tools-input" min="1" max="12" value="2" />
+                  <label class="settings-label" for="sub-agent-max-steps-input">Sub-agent max steps (1-12)</label>
+                  <input type="number" class="settings-number" id="sub-agent-max-steps-input" min="1" max="12" value="6" />
                 </div>
                 <div>
                   <label class="settings-label" for="fetch-threshold-input">Clipping threshold in tokens (400-20000)</label>
@@ -548,71 +548,63 @@
                 </div>
               </div>
               <p class="settings-copy">Parallel-safe calls above the limit stay in the same assistant turn but queue instead of starting together.</p>
+              <p class="settings-copy">The sub-agent can still finish early when it has enough evidence; this setting only caps its maximum budget.</p>
             </div>
 
             <div class="settings-page-section-card">
               <div class="settings-page-section-card__header">
                 <div>
-                  <span class="settings-section-kicker">Sub-agent runtime</span>
-                  <h3>Timeout and handoff</h3>
+                  <span class="settings-section-kicker">Cache</span>
+                  <h3>Cache settings</h3>
                 </div>
-                <p>These controls decide how long helper runs last and what context they can receive.</p>
+                <p>Control how long fetched web content stays cached and whether supported OpenRouter models use prompt caching.</p>
               </div>
-              <div class="settings-page-grid settings-page-grid--three settings-page-grid--sub-agent-controls">
+              <div class="settings-page-grid settings-page-grid--two">
                 <div>
-                  <label class="settings-label" for="sub-agent-timeout-input">Soft timeout (seconds)</label>
-                  <input type="number" class="settings-number" id="sub-agent-timeout-input" min="5" max="900" value="240" />
-                </div>
-                <div>
-                  <label class="settings-label" for="sub-agent-retry-attempts-input">Retry attempts</label>
-                  <input type="number" class="settings-number" id="sub-agent-retry-attempts-input" min="0" max="5" value="2" />
-                </div>
-                <div>
-                  <label class="settings-label" for="sub-agent-retry-delay-input">Retry delay (seconds)</label>
-                  <input type="number" class="settings-number" id="sub-agent-retry-delay-input" min="0" max="60" value="5" />
+                  <label class="settings-label" for="web-cache-ttl-hours-input">Web cache TTL in hours (0-168)</label>
+                  <input type="number" class="settings-number" id="web-cache-ttl-hours-input" min="0" max="168" value="24" />
+                  <p class="settings-copy">Set to 0 to disable the SQLite-backed web cache.</p>
                 </div>
               </div>
-              <label class="tool-toggle"><input type="checkbox" id="sub-agent-include-conversation-context-toggle" /> <span>Share recent conversation excerpts when local chat context is necessary</span></label>
-              <label class="tool-toggle"><input type="checkbox" id="sub-agent-include-canvas-context-toggle" /> <span>Share available canvas document metadata when canvas context is relevant</span></label>
-              <p class="settings-copy">Keep both toggles off if the helper should work from the brief alone. Turning either on only shares that specific data source.</p>
+              <label class="tool-toggle"><input type="checkbox" id="openrouter-prompt-cache-enabled-toggle" /> <span>Enable OpenRouter prompt cache when the selected model supports it</span></label>
             </div>
-          </div>
 
-          <div class="settings-page-section-card">
-            <div class="settings-page-section-card__header">
-              <div>
-                <span class="settings-section-kicker">Sub-agent</span>
-                <h3>Allowed tools</h3>
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Sub-agent</span>
+                  <h3>Allowed web tools</h3>
+                </div>
+                <p>Choose which web-only tools the delegated helper may use during research.</p>
               </div>
-              <p>Choose the read-only tools the helper may use. The parent still only prepares the research brief and optional step budget.</p>
-            </div>
-            <ul class="settings-copy-list">
-              <li>Unchecked tools are never exposed to the helper, even if the parent turn can see them.</li>
-              <li>The runtime still intersects this choice with the tools visible in the current assistant turn.</li>
-            </ul>
-            <div class="tool-permission-sections" id="sub-agent-tool-toggles">
-              {% for section in sub_agent_tool_sections %}
-              <section class="tool-permission-section">
-                <div class="tool-permission-section__header">
-                  <div>
-                    <div class="settings-label">{{ section.title }}</div>
-                    <p class="settings-copy">{{ section.description }}</p>
+              <div class="settings-page-note-block">
+                <strong>Scope</strong>
+                <p>This does not grant file, canvas, or memory access to the helper. It only narrows the web research tools the helper may call.</p>
+              </div>
+              <div class="tool-permission-sections" id="sub-agent-tool-toggles">
+                {% for section in sub_agent_tool_sections %}
+                <section class="tool-permission-section">
+                  <div class="tool-permission-section__header">
+                    <div>
+                      <div class="settings-label">{{ section.title }}</div>
+                      <p class="settings-copy">{{ section.description }}</p>
+                    </div>
+                    <p class="settings-copy">{{ section.note }}</p>
                   </div>
-                  <p class="settings-copy">{{ section.note }}</p>
-                </div>
-                <div class="tool-toggles tool-toggles--page tool-permission-section__tools">
-                  {% for tool in section.tools %}
-                  <label class="tool-toggle">
-                    <input type="checkbox" name="sub-agent-allowed-tool" value="{{ tool.name }}" />
-                    <span>
-                      <strong>{{ tool.label }}</strong>
-                      {% if tool.description %}<br /><small>{{ tool.description }}</small>{% endif %}
-                    </span>
-                  </label>
-                  {% endfor %}
-                </div>
-              </section>
-              {% endfor %}
+                  <div class="tool-toggles tool-toggles--page tool-permission-section__tools">
+                    {% for tool in section.tools %}
+                    <label class="tool-toggle">
+                      <input type="checkbox" name="sub-agent-allowed-tool" value="{{ tool.name }}" />
+                      <span>
+                        <strong>{{ tool.label }}</strong>
+                        {% if tool.description %}<br /><small>{{ tool.description }}</small>{% endif %}
+                      </span>
+                    </label>
+                    {% endfor %}
+                  </div>
+                </section>
+                {% endfor %}
+              </div>
             </div>
           </div>
 

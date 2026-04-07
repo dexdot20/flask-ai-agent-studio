@@ -422,13 +422,10 @@ The Settings page persists these values in `app_settings`:
 - `max_parallel_tools`
 - `temperature`
 - `clarification_max_questions`
-- `sub_agent_timeout_seconds`
-- `sub_agent_retry_attempts`
-- `sub_agent_retry_delay_seconds`
-- `sub_agent_max_parallel_tools`
+- `sub_agent_max_steps`
 - `sub_agent_allowed_tool_names`
-- `sub_agent_include_conversation_context`
-- `sub_agent_include_canvas_context`
+- `web_cache_ttl_hours`
+- `openrouter_prompt_cache_enabled`
 - `chat_summary_detail_level`
 - `custom_models`
 - `visible_model_order`
@@ -448,6 +445,8 @@ The Settings page persists these values in `app_settings`:
 - `chat_summary_trigger_token_count`
 - `summary_skip_first`
 - `summary_skip_last`
+
+The delegated helper still receives only the explicit delegated task text, but users can now configure its preferred model, fallback models, maximum step budget, and which web research tools it may use from the Settings page. Cache behavior is also partially user-controlled there via web cache TTL and the OpenRouter prompt-cache toggle.
 - `pruning_enabled`
 - `pruning_token_threshold`
 - `pruning_batch_size`
