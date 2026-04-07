@@ -391,6 +391,15 @@ DEFAULT_SETTINGS = {
         ],
         ensure_ascii=False,
     ),
+    "rag_auto_inject_source_types": json.dumps(
+        [
+            RAG_SOURCE_CONVERSATION,
+            RAG_SOURCE_TOOL_RESULT,
+            RAG_SOURCE_TOOL_MEMORY,
+            RAG_SOURCE_UPLOADED_DOCUMENT,
+        ],
+        ensure_ascii=False,
+    ),
     "tool_memory_auto_inject": "false",
     "fetch_url_token_threshold": str(FETCH_SUMMARY_TOKEN_THRESHOLD),
     "fetch_url_clip_aggressiveness": "50",

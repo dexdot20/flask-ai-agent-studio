@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 import hashlib
 import html
 import json
@@ -102,6 +103,7 @@ from db import (
     normalize_scratchpad_text,
     replace_scratchpad,
 )
+from messages import build_current_time_context
 from model_registry import (
     DEEPSEEK_PROVIDER,
     OPENROUTER_PROVIDER,
@@ -1318,6 +1320,7 @@ def _build_sub_agent_messages(
     task: str,
     allowed_tools: list[str],
     max_parallel_tools: int | None = None,
+    now: datetime | None = None,
 ) -> list[dict]:
     parts = [
         "You are an advanced delegated helper agent for a larger AI assistant system.",
@@ -1330,6 +1333,7 @@ def _build_sub_agent_messages(
         "When using read-only search tools like search_web or search_news, batch queries between 1 and 5 items per list and split broader searches into multiple calls.",
         "Synthesize your findings and return a concise, definitive final answer that directly helps the parent assistant continue."
     ]
+    parts.append(build_current_time_context(now))
     if allowed_tools:
         parts.append(f"Available read-only tools: {', '.join(allowed_tools)}.")
     if max_parallel_tools is not None:
@@ -3505,11 +3509,13 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
         return {"status": "error", "error": error}, f"Failed: {error}"
 
     overall_deadline = time.monotonic() + timeout_seconds
+    now = datetime.now().astimezone()
     child_max_steps = _resolve_sub_agent_max_steps(settings)
     child_messages = _build_sub_agent_messages(
         task,
         child_tool_names,
         max_parallel_tools=child_max_parallel_tools,
+        now=now,
     )
     resume_messages: list[dict] = []
     fallback_attempts: list[dict[str, str]] = []

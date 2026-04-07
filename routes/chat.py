@@ -78,6 +78,7 @@ from db import (
     get_prompt_tool_trace_max_tokens,
     get_prompt_tool_memory_max_tokens,
     get_rag_auto_inject_enabled,
+    get_rag_auto_inject_source_types,
     get_rag_auto_inject_top_k,
     get_rag_source_types,
     get_rag_sensitivity,
@@ -2626,7 +2627,7 @@ def register_chat_routes(app) -> None:
             if conv_id
             else None
         )
-        rag_allowed_source_types = set(get_rag_source_types(settings))
+        rag_allowed_source_types = set(get_rag_auto_inject_source_types(settings))
         if get_tool_memory_auto_inject_enabled(settings):
             rag_allowed_source_types.discard(RAG_SOURCE_TOOL_MEMORY)
         retrieved_context = build_rag_auto_context(

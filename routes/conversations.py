@@ -12,6 +12,7 @@ from canvas_service import (
     build_markdown_download,
     build_pdf_download,
     clear_canvas,
+    create_canvas_document,
     create_canvas_runtime_state,
     delete_canvas_document,
     find_latest_canvas_document,
@@ -36,6 +37,7 @@ from db import (
     delete_conversation_file_assets,
     delete_conversation_image_assets,
     extract_message_attachments,
+    extract_sub_agent_traces,
     get_app_settings,
     get_rag_source_types,
     get_conversation_message_rows,
@@ -109,6 +111,57 @@ def _parse_truthy_form_value(value, default: bool = True) -> bool:
     if normalized in {"0", "false", "no", "off"}:
         return False
     return default
+
+
+def _parse_optional_int(value):
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _mark_sub_agent_trace_canvas_saved(
+    conn,
+    *,
+    conversation_id: int,
+    assistant_message_id: int | None,
+    trace_index: int | None,
+    canvas_document: dict,
+) -> bool:
+    if assistant_message_id is None or trace_index is None or trace_index < 0:
+        return False
+
+    row = conn.execute(
+        """SELECT id, conversation_id, role, metadata, deleted_at
+           FROM messages WHERE id = ?""",
+        (assistant_message_id,),
+    ).fetchone()
+    if not row or row["deleted_at"] is not None:
+        return False
+    if int(row["conversation_id"] or 0) != conversation_id:
+        return False
+    if str(row["role"] or "").strip() != "assistant":
+        return False
+
+    metadata = parse_message_metadata(row["metadata"])
+    sub_agent_traces = extract_sub_agent_traces(metadata)
+    if trace_index >= len(sub_agent_traces):
+        return False
+
+    updated_trace = dict(sub_agent_traces[trace_index])
+    updated_trace["canvas_saved"] = True
+    updated_trace["canvas_document_id"] = str(canvas_document.get("id") or "").strip()
+    updated_trace["canvas_document_title"] = str(canvas_document.get("title") or "").strip()
+    sub_agent_traces[trace_index] = updated_trace
+    metadata["sub_agent_traces"] = sub_agent_traces
+
+    conn.execute(
+        "UPDATE messages SET metadata = ? WHERE id = ?",
+        (serialize_message_metadata(metadata), assistant_message_id),
+    )
+    return True
 
 
 def _parse_rag_source_type_filter(raw_value):
@@ -463,6 +516,87 @@ def register_conversation_routes(app) -> None:
                 "messages": updated_messages,
             }
         )
+
+    @app.route("/api/conversations/<int:conv_id>/canvas", methods=["POST"])
+    def create_canvas(conv_id):
+        data = request.get_json(silent=True) or {}
+        title = str(data.get("title") or "Canvas").strip() or "Canvas"
+        content = str(data.get("content") or "")
+        format_name = str(data.get("format") or "markdown").strip() or "markdown"
+        language = str(data.get("language") or "").strip() or None
+        summary = str(data.get("summary") or "").strip() or None
+        source_assistant_message_id = _parse_optional_int(data.get("source_assistant_message_id"))
+        source_sub_agent_trace_index = _parse_optional_int(data.get("source_sub_agent_trace_index"))
+
+        if not content.strip():
+            return jsonify({"error": "content is required."}), 400
+
+        conversation, messages = _load_conversation_payload(conv_id)
+        if not conversation:
+            return jsonify({"error": "Not found."}), 404
+
+        latest_canvas_state = find_latest_canvas_state(messages)
+        runtime_state = create_canvas_runtime_state(
+            latest_canvas_state.get("documents"),
+            active_document_id=latest_canvas_state.get("active_document_id"),
+        )
+
+        try:
+            document = create_canvas_document(
+                runtime_state,
+                title=title,
+                content=content,
+                format_name=format_name,
+                language_name=language,
+                summary=summary,
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        next_documents = get_canvas_runtime_documents(runtime_state)
+        metadata = serialize_message_metadata(
+            {
+                "canvas_documents": next_documents,
+                "active_document_id": get_canvas_runtime_active_document_id(runtime_state),
+                "canvas_viewports": runtime_state.get("viewports") if isinstance(runtime_state.get("viewports"), dict) else {},
+                "canvas_cleared": not next_documents,
+            }
+        )
+
+        saved_sub_agent_trace = False
+        with get_db() as conn:
+            insert_message(
+                conn,
+                conv_id,
+                "tool",
+                "",
+                metadata=metadata,
+            )
+            saved_sub_agent_trace = _mark_sub_agent_trace_canvas_saved(
+                conn,
+                conversation_id=conv_id,
+                assistant_message_id=source_assistant_message_id,
+                trace_index=source_sub_agent_trace_index,
+                canvas_document=document,
+            )
+            conn.execute(
+                "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
+                (conv_id,),
+            )
+
+        if RAG_ENABLED:
+            sync_conversations_to_rag_safe(conversation_id=conv_id)
+
+        _, updated_messages = _load_conversation_payload(conv_id)
+        return jsonify(
+            {
+                "document": document,
+                "documents": next_documents,
+                "active_document_id": document.get("id"),
+                "messages": updated_messages,
+                "saved_sub_agent_trace": saved_sub_agent_trace,
+            }
+        ), 201
 
     @app.route("/api/conversations/<int:conv_id>/canvas", methods=["PATCH"])
     def update_canvas(conv_id):

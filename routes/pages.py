@@ -54,6 +54,7 @@ from db import (
     get_pruning_token_threshold,
     get_reasoning_auto_collapse,
     get_rag_auto_inject_enabled,
+    get_rag_auto_inject_source_types,
     get_rag_context_size,
     get_rag_source_types,
     get_rag_sensitivity,
@@ -124,6 +125,7 @@ TOOL_PERMISSION_LABELS = {
     "transform_canvas_lines": "Transform canvas lines",
     "update_canvas_metadata": "Update canvas metadata",
     "set_canvas_viewport": "Set canvas viewport",
+    "focus_canvas_page": "Focus Canvas Page",
     "clear_canvas_viewport": "Clear canvas viewport",
     "replace_canvas_lines": "Replace canvas lines",
     "insert_canvas_lines": "Insert canvas lines",
@@ -165,6 +167,7 @@ TOOL_PERMISSION_DESCRIPTIONS = {
     "transform_canvas_lines": "Apply a text transformation to a range of lines in a canvas document.",
     "update_canvas_metadata": "Update the title, language, or other metadata of a canvas document.",
     "set_canvas_viewport": "Pin a line range as the active viewport for a canvas document.",
+    "focus_canvas_page": "Pin a specific page from a page-aware canvas document so later prompts keep that page in view.",
     "clear_canvas_viewport": "Remove the pinned viewport so the full canvas is shown.",
     "replace_canvas_lines": "Replace a specific line range inside a canvas document.",
     "insert_canvas_lines": "Insert new lines at a position inside a canvas document.",
@@ -250,6 +253,7 @@ def _get_tool_permission_section_key(name: str) -> str:
         "transform_canvas_lines",
         "update_canvas_metadata",
         "set_canvas_viewport",
+        "focus_canvas_page",
         "clear_canvas_viewport",
         "replace_canvas_lines",
         "insert_canvas_lines",
@@ -334,6 +338,7 @@ def build_settings_payload() -> dict:
         "rag_sensitivity": get_rag_sensitivity(raw),
         "rag_context_size": get_rag_context_size(raw),
         "rag_source_types": get_rag_source_types(raw),
+        "rag_auto_inject_source_types": get_rag_auto_inject_source_types(raw),
         "tool_memory_auto_inject": get_tool_memory_auto_inject_enabled(raw),
         "canvas_prompt_max_lines": get_canvas_prompt_max_lines(raw),
         "canvas_prompt_max_tokens": get_canvas_prompt_max_tokens(raw),
@@ -437,6 +442,7 @@ def register_page_routes(app) -> None:
         rag_sensitivity = data.get("rag_sensitivity")
         rag_context_size = data.get("rag_context_size")
         rag_source_types = data.get("rag_source_types")
+        rag_auto_inject_source_types = data.get("rag_auto_inject_source_types")
         tool_memory_auto_inject = data.get("tool_memory_auto_inject")
         chat_summary_mode_raw = data.get("chat_summary_mode")
         chat_summary_detail_level_raw = data.get("chat_summary_detail_level")
@@ -479,6 +485,7 @@ def register_page_routes(app) -> None:
             and rag_sensitivity is None
             and rag_context_size is None
             and rag_source_types is None
+            and rag_auto_inject_source_types is None
             and tool_memory_auto_inject is None
             and chat_summary_mode_raw is None
             and chat_summary_detail_level_raw is None
@@ -724,6 +731,15 @@ def register_page_routes(app) -> None:
                 return jsonify({"error": "rag_source_types contains unsupported source types."}), 400
             settings["rag_source_types"] = json.dumps(normalized_rag_source_types, ensure_ascii=False)
 
+        if rag_auto_inject_source_types is not None:
+            if not isinstance(rag_auto_inject_source_types, list):
+                return jsonify({"error": "rag_auto_inject_source_types must be an array."}), 400
+            normalized_rag_auto_inject_source_types = normalize_rag_source_types(rag_auto_inject_source_types)
+            incoming_auto_inject_source_types = [str(value or "").strip().lower() for value in rag_auto_inject_source_types]
+            if any(source_type not in normalized_rag_auto_inject_source_types for source_type in incoming_auto_inject_source_types):
+                return jsonify({"error": "rag_auto_inject_source_types contains unsupported source types."}), 400
+            settings["rag_auto_inject_source_types"] = json.dumps(normalized_rag_auto_inject_source_types, ensure_ascii=False)
+
         if tool_memory_auto_inject is not None and RAG_ENABLED:
             if isinstance(tool_memory_auto_inject, bool):
                 settings["tool_memory_auto_inject"] = "true" if tool_memory_auto_inject else "false"
@@ -733,6 +749,7 @@ def register_page_routes(app) -> None:
                 )
         elif not RAG_ENABLED:
             settings["tool_memory_auto_inject"] = "false"
+            settings["rag_auto_inject_source_types"] = json.dumps([], ensure_ascii=False)
 
         if chat_summary_mode_raw is not None:
             normalized_summary_mode = str(chat_summary_mode_raw or "").strip().lower()

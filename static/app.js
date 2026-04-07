@@ -168,6 +168,8 @@ let pendingConversationRefreshTimers = new Set();
 let lastConversationSignature = "";
 let userScrolledUp = false;
 let pendingCanvasConfirmAction = null;
+const DEFAULT_CANVAS_CONFIRM_LABEL = "Open Canvas";
+const DEFAULT_CANVAS_CONFIRM_CANCEL_LABEL = "Later";
 let activeSidebarRename = null;
 let collapsedCanvasFolders = new Set();
 let lastCanvasTreeTypeAheadValue = "";
@@ -2054,6 +2056,12 @@ function closeCanvasConfirmModal(action = "cancel", executeHandler = true) {
   canvasConfirmModal.classList.remove("open");
   canvasConfirmOverlay?.classList.remove("open");
   canvasConfirmModal.setAttribute("aria-hidden", "true");
+  if (canvasConfirmOpenBtn) {
+    canvasConfirmOpenBtn.textContent = DEFAULT_CANVAS_CONFIRM_LABEL;
+  }
+  if (canvasConfirmLaterBtn) {
+    canvasConfirmLaterBtn.textContent = DEFAULT_CANVAS_CONFIRM_CANCEL_LABEL;
+  }
 
   if (lastCanvasConfirmTriggerEl && typeof lastCanvasConfirmTriggerEl.focus === "function") {
     lastCanvasConfirmTriggerEl.focus();
@@ -2091,6 +2099,12 @@ function openCanvasConfirmModal(options = {}) {
   };
   canvasConfirmTitle.textContent = String(options.title || "Open document in Canvas?").trim() || "Open document in Canvas?";
   canvasConfirmMessage.textContent = String(options.message || "Your uploaded document is ready in Canvas.").trim() || "Your uploaded document is ready in Canvas.";
+  if (canvasConfirmOpenBtn) {
+    canvasConfirmOpenBtn.textContent = String(options.confirmLabel || DEFAULT_CANVAS_CONFIRM_LABEL).trim() || DEFAULT_CANVAS_CONFIRM_LABEL;
+  }
+  if (canvasConfirmLaterBtn) {
+    canvasConfirmLaterBtn.textContent = String(options.cancelLabel || DEFAULT_CANVAS_CONFIRM_CANCEL_LABEL).trim() || DEFAULT_CANVAS_CONFIRM_CANCEL_LABEL;
+  }
   canvasConfirmModal.classList.add("open");
   canvasConfirmOverlay?.classList.add("open");
   canvasConfirmModal.setAttribute("aria-hidden", "false");
@@ -7113,9 +7127,13 @@ function getSubAgentTraceEntries(metadata) {
       error: String(entry.error || "").trim(),
       timed_out: entry.timed_out === true,
       fallback_note: String(entry.fallback_note || "").trim(),
+      canvas_saved: entry.canvas_saved === true,
+      canvas_document_id: String(entry.canvas_document_id || "").trim(),
+      canvas_document_title: String(entry.canvas_document_title || "").trim(),
+      artifacts: Array.isArray(entry.artifacts) ? entry.artifacts.filter((artifact) => artifact && typeof artifact === "object") : [],
       tool_trace: getToolTraceEntries({ tool_trace: Array.isArray(entry.tool_trace) ? entry.tool_trace : [] }),
     }))
-    .filter((entry) => entry.task || entry.summary || entry.error || entry.fallback_note || entry.tool_trace.length);
+    .filter((entry) => entry.task || entry.summary || entry.error || entry.fallback_note || entry.tool_trace.length || entry.canvas_saved);
 }
 
 function mergeAssistantSubAgentTraceEntry(entries, entry) {
@@ -7278,6 +7296,136 @@ function getSubAgentStatusLabel(entry) {
   return "Done";
 }
 
+function getLatestUnsavedCompletedSubAgentTrace(metadata) {
+  const entries = getSubAgentTraceEntries(metadata);
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (!entry || entry.status === "running" || entry.canvas_saved) {
+      continue;
+    }
+    if (entry.status === "error" && !String(entry.summary || "").trim() && !entry.tool_trace.length) {
+      continue;
+    }
+    return { index, entry };
+  }
+  return null;
+}
+
+function buildSubAgentResearchCanvasTitle(entry) {
+  const taskInstructions = String(entry?.task_full || entry?.task || "").trim();
+  const taskHeading = getSubAgentTaskHeading(taskInstructions || entry?.summary || "Research");
+  const normalizedHeading = String(taskHeading || "Research").trim();
+  return `Research - ${normalizedHeading}`.slice(0, 120).trim() || "Research";
+}
+
+function buildSubAgentResearchCanvasContent(entry) {
+  const taskInstructions = String(entry?.task_full || entry?.task || "").trim();
+  const taskHeading = getSubAgentTaskHeading(taskInstructions || entry?.summary || "Research");
+  const lines = [`# ${buildSubAgentResearchCanvasTitle(entry)}`, "", `Saved from sub-agent research: ${taskHeading}`, ""];
+
+  if (taskInstructions) {
+    lines.push("## Task", "", taskInstructions, "");
+  }
+
+  const summaryText = String(entry?.summary || "").trim();
+  if (summaryText) {
+    lines.push("## Summary", "", summaryText, "");
+  }
+
+  if (Array.isArray(entry?.tool_trace) && entry.tool_trace.length) {
+    lines.push("## Research Steps", "");
+    entry.tool_trace.forEach((traceEntry) => {
+      const label = getToolUiConfig(traceEntry.tool_name).label;
+      const detail = String(traceEntry.preview || traceEntry.summary || "").trim();
+      const state = traceEntry.state === "error" ? "failed" : traceEntry.cached ? "cached" : "done";
+      lines.push(`- ${label} (${state}): ${detail || "No detail recorded."}`);
+      const summary = String(traceEntry.summary || "").trim();
+      if (summary && summary !== detail) {
+        lines.push(`  ${summary}`);
+      }
+    });
+    lines.push("");
+  }
+
+  const fallbackNote = String(entry?.fallback_note || "").trim();
+  if (fallbackNote) {
+    lines.push("## Fallback Note", "", fallbackNote, "");
+  }
+
+  const errorText = String(entry?.error || "").trim();
+  if (errorText) {
+    lines.push("## Error", "", errorText, "");
+  }
+
+  return lines.join("\n").trim();
+}
+
+async function saveSubAgentResearchToCanvas(assistantMessageId, traceIndex, traceEntry) {
+  if (!currentConvId) {
+    showError("Create a conversation first so the research can be saved to Canvas.");
+    return;
+  }
+
+  const response = await fetch(`/api/conversations/${currentConvId}/canvas`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: buildSubAgentResearchCanvasTitle(traceEntry),
+      content: buildSubAgentResearchCanvasContent(traceEntry),
+      format: "markdown",
+      source_assistant_message_id: assistantMessageId,
+      source_sub_agent_trace_index: traceIndex,
+      summary: String(traceEntry.summary || "").trim() || null,
+    }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || "Research could not be saved to Canvas.");
+  }
+
+  history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
+  streamingCanvasDocuments = [];
+  resetStreamingCanvasPreview();
+  activeCanvasDocumentId = String(payload.active_document_id || "").trim() || getActiveCanvasDocument(history)?.id || null;
+  rebuildTokenStatsFromHistory();
+  renderConversationHistory({ preserveScroll: true });
+  renderCanvasPanel();
+  lastConversationSignature = getConversationSignature(history);
+  loadSidebar();
+  openCanvas();
+  setCanvasStatus("Research saved to Canvas.", "success");
+  showToast("Research saved to Canvas.", "success");
+}
+
+function maybePromptToSaveSubAgentResearch(assistantEntry) {
+  if (!assistantEntry || !isPersistedMessageId(assistantEntry.id) || !currentConvId) {
+    return;
+  }
+
+  const pendingTrace = getLatestUnsavedCompletedSubAgentTrace(assistantEntry.metadata);
+  if (!pendingTrace) {
+    return;
+  }
+
+  const taskHeading = getSubAgentTaskHeading(
+    String(pendingTrace.entry.task_full || pendingTrace.entry.task || pendingTrace.entry.summary || "Research").trim(),
+  );
+
+  openCanvasConfirmModal({
+    title: "Save research to Canvas?",
+    message: `${taskHeading} is ready. Save it to Canvas so it stays editable and future turns can rely on the Canvas copy instead of the raw sub-agent trace?`,
+    confirmLabel: "Save to Canvas",
+    cancelLabel: "Not now",
+    onConfirm: async () => {
+      try {
+        await saveSubAgentResearchToCanvas(assistantEntry.id, pendingTrace.index, pendingTrace.entry);
+      } catch (error) {
+        showError(error.message || "Research could not be saved to Canvas.");
+      }
+    },
+  });
+}
+
 function createSubAgentStep(traceEntry) {
   const item = document.createElement("div");
   item.className = `sub-agent-step sub-agent-step--${traceEntry.state || "done"}`;
@@ -7409,6 +7557,15 @@ function updateAssistantSubAgentTrace(group, metadata) {
       message.className = `${entry.error ? "sub-agent-run__error" : "sub-agent-run__result"} sub-agent-markdown`;
       setMarkdownBlockContent(message, supportingText);
       run.appendChild(message);
+    }
+
+    if (entry.canvas_saved) {
+      const savedNote = document.createElement("div");
+      savedNote.className = "sub-agent-run__canvas-note";
+      savedNote.textContent = entry.canvas_document_title
+        ? `Saved to Canvas as ${entry.canvas_document_title}.`
+        : "Saved to Canvas.";
+      run.appendChild(savedNote);
     }
 
     body.appendChild(run);
@@ -8492,6 +8649,7 @@ async function sendMessage(options = {}) {
       applyPersistedMessageIds(persistedMessageIds, assistantEntry);
     }
     finalizeAssistantStreamingGroup(asstGroup, stepLog, assistantEntry.metadata);
+    maybePromptToSaveSubAgentResearch(assistantEntry);
     clearEditTarget();
     renderSummaryInspector();
 
@@ -8531,6 +8689,7 @@ async function sendMessage(options = {}) {
         applyPersistedMessageIds(persistedMessageIds, assistantEntry);
       }
       finalizeAssistantStreamingGroup(asstGroup, stepLog, assistantEntry.metadata);
+      maybePromptToSaveSubAgentResearch(assistantEntry);
       clearEditTarget();
       renderSummaryInspector();
       loadSidebar();

@@ -305,6 +305,10 @@ class AppRoutesTestCase(unittest.TestCase):
             payload["rag_source_types"],
             ["conversation", "tool_result", "tool_memory", "uploaded_document"] if payload["features"]["rag_enabled"] else [],
         )
+        self.assertEqual(
+            payload["rag_auto_inject_source_types"],
+            ["conversation", "tool_result", "tool_memory", "uploaded_document"] if payload["features"]["rag_enabled"] else [],
+        )
         self.assertFalse(payload["tool_memory_auto_inject"])
         self.assertIn("features", payload)
         self.assertIn("rag_enabled", payload["features"])
@@ -379,6 +383,7 @@ class AppRoutesTestCase(unittest.TestCase):
                 "rag_sensitivity": "strict",
                 "rag_context_size": "large",
                 "rag_source_types": ["tool_memory", "uploaded_document"],
+                "rag_auto_inject_source_types": ["uploaded_document"],
                 "tool_memory_auto_inject": False,
             },
         )
@@ -442,6 +447,10 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(
             payload["rag_source_types"],
             ["tool_memory", "uploaded_document"] if payload["features"]["rag_enabled"] else [],
+        )
+        self.assertEqual(
+            payload["rag_auto_inject_source_types"],
+            ["uploaded_document"] if payload["features"]["rag_enabled"] else [],
         )
         self.assertFalse(payload["tool_memory_auto_inject"])
 
@@ -1230,6 +1239,23 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("rag_source_types", response.get_json()["error"])
 
+    def test_settings_patch_rejects_invalid_rag_auto_inject_source_types(self):
+        response = self.client.patch(
+            "/api/settings",
+            json={"rag_auto_inject_source_types": "conversation"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("rag_auto_inject_source_types", response.get_json()["error"])
+
+        response = self.client.patch(
+            "/api/settings",
+            json={"rag_auto_inject_source_types": ["conversation", "invalid_source"]},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("rag_auto_inject_source_types", response.get_json()["error"])
+
         response = self.client.patch(
             "/api/settings",
             json={"rag_source_types": ["conversation", "invalid_source"]},
@@ -1237,6 +1263,20 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("rag_source_types", response.get_json()["error"])
+
+    def test_settings_patch_keeps_auto_inject_sources_independent_of_searchable_sources(self):
+        response = self.client.patch(
+            "/api/settings",
+            json={
+                "rag_source_types": ["conversation"],
+                "rag_auto_inject_source_types": ["uploaded_document"],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["rag_source_types"], ["conversation"])
+        self.assertEqual(payload["rag_auto_inject_source_types"], ["uploaded_document"])
 
     def test_settings_patch_rejects_invalid_pruning_values(self):
         response = self.client.patch(
@@ -3675,6 +3715,8 @@ class AppRoutesTestCase(unittest.TestCase):
                 "rag_auto_inject": "true",
                 "rag_sensitivity": "strict",
                 "rag_context_size": "large",
+                "rag_source_types": json.dumps(["conversation"], ensure_ascii=False),
+                "rag_auto_inject_source_types": json.dumps(["uploaded_document"], ensure_ascii=False),
             }
         )
 
@@ -3705,6 +3747,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertTrue(mocked_rag.call_args.args[1])
         self.assertEqual(mocked_rag.call_args.kwargs["threshold"], 0.55)
         self.assertEqual(mocked_rag.call_args.kwargs["top_k"], 8)
+        self.assertEqual(mocked_rag.call_args.kwargs["allowed_source_types"], {"uploaded_document"})
 
     def test_chat_excludes_tool_memory_from_generic_rag_when_dedicated_tool_memory_auto_inject_is_enabled(self):
         conversation_id = self._create_conversation()
@@ -3718,6 +3761,7 @@ class AppRoutesTestCase(unittest.TestCase):
                 "rag_sensitivity": "strict",
                 "rag_context_size": "large",
                 "rag_source_types": json.dumps(["conversation", "tool_memory", "uploaded_document"], ensure_ascii=False),
+                "rag_auto_inject_source_types": json.dumps(["conversation", "tool_memory", "uploaded_document"], ensure_ascii=False),
                 "tool_memory_auto_inject": "true",
             }
         )
@@ -3845,6 +3889,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("read_file", [tool["name"] for tool in workspace_tools])
         self.assertIn("validate_project_workspace", [tool["name"] for tool in workspace_tools])
         self.assertIn("search_canvas_document", [tool["name"] for tool in canvas_tools])
+        self.assertIn("focus_canvas_page", [tool["name"] for tool in canvas_tools])
 
     def test_sub_agent_allowed_tools_are_web_only(self):
         self.assertEqual(
@@ -6319,6 +6364,16 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("Read-only still includes web search and URL fetch tools", messages[0]["content"])
         self.assertIn("1 and 5 items", messages[0]["content"])
         self.assertIn("split broader searches into multiple calls", messages[0]["content"])
+        self.assertIn("## Current Date and Time", messages[0]["content"])
+
+    def test_build_sub_agent_messages_includes_fixed_current_time_context(self):
+        now = datetime(2026, 4, 7, 14, 23, 45, tzinfo=timezone(timedelta(hours=3)))
+        messages = _build_sub_agent_messages("Inspect the web", ["search_web"], now=now)
+
+        self.assertIn("## Current Date and Time", messages[0]["content"])
+        self.assertIn("2026-04-07T14:20:00+03:00", messages[0]["content"])
+        self.assertIn("- Date: 2026-04-07", messages[0]["content"])
+        self.assertIn("- Time: 14:20", messages[0]["content"])
 
     def test_build_sub_agent_messages_only_includes_task_text(self):
         messages = _build_sub_agent_messages("Inspect the web", ["search_web"])
@@ -6729,6 +6784,7 @@ class AppRoutesTestCase(unittest.TestCase):
         html = response.get_data(as_text=True)
         self.assertIn('value="expand_canvas_document"', html)
         self.assertIn('value="scroll_canvas_document"', html)
+        self.assertIn('value="focus_canvas_page"', html)
 
     def test_conversation_crud_flow(self):
         conversation_id = self._create_conversation()
@@ -7256,6 +7312,9 @@ class AppRoutesTestCase(unittest.TestCase):
                                 "content": '{"path":"README.md","content":"hello"}',
                             },
                         ],
+                        "canvas_saved": True,
+                        "canvas_document_id": "canvas-research-1",
+                        "canvas_document_title": "Research - Inspect README",
                     }
                 ]
             }
@@ -7271,6 +7330,9 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(metadata["sub_agent_traces"][0]["tool_trace"][0]["tool_name"], "read_file")
         self.assertEqual(metadata["sub_agent_traces"][0]["messages"][0]["tool_calls"][0]["name"], "read_file")
         self.assertEqual(metadata["sub_agent_traces"][0]["fallback_note"], "Continued on deepseek-chat after timeout.")
+        self.assertTrue(metadata["sub_agent_traces"][0]["canvas_saved"])
+        self.assertEqual(metadata["sub_agent_traces"][0]["canvas_document_id"], "canvas-research-1")
+        self.assertEqual(metadata["sub_agent_traces"][0]["canvas_document_title"], "Research - Inspect README")
 
     def test_serialize_message_metadata_keeps_canvas_documents(self):
         payload = serialize_message_metadata(
@@ -8074,6 +8136,68 @@ class AppRoutesTestCase(unittest.TestCase):
         payload = response.get_json()
         self.assertEqual(payload["document"]["title"], "Arduino Kodu - RobotBeyni.ino")
         self.assertEqual(payload["document"]["content"], "int led = 12;")
+
+    def test_canvas_post_endpoint_saves_sub_agent_research_and_marks_trace(self):
+        conversation_id = self._create_conversation()
+        assistant_metadata = serialize_message_metadata(
+            {
+                "sub_agent_traces": [
+                    {
+                        "task": "Inspect the README setup section",
+                        "status": "ok",
+                        "summary": "Found the setup commands and dependency notes.",
+                        "tool_trace": [
+                            {
+                                "tool_name": "read_file",
+                                "step": 1,
+                                "preview": "README.md",
+                                "summary": "Read the setup section.",
+                                "state": "done",
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+
+        with get_db() as conn:
+            assistant_message_id = insert_message(
+                conn,
+                conversation_id,
+                "assistant",
+                "Here is the research summary.",
+                metadata=assistant_metadata,
+            )
+
+        response = self.client.post(
+            f"/api/conversations/{conversation_id}/canvas",
+            json={
+                "title": "Research - README setup",
+                "content": "# README setup\n\nInstall the dependencies first.",
+                "format": "markdown",
+                "source_assistant_message_id": assistant_message_id,
+                "source_sub_agent_trace_index": 0,
+            },
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.get_json()
+        self.assertTrue(payload["saved_sub_agent_trace"])
+        self.assertEqual(payload["document"]["title"], "Research - README setup")
+        self.assertEqual(payload["document"]["format"], "markdown")
+
+        conversation_response = self.client.get(f"/api/conversations/{conversation_id}")
+        self.assertEqual(conversation_response.status_code, 200)
+        messages = conversation_response.get_json()["messages"]
+        latest_canvas = find_latest_canvas_documents(messages)
+        self.assertEqual(len(latest_canvas), 1)
+        self.assertEqual(latest_canvas[0]["title"], "Research - README setup")
+
+        updated_assistant = next(message for message in messages if message["id"] == assistant_message_id)
+        trace_entry = updated_assistant["metadata"]["sub_agent_traces"][0]
+        self.assertTrue(trace_entry["canvas_saved"])
+        self.assertEqual(trace_entry["canvas_document_title"], "Research - README setup")
+        self.assertEqual(trace_entry["canvas_document_id"], payload["document"]["id"])
 
     def test_document_canvas_inference_for_code_files(self):
         self.assertEqual(infer_canvas_format("main.py"), "code")
@@ -9813,6 +9937,63 @@ class AppRoutesTestCase(unittest.TestCase):
                     "role": "user",
                     "content": "[Clarification answers provided - see the Clarification Response section for the full Q/A.]",
                 }
+            ],
+        )
+
+    def test_build_api_messages_strips_saved_sub_agent_tool_blocks(self):
+        normalized = normalize_chat_messages(
+            [
+                {"id": 1, "role": "user", "content": "Research the setup steps."},
+                {
+                    "id": 2,
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call-sub-agent-1",
+                            "type": "function",
+                            "function": {
+                                "name": "sub_agent",
+                                "arguments": '{"task":"Inspect README setup"}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "id": 3,
+                    "role": "tool",
+                    "content": '{"summary":"Install requirements.txt first."}',
+                    "tool_call_id": "call-sub-agent-1",
+                },
+                {
+                    "id": 4,
+                    "role": "assistant",
+                    "content": "I found the setup steps and saved them to Canvas.",
+                    "metadata": {
+                        "sub_agent_traces": [
+                            {
+                                "task": "Inspect README setup",
+                                "status": "ok",
+                                "summary": "Install requirements.txt first.",
+                                "canvas_saved": True,
+                                "canvas_document_id": "canvas-1",
+                                "canvas_document_title": "Research - README setup",
+                            }
+                        ]
+                    },
+                },
+                {"id": 5, "role": "user", "content": "What should I install first?"},
+            ]
+        )
+
+        api_messages = build_api_messages(normalized)
+
+        self.assertEqual(
+            api_messages,
+            [
+                {"role": "user", "content": "Research the setup steps."},
+                {"role": "assistant", "content": "I found the setup steps and saved them to Canvas."},
+                {"role": "user", "content": "What should I install first?"},
             ],
         )
 

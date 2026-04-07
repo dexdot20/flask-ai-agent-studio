@@ -82,63 +82,67 @@
       <div class="settings-tab-panels">
         <section class="settings-tab-panel active" data-settings-panel="general" aria-labelledby="general-tab">
           <div class="settings-page-grid settings-page-grid--two">
-            <div class="settings-page-section-card">
-              <div class="settings-page-section-card__header">
-                <div>
-                  <span class="settings-section-kicker">Assistant behavior</span>
-                  <h3>Response defaults</h3>
+            <div class="settings-page-stack">
+              <div class="settings-page-section-card">
+                <div class="settings-page-section-card__header">
+                  <div>
+                    <span class="settings-section-kicker">Assistant behavior</span>
+                    <h3>Response defaults</h3>
+                  </div>
+                  <p>Saved once and injected into every conversation automatically.</p>
                 </div>
-                <p>Saved once and injected into every conversation automatically.</p>
+                <label class="settings-label" for="preferences-input">Response preferences</label>
+                <textarea id="preferences-input" rows="8" placeholder="Example: Reply in English, keep answers concise, and use bullet points when useful."></textarea>
+                <label class="settings-label" for="temperature-input">Response temperature (0.0-2.0)</label>
+                <input type="number" class="settings-number" id="temperature-input" min="0" max="2" step="0.1" value="0.7" />
+                <p class="settings-copy">Lower values are more deterministic; higher values add more variation to assistant replies.</p>
               </div>
-              <label class="settings-label" for="preferences-input">Response preferences</label>
-              <textarea id="preferences-input" rows="8" placeholder="Example: Reply in English, keep answers concise, and use bullet points when useful."></textarea>
-              <label class="settings-label" for="temperature-input">Response temperature (0.0-2.0)</label>
-              <input type="number" class="settings-number" id="temperature-input" min="0" max="2" step="0.1" value="0.7" />
-              <p class="settings-copy">Lower values are more deterministic; higher values add more variation to assistant replies.</p>
+
+              <div class="settings-page-section-card">
+                <div class="settings-page-section-card__header">
+                  <div>
+                    <span class="settings-section-kicker">Assistant output</span>
+                    <h3>Reasoning display</h3>
+                  </div>
+                  <p>Choose how reasoning panels behave after a streamed answer finishes.</p>
+                </div>
+                <label class="tool-toggle"><input type="checkbox" id="reasoning-auto-collapse-toggle" /> <span>Auto-collapse reasoning panels after the answer completes</span></label>
+                <p class="settings-copy">Reasoning stays available on each assistant message and can still be expanded manually.</p>
+              </div>
             </div>
 
-            <div class="settings-page-section-card">
-              <div class="settings-page-section-card__header">
-                <div>
-                  <span class="settings-section-kicker">Clarification</span>
-                  <h3>Question limit</h3>
+            <div class="settings-page-stack">
+              <div class="settings-page-section-card">
+                <div class="settings-page-section-card__header">
+                  <div>
+                    <span class="settings-section-kicker">Clarification</span>
+                    <h3>Question limit</h3>
+                  </div>
+                  <p>Control how many clarification questions the assistant may ask in one turn.</p>
                 </div>
-                <p>Control how many clarification questions the assistant may ask in one turn.</p>
+                <label class="settings-label" for="clarification-max-questions-input">Max clarification questions (1-25)</label>
+                <input type="number" class="settings-number" id="clarification-max-questions-input" min="1" max="25" value="5" />
+                <p class="settings-copy">Higher values allow broader clarification turns, but the assistant should still ask only the minimum needed.</p>
               </div>
-              <label class="settings-label" for="clarification-max-questions-input">Max clarification questions (1-25)</label>
-              <input type="number" class="settings-number" id="clarification-max-questions-input" min="1" max="25" value="5" />
-              <p class="settings-copy">Higher values allow broader clarification turns, but the assistant should still ask only the minimum needed.</p>
-            </div>
 
-            <div class="settings-page-section-card">
-              <div class="settings-page-section-card__header">
-                <div>
-                  <span class="settings-section-kicker">Assistant output</span>
-                  <h3>Reasoning display</h3>
+              <div class="settings-page-section-card">
+                <div class="settings-page-section-card__header">
+                  <div>
+                    <span class="settings-section-kicker">Image analysis</span>
+                    <h3>Preferred processing method</h3>
+                  </div>
+                  <p>Choose whether uploaded images should use the active LLM when available, local OCR, local visual analysis, or a combined local pipeline.</p>
                 </div>
-                <p>Choose how reasoning panels behave after a streamed answer finishes.</p>
+                <label class="settings-label" for="image-processing-method-select">Image processing method</label>
+                <select id="image-processing-method-select">
+                  <option value="auto">Auto</option>
+                  <option value="llm">LLM via active chat model</option>
+                  <option value="local_ocr">Local OCR only</option>
+                  <option value="local_vl">Local vision model only</option>
+                  <option value="local_both">Local OCR + local vision</option>
+                </select>
+                <p class="settings-copy">OCR-only and vision-only choices stay strict. Auto, active-model, and combined local modes can still fall back to the closest supported method.</p>
               </div>
-              <label class="tool-toggle"><input type="checkbox" id="reasoning-auto-collapse-toggle" /> <span>Auto-collapse reasoning panels after the answer completes</span></label>
-              <p class="settings-copy">Reasoning stays available on each assistant message and can still be expanded manually.</p>
-            </div>
-
-            <div class="settings-page-section-card">
-              <div class="settings-page-section-card__header">
-                <div>
-                  <span class="settings-section-kicker">Image analysis</span>
-                  <h3>Preferred processing method</h3>
-                </div>
-                <p>Choose whether uploaded images should use the active LLM when available, local OCR, local visual analysis, or a combined local pipeline.</p>
-              </div>
-              <label class="settings-label" for="image-processing-method-select">Image processing method</label>
-              <select id="image-processing-method-select">
-                <option value="auto">Auto</option>
-                <option value="llm">LLM via active chat model</option>
-                <option value="local_ocr">Local OCR only</option>
-                <option value="local_vl">Local vision model only</option>
-                <option value="local_both">Local OCR + local vision</option>
-              </select>
-              <p class="settings-copy">OCR-only and vision-only choices stay strict. Auto, active-model, and combined local modes can still fall back to the closest supported method.</p>
             </div>
           </div>
         </section>
@@ -258,10 +262,7 @@
                 </div>
               </div>
 
-              <div class="settings-page-note-block">
-                <strong>Fallback models</strong>
-                <p>These are used only when a preferred task model is unavailable. Add more than one to create a priority order for each operation.</p>
-              </div>
+              <p class="settings-copy">Fallback models are used only when a preferred task model is unavailable. Add more than one to create a priority order for each operation.</p>
 
               <div class="settings-page-grid settings-page-grid--two settings-page-grid--model-preferences">
                 <div>
@@ -319,46 +320,117 @@
         </section>
 
         <section class="settings-tab-panel" data-settings-panel="context" aria-labelledby="context-tab">
-          <div class="settings-page-grid settings-page-grid--two">
-            <div class="settings-page-section-card">
-              <div class="settings-page-section-card__header">
-                <div>
-                  <span class="settings-section-kicker">Persistent memory</span>
-                  <h3>Scratchpad</h3>
-                </div>
-                <p>Structured durable memory injected into the runtime system prompt.</p>
-              </div>
-              <div class="settings-label">Scratchpad sections</div>
-              <p id="scratchpad-readonly-note" class="settings-copy">Capture lessons, user profile clues, open problems, ongoing tasks, preferences, domain facts, and general notes.</p>
-              <div id="scratchpad-list" class="scratchpad-list" aria-label="Stored notes list"></div>
-              <div class="scratchpad-toolbar">
-                <button class="btn-ghost" id="scratchpad-add-btn" type="button">Quick add to General Notes</button>
-                <span id="scratchpad-count" class="scratchpad-count">0 notes</span>
-              </div>
-            </div>
+          <div class="settings-page-grid settings-page-grid--two settings-page-grid--context">
             <div class="settings-page-stack">
               <div class="settings-page-section-card">
                 <div class="settings-page-section-card__header">
                   <div>
-                    <span class="settings-section-kicker">Remembered tool results</span>
-                    <h3>Tool memory</h3>
+                    <span class="settings-section-kicker">Persistent memory</span>
+                    <h3>Scratchpad</h3>
                   </div>
-                  <p>Past web and URL results can be re-used instead of searched again. This is separate from generic RAG retrieval.</p>
+                  <p>Structured durable memory injected into the runtime system prompt.</p>
                 </div>
-                <p id="tool-memory-disabled-note" class="settings-copy" hidden>Tool memory requires RAG to be enabled.</p>
-                <label class="tool-toggle"><input type="checkbox" id="tool-memory-auto-inject-toggle" /> <span>Auto inject remembered tool results into each chat turn</span></label>
+                <div class="settings-label">Scratchpad sections</div>
+                <p id="scratchpad-readonly-note" class="settings-copy">Capture lessons, user profile clues, open problems, ongoing tasks, preferences, domain facts, and general notes.</p>
+                <div id="scratchpad-list" class="scratchpad-list" aria-label="Stored notes list"></div>
+                <div class="scratchpad-toolbar">
+                  <button class="btn-ghost" id="scratchpad-add-btn" type="button">Quick add to General Notes</button>
+                  <span id="scratchpad-count" class="scratchpad-count">0 notes</span>
+                </div>
               </div>
 
+              <div class="settings-page-section-card">
+                <div class="settings-page-section-card__header">
+                  <div>
+                    <span class="settings-section-kicker">Conversation compression</span>
+                    <h3>Summary policy</h3>
+                  </div>
+                  <p>Define when long conversations get summarized, how detailed the summary should be, and which messages must stay untouched.</p>
+                </div>
+                <div class="settings-page-grid settings-page-grid--two settings-page-grid--compact">
+                  <div class="settings-form-cluster">
+                    <label class="settings-label" for="summary-mode-select">Conversation summary mode</label>
+                    <select id="summary-mode-select">
+                      <option value="auto">Auto</option>
+                      <option value="never">Never</option>
+                      <option value="aggressive">Aggressive</option>
+                    </select>
+                    <p class="settings-copy">Auto balances cost and continuity, Never disables background summarization, and Aggressive summarizes earlier and more often.</p>
+                  </div>
+                  <div class="settings-form-cluster">
+                    <label class="settings-label" for="summary-detail-level-select">Summary detail level</label>
+                    <select id="summary-detail-level-select">
+                      <option value="balanced">Balanced</option>
+                      <option value="concise">Concise</option>
+                      <option value="detailed">Detailed</option>
+                    </select>
+                    <p class="settings-copy">Higher detail keeps more nuance and task history, but it also spends more prompt budget.</p>
+                  </div>
+                  <div class="settings-form-cluster">
+                    <label class="settings-label" for="summary-trigger-input">Summary trigger in visible tokens (1000-200000)</label>
+                    <input type="number" class="settings-number" id="summary-trigger-input" min="1000" max="200000" value="80000" />
+                    <p class="settings-copy">Once the visible conversation exceeds this threshold, automatic summarization becomes eligible.</p>
+                  </div>
+                  <div class="settings-form-cluster settings-form-cluster--split">
+                    <div class="settings-label">Protected message window</div>
+                    <div class="settings-inline-grid">
+                      <div>
+                        <label class="settings-mini-label" for="summary-skip-first-input">Protect first N messages (0-20)</label>
+                        <input type="number" class="settings-number" id="summary-skip-first-input" min="0" max="20" value="2" />
+                      </div>
+                      <div>
+                        <label class="settings-mini-label" for="summary-skip-last-input">Protect last N messages (0-20)</label>
+                        <input type="number" class="settings-number" id="summary-skip-last-input" min="0" max="20" value="1" />
+                      </div>
+                    </div>
+                    <p class="settings-copy">These messages are excluded from automatic summarization so the assistant keeps your opening context and latest turn intact.</p>
+                  </div>
+                </div>
+              </div>
+
+              <div class="settings-page-section-card">
+                <div class="settings-page-section-card__header">
+                  <div>
+                    <span class="settings-section-kicker">Canvas visibility</span>
+                    <h3>Canvas limits</h3>
+                  </div>
+                  <p>Control how much of large canvas files the assistant can see by default and per targeted read.</p>
+                </div>
+                <div class="settings-page-grid settings-page-grid--two">
+                  <div>
+                    <label class="settings-label" for="canvas-prompt-lines-input">Prompt max lines (100-3000)</label>
+                    <input type="number" class="settings-number" id="canvas-prompt-lines-input" min="100" max="3000" value="800" />
+                    <p class="settings-copy">Injected automatically into each turn for the active canvas document.</p>
+                  </div>
+                  <div>
+                    <label class="settings-label" for="canvas-prompt-tokens-input">Prompt token budget (500-20000)</label>
+                    <input type="number" class="settings-number" id="canvas-prompt-tokens-input" min="500" max="20000" value="2000" />
+                    <p class="settings-copy">Hard cap on canvas visible-content tokens per turn. Reduce for Unicode-heavy documents (Turkish, Arabic, CJK) that tokenise at a higher rate than ASCII.</p>
+                  </div>
+                  <div>
+                    <label class="settings-label" for="canvas-expand-lines-input">Expand max lines (100-4000)</label>
+                    <input type="number" class="settings-number" id="canvas-expand-lines-input" min="100" max="4000" value="1600" />
+                    <p class="settings-copy">Used when the assistant calls the larger canvas expansion tool.</p>
+                  </div>
+                  <div>
+                    <label class="settings-label" for="canvas-scroll-lines-input">Scroll window lines (50-800)</label>
+                    <input type="number" class="settings-number" id="canvas-scroll-lines-input" min="50" max="800" value="200" />
+                    <p class="settings-copy">Caps how many lines a single targeted canvas scroll can return.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-page-stack">
               <div class="settings-page-section-card">
                 <div class="settings-page-section-card__header">
                   <div>
                     <span class="settings-section-kicker">Retrieved context</span>
                     <h3>RAG injection</h3>
                   </div>
-                  <p>Choose whether retrieved context enters prompts automatically and how strict retrieval should be.</p>
+                  <p>Control which memory pools can be searched and which ones may be inserted automatically. Automatic injection is configured per source, so there is no separate global toggle here.</p>
                 </div>
                 <p id="rag-disabled-note" class="settings-copy" hidden>RAG is disabled in the environment, so sync and auto-injection are unavailable.</p>
-                <label class="tool-toggle"><input type="checkbox" id="rag-auto-inject-toggle" /> <span>Auto inject retrieved context into each chat turn</span></label>
                 <div id="rag-inject-options" class="rag-settings-grid">
                   <div class="rag-setting-group">
                     <label class="settings-label" for="rag-sensitivity-select">Injection sensitivity</label>
@@ -367,7 +439,7 @@
                       <option value="normal">Normal</option>
                       <option value="strict">Strict</option>
                     </select>
-                    <p id="rag-sensitivity-hint" class="settings-copy">Normal: balanced matching with an approximate threshold of 0.35.</p>
+                    <p id="rag-sensitivity-hint" class="settings-copy">Normal: uses a balanced threshold around 0.35, which is usually the best tradeoff between relevant recall and prompt cleanliness.</p>
                   </div>
 
                   <div class="rag-setting-group">
@@ -377,43 +449,86 @@
                       <option value="medium">Medium (5 chunks)</option>
                       <option value="large">Large (8 chunks)</option>
                     </select>
-                    <p class="settings-copy">Limits how many retrieved chunks can be added to a single turn.</p>
+                    <p class="settings-copy">This is the per-turn cap for injected material. Larger values preserve more context, but they also consume more prompt budget.</p>
                   </div>
 
                   <div class="rag-setting-group rag-setting-group--full">
-                    <div class="settings-label">Allowed RAG source pools</div>
-                    <p class="settings-copy">These pools feed generic retrieved context. If dedicated Tool memory auto-inject is enabled above, the backend skips the Tool memory pool here to avoid duplicate prompt injection.</p>
-                    <div id="rag-source-types" class="rag-source-type-list">
-                      <label class="rag-source-toggle">
-                        <input type="checkbox" name="rag-source-type" value="conversation" />
-                        <span class="rag-source-toggle__body">
+                    <div class="settings-label">RAG source pools</div>
+                    <p class="settings-copy">Each row maps one memory pool. Search controls whether the assistant may retrieve from that pool during normal RAG lookup. Auto inject controls whether matches from that pool may be inserted automatically into the prompt. Tool outputs come from executed tools inside chats, while saved web/fetches are remembered external results kept separately for reuse.</p>
+                    <div class="rag-source-matrix" role="group" aria-label="RAG source pool controls">
+                      <div class="rag-source-matrix__row">
+                        <div class="rag-source-matrix__source">
                           <strong>Chats</strong>
-                          <small>Earlier user and assistant messages indexed from conversations.</small>
-                        </span>
-                      </label>
-                      <label class="rag-source-toggle">
-                        <input type="checkbox" name="rag-source-type" value="tool_result" />
-                        <span class="rag-source-toggle__body">
-                          <strong>Tool results</strong>
-                          <small>Structured outputs captured from executed tools.</small>
-                        </span>
-                      </label>
-                      <label class="rag-source-toggle">
-                        <input type="checkbox" name="rag-source-type" value="tool_memory" />
-                        <span class="rag-source-toggle__body">
-                          <strong>Tool memory</strong>
-                          <small>Previously remembered web and fetch results.</small>
-                        </span>
-                      </label>
-                      <label class="rag-source-toggle">
-                        <input type="checkbox" name="rag-source-type" value="uploaded_document" />
-                        <span class="rag-source-toggle__body">
+                          <small>Earlier user and assistant messages indexed from previous conversations. Useful when the assistant should recall prior discussion without relying only on the visible thread.</small>
+                        </div>
+                        <div class="rag-source-matrix__actions">
+                          <label class="rag-source-mode-toggle">
+                            <input type="checkbox" name="rag-source-type" value="conversation" />
+                            <span>Search</span>
+                          </label>
+                          <label class="rag-source-mode-toggle">
+                            <input type="checkbox" name="rag-auto-inject-source-type" value="conversation" />
+                            <span>Auto inject</span>
+                          </label>
+                        </div>
+                      </div>
+
+                      <div class="rag-source-matrix__group-label">Tool-derived context</div>
+
+                      <div class="rag-source-matrix__row">
+                        <div class="rag-source-matrix__source">
+                          <strong>Tool outputs</strong>
+                          <small>Outputs captured from executed tools inside conversation history, such as searches, fetches, or analysis steps. Use this when recent tool work should stay searchable in chat context.</small>
+                        </div>
+                        <div class="rag-source-matrix__actions">
+                          <label class="rag-source-mode-toggle">
+                            <input type="checkbox" name="rag-source-type" value="tool_result" />
+                            <span>Search</span>
+                          </label>
+                          <label class="rag-source-mode-toggle">
+                            <input type="checkbox" name="rag-auto-inject-source-type" value="tool_result" />
+                            <span>Auto inject</span>
+                          </label>
+                        </div>
+                      </div>
+
+                      <div class="rag-source-matrix__row">
+                        <div class="rag-source-matrix__source">
+                          <strong>Saved web/fetches</strong>
+                          <small>Remembered web, URL, and news results stored separately from conversation history so they can be reused later without depending on the original chat turn.</small>
+                        </div>
+                        <div class="rag-source-matrix__actions">
+                          <label class="rag-source-mode-toggle">
+                            <input type="checkbox" name="rag-source-type" value="tool_memory" />
+                            <span>Search</span>
+                          </label>
+                          <label class="rag-source-mode-toggle">
+                            <input type="checkbox" name="rag-auto-inject-source-type" value="tool_memory" />
+                            <span>Auto inject</span>
+                          </label>
+                        </div>
+                      </div>
+
+                      <div class="rag-source-matrix__row">
+                        <div class="rag-source-matrix__source">
                           <strong>Uploaded documents</strong>
-                          <small>Manual files or notes added from the settings page.</small>
-                        </span>
-                      </label>
+                          <small>Manual files, notes, or other knowledge-base content added from Settings. Use this when uploaded reference material should participate in retrieval.</small>
+                        </div>
+                        <div class="rag-source-matrix__actions">
+                          <label class="rag-source-mode-toggle">
+                            <input type="checkbox" name="rag-source-type" value="uploaded_document" />
+                            <span>Search</span>
+                          </label>
+                          <label class="rag-source-mode-toggle">
+                            <input type="checkbox" name="rag-auto-inject-source-type" value="uploaded_document" />
+                            <span>Auto inject</span>
+                          </label>
+                        </div>
+                      </div>
                     </div>
-                    <p id="rag-source-summary" class="settings-copy">Choose which RAG memory pools the assistant can search and auto-inject.</p>
+                    <p class="settings-copy">In practice, Search decides what the system may look up, and Auto inject decides what eligible matches may be inserted automatically. If a pool is not searchable, it will not contribute generic retrieved context even if Auto inject is checked.</p>
+                    <p id="rag-source-summary" class="settings-copy">Search is enabled for the selected pools only; unselected pools will not participate in generic RAG retrieval.</p>
+                    <p id="rag-auto-inject-source-summary" class="settings-copy">Auto inject applies only to the selected pools.</p>
                   </div>
                 </div>
               </div>
@@ -424,92 +539,22 @@
                     <span class="settings-section-kicker">Message refinement</span>
                     <h3>Pruning mode</h3>
                   </div>
-                  <p>Trim earlier chat messages without changing their meaning when long conversations start to drift.</p>
+                  <p>Shorten older visible history when the conversation gets noisy, while keeping the underlying meaning intact.</p>
                 </div>
                 <label class="tool-toggle"><input type="checkbox" id="pruning-enabled-toggle" /> <span>Enable automatic pruning after the visible token threshold is exceeded</span></label>
-                <div class="settings-page-grid settings-page-grid--two">
-                  <div>
+                <div class="settings-page-grid settings-page-grid--two settings-page-grid--compact">
+                  <div class="settings-form-cluster">
                     <label class="settings-label" for="pruning-token-threshold-input">Pruning trigger in visible tokens (1000-200000)</label>
                     <input type="number" class="settings-number" id="pruning-token-threshold-input" min="1000" max="200000" value="80000" />
+                    <p class="settings-copy">Pruning becomes eligible once the visible conversation crosses this size threshold.</p>
                   </div>
-                  <div>
+                  <div class="settings-form-cluster">
                     <label class="settings-label" for="pruning-batch-size-input">Prune first N eligible messages (1-50)</label>
                     <input type="number" class="settings-number" id="pruning-batch-size-input" min="1" max="50" value="10" />
+                    <p class="settings-copy">Controls how many older messages are shortened in one automatic pruning pass.</p>
                   </div>
                 </div>
                 <p class="settings-copy">Manual pruning stays available from message actions even if automatic pruning is turned off.</p>
-              </div>
-            </div>
-          </div>
-
-          <div class="settings-page-grid settings-page-grid--two">
-            <div class="settings-page-section-card">
-              <div class="settings-page-section-card__header">
-                <div>
-                  <span class="settings-section-kicker">Conversation compression</span>
-                  <h3>Summary policy</h3>
-                </div>
-                <p>These settings govern automatic summarization of long conversations.</p>
-              </div>
-              <div class="settings-page-grid settings-page-grid--two">
-                <div>
-                  <label class="settings-label" for="summary-mode-select">Conversation summary mode</label>
-                  <select id="summary-mode-select">
-                    <option value="auto">Auto</option>
-                    <option value="never">Never</option>
-                    <option value="aggressive">Aggressive</option>
-                  </select>
-                  <label class="settings-label" for="summary-detail-level-select">Summary detail level</label>
-                  <select id="summary-detail-level-select">
-                    <option value="balanced">Balanced</option>
-                    <option value="concise">Concise</option>
-                    <option value="detailed">Detailed</option>
-                  </select>
-                </div>
-                <div>
-                  <label class="settings-label" for="summary-trigger-input">Summary trigger in visible tokens (1000-200000)</label>
-                  <input type="number" class="settings-number" id="summary-trigger-input" min="1000" max="200000" value="80000" />
-                </div>
-                <div>
-                  <label class="settings-label" for="summary-skip-first-input">Protect first N messages (0-20)</label>
-                  <input type="number" class="settings-number" id="summary-skip-first-input" min="0" max="20" value="2" />
-                </div>
-                <div>
-                  <label class="settings-label" for="summary-skip-last-input">Protect last N messages (0-20)</label>
-                  <input type="number" class="settings-number" id="summary-skip-last-input" min="0" max="20" value="1" />
-                </div>
-              </div>
-            </div>
-
-            <div class="settings-page-section-card">
-              <div class="settings-page-section-card__header">
-                <div>
-                  <span class="settings-section-kicker">Canvas visibility</span>
-                  <h3>Canvas limits</h3>
-                </div>
-                <p>Control how much of large canvas files the assistant can see by default and per targeted read.</p>
-              </div>
-              <div class="settings-page-grid settings-page-grid--two">
-                <div>
-                  <label class="settings-label" for="canvas-prompt-lines-input">Prompt max lines (100-3000)</label>
-                  <input type="number" class="settings-number" id="canvas-prompt-lines-input" min="100" max="3000" value="800" />
-                  <p class="settings-copy">Injected automatically into each turn for the active canvas document.</p>
-                </div>
-                <div>
-                  <label class="settings-label" for="canvas-prompt-tokens-input">Prompt token budget (500-20000)</label>
-                  <input type="number" class="settings-number" id="canvas-prompt-tokens-input" min="500" max="20000" value="2000" />
-                  <p class="settings-copy">Hard cap on canvas visible-content tokens per turn. Reduce for Unicode-heavy documents (Turkish, Arabic, CJK) that tokenise at a higher rate than ASCII.</p>
-                </div>
-                <div>
-                  <label class="settings-label" for="canvas-expand-lines-input">Expand max lines (100-4000)</label>
-                  <input type="number" class="settings-number" id="canvas-expand-lines-input" min="100" max="4000" value="1600" />
-                  <p class="settings-copy">Used when the assistant calls the larger canvas expansion tool.</p>
-                </div>
-                <div>
-                  <label class="settings-label" for="canvas-scroll-lines-input">Scroll window lines (50-800)</label>
-                  <input type="number" class="settings-number" id="canvas-scroll-lines-input" min="50" max="800" value="200" />
-                  <p class="settings-copy">Caps how many lines a single targeted canvas scroll can return.</p>
-                </div>
               </div>
             </div>
           </div>
@@ -547,8 +592,7 @@
                   <input type="number" class="settings-number" id="fetch-aggressiveness-input" min="0" max="100" value="50" />
                 </div>
               </div>
-              <p class="settings-copy">Parallel-safe calls above the limit stay in the same assistant turn but queue instead of starting together.</p>
-              <p class="settings-copy">The sub-agent can still finish early when it has enough evidence; this setting only caps its maximum budget.</p>
+              <p class="settings-copy">Calls above the parallel limit queue in the same turn, and the sub-agent may still finish early if it already has enough evidence.</p>
             </div>
 
             <div class="settings-page-section-card">
@@ -575,11 +619,7 @@
                   <span class="settings-section-kicker">Sub-agent</span>
                   <h3>Allowed web tools</h3>
                 </div>
-                <p>Choose which web-only tools the delegated helper may use during research.</p>
-              </div>
-              <div class="settings-page-note-block">
-                <strong>Scope</strong>
-                <p>This does not grant file, canvas, or memory access to the helper. It only narrows the web research tools the helper may call.</p>
+                <p>Choose which web-only tools the delegated helper may use during research. This does not grant file, canvas, or memory access.</p>
               </div>
               <div class="tool-permission-sections" id="sub-agent-tool-toggles">
                 {% for section in sub_agent_tool_sections %}
@@ -614,16 +654,7 @@
                 <span class="settings-section-kicker">Runtime contract</span>
                 <h3>Tool permissions</h3>
               </div>
-              <p>Only enabled tools are exposed to the assistant and allowed to execute.</p>
-            </div>
-            <div class="settings-page-note-block">
-              <strong>What this panel controls</strong>
-              <p>You can turn tool families on or off here, but some access is still decided at runtime. Workspace tools stay inside the sandbox, canvas edit tools can pull in inspection helpers automatically, and web or news tools may be hidden when the user request does not call for them.</p>
-              <ul class="settings-page-note-list">
-                <li>Turning a tool on allows the assistant to request it when context permits.</li>
-                <li>Turning a tool off removes it from the assistant's available options.</li>
-                <li>This page does not widen the workspace sandbox or override feature flags.</li>
-              </ul>
+              <p>Only enabled tools are exposed to the assistant and allowed to execute. This page does not widen the sandbox or override feature flags.</p>
             </div>
             <div class="tool-permission-sections" id="tool-toggles">
               {% for section in tool_sections %}
@@ -657,11 +688,7 @@
                 <span class="settings-section-kicker">Proxy routing</span>
                 <h3>Proxy scope</h3>
               </div>
-              <p>Choose which operations may read and use proxies from proxies.txt. Unchecked operations always connect directly.</p>
-            </div>
-            <div class="settings-page-note-block">
-              <strong>Recommended baseline</strong>
-              <p>OpenRouter provider traffic stays direct by default. Enable it only if your network actually requires a proxy for model requests.</p>
+              <p>Choose which operations may read and use proxies from proxies.txt. Unchecked operations always connect directly, and OpenRouter traffic usually stays direct unless your network requires a proxy.</p>
             </div>
             <div class="tool-toggles tool-toggles--page">
               {% for option in proxy_operation_options %}

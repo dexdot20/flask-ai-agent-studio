@@ -22,6 +22,7 @@ from db import (
     extract_clarification_response,
     extract_message_attachments,
     extract_pending_clarification,
+    extract_sub_agent_traces,
     parse_message_metadata,
     parse_message_tool_calls,
 )
@@ -606,9 +607,51 @@ def _collect_answered_clarification_skip_indexes(messages: list[dict]) -> set[in
     return skip_indexes
 
 
+def _collect_canvas_saved_sub_agent_skip_indexes(messages: list[dict]) -> set[int]:
+    skip_indexes: set[int] = set()
+
+    for assistant_index, message in enumerate(messages):
+        if str(message.get("role") or "").strip() != "assistant":
+            continue
+
+        metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+        sub_agent_traces = extract_sub_agent_traces(metadata)
+        if not any(trace.get("canvas_saved") is True for trace in sub_agent_traces):
+            continue
+
+        tool_indexes: list[int] = []
+        probe_index = assistant_index - 1
+        while probe_index >= 0 and str(messages[probe_index].get("role") or "").strip() == "tool":
+            tool_indexes.append(probe_index)
+            probe_index -= 1
+
+        if probe_index < 0 or str(messages[probe_index].get("role") or "").strip() != "assistant":
+            continue
+
+        tool_call_message = messages[probe_index]
+        tool_calls = parse_message_tool_calls(tool_call_message.get("tool_calls"))
+        sub_agent_call_ids = {
+            str(tool_call.get("id") or "").strip()
+            for tool_call in tool_calls
+            if str(((tool_call.get("function") or {}).get("name") or "")).strip() == "sub_agent"
+        }
+        if not sub_agent_call_ids:
+            continue
+
+        skip_indexes.add(probe_index)
+        skip_indexes.update(
+            index
+            for index in tool_indexes
+            if str(messages[index].get("tool_call_id") or "").strip() in sub_agent_call_ids
+        )
+
+    return skip_indexes
+
+
 def build_api_messages(messages: list[dict], *, canvas_documents: list[dict] | None = None) -> list[dict]:
     api_messages = []
     skip_indexes = _collect_answered_clarification_skip_indexes(messages)
+    skip_indexes.update(_collect_canvas_saved_sub_agent_skip_indexes(messages))
     latest_user_message_index = max(
         (index for index, message in enumerate(messages) if message.get("role") == "user"),
         default=-1,
@@ -967,6 +1010,10 @@ def _build_current_time_context(now: datetime) -> str:
         f"- Date: {normalized_now.date().isoformat()}\n- Time: {normalized_now.strftime('%H:%M')}\n"
         f"- Weekday: {normalized_now.strftime('%A')}\n- Timezone: {timezone_label}\n"
     )
+
+
+def build_current_time_context(now: datetime | None = None) -> str:
+    return _build_current_time_context((now or datetime.now().astimezone()).astimezone())
 
 
 def _count_summary_messages(messages: list[dict] | None) -> int:
@@ -1383,6 +1430,7 @@ def prepend_runtime_context(
     current_context_injection: str | None = None,
     summary_count: int | None = None,
 ):
+    now = datetime.now().astimezone()
     resolved_runtime_tool_names = resolve_runtime_tool_names(
         _normalize_tool_name_list(active_tool_names),
         canvas_documents=canvas_documents,
@@ -1419,6 +1467,7 @@ def prepend_runtime_context(
         include_volatile_context=False,
         runtime_tool_names=resolved_runtime_tool_names,
         canvas_payload=canvas_payload,
+        now=now,
     )
 
     normalized_summary_count = summary_count if summary_count is not None else _count_summary_messages(messages)
@@ -1441,6 +1490,7 @@ def prepend_runtime_context(
             canvas_payload=canvas_payload,
             summary_count=normalized_summary_count,
             include_time_context=True,
+            now=now,
         )
 
     if not injection_content:

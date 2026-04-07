@@ -1549,6 +1549,16 @@ def _normalize_sub_agent_trace_entry(value) -> dict | None:
         cleaned["reasoning"] = reasoning
     if value.get("timed_out") is True:
         cleaned["timed_out"] = True
+    if value.get("canvas_saved") is True:
+        cleaned["canvas_saved"] = True
+
+    canvas_document_id = str(value.get("canvas_document_id") or "").strip()[:120]
+    if canvas_document_id:
+        cleaned["canvas_document_id"] = canvas_document_id
+
+    canvas_document_title = str(value.get("canvas_document_title") or "").strip()[:300]
+    if canvas_document_title:
+        cleaned["canvas_document_title"] = canvas_document_title
 
     fallback_note = str(value.get("fallback_note") or "").strip()[:300]
     if fallback_note:
@@ -1581,7 +1591,7 @@ def _normalize_sub_agent_trace_entry(value) -> dict | None:
     if normalized_messages:
         cleaned["messages"] = normalized_messages
 
-    return cleaned if any(key in cleaned for key in {"task", "task_full", "summary", "error", "tool_trace", "artifacts", "messages", "reasoning", "fallback_note"}) else None
+    return cleaned if any(key in cleaned for key in {"task", "task_full", "summary", "error", "tool_trace", "artifacts", "messages", "reasoning", "fallback_note", "canvas_saved", "canvas_document_id", "canvas_document_title"}) else None
 
 
 def extract_sub_agent_traces(metadata: dict | None) -> list[dict]:
@@ -2390,6 +2400,14 @@ def get_rag_source_types(settings: dict | None = None) -> list[str]:
         return []
     source = settings if settings is not None else get_app_settings()
     raw_value = source.get("rag_source_types", DEFAULT_SETTINGS["rag_source_types"])
+    return normalize_rag_source_types(raw_value)
+
+
+def get_rag_auto_inject_source_types(settings: dict | None = None) -> list[str]:
+    if not RAG_ENABLED:
+        return []
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get("rag_auto_inject_source_types", DEFAULT_SETTINGS["rag_auto_inject_source_types"])
     return normalize_rag_source_types(raw_value)
 
 

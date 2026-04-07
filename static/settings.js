@@ -76,17 +76,16 @@ const titleModelFallbackAddBtn = document.getElementById("title-model-fallback-a
 const uploadMetadataModelFallbackAddBtn = document.getElementById("upload-metadata-model-fallback-add-btn");
 const subAgentModelFallbackAddBtn = document.getElementById("sub-agent-model-fallback-add-btn");
 const imageProcessingMethodEl = document.getElementById("image-processing-method-select");
-const ragAutoInjectEl = document.getElementById("rag-auto-inject-toggle");
 const ragInjectOptionsEl = document.getElementById("rag-inject-options");
 const ragSensitivityEl = document.getElementById("rag-sensitivity-select");
 const ragSensitivityHintEl = document.getElementById("rag-sensitivity-hint");
 const ragContextSizeEl = document.getElementById("rag-context-size-select");
 const ragSourceTypeEls = Array.from(document.querySelectorAll("input[name='rag-source-type']"));
+const ragAutoInjectSourceTypeEls = Array.from(document.querySelectorAll("input[name='rag-auto-inject-source-type']"));
 const proxyOperationEls = Array.from(document.querySelectorAll("input[name='proxy-enabled-operation']"));
 const subAgentToolToggleEls = Array.from(document.querySelectorAll("input[name='sub-agent-allowed-tool']"));
 const ragSourceSummaryEl = document.getElementById("rag-source-summary");
-const toolMemoryAutoInjectEl = document.getElementById("tool-memory-auto-inject-toggle");
-const toolMemoryDisabledNoteEl = document.getElementById("tool-memory-disabled-note");
+const ragAutoInjectSourceSummaryEl = document.getElementById("rag-auto-inject-source-summary");
 const ragDisabledNoteEl = document.getElementById("rag-disabled-note");
 const toolToggleEls = Array.from(document.querySelectorAll("#tool-toggles input[type='checkbox']"));
 const kbSyncBtn = document.getElementById("kb-sync-btn");
@@ -113,15 +112,15 @@ const SETTINGS_TAB_ALIASES = {
 };
 
 const RAG_SENSITIVITY_HINTS = {
-  flexible: "Flexible: lower threshold around 0.20, so the system injects broader matches.",
-  normal: "Normal: balanced matching with an approximate threshold of 0.35.",
-  strict: "Strict: higher threshold around 0.55, so only stronger matches are injected.",
+  flexible: "Flexible: uses a lower threshold around 0.20, so broader and weaker matches may still be included when recall matters more than precision.",
+  normal: "Normal: uses a balanced threshold around 0.35, which is usually the best tradeoff between relevant recall and prompt cleanliness.",
+  strict: "Strict: uses a higher threshold around 0.55, so only stronger matches are injected and weak or tangential context is filtered out more aggressively.",
 };
 
 const RAG_SOURCE_TYPE_LABELS = {
   conversation: "Chats",
-  tool_result: "Tool results",
-  tool_memory: "Tool memory",
+  tool_result: "Tool outputs",
+  tool_memory: "Saved web/fetches",
   uploaded_document: "Uploaded documents",
 };
 
@@ -1370,12 +1369,20 @@ function getSelectedRagSourceTypes() {
   return ragSourceTypeEls.filter((element) => element.checked).map((element) => element.value);
 }
 
+function getSelectedRagAutoInjectSourceTypes() {
+  return ragAutoInjectSourceTypeEls.filter((element) => element.checked).map((element) => element.value);
+}
+
 function getSelectedProxyOperations() {
   return proxyOperationEls.filter((element) => element.checked).map((element) => element.value);
 }
 
 function getSelectedSubAgentTools() {
   return subAgentToolToggleEls.filter((element) => element.checked).map((element) => element.value);
+}
+
+function getRagSourceControlContainer(element) {
+  return element?.closest(".rag-source-mode-toggle") || null;
 }
 
 function applySelectedTools(selected) {
@@ -1390,7 +1397,16 @@ function applySelectedRagSourceTypes(selected) {
   ragSourceTypeEls.forEach((element) => {
     element.checked = active.has(element.value);
   });
+  syncRagAutoInjectSourceAvailability();
   updateRagSourceSummary();
+}
+
+function applySelectedRagAutoInjectSourceTypes(selected) {
+  const active = new Set(Array.isArray(selected) ? selected : []);
+  ragAutoInjectSourceTypeEls.forEach((element) => {
+    element.checked = active.has(element.value);
+  });
+  syncRagAutoInjectSourceAvailability();
 }
 
 function applySelectedProxyOperations(selected) {
@@ -1419,12 +1435,54 @@ function updateRagSourceSummary() {
 
   const selected = getSelectedRagSourceTypes();
   if (!selected.length) {
-    ragSourceSummaryEl.textContent = "No RAG source pool is selected. The assistant will not retrieve memory context.";
+    ragSourceSummaryEl.textContent = "No source pool is enabled for Search. The assistant will skip generic RAG retrieval from chats, tool outputs, and uploaded documents.";
     return;
   }
 
-  const labels = selected.map((value) => RAG_SOURCE_TYPE_LABELS[value] || value).join(", ");
-  ragSourceSummaryEl.textContent = `Assistant can search and auto-inject: ${labels}.`;
+  ragSourceSummaryEl.textContent = `Search is enabled for: ${formatRagSourceLabels(selected)}. Only these pools can supply generic retrieved context.`;
+}
+
+function updateRagAutoInjectSourceSummary() {
+  if (!ragAutoInjectSourceSummaryEl) {
+    return;
+  }
+
+  if (!Boolean(featureFlags.rag_enabled)) {
+    ragAutoInjectSourceSummaryEl.textContent = "RAG is disabled in .env, so per-source auto-injection is inactive.";
+    return;
+  }
+
+  const selected = getSelectedRagAutoInjectSourceTypes();
+  if (!selected.length) {
+    ragAutoInjectSourceSummaryEl.textContent = "No source pool is marked for Auto inject. Retrieved context can still be searched manually, but nothing will be inserted automatically.";
+    return;
+  }
+
+  ragAutoInjectSourceSummaryEl.textContent = `Auto inject is configured for: ${formatRagSourceLabels(selected)}. These pools are eligible for automatic prompt insertion.`;
+}
+
+function formatRagSourceLabels(selectedValues) {
+  const values = Array.isArray(selectedValues) ? selectedValues : [];
+  const toolDerivedSelected = values.includes("tool_result") && values.includes("tool_memory");
+  const labels = values
+    .filter((value) => !toolDerivedSelected || (value !== "tool_result" && value !== "tool_memory"))
+    .map((value) => RAG_SOURCE_TYPE_LABELS[value] || value);
+  if (toolDerivedSelected) {
+    labels.splice(1, 0, "Tool-derived context");
+  }
+  return labels.join(", ");
+}
+
+function syncRagAutoInjectSourceAvailability() {
+  const ragEnabled = Boolean(featureFlags.rag_enabled);
+
+  ragAutoInjectSourceTypeEls.forEach((element) => {
+    element.disabled = !ragEnabled;
+    getRagSourceControlContainer(element)?.classList.toggle("is-muted", !ragEnabled);
+  });
+
+  updateRagAutoInjectSourceSummary();
+  syncOverviewStats();
 }
 
 function syncOverviewStats() {
@@ -1443,7 +1501,8 @@ function syncOverviewStats() {
       statRagEl.textContent = "Disabled";
     } else {
       const sourceCount = getSelectedRagSourceTypes().length;
-      statRagEl.textContent = sourceCount === 1 ? "1 source" : `${sourceCount} sources`;
+      const autoInjectCount = getSelectedRagAutoInjectSourceTypes().length;
+      statRagEl.textContent = `${sourceCount} search / ${autoInjectCount} inject`;
     }
   }
 }
@@ -1478,9 +1537,6 @@ function applySettingsToForm() {
   applySelectedTools(appSettings.active_tools || []);
   applySelectedSubAgentTools(appSettings.sub_agent_allowed_tool_names || []);
   applySelectedProxyOperations(appSettings.proxy_enabled_operations || []);
-  if (ragAutoInjectEl) {
-    ragAutoInjectEl.checked = Boolean(featureFlags.rag_enabled ? appSettings.rag_auto_inject : false);
-  }
   if (ragSensitivityEl) {
     ragSensitivityEl.value = appSettings.rag_sensitivity || "normal";
   }
@@ -1488,9 +1544,7 @@ function applySettingsToForm() {
     ragContextSizeEl.value = appSettings.rag_context_size || "medium";
   }
   applySelectedRagSourceTypes(appSettings.rag_source_types || []);
-  if (toolMemoryAutoInjectEl) {
-    toolMemoryAutoInjectEl.checked = Boolean(featureFlags.rag_enabled ? appSettings.tool_memory_auto_inject : false);
-  }
+  applySelectedRagAutoInjectSourceTypes(appSettings.rag_auto_inject_source_types || appSettings.rag_source_types || []);
   if (imageProcessingMethodEl) {
     imageProcessingMethodEl.value = appSettings.image_processing_method || "auto";
   }
@@ -1515,14 +1569,15 @@ function applySettingsToForm() {
 function applyFeatureAvailability() {
   const ragEnabled = Boolean(featureFlags.rag_enabled);
 
-  if (ragAutoInjectEl) ragAutoInjectEl.disabled = !ragEnabled;
   if (ragSensitivityEl) ragSensitivityEl.disabled = !ragEnabled;
   if (ragContextSizeEl) ragContextSizeEl.disabled = !ragEnabled;
   ragSourceTypeEls.forEach((element) => {
     element.disabled = !ragEnabled;
   });
+  ragAutoInjectSourceTypeEls.forEach((element) => {
+    element.disabled = !ragEnabled;
+  });
   if (kbSyncBtn) kbSyncBtn.disabled = !ragEnabled;
-  if (toolMemoryAutoInjectEl) toolMemoryAutoInjectEl.disabled = !ragEnabled;
   if (kbUploadFileEl) kbUploadFileEl.disabled = !ragEnabled;
   if (kbUploadTitleEl) kbUploadTitleEl.disabled = !ragEnabled;
   if (kbUploadDescriptionEl) kbUploadDescriptionEl.disabled = !ragEnabled;
@@ -1533,9 +1588,6 @@ function applyFeatureAvailability() {
   }
   if (ragDisabledNoteEl) {
     ragDisabledNoteEl.hidden = ragEnabled;
-  }
-  if (toolMemoryDisabledNoteEl) {
-    toolMemoryDisabledNoteEl.hidden = ragEnabled;
   }
   if (scratchpadAddBtn) {
     scratchpadAddBtn.hidden = false;
@@ -1549,6 +1601,7 @@ function applyFeatureAvailability() {
   } else {
     setKbUploadStatus("Ready to upload", "muted");
   }
+  syncRagAutoInjectSourceAvailability();
   updateRagSourceSummary();
   syncOverviewStats();
 }
@@ -1599,7 +1652,9 @@ function applyServerSettingsData(data) {
   appSettings.rag_sensitivity = data.rag_sensitivity || "normal";
   appSettings.rag_context_size = data.rag_context_size || "medium";
   appSettings.rag_source_types = Array.isArray(data.rag_source_types) ? data.rag_source_types : [];
-  appSettings.tool_memory_auto_inject = Boolean(data.tool_memory_auto_inject);
+  appSettings.rag_auto_inject_source_types = Array.isArray(data.rag_auto_inject_source_types)
+    ? data.rag_auto_inject_source_types
+    : appSettings.rag_source_types;
   if (data.features && typeof data.features === "object") {
     Object.assign(featureFlags, data.features);
   }
@@ -1659,11 +1714,12 @@ async function saveSettings() {
     active_tools: getSelectedTools(),
     sub_agent_allowed_tool_names: getSelectedSubAgentTools(),
     proxy_enabled_operations: getSelectedProxyOperations(),
-    rag_auto_inject: featureFlags.rag_enabled ? Boolean(ragAutoInjectEl?.checked) : false,
+    rag_auto_inject: featureFlags.rag_enabled ? getSelectedRagAutoInjectSourceTypes().length > 0 : false,
     rag_sensitivity: ragSensitivityEl?.value || "normal",
     rag_context_size: ragContextSizeEl?.value || "medium",
     rag_source_types: featureFlags.rag_enabled ? getSelectedRagSourceTypes() : [],
-    tool_memory_auto_inject: featureFlags.rag_enabled ? Boolean(toolMemoryAutoInjectEl?.checked) : false,
+    rag_auto_inject_source_types: featureFlags.rag_enabled ? getSelectedRagAutoInjectSourceTypes() : [],
+    tool_memory_auto_inject: false,
     scratchpad: (scratchpadSections[DEFAULT_SCRATCHPAD_SECTION_ID] || []).join("\n"),
     scratchpad_sections: DEFAULT_SCRATCHPAD_SECTION_ORDER.reduce((acc, sectionId) => {
       acc[sectionId] = (scratchpadSections[sectionId] || []).join("\n");
@@ -2057,7 +2113,6 @@ function registerDirtyListeners() {
   uploadMetadataModelPreferenceEl?.addEventListener("change", markDirty);
   subAgentModelPreferenceEl?.addEventListener("change", markDirty);
   imageProcessingMethodEl?.addEventListener("change", markDirty);
-  ragAutoInjectEl?.addEventListener("change", markDirty);
   ragSensitivityEl?.addEventListener("change", () => {
     updateRagSensitivityHint();
     markDirty();
@@ -2065,12 +2120,19 @@ function registerDirtyListeners() {
   ragContextSizeEl?.addEventListener("change", markDirty);
   ragSourceTypeEls.forEach((element) => {
     element.addEventListener("change", () => {
+      syncRagAutoInjectSourceAvailability();
       updateRagSourceSummary();
       syncOverviewStats();
       markDirty();
     });
   });
-  toolMemoryAutoInjectEl?.addEventListener("change", markDirty);
+  ragAutoInjectSourceTypeEls.forEach((element) => {
+    element.addEventListener("change", () => {
+      updateRagAutoInjectSourceSummary();
+      syncOverviewStats();
+      markDirty();
+    });
+  });
   toolToggleEls.forEach((element) => {
     element.addEventListener("change", () => {
       markDirty();
