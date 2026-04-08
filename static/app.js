@@ -566,6 +566,8 @@ let activeAssistantStreamingHasVisibleAnswer = false;
 let selectedImageFiles = [];
 let selectedDocumentFiles = [];
 let selectedDocumentSubmissionModes = new Map();
+const attachmentFileKeyByObject = new WeakMap();
+let nextAttachmentFileKeyId = 1;
 let selectedYouTubeUrl = "";
 let pendingDocumentCanvasOpen = null;
 let editingMessageId = null;
@@ -1074,6 +1076,7 @@ const ALLOWED_DOCUMENT_TYPES = new Set([
   "text/markdown",
 ]);
 const DOCUMENT_EXTENSIONS = new Set([".docx", ".pdf", ".txt", ".csv", ".md"]);
+const VISUAL_PDF_PAGE_LIMIT = 3;
 const STREAM_TYPING_INTERVAL_MS = 24;
 const STREAM_TYPING_MIN_STEP = 3;
 const STREAM_TYPING_MAX_STEP = 48;
@@ -1179,8 +1182,31 @@ function syncSelectedDocumentSubmissionModes() {
   selectedDocumentSubmissionModes = nextModes;
 }
 
-function getAttachmentFileKey(file) {
+function getAttachmentDeduplicationKey(file) {
   return [file?.name || "", file?.size || 0, file?.type || "", file?.lastModified || 0].join("::");
+}
+
+function getAttachmentFileKey(file) {
+  if (!file || (typeof file !== "object" && typeof file !== "function")) {
+    return "";
+  }
+
+  const existingKey = attachmentFileKeyByObject.get(file);
+  if (existingKey) {
+    return existingKey;
+  }
+
+  const nextKey = [
+    "attachment",
+    nextAttachmentFileKeyId,
+    file?.name || "",
+    file?.size || 0,
+    file?.type || "",
+    file?.lastModified || 0,
+  ].join("::");
+  nextAttachmentFileKeyId += 1;
+  attachmentFileKeyByObject.set(file, nextKey);
+  return nextKey;
 }
 
 function dedupeFiles(files) {
@@ -1190,7 +1216,7 @@ function dedupeFiles(files) {
     if (!file) {
       return;
     }
-    const key = getAttachmentFileKey(file);
+    const key = getAttachmentDeduplicationKey(file);
     if (seen.has(key)) {
       return;
     }
@@ -3719,8 +3745,8 @@ function promptPdfSubmissionMode(files) {
     ? `How should ${String(pdfFiles[0]?.name || "this PDF").trim() || "this PDF"} be sent?`
     : `How should these ${pdfFiles.length} PDFs be sent?`;
   const message = pdfFiles.length === 1
-    ? "Choose visual mode for page-image analysis with vision-capable models, or text mode to extract text and open it in Canvas."
-    : "Choose one mode for this PDF batch. Visual mode sends the first 3 pages as images. Text mode extracts text and keeps Canvas editing available.";
+    ? `Choose visual mode for page-image analysis with vision-capable models. Visual mode sends up to the first ${VISUAL_PDF_PAGE_LIMIT} pages as images, while text mode extracts text and keeps Canvas editing available.`
+    : `Choose one mode for this PDF batch. Visual mode sends up to the first ${VISUAL_PDF_PAGE_LIMIT} pages of each PDF as images. Text mode extracts text and keeps Canvas editing available.`;
 
   return new Promise((resolve) => {
     openCanvasConfirmModal({
@@ -9036,11 +9062,14 @@ function renderAttachmentPreview() {
     const icon = kind === "image" ? "🖼️" : kind === "video" ? "▶️" : "📄";
     const preferredImageAnalysis = describePreferredImageAnalysisMethod();
     const documentSubmissionMode = kind === "document" ? getDocumentSubmissionMode(file) : null;
+    const documentProcessingDescription = documentSubmissionMode === "visual"
+      ? `first ${VISUAL_PDF_PAGE_LIMIT} pages as images`
+      : "text extraction";
     const description = kind === "image"
       ? `${preferredImageAnalysis} · ${formatFileSize(file.size)}`
       : kind === "video"
         ? "YouTube transcript will be generated locally"
-        : `${((file.name || "").split(".").pop() || "FILE").toUpperCase()} document · ${documentSubmissionMode === "visual" ? "visual analysis" : "text extraction"} · ${formatFileSize(file.size)}`;
+        : `${((file.name || "").split(".").pop() || "FILE").toUpperCase()} document · ${documentSubmissionMode === "visual" ? "visual analysis" : "text extraction"} · ${documentProcessingDescription} · ${formatFileSize(file.size)}`;
     const name = kind === "video" ? String(url || "YouTube video") : file.name;
     const removeLabel = kind === "image" ? "Remove image" : kind === "video" ? "Remove video" : "Remove document";
     return (
@@ -10615,7 +10644,7 @@ async function sendMessage(options = {}) {
         }
 
         if (event.visual_only) {
-          setCanvasStatus(`${String(event.file_name || "PDF").trim() || "PDF"} attached in visual mode. Canvas editing is unavailable for this upload.`, "muted");
+          setCanvasStatus(`${String(event.file_name || "PDF").trim() || "PDF"} attached in visual mode. Up to the first ${VISUAL_PDF_PAGE_LIMIT} pages will be used for image analysis, and Canvas editing is unavailable for this upload.`, "muted");
         }
 
         const pendingCanvasRequest = event.canvas_document ? consumePendingDocumentCanvasOpen() : null;

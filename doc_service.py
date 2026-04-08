@@ -135,6 +135,7 @@ _PDF_TEXT_TABLE_SETTINGS: dict = {
 _PDF_OCR_MIN_TEXT_CHARS = 20
 _PDF_OCR_RENDER_DPI = 200
 _PDF_OCR_MIN_IMAGE_COVERAGE = 0.35
+PDF_VISION_PAGE_LIMIT = 3
 _PDF_VISION_RENDER_DPI = 144
 _PDF_VISION_MAX_DIMENSION = 1600
 _PDF_HEADER_FOOTER_EDGE_RATIO = 0.08
@@ -804,7 +805,7 @@ def _render_pdf_page_image_bytes(page, *, dpi: int = _PDF_VISION_RENDER_DPI, max
     return image_buffer.getvalue(), "image/jpeg"
 
 
-def render_pdf_pages_for_vision(doc_bytes: bytes, *, max_pages: int = 3) -> list[dict]:
+def render_pdf_pages_for_vision(doc_bytes: bytes, *, max_pages: int = PDF_VISION_PAGE_LIMIT) -> list[dict]:
     page_limit = max(1, int(max_pages or 1))
     rendered_pages: list[dict] = []
 

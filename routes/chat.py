@@ -116,6 +116,7 @@ from db import (
     update_message_metadata,
 )
 from doc_service import (
+    PDF_VISION_PAGE_LIMIT,
     build_canvas_markdown,
     build_document_context_block,
     extract_document_text,
@@ -3187,7 +3188,7 @@ def register_chat_routes(app) -> None:
                         if not can_model_process_images(model, settings):
                             raise ValueError("The selected model does not support visual PDF analysis. Choose a vision-capable model or send the PDF as extracted text.")
 
-                        rendered_pages = render_pdf_pages_for_vision(doc_bytes, max_pages=3)
+                        rendered_pages = render_pdf_pages_for_vision(doc_bytes, max_pages=PDF_VISION_PAGE_LIMIT)
                         if not rendered_pages:
                             raise ValueError("Could not render the uploaded PDF as page images.")
 
