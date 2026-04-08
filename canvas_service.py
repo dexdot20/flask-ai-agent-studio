@@ -1347,14 +1347,90 @@ def delete_canvas_lines(
 
 
 def _normalize_batch_canvas_lines(value, *, field_name: str) -> list[str]:
+    value = _coerce_batch_canvas_json_value(value)
     if value is None:
         return []
+    if isinstance(value, str):
+        return [value]
     if not isinstance(value, list):
         raise ValueError(f"Batch canvas edit field '{field_name}' must be an array of strings.")
     return [str(line) for line in value]
 
 
+def _coerce_batch_canvas_json_value(value):
+    if not isinstance(value, str):
+        return value
+    raw_value = value.strip()
+    if not raw_value or raw_value[0] not in "[{":
+        return value
+
+    candidates = [raw_value]
+    if _repair_json is not None:
+        try:
+            repaired = _repair_json(raw_value)
+        except Exception:
+            repaired = None
+        if repaired and repaired not in candidates:
+            candidates.append(repaired)
+
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except Exception:
+            continue
+    return value
+
+
+def _normalize_batch_canvas_operations_input(operations):
+    normalized = _coerce_batch_canvas_json_value(operations)
+    while isinstance(normalized, list) and len(normalized) == 1 and isinstance(normalized[0], list):
+        normalized = normalized[0]
+    if isinstance(normalized, dict):
+        normalized = [normalized]
+    return normalized
+
+
+def _normalize_batch_canvas_targets_input(targets):
+    normalized = _coerce_batch_canvas_json_value(targets)
+    while isinstance(normalized, list) and len(normalized) == 1 and isinstance(normalized[0], list):
+        normalized = normalized[0]
+    if isinstance(normalized, dict):
+        normalized = [normalized]
+    return normalized
+
+
+def _normalize_batch_canvas_operation_candidate(operation):
+    normalized = _coerce_batch_canvas_json_value(operation)
+    while isinstance(normalized, list) and len(normalized) == 1:
+        normalized = _coerce_batch_canvas_json_value(normalized[0])
+
+    if not isinstance(normalized, dict):
+        return normalized
+
+    action = str(normalized.get("action") or "").strip().lower()
+    if action:
+        return normalized
+
+    nested_action_names = [
+        candidate
+        for candidate in ("replace", "insert", "delete")
+        if isinstance(normalized.get(candidate), dict)
+    ]
+    if len(nested_action_names) != 1:
+        return normalized
+
+    nested_action = nested_action_names[0]
+    nested_operation = dict(normalized.get(nested_action) or {})
+    for key, value in normalized.items():
+        if key == nested_action or key in {"replace", "insert", "delete"}:
+            continue
+        nested_operation.setdefault(key, value)
+    nested_operation["action"] = nested_action
+    return nested_operation
+
+
 def _normalize_batch_canvas_operation(operation: dict, index: int) -> dict:
+    operation = _normalize_batch_canvas_operation_candidate(operation)
     if not isinstance(operation, dict):
         raise ValueError(f"Batch canvas operation #{index + 1} must be an object.")
 
@@ -1577,6 +1653,7 @@ def batch_canvas_edits(
     targets: list[dict] | None = None,
 ) -> dict:
     if targets is not None:
+        targets = _normalize_batch_canvas_targets_input(targets)
         if not isinstance(targets, list) or not targets:
             raise ValueError("batch_canvas_edits requires a non-empty targets array when targets is provided.")
 
@@ -1584,9 +1661,10 @@ def batch_canvas_edits(
         results: list[dict] = []
         total_applied_count = 0
         for index, target in enumerate(targets):
+            target = _normalize_batch_canvas_operation_candidate(target)
             if not isinstance(target, dict):
                 raise ValueError(f"batch_canvas_edits target #{index + 1} must be an object.")
-            target_operations = target.get("operations")
+            target_operations = _normalize_batch_canvas_operations_input(target.get("operations"))
             if not isinstance(target_operations, list) or not target_operations:
                 raise ValueError(f"batch_canvas_edits target #{index + 1} requires a non-empty operations array.")
             normalized_operations = _validate_batch_canvas_operations(target_operations)
@@ -1641,6 +1719,7 @@ def batch_canvas_edits(
             "total_applied_count": total_applied_count,
         }
 
+    operations = _normalize_batch_canvas_operations_input(operations)
     if not isinstance(operations, list) or not operations:
         raise ValueError("batch_canvas_edits requires a non-empty operations array.")
 
@@ -1881,6 +1960,9 @@ def preview_canvas_changes(
     _, document = _find_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
     _require_canvas_document_editable(document, "preview_canvas_changes")
     preview_state = create_canvas_runtime_state([document], active_document_id=document.get("id"))
+    operations = _normalize_batch_canvas_operations_input(operations)
+    if not isinstance(operations, list) or not operations:
+        raise ValueError("preview_canvas_changes requires a non-empty operations array.")
     normalized_operations = _validate_batch_canvas_operations(operations)
     preview_entries: list[dict] = []
     applied_operations: list[dict] = []

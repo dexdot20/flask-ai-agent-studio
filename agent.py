@@ -109,7 +109,7 @@ from db import (
     normalize_scratchpad_text,
     replace_scratchpad,
 )
-from messages import build_current_time_context
+from messages import _build_canvas_prompt_payload, build_current_time_context
 from image_service import answer_image_question
 from model_registry import (
     DEEPSEEK_PROVIDER,
@@ -3347,7 +3347,11 @@ def _build_streaming_canvas_batch_edit_preview(
 
     target_args = tool_args
     raw_targets = tool_args.get("targets")
-    if isinstance(raw_targets, list):
+    if isinstance(raw_targets, dict):
+        target_args = raw_targets
+    elif isinstance(raw_targets, list):
+        if len(raw_targets) == 1 and isinstance(raw_targets[0], list):
+            raw_targets = raw_targets[0]
         if len(raw_targets) != 1 or not isinstance(raw_targets[0], dict):
             return None, None
         target_args = raw_targets[0]
@@ -3359,15 +3363,11 @@ def _build_streaming_canvas_batch_edit_preview(
     except Exception:
         return None, None
 
-    operations = target_args.get("operations")
-    if not isinstance(operations, list) or not operations:
-        return None, document
-
     preview_state = create_canvas_runtime_state([dict(document)], active_document_id=document.get("id"))
     try:
         result = batch_canvas_edits(
             preview_state,
-            operations,
+            target_args.get("operations") or [],
             document_id=document.get("id"),
             atomic=True,
         )
@@ -4685,6 +4685,10 @@ def _run_create_canvas_document(tool_args: dict, runtime_state: dict):
 
 def _run_expand_canvas_document(tool_args: dict, runtime_state: dict):
     canvas_state = _get_canvas_runtime_state(runtime_state)
+    skip_result = _build_already_visible_canvas_expand_result(tool_args, runtime_state)
+    if skip_result is not None:
+        target_label = str(skip_result.get("document_path") or skip_result.get("title") or "Canvas").strip()
+        return skip_result, f"Canvas already fully visible: {target_label}"
     canvas_limits = runtime_state.get("canvas_limits") if isinstance(runtime_state.get("canvas_limits"), dict) else {}
     expand_max_lines = int(canvas_limits.get("expand_max_lines") or 0) or None
     result = build_canvas_document_context_result(
@@ -5035,7 +5039,7 @@ def _run_preview_canvas_changes(tool_args: dict, runtime_state: dict):
     canvas_state = _get_canvas_runtime_state(runtime_state)
     result = preview_canvas_changes(
         canvas_state,
-        tool_args.get("operations") or [],
+        tool_args.get("operations"),
         document_id=tool_args.get("document_id"),
         document_path=tool_args.get("document_path"),
     )
@@ -5219,6 +5223,67 @@ def _execute_tool(tool_name: str, tool_args: dict, runtime_state: dict | None = 
     if handler is not None:
         return handler(tool_args if isinstance(tool_args, dict) else {}, runtime_state)
     return {"error": f"Unknown tool: {tool_name}"}, f"Unknown tool: {tool_name}"
+
+
+def _build_active_canvas_prompt_payload(runtime_state: dict) -> dict | None:
+    if not isinstance(runtime_state, dict):
+        return None
+    prompt_state = runtime_state.get("canvas_prompt") if isinstance(runtime_state.get("canvas_prompt"), dict) else {}
+    max_lines = _coerce_int_range(prompt_state.get("max_lines"), 0, 0, 10_000)
+    max_tokens = _coerce_int_range(prompt_state.get("max_tokens"), 0, 0, 1_000_000)
+    if max_lines <= 0 and max_tokens <= 0:
+        return None
+
+    canvas_state = _get_canvas_runtime_state(runtime_state)
+    documents = get_canvas_runtime_documents(canvas_state)
+    if not documents:
+        return None
+
+    return _build_canvas_prompt_payload(
+        documents,
+        active_document_id=get_canvas_runtime_active_document_id(canvas_state),
+        max_lines=max_lines or 250,
+        max_tokens=max_tokens or 0,
+    )
+
+
+def _build_already_visible_canvas_expand_result(tool_args: dict, runtime_state: dict) -> dict | None:
+    prompt_payload = _build_active_canvas_prompt_payload(runtime_state)
+    if not isinstance(prompt_payload, dict) or prompt_payload.get("is_truncated") is not False:
+        return None
+
+    active_document = prompt_payload.get("active_document") if isinstance(prompt_payload.get("active_document"), dict) else None
+    if not isinstance(active_document, dict):
+        return None
+
+    canvas_state = _get_canvas_runtime_state(runtime_state)
+    target_document_id = tool_args.get("document_id")
+    target_document_path = tool_args.get("document_path")
+    if target_document_id or target_document_path:
+        try:
+            _, target_document = _find_canvas_document(
+                canvas_state,
+                document_id=target_document_id,
+                document_path=target_document_path,
+            )
+        except Exception:
+            return None
+        if str(target_document.get("id") or "") != str(active_document.get("id") or ""):
+            return None
+
+    target_label = str(active_document.get("path") or active_document.get("title") or "Canvas").strip() or "Canvas"
+    return {
+        "status": "ok",
+        "action": "already_visible",
+        "document_id": active_document.get("id"),
+        "document_path": active_document.get("path"),
+        "title": active_document.get("title"),
+        "line_count": prompt_payload.get("total_lines"),
+        "visible_lines": prompt_payload.get("visible_lines") or [],
+        "visible_line_end": prompt_payload.get("visible_line_end"),
+        "is_truncated": False,
+        "reason": f"{target_label} is already fully visible in the current prompt excerpt; expand_canvas_document was skipped.",
+    }
 
 
 def collect_agent_response(
@@ -6045,6 +6110,8 @@ def run_agent_stream(
     fetch_url_clip_aggressiveness: int | None = None,
     initial_canvas_documents: list[dict] | None = None,
     initial_canvas_active_document_id: str | None = None,
+    canvas_prompt_max_lines: int | None = None,
+    canvas_prompt_max_tokens: int | None = None,
     canvas_expand_max_lines: int | None = None,
     canvas_scroll_window_lines: int | None = None,
     workspace_runtime_state: dict | None = None,
@@ -6105,6 +6172,10 @@ def run_agent_stream(
         "canvas_limits": {
             "expand_max_lines": int(canvas_expand_max_lines or 800),
             "scroll_window_lines": int(canvas_scroll_window_lines or 200),
+        },
+        "canvas_prompt": {
+            "max_lines": int(canvas_prompt_max_lines or 0),
+            "max_tokens": int(canvas_prompt_max_tokens or 0),
         },
         "workspace": workspace_runtime_state if isinstance(workspace_runtime_state, dict) else create_workspace_runtime_state(),
     }

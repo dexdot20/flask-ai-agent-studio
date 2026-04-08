@@ -11062,6 +11062,68 @@ class AppRoutesTestCase(unittest.TestCase):
             "alpha\nbeta updated\ngamma\ndelta",
         )
 
+    def test_execute_tool_batch_canvas_edits_repairs_nested_operation_shapes(self):
+        runtime_state = {
+            "canvas": create_canvas_runtime_state(
+                [
+                    {
+                        "id": "canvas-1",
+                        "title": "app.py",
+                        "path": "src/app.py",
+                        "format": "code",
+                        "content": "alpha\nbeta\ngamma",
+                    }
+                ]
+            )
+        }
+
+        result, summary = _execute_tool(
+            "batch_canvas_edits",
+            {
+                "document_path": "src/app.py",
+                "operations": [[{"replace": {"start_line": 2, "end_line": 2, "lines": "beta updated"}}]],
+            },
+            runtime_state,
+        )
+
+        self.assertEqual(result["action"], "lines_batch_edited")
+        self.assertEqual(result["applied_count"], 1)
+        self.assertIn("Canvas batch edit applied", summary)
+        self.assertEqual(
+            get_canvas_runtime_documents(runtime_state["canvas"])[0]["content"],
+            "alpha\nbeta updated\ngamma",
+        )
+
+    def test_execute_tool_skips_expand_when_active_canvas_is_already_fully_visible(self):
+        runtime_state = {
+            "canvas": create_canvas_runtime_state(
+                [
+                    {
+                        "id": "canvas-1",
+                        "title": "app.py",
+                        "path": "src/app.py",
+                        "format": "code",
+                        "content": "alpha\nbeta\ngamma",
+                    }
+                ],
+                active_document_id="canvas-1",
+            ),
+            "canvas_prompt": {"max_lines": 20, "max_tokens": 4000},
+            "canvas_limits": {"expand_max_lines": 800, "scroll_window_lines": 200},
+        }
+
+        result, summary = _execute_tool(
+            "expand_canvas_document",
+            {"document_path": "src/app.py"},
+            runtime_state,
+        )
+
+        self.assertEqual(result["action"], "already_visible")
+        self.assertFalse(result["is_truncated"])
+        self.assertEqual(result["visible_line_end"], 3)
+        self.assertIn("already fully visible", result["reason"])
+        self.assertIn("Canvas already fully visible", summary)
+
     def test_normalize_canvas_document_falls_back_to_default_title(self):
         normalized = normalize_canvas_document(
             {

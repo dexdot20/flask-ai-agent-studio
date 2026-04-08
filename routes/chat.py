@@ -3630,6 +3630,8 @@ def register_chat_routes(app) -> None:
                 fetch_url_clip_aggressiveness=fetch_url_clip_aggressiveness,
                 initial_canvas_documents=initial_canvas_documents,
                 initial_canvas_active_document_id=initial_canvas_active_document_id,
+                canvas_prompt_max_lines=get_canvas_prompt_max_lines(settings),
+                canvas_prompt_max_tokens=get_canvas_prompt_max_tokens(settings),
                 canvas_expand_max_lines=get_canvas_expand_max_lines(settings),
                 canvas_scroll_window_lines=get_canvas_scroll_window_lines(settings),
                 workspace_runtime_state=workspace_runtime_state,
