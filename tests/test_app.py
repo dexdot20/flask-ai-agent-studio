@@ -2429,6 +2429,62 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
 
+    def test_chat_route_updates_conversation_model_to_last_used_model(self):
+        conversation_id = self._create_conversation()
+
+        settings_response = self.client.patch(
+            "/api/settings",
+            json={
+                "custom_models": [
+                    {
+                        "name": "Claude Sonnet 4.5",
+                        "api_model": "anthropic/claude-sonnet-4.5",
+                        "supports_tools": True,
+                        "supports_vision": True,
+                        "supports_structured_outputs": True,
+                    }
+                ],
+                "visible_model_order": ["openrouter:anthropic/claude-sonnet-4.5", "deepseek-chat"],
+                "user_preferences": "",
+                "max_steps": "1",
+                "active_tools": [],
+                "rag_auto_inject": False,
+            },
+        )
+        self.assertEqual(settings_response.status_code, 200)
+
+        def fake_run_agent_stream(*args, **kwargs):
+            return iter(
+                [
+                    {"type": "answer_start"},
+                    {"type": "answer_delta", "text": "Tamam."},
+                    {"type": "tool_capture", "tool_results": [], "canvas_documents": []},
+                    {"type": "done"},
+                ]
+            )
+
+        with patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream), patch(
+            "routes.chat.sync_conversations_to_rag_safe"
+        ):
+            response = self.client.post(
+                "/chat",
+                json={
+                    "conversation_id": conversation_id,
+                    "model": "openrouter:anthropic/claude-sonnet-4.5",
+                    "user_content": "Yeni modeli kullan.",
+                    "messages": [{"role": "user", "content": "Yeni modeli kullan."}],
+                },
+            )
+            response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+
+        conversation_response = self.client.get(f"/api/conversations/{conversation_id}")
+        self.assertEqual(conversation_response.status_code, 200)
+        conversation = conversation_response.get_json()["conversation"]
+        self.assertEqual(conversation["model"], "openrouter:anthropic/claude-sonnet-4.5")
+        self.assertEqual(conversation["model_label"], "Claude Sonnet 4.5")
+
     def test_chat_edit_restores_canvas_state_from_that_point(self):
         captured = {}
         conversation_id = self._create_conversation()
@@ -6758,6 +6814,35 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(entries[0]["entry_type"], "user_info")
         self.assertEqual(entries[0]["key"], "Preferred language")
 
+    def test_execute_tool_updates_existing_conversation_memory_entry_by_key(self):
+        conversation_id = self._create_conversation()
+        original_entry = insert_conversation_memory_entry(
+            conversation_id,
+            "user_info",
+            "Preferred language",
+            "Kullanıcı bu konuşmada Türkçe istiyor.",
+        )
+
+        result, summary = _execute_tool(
+            "save_to_conversation_memory",
+            {
+                "entry_type": "task_context",
+                "key": "Preferred language",
+                "value": "Kullanıcı bu konuşmada kısa ve net Türkçe yanıt istiyor.",
+            },
+            runtime_state={"agent_context": {"conversation_id": conversation_id}},
+        )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(summary, "Conversation memory updated: Preferred language")
+        self.assertTrue(result["entry"].get("updated_existing"))
+        self.assertEqual(result["entry"]["id"], original_entry["id"])
+        entries = get_conversation_memory(conversation_id)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["id"], original_entry["id"])
+        self.assertEqual(entries[0]["entry_type"], "task_context")
+        self.assertEqual(entries[0]["value"], "Kullanıcı bu konuşmada kısa ve net Türkçe yanıt istiyor.")
+
     def test_execute_tool_does_not_delete_other_conversation_memory_entry(self):
         source_conversation_id = self._create_conversation("Source")
         other_conversation_id = self._create_conversation("Other")
@@ -6801,12 +6886,17 @@ class AppRoutesTestCase(unittest.TestCase):
                     "created_at": "2026-04-08 10:23:00",
                 }
             ],
+            summary_count=2,
         )
 
         content = message["content"]
         self.assertIn("## Conversation Memory", content)
         self.assertIn("#7 [tool_result] 10:23 - Latest fetch: Belgelerde Python 3.12 hedefleniyor.", content)
+        self.assertIn("survives prompt compaction, summarization, and pruning", content)
+        self.assertIn("## Conversation Memory Priority", content)
         self.assertIn("## Conversation Memory Write Policy", content)
+        self.assertIn("Especially save before context loss", content)
+        self.assertIn("Prefer update over duplication", content)
         self.assertIn("save_to_conversation_memory", content)
 
     def test_run_agent_stream_caps_parallel_safe_tool_workers(self):
@@ -11082,6 +11172,38 @@ class AppRoutesTestCase(unittest.TestCase):
             {
                 "document_path": "src/app.py",
                 "operations": [[{"replace": {"start_line": 2, "end_line": 2, "lines": "beta updated"}}]],
+            },
+            runtime_state,
+        )
+
+        self.assertEqual(result["action"], "lines_batch_edited")
+        self.assertEqual(result["applied_count"], 1)
+        self.assertIn("Canvas batch edit applied", summary)
+        self.assertEqual(
+            get_canvas_runtime_documents(runtime_state["canvas"])[0]["content"],
+            "alpha\nbeta updated\ngamma",
+        )
+
+    def test_execute_tool_batch_canvas_edits_repairs_stringified_wrapper_payloads(self):
+        runtime_state = {
+            "canvas": create_canvas_runtime_state(
+                [
+                    {
+                        "id": "canvas-1",
+                        "title": "app.py",
+                        "path": "src/app.py",
+                        "format": "code",
+                        "content": "alpha\nbeta\ngamma",
+                    }
+                ]
+            )
+        }
+
+        result, summary = _execute_tool(
+            "batch_canvas_edits",
+            {
+                "document_path": "src/app.py",
+                "operations": "```json\n{\"operations\": [{\"operation\": \"{'replace': {'start_line': 2, 'end_line': 2, 'lines': ['beta updated']}}\"}]}\n```",
             },
             runtime_state,
         )

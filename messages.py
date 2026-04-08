@@ -198,7 +198,7 @@ def build_conversation_memory_section(entries) -> list[str]:
 
     parts = [
         "## Conversation Memory",
-        "*Use this as conversation-scoped working memory for important user details, active constraints, decisions, and critical tool outcomes that should not be lost within this chat.*\n",
+        "*Use this as the durable working memory for this chat. It survives prompt compaction, summarization, and pruning, so prefer it for important user details, active constraints, decisions, and critical tool outcomes that must not be lost later in the conversation.*\n",
     ]
     for entry in normalized_entries:
         entry_id = entry.get("id")
@@ -1703,13 +1703,23 @@ def build_runtime_system_message(
     if conversation_memory_section:
         parts.extend(conversation_memory_section)
 
+    if summary_count and any(name in {"save_to_conversation_memory", "delete_conversation_memory_entry"} for name in runtime_tool_names):
+        parts.append("## Conversation Memory Priority")
+        parts.append(
+            "- Earlier turns in this chat have already been summarized or compacted. Treat Conversation Memory as the primary durable record for user constraints, important decisions, and critical past findings from older context.\n"
+            "- When a newly confirmed detail is likely to matter after more pruning or summarization, prefer saving it immediately instead of assuming it will remain obvious from the visible chat history."
+        )
+        parts.append("")
+
     if any(name in {"save_to_conversation_memory", "delete_conversation_memory_entry"} for name in runtime_tool_names):
         parts.append("## Conversation Memory Write Policy")
         parts.append(
-            "- **Use save_to_conversation_memory** for important conversation-scoped facts that should survive later turns in this same chat.\n"
+            "- **Use save_to_conversation_memory** proactively for important conversation-scoped facts that should survive later turns in this same chat.\n"
             "- **DO save**: confirmed user details relevant to this chat, active goals, firm constraints, decisions, and critical tool results that may matter later in the conversation.\n"
+            "- **Especially save before context loss**: details that would be expensive to rediscover after summarization, pruning, or long tool-heavy detours.\n"
             "- **DO NOT save**: raw verbose outputs, broad summaries, speculative inferences, or durable cross-conversation facts better suited for the scratchpad.\n"
             "- **Style**: `key` should be a short label and `value` should be one compact factual line.\n"
+            "- **Prefer update over duplication**: Reuse the same key for the same fact. Saving an existing key refreshes that memory instead of creating noisy duplicates.\n"
             "- **Cleanup**: If an entry becomes wrong or obsolete, remove it with delete_conversation_memory_entry."
         )
         parts.append("")

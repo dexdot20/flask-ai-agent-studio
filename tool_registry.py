@@ -354,7 +354,8 @@ TOOL_SPECS = [
             "name": "save_to_conversation_memory",
             "description": (
                 "Save one compact conversation-scoped memory entry for this chat only. "
-                "Use it for important user details, active constraints, decisions, or critical tool outcomes that should not be lost later in the same conversation."
+                "Use it for important user details, active constraints, decisions, or critical tool outcomes that should not be lost later in the same conversation. "
+                "If the same key already exists, the entry is refreshed instead of duplicated."
             ),
             "parameters": {
                 "type": "object",
@@ -384,7 +385,9 @@ TOOL_SPECS = [
                 },
                 "guidance": (
                     "Use this when the information is important within this conversation but not durable enough for the cross-conversation scratchpad. "
-                    "Prefer concise micro-summaries over raw outputs. Save critical tool outcomes only when they are likely to matter later in the same chat."
+                    "Prefer concise micro-summaries over raw outputs. Save critical tool outcomes only when they are likely to matter later in the same chat. "
+                    "Be proactive in long or tool-heavy conversations, especially before details may be summarized, pruned, or pushed out of the visible context window. "
+                    "Reuse the same key when updating the same fact so memory stays compact."
                 ),
             },
         },

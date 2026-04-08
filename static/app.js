@@ -7452,6 +7452,25 @@ function writeModelPreference(modelId) {
   }
 }
 
+function resolvePreferredModelSelection(fallbackModelId = "") {
+  const candidateValues = [
+    isMobileViewport() ? mobileModelSel?.value : modelSel?.value,
+    modelSel?.value,
+    mobileModelSel?.value,
+    readModelPreference(),
+    fallbackModelId,
+  ];
+
+  for (const candidateValue of candidateValues) {
+    const normalizedId = String(candidateValue || "").trim();
+    if (isKnownModelId(normalizedId)) {
+      return normalizedId;
+    }
+  }
+
+  return "";
+}
+
 function ensureModelSelectorOption(selectEl, modelId, label = "") {
   if (!selectEl) {
     return;
@@ -7792,13 +7811,11 @@ if (mobileSummaryBtn) {
 if (modelSel) {
   modelSel.addEventListener("change", () => {
     syncModelSelectors(modelSel.value);
-    writeModelPreference(modelSel.value);
   });
 }
 if (mobileModelSel) {
   mobileModelSel.addEventListener("change", () => {
     syncModelSelectors(mobileModelSel.value);
-    writeModelPreference(mobileModelSel.value);
   });
 }
 summaryClose?.addEventListener("click", closeSummaryPanel);
@@ -8200,7 +8217,14 @@ async function openConversation(id) {
   userScrolledUp = false;
   currentConvId = id;
   currentConvTitle = String(data.conversation?.title || "New Chat").trim() || "New Chat";
-  syncModelSelectors(data.conversation.model, data.conversation.model_label || "");
+  const conversationModelId = String(data.conversation?.model || "").trim();
+  const nextModelId = resolvePreferredModelSelection(conversationModelId);
+  if (nextModelId) {
+    const nextModelLabel = nextModelId === conversationModelId
+      ? (data.conversation.model_label || "")
+      : getKnownModelLabel(nextModelId);
+    syncModelSelectors(nextModelId, nextModelLabel);
+  }
   clearEditTarget();
   clearInlineEditingTarget();
   resetCanvasWorkspaceState();
@@ -8260,7 +8284,7 @@ function startNewChat() {
   renderCanvasPanel();
   renderConversationMemoryPanel();
   updateExportPanel();
-  const preferredModelId = readModelPreference();
+  const preferredModelId = resolvePreferredModelSelection(modelSel ? modelSel.value : "");
   if (preferredModelId) {
     syncModelSelectors(preferredModelId, getKnownModelLabel(preferredModelId));
   }
@@ -11140,8 +11164,7 @@ applyCanvasPanelWidth(readCanvasWidthPreference(), false);
 syncCanvasToggleButton();
 const initialSidebarPref = readSidebarPreference();
 setSidebarOpen(initialSidebarPref === null ? !isMobileViewport() : initialSidebarPref, false);
-const preferredModelId = readModelPreference();
-const initialModelId = preferredModelId || (modelSel ? modelSel.value : "");
+const initialModelId = resolvePreferredModelSelection(modelSel ? modelSel.value : "");
 syncModelSelectors(initialModelId, getKnownModelLabel(initialModelId));
 loadSidebar();
 updateExportPanel();

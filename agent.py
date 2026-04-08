@@ -4116,7 +4116,11 @@ def _run_save_to_conversation_memory(tool_args: dict, runtime_state: dict):
     return {
         "status": "ok",
         "entry": entry,
-    }, f"Conversation memory saved: {entry['key']}"
+    }, (
+        f"Conversation memory updated: {entry['key']}"
+        if entry.get("updated_existing") is True
+        else f"Conversation memory saved: {entry['key']}"
+    )
 
 
 def _run_delete_conversation_memory_entry(tool_args: dict, runtime_state: dict):

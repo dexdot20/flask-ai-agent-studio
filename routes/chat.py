@@ -3421,8 +3421,8 @@ def register_chat_routes(app) -> None:
                             datetime.now().astimezone().isoformat(timespec="seconds"),
                         )
                     conn.execute(
-                        "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
-                        (conv_id,),
+                        "UPDATE conversations SET model = ?, updated_at = datetime('now') WHERE id = ?",
+                        (model, conv_id),
                     )
                 if RAG_ENABLED:
                     _schedule_rag_conversation_sync(conversation_id=conv_id)
@@ -3437,8 +3437,8 @@ def register_chat_routes(app) -> None:
                         metadata=user_message_metadata,
                     )
                     conn.execute(
-                        "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
-                        (conv_id,),
+                        "UPDATE conversations SET model = ?, updated_at = datetime('now') WHERE id = ?",
+                        (model, conv_id),
                     )
 
             attachments = extract_message_attachments(latest_user_message.get("metadata"))

@@ -1362,7 +1362,11 @@ def _coerce_batch_canvas_json_value(value):
         return value
     raw_value = value.strip()
     if not raw_value or raw_value[0] not in "[{":
-        return value
+        fenced_match = re.match(r"^```(?:json|javascript|js|python)?\s*(.*?)\s*```$", raw_value, flags=re.DOTALL | re.IGNORECASE)
+        if fenced_match:
+            raw_value = fenced_match.group(1).strip()
+        if not raw_value or raw_value[0] not in "[{":
+            return value
 
     candidates = [raw_value]
     if _repair_json is not None:
@@ -1377,12 +1381,24 @@ def _coerce_batch_canvas_json_value(value):
         try:
             return json.loads(candidate)
         except Exception:
-            continue
+            try:
+                return ast.literal_eval(candidate)
+            except Exception:
+                continue
     return value
 
 
 def _normalize_batch_canvas_operations_input(operations):
     normalized = _coerce_batch_canvas_json_value(operations)
+    if isinstance(normalized, dict):
+        for key in ("operations", "edits", "items", "batch"):
+            candidate = _coerce_batch_canvas_json_value(normalized.get(key))
+            if isinstance(candidate, list):
+                normalized = candidate
+                break
+            if isinstance(candidate, dict):
+                normalized = [candidate]
+                break
     while isinstance(normalized, list) and len(normalized) == 1 and isinstance(normalized[0], list):
         normalized = normalized[0]
     if isinstance(normalized, dict):
@@ -1392,6 +1408,15 @@ def _normalize_batch_canvas_operations_input(operations):
 
 def _normalize_batch_canvas_targets_input(targets):
     normalized = _coerce_batch_canvas_json_value(targets)
+    if isinstance(normalized, dict):
+        for key in ("targets", "items", "documents", "batch"):
+            candidate = _coerce_batch_canvas_json_value(normalized.get(key))
+            if isinstance(candidate, list):
+                normalized = candidate
+                break
+            if isinstance(candidate, dict):
+                normalized = [candidate]
+                break
     while isinstance(normalized, list) and len(normalized) == 1 and isinstance(normalized[0], list):
         normalized = normalized[0]
     if isinstance(normalized, dict):
@@ -1406,6 +1431,17 @@ def _normalize_batch_canvas_operation_candidate(operation):
 
     if not isinstance(normalized, dict):
         return normalized
+
+    for wrapper_key in ("operation", "edit", "item", "payload", "args"):
+        wrapped_candidate = _coerce_batch_canvas_json_value(normalized.get(wrapper_key))
+        if isinstance(wrapped_candidate, dict):
+            merged_candidate = dict(wrapped_candidate)
+            for key, value in normalized.items():
+                if key == wrapper_key:
+                    continue
+                merged_candidate.setdefault(key, value)
+            normalized = merged_candidate
+            break
 
     action = str(normalized.get("action") or "").strip().lower()
     if action:
