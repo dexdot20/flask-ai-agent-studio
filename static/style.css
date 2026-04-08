@@ -2111,7 +2111,7 @@ kbd {
   position: fixed;
   top: calc(var(--header-offset) + 12px);
   right: 12px;
-  width: min(420px, calc(100vw - 24px));
+  width: min(520px, calc(100vw - 24px));
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 18px;
@@ -2177,6 +2177,60 @@ kbd {
   gap: 12px;
 }
 
+.summary-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.summary-card__header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.summary-card__header span {
+  display: block;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.summary-card__header p {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.summary-preset-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.summary-preset {
+  border: 1px solid rgba(110, 166, 255, 0.18);
+  background: rgba(110, 166, 255, 0.08);
+  color: var(--text-primary);
+  border-radius: 999px;
+  padding: 7px 11px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s, transform 0.15s;
+}
+
+.summary-preset:hover {
+  border-color: rgba(110, 166, 255, 0.42);
+  background: rgba(110, 166, 255, 0.14);
+  transform: translateY(-1px);
+}
+
 .summary-field {
   display: flex;
   flex-direction: column;
@@ -2203,6 +2257,51 @@ kbd {
   outline: none;
 }
 
+.summary-detail-select {
+  display: none;
+}
+
+.summary-option-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.summary-option {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  border: 1px solid var(--border);
+  background: var(--surface-hi);
+  color: var(--text-primary);
+  border-radius: 14px;
+  padding: 10px 11px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, transform 0.15s;
+}
+
+.summary-option:hover {
+  border-color: rgba(110, 166, 255, 0.42);
+  transform: translateY(-1px);
+}
+
+.summary-option.is-active {
+  border-color: rgba(110, 166, 255, 0.65);
+  background: rgba(110, 166, 255, 0.12);
+}
+
+.summary-option__label {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.summary-option__description {
+  font-size: 0.74rem;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
 .summary-field textarea:focus,
 .summary-field select:focus {
   border-color: var(--border-focus);
@@ -2210,6 +2309,12 @@ kbd {
 
 .summary-field select {
   width: 100%;
+}
+
+@media (max-width: 520px) {
+  .summary-option-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .summary-panel__actions {

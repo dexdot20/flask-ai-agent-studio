@@ -207,7 +207,7 @@ TOOL_PERMISSION_SECTION_METADATA = {
     "canvas": {
         "title": "Canvas Editing",
         "description": "Editable draft documents, canvas search, and line-level changes inside the conversation canvas.",
-        "note": "Canvas edit tools can automatically pull in inspection helpers such as expand and scroll.",
+        "note": "Enable inspection helpers such as expand and scroll separately when you want read-only canvas navigation.",
     },
     "workspace": {
         "title": "Workspace Sandbox",

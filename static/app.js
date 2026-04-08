@@ -117,17 +117,171 @@ const exportStatus = document.getElementById("export-status");
 const summaryPanel = document.getElementById("summary-panel");
 const summaryOverlay = document.getElementById("summary-overlay");
 const summaryClose = document.getElementById("summary-close");
+const summaryFocusPresetGrid = document.getElementById("summary-focus-presets");
 const summaryFocusInput = document.getElementById("summary-focus-input");
 const summaryDetailSelect = document.getElementById("summary-detail-select");
+const summaryDetailOptionGrid = document.getElementById("summary-detail-options");
 const summarySubmitBtn = document.getElementById("summary-submit-btn");
 const mobileSummaryBtn = document.getElementById("mobile-summary-btn");
 const conversationExportMdBtn = document.getElementById("conversation-export-md-btn");
 const conversationExportDocxBtn = document.getElementById("conversation-export-docx-btn");
 const conversationExportPdfBtn = document.getElementById("conversation-export-pdf-btn");
 
+const SUMMARY_FOCUS_PRESETS = [
+  {
+    id: "action_items",
+    label: "Action items",
+    text: "action items, owners, and next steps",
+  },
+  {
+    id: "decisions",
+    label: "Decisions",
+    text: "decisions made and why they were chosen",
+  },
+  {
+    id: "unresolved_questions",
+    label: "Unresolved questions",
+    text: "open questions, blockers, and what still needs confirmation",
+  },
+  {
+    id: "risks",
+    label: "Risks",
+    text: "risks, tradeoffs, and anything that could go wrong",
+  },
+  {
+    id: "key_facts",
+    label: "Key facts",
+    text: "the most important facts, constraints, and context to retain",
+  },
+  {
+    id: "next_steps",
+    label: "Next steps",
+    text: "the next concrete steps and the order they should happen in",
+  },
+];
+
+const SUMMARY_DETAIL_OPTIONS = [
+  {
+    value: "very_concise",
+    label: "Very concise",
+    description: "Shortest useful form. Keeps only essentials.",
+  },
+  {
+    value: "concise",
+    label: "Concise",
+    description: "Keeps high-value facts, decisions, and open questions.",
+  },
+  {
+    value: "balanced",
+    label: "Balanced",
+    description: "Default choice. Preserves context without adding noise.",
+  },
+  {
+    value: "detailed",
+    label: "Detailed",
+    description: "Preserves more nuance while staying compact.",
+  },
+  {
+    value: "comprehensive",
+    label: "Comprehensive",
+    description: "Largest context retention for the least ambiguity.",
+  },
+];
+
 if (summaryDetailSelect) {
   summaryDetailSelect.value = String(appSettings.chat_summary_detail_level || "balanced").trim();
 }
+
+function setSummaryDetailLevel(value) {
+  if (!summaryDetailSelect) {
+    return;
+  }
+  summaryDetailSelect.value = value;
+  updateSummaryDetailOptionsState();
+}
+
+function updateSummaryDetailOptionsState() {
+  const selectedValue = String(summaryDetailSelect?.value || "balanced").trim() || "balanced";
+  summaryDetailOptionGrid?.querySelectorAll("[data-summary-detail-value]").forEach((element) => {
+    const isSelected = element.getAttribute("data-summary-detail-value") === selectedValue;
+    element.classList.toggle("is-active", isSelected);
+    element.setAttribute("aria-pressed", String(isSelected));
+  });
+}
+
+function renderSummaryDetailOptions() {
+  if (!summaryDetailOptionGrid) {
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  const selectFragment = document.createDocumentFragment();
+  SUMMARY_DETAIL_OPTIONS.forEach((option) => {
+    if (summaryDetailSelect) {
+      const selectOption = document.createElement("option");
+      selectOption.value = option.value;
+      selectOption.textContent = option.label;
+      selectFragment.append(selectOption);
+    }
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "summary-option";
+    button.dataset.summaryDetailValue = option.value;
+    button.setAttribute("aria-pressed", "false");
+
+    const label = document.createElement("span");
+    label.className = "summary-option__label";
+    label.textContent = option.label;
+
+    const description = document.createElement("span");
+    description.className = "summary-option__description";
+    description.textContent = option.description;
+
+    button.append(label, description);
+    button.addEventListener("click", () => setSummaryDetailLevel(option.value));
+    fragment.append(button);
+  });
+
+  summaryDetailSelect?.replaceChildren(selectFragment);
+  if (summaryDetailSelect) {
+    const preferredValue = String(appSettings.chat_summary_detail_level || "balanced").trim() || "balanced";
+    summaryDetailSelect.value = preferredValue;
+  }
+  summaryDetailOptionGrid.replaceChildren(fragment);
+  updateSummaryDetailOptionsState();
+}
+
+function applySummaryFocusPreset(preset) {
+  if (!summaryFocusInput || !preset) {
+    return;
+  }
+  summaryFocusInput.value = preset.text;
+  autoResize(summaryFocusInput);
+  summaryFocusInput.focus({ preventScroll: true });
+}
+
+function renderSummaryFocusPresets() {
+  if (!summaryFocusPresetGrid) {
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  SUMMARY_FOCUS_PRESETS.forEach((preset) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "summary-preset";
+    button.textContent = preset.label;
+    button.title = preset.text;
+    button.addEventListener("click", () => applySummaryFocusPreset(preset));
+    fragment.append(button);
+  });
+
+  summaryFocusPresetGrid.replaceChildren(fragment);
+}
+
+renderSummaryFocusPresets();
+renderSummaryDetailOptions();
 
 let history = [];
 let isStreaming = false;
@@ -2615,7 +2769,7 @@ function openSummaryPanel(triggerEl = null) {
     ? triggerEl
     : (document.activeElement instanceof HTMLElement ? document.activeElement : mobileSummaryBtn);
   if (summaryFocusInput) {
-    window.setTimeout(() => summaryFocusInput.focus(), 0);
+    window.setTimeout(() => summaryFocusInput.focus({ preventScroll: true }), 0);
   }
 }
 

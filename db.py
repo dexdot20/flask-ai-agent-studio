@@ -2543,7 +2543,6 @@ def get_active_tool_names(settings: dict | None = None) -> list[str]:
         if any(name in names for name in {"append_scratchpad", "replace_scratchpad"}):
             names = _ensure_tool("replace_scratchpad", names)
             names = _ensure_tool("read_scratchpad", names)
-        names = _ensure_canvas_inspection_tools(names)
         return names
     if source.get("active_tools") is None:
         names = normalize_active_tool_names(DEFAULT_SETTINGS["active_tools"])

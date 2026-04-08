@@ -95,18 +95,29 @@
     </button>
   </div>
   <div class="summary-panel__body">
-    <label class="summary-field">
-      <span>Focus</span>
-      <textarea id="summary-focus-input" rows="3" placeholder="Example: action items, decisions, and unresolved questions"></textarea>
-    </label>
-    <label class="summary-field">
-      <span>Detail level</span>
-      <select id="summary-detail-select">
-        <option value="balanced" selected>Balanced</option>
-        <option value="concise">Concise</option>
-        <option value="detailed">Detailed</option>
-      </select>
-    </label>
+    <section class="summary-card">
+      <div class="summary-card__header">
+        <div>
+          <span>Focus</span>
+          <p>Pick a starting point or write your own emphasis.</p>
+        </div>
+      </div>
+      <div id="summary-focus-presets" class="summary-preset-grid" aria-label="Focus presets"></div>
+      <label class="summary-field">
+        <span>Custom focus</span>
+        <textarea id="summary-focus-input" rows="3" placeholder="Example: action items, decisions, and unresolved questions"></textarea>
+      </label>
+    </section>
+    <section class="summary-card">
+      <div class="summary-card__header">
+        <div>
+          <span>Detail level</span>
+          <p>Choose how much context the summary should preserve.</p>
+        </div>
+      </div>
+      <div id="summary-detail-options" class="summary-option-grid" role="radiogroup" aria-label="Summary detail level"></div>
+      <select id="summary-detail-select" class="summary-detail-select" aria-hidden="true" tabindex="-1"></select>
+    </section>
   </div>
   <div class="summary-panel__actions">
     <button class="btn-primary" id="summary-submit-btn" type="button">Summarize Conversation</button>

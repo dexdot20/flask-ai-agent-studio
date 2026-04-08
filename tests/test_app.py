@@ -2878,15 +2878,15 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("replace_scratchpad", active_tools)
         self.assertIn("read_scratchpad", active_tools)
 
-    def test_active_tools_backfill_canvas_inspection_tools_for_legacy_canvas_edit_mode(self):
+    def test_active_tools_do_not_backfill_disabled_canvas_inspection_tools(self):
         settings = {"active_tools": json.dumps(["rewrite_canvas_document", "replace_canvas_lines"])}
 
         active_tool_names = get_active_tool_names(settings)
 
         self.assertIn("rewrite_canvas_document", active_tool_names)
         self.assertIn("replace_canvas_lines", active_tool_names)
-        self.assertIn("expand_canvas_document", active_tool_names)
-        self.assertIn("scroll_canvas_document", active_tool_names)
+        self.assertNotIn("expand_canvas_document", active_tool_names)
+        self.assertNotIn("scroll_canvas_document", active_tool_names)
 
     def test_db_connections_enable_busy_timeout_and_wal_mode(self):
         with get_db() as conn:
@@ -6144,6 +6144,9 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn('id="canvas-actions-manage"', html_text)
         self.assertIn('id="canvas-actions-export"', html_text)
         self.assertIn('id="canvas-resize-handle"', html_text)
+        self.assertIn('id="summary-panel"', html_text)
+        self.assertIn('id="summary-focus-presets"', html_text)
+        self.assertIn('id="summary-detail-options"', html_text)
         self.assertIn('const canvasToggleBtn = document.getElementById("canvas-toggle-btn")', script_text)
         self.assertIn('const canvasSearchStatus = document.getElementById("canvas-search-status")', script_text)
         self.assertIn('const canvasMetaBar = document.getElementById("canvas-meta-bar")', script_text)
@@ -6168,6 +6171,11 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn('function renderHighlightedCodeBlock(codeText, rawLang = null)', script_text)
         self.assertIn('async function saveCanvasEdits()', script_text)
         self.assertIn("async function deleteCanvasDocuments(", script_text)
+        self.assertIn('const SUMMARY_FOCUS_PRESETS = [', script_text)
+        self.assertIn('const SUMMARY_DETAIL_OPTIONS = [', script_text)
+        self.assertIn('function renderSummaryFocusPresets()', script_text)
+        self.assertIn('function renderSummaryDetailOptions()', script_text)
+        self.assertIn('function setSummaryDetailLevel(value)', script_text)
         self.assertIn(".canvas-meta-bar", style_text)
         self.assertIn(".canvas-meta-chip", style_text)
         self.assertIn('.canvas-workspace-shell', style_text)
@@ -6175,6 +6183,10 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn('.canvas-tree-file.active', style_text)
         self.assertIn('.canvas-action-group', style_text)
         self.assertIn('.canvas-search-status', style_text)
+        self.assertIn('.summary-card', style_text)
+        self.assertIn('.summary-preset-grid', style_text)
+        self.assertIn('.summary-option-grid', style_text)
+        self.assertIn('.summary-option.is-active', style_text)
 
     def test_settings_ui_exposes_fetch_threshold_input(self):
         html = self.client.get("/settings").get_data(as_text=True)
