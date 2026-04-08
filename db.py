@@ -3074,15 +3074,16 @@ def restore_soft_deleted_messages(
     conn: sqlite3.Connection,
     conversation_id: int,
     message_ids: Iterable[int],
-) -> None:
+) -> int:
     normalized_ids = [int(message_id) for message_id in message_ids if int(message_id) > 0]
     if not normalized_ids:
-        return
+        return 0
     placeholders = ", ".join("?" for _ in normalized_ids)
-    conn.execute(
+    cursor = conn.execute(
         f"UPDATE messages SET deleted_at = NULL WHERE conversation_id = ? AND id IN ({placeholders}) AND deleted_at IS NOT NULL",
         (conversation_id, *normalized_ids),
     )
+    return max(0, int(cursor.rowcount or 0))
 
 
 def shift_message_positions(

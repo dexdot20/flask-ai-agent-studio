@@ -3494,6 +3494,20 @@ function normalizeModelCallPayload(callEntry) {
   };
 }
 
+function normalizePromptBudgetPayload(promptBudget) {
+  const source = promptBudget && typeof promptBudget === "object" ? promptBudget : null;
+  if (!source) {
+    return null;
+  }
+
+  return {
+    archived_conversation_match_count: Math.max(0, Math.round(toFiniteNumber(source.archived_conversation_match_count, 0))),
+    archived_conversation_source_count: Math.max(0, Math.round(toFiniteNumber(source.archived_conversation_source_count, 0))),
+    archived_conversation_message_count: Math.max(0, Math.round(toFiniteNumber(source.archived_conversation_message_count, 0))),
+    archived_conversation_tokens: Math.max(0, Math.round(toFiniteNumber(source.archived_conversation_tokens, 0))),
+  };
+}
+
 function normalizeUsagePayload(usage) {
   const source = usage && typeof usage === "object" ? usage : {};
   const promptTokens = Math.max(0, Math.round(toFiniteNumber(source.prompt_tokens, 0)));
@@ -3513,6 +3527,7 @@ function normalizeUsagePayload(usage) {
   const maxInputTokensPerCall =
     toNonNegativeIntOrNull(source.max_input_tokens_per_call) ??
     getMaxInputTokensPerCall(modelCalls, promptTokens || estimatedInputTokens);
+  const preflightPromptBudget = normalizePromptBudgetPayload(source.preflight_prompt_budget);
   const cost = typeof source.cost === "number" && Number.isFinite(source.cost) && source.cost >= 0
     ? Number(source.cost)
     : null;
@@ -3531,6 +3546,7 @@ function normalizeUsagePayload(usage) {
     model_calls: modelCalls,
     max_input_tokens_per_call: maxInputTokensPerCall,
     configured_prompt_max_input_tokens: configuredPromptMaxInputTokens,
+    preflight_prompt_budget: preflightPromptBudget,
     provider: String(source.provider || "").trim() || null,
     model: String(source.model || "—") || "—",
     cache_metrics_estimated: source.cache_metrics_estimated === true,
@@ -3851,6 +3867,10 @@ function renderTokenStats() {
     : formatPartialSummaryText("—", lastTurnHasPartialProviderUsage);
   document.getElementById("stat-last-model").textContent = lastTurn ? lastTurn.model : "—";
   document.getElementById("stat-last-provider").textContent = lastTurn?.provider || "—";
+  const archivedPromptBudget = lastTurn?.preflight_prompt_budget;
+  document.getElementById("stat-last-archived-rag").textContent = archivedPromptBudget && archivedPromptBudget.archived_conversation_match_count > 0
+    ? `${fmt(archivedPromptBudget.archived_conversation_match_count)} matches · ${fmt(archivedPromptBudget.archived_conversation_message_count)} hidden msgs · ~${fmt(archivedPromptBudget.archived_conversation_tokens)} tokens`
+    : "—";
   document.getElementById("stat-breakdown-session-total").textContent = formatPartialSummaryValue(
     sumBreakdown(sessionBreakdown),
     sessionHasPartialProviderUsage,
@@ -3903,6 +3923,10 @@ function renderTokenStats() {
         const totalStatLabel = turnHasPartialProviderUsage && turn.total_tokens <= 0
           ? "Provider total unavailable"
           : `${formatPartialSummaryValue(turn.total_tokens, turnHasPartialProviderUsage)} total`;
+        const archivedPromptBudget = turn.preflight_prompt_budget;
+        const archivedRagStat = archivedPromptBudget && archivedPromptBudget.archived_conversation_match_count > 0
+          ? `<span class="turn-stat">${fmt(archivedPromptBudget.archived_conversation_match_count)} archived RAG matches · ${fmt(archivedPromptBudget.archived_conversation_message_count)} hidden msgs</span>`
+          : "";
         return (
         `<div class="turn-item">` +
           `<div class="turn-header">` +
@@ -3922,6 +3946,7 @@ function renderTokenStats() {
             cacheHitStat +
             cacheMissStat +
             costStat +
+            archivedRagStat +
             `<span class="turn-stat"><span class="stats-dot dot-asst"></span>${escHtml(completionStatLabel)}</span>` +
             `<span class="turn-stat">${escHtml(totalStatLabel)}</span>` +
           `</div>` +
@@ -5702,7 +5727,7 @@ function describeSummaryFailure(status) {
 function updateSummarySelectionUi() {
   const eligibleMessages = getSummaryEligibleMessages(history);
   const eligibleCount = eligibleMessages.length;
-  const allMessagesEligibleCount = getSummaryEligibleMessages(history, 1, 1).length;
+  const allMessagesEligibleCount = eligibleCount;
   const skipFirst = getSummarySkipFirstValue();
   const skipLast = getSummarySkipLastValue();
   const mode = SUMMARY_MODE_LABELS[getSummaryModeValue()] || SUMMARY_MODE_LABELS.auto;
@@ -5729,7 +5754,7 @@ function updateSummarySelectionUi() {
       summarySelectionNote.textContent = "Open a conversation to see which messages are currently eligible for summary.";
     } else if (summarizeAllMessages) {
       summarySelectionNote.textContent = allMessagesEligibleCount > 0
-        ? `All ${fmt(allMessagesEligibleCount)} eligible messages will be summarized. The first and last messages stay in place.`
+        ? `All ${fmt(allMessagesEligibleCount)} eligible messages will be summarized. The protected messages from Settings stay in place.`
         : "No messages are currently eligible for summary.";
     } else if (!eligibleCount) {
       summarySelectionNote.textContent = "No messages are currently eligible after the protected first/last message window from Settings is applied.";

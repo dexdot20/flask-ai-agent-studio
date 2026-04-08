@@ -2174,7 +2174,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         chat_sync.assert_called_once_with(conversation_id=conversation_id, force=False)
 
-    def test_get_conversation_records_for_rag_excludes_soft_deleted_messages(self):
+    def test_get_conversation_records_for_rag_separates_soft_deleted_messages_into_archive(self):
         conversation_id = self._create_conversation()
         assistant_metadata = serialize_message_metadata(
             {
@@ -2213,6 +2213,9 @@ class AppRoutesTestCase(unittest.TestCase):
             ],
         )
         self.assertEqual(records[0]["tool_results"], [])
+        self.assertEqual(len(records[0]["archived_messages"]), 1)
+        self.assertIn("Hidden transcript message from this conversation.", records[0]["archived_messages"][0]["content"])
+        self.assertIn("Outdated answer", records[0]["archived_messages"][0]["content"])
 
     def test_get_conversation_records_for_rag_compacts_clarification_response_messages(self):
         conversation_id = self._create_conversation()
@@ -3505,6 +3508,20 @@ class AppRoutesTestCase(unittest.TestCase):
                 "similarity": 0.95,
             },
             {
+                "id": "archived-hit",
+                "text": "archived conversation memory",
+                "metadata": {
+                    "source_key": "conversation-1-archived",
+                    "source_name": "Conversation archive",
+                    "source_type": "conversation",
+                    "category": "conversation",
+                    "chunk_index": 0,
+                    "archived_conversation": True,
+                    "archived_message_count": 12,
+                },
+                "similarity": 0.93,
+            },
+            {
                 "id": "other-hit",
                 "text": "other memory",
                 "metadata": {"source_key": "other-1", "source_name": "Other", "source_type": "tool_memory", "category": "tool_memory", "chunk_index": 0},
@@ -3522,7 +3539,9 @@ class AppRoutesTestCase(unittest.TestCase):
             )
 
         self.assertIsNotNone(result)
-        self.assertEqual([match["source_name"] for match in result["matches"]], ["Other"])
+        self.assertEqual([match["source_name"] for match in result["matches"]], ["Conversation archive", "Other"])
+        self.assertTrue(result["matches"][0]["archived_conversation"])
+        self.assertEqual(result["matches"][0]["archived_message_count"], 12)
 
     def test_rag_search_route_uses_saved_source_type_settings(self):
         settings = get_app_settings()
@@ -6231,8 +6250,10 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn('id="summary-detail-options"', html_text)
         self.assertIn('id="summary-message-count-input"', html_text)
         self.assertIn('id="summary-all-messages-checkbox"', html_text)
+        self.assertIn('Preserves the protected message window from Settings, then compresses the rest.', html_text)
         self.assertIn('id="summary-progress"', html_text)
         self.assertIn('id="summary-history-list"', html_text)
+        self.assertIn('id="stat-last-archived-rag"', html_text)
         self.assertNotIn('id="summary-now-btn"', html_text)
         self.assertNotIn('id="summary-undo-btn"', html_text)
         self.assertIn('const canvasToggleBtn = document.getElementById("canvas-toggle-btn")', script_text)
@@ -6263,6 +6284,8 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn('const SUMMARY_DETAIL_OPTIONS = [', script_text)
         self.assertIn('const summaryMessageCountInput = document.getElementById("summary-message-count-input")', script_text)
         self.assertIn('const summaryAllMessagesCheckbox = document.getElementById("summary-all-messages-checkbox")', script_text)
+        self.assertIn('document.getElementById("stat-last-archived-rag")', script_text)
+        self.assertIn('The protected messages from Settings stay in place.', script_text)
         self.assertIn('const summaryHistoryList = document.getElementById("summary-history-list")', script_text)
         self.assertIn('function renderSummaryFocusPresets()', script_text)
         self.assertIn('function renderSummaryDetailOptions()', script_text)
@@ -15318,8 +15341,8 @@ class AppRoutesTestCase(unittest.TestCase):
                 "rag_auto_inject": "false",
                 "chat_summary_mode": "never",
                 "chat_summary_trigger_token_count": "1000",
-                "summary_skip_first": "0",
-                "summary_skip_last": "0",
+                "summary_skip_first": "2",
+                "summary_skip_last": "2",
             }
         )
 
@@ -15353,13 +15376,13 @@ class AppRoutesTestCase(unittest.TestCase):
         data = response.get_json()
         self.assertTrue(data["applied"])
         self.assertIsNone(data["requested_message_count"])
-        self.assertEqual(data["eligible_message_count"], 70)
-        self.assertEqual(data["covered_message_count"], 70)
+        self.assertEqual(data["eligible_message_count"], 68)
+        self.assertEqual(data["covered_message_count"], 68)
 
         summary_message = next(message for message in data["messages"] if message["role"] == "summary")
-        self.assertEqual(summary_message["metadata"]["covered_message_count"], 70)
-        self.assertEqual(summary_message["metadata"]["covers_from_position"], 2)
-        self.assertEqual(summary_message["metadata"]["covers_to_position"], 71)
+        self.assertEqual(summary_message["metadata"]["covered_message_count"], 68)
+        self.assertEqual(summary_message["metadata"]["covers_from_position"], 3)
+        self.assertEqual(summary_message["metadata"]["covers_to_position"], 70)
 
     def test_manual_summarize_endpoint_threads_summary_preferences_into_prompt(self):
         conversation_id = self._create_conversation()
@@ -15399,7 +15422,7 @@ class AppRoutesTestCase(unittest.TestCase):
                 json={
                     "force": True,
                     "summary_focus": "action items and decisions",
-                    "summary_detail_level": "concise",
+                    "summary_detail_level": "comprehensive",
                 },
             )
 
@@ -15407,9 +15430,10 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertTrue(response.get_json()["applied"])
         prompt_messages = mocked_collect.call_args.args[0]
         prompt_text = "\n".join(str(message.get("content") or "") for message in prompt_messages)
-        self.assertIn("concise summary", prompt_text)
+        self.assertIn("comprehensive summary", prompt_text)
         self.assertIn("Current continuation focus:", prompt_text)
         self.assertIn("action items and decisions", prompt_text)
+        self.assertIn("Preserve continuity carefully", prompt_text)
 
     def test_manual_summarize_endpoint_honors_false_force_strings(self):
         conversation_id = self._create_conversation()
@@ -15829,7 +15853,61 @@ class AppRoutesTestCase(unittest.TestCase):
                 ("user", None),
             ],
         )
-        self.assertEqual([message["position"] for message in payload["messages"]], [1, 2, 3, 4, 5])
+
+    def test_undo_summary_does_not_count_older_deleted_messages_in_same_range(self):
+        conversation_id = self._create_conversation()
+
+        with get_db() as conn:
+            inserted_ids = []
+            for index in range(8):
+                inserted_ids.append(
+                    conn.execute(
+                        "INSERT INTO messages (conversation_id, role, content, metadata, position) VALUES (?, 'user', ?, ?, ?)",
+                        (conversation_id, f"Message {index + 1}", None, index + 1),
+                    ).lastrowid
+                )
+
+            older_deleted_at = "2026-04-08T10:00:00+00:00"
+            current_deleted_at = "2026-04-08T11:00:00+00:00"
+            conn.execute(
+                "UPDATE messages SET deleted_at = ? WHERE conversation_id = ? AND id IN (?, ?)",
+                (older_deleted_at, conversation_id, inserted_ids[2], inserted_ids[3]),
+            )
+            conn.execute(
+                "UPDATE messages SET deleted_at = ? WHERE conversation_id = ? AND id IN (?, ?)",
+                (current_deleted_at, conversation_id, inserted_ids[4], inserted_ids[5]),
+            )
+            summary_id = conn.execute(
+                "INSERT INTO messages (conversation_id, role, content, metadata, position) VALUES (?, 'summary', ?, ?, ?)",
+                (
+                    conversation_id,
+                    "Conversation summary (generated from deleted messages):\n\nSummary block.",
+                    serialize_message_metadata(
+                        {
+                            "is_summary": True,
+                            "summary_source": "conversation_history",
+                            "covers_from_position": 3,
+                            "covers_to_position": 6,
+                            "summary_insert_strategy": "replace_first_covered_message_preserve_positions",
+                            "covered_message_count": 2,
+                            "covered_message_ids": [inserted_ids[4], inserted_ids[5]],
+                            "generated_at": current_deleted_at,
+                        }
+                    ),
+                    5,
+                ),
+            ).lastrowid
+
+        with patch("routes.chat.sync_conversations_to_rag_safe"):
+            response = self.client.post(
+                f"/api/conversations/{conversation_id}/summaries/{summary_id}/undo"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["reverted"])
+        self.assertEqual(payload["restored_message_count"], 2)
+        self.assertEqual([message["position"] for message in payload["messages"]], [1, 2, 5, 6, 7, 8])
 
         with get_db() as conn:
             visible_ids = {
@@ -15840,7 +15918,10 @@ class AppRoutesTestCase(unittest.TestCase):
                 ).fetchall()
             }
 
-        self.assertTrue({user_one_id, assistant_tool_id, tool_id, user_two_id, user_three_id}.issubset(visible_ids))
+        self.assertIn(inserted_ids[4], visible_ids)
+        self.assertIn(inserted_ids[5], visible_ids)
+        self.assertNotIn(inserted_ids[2], visible_ids)
+        self.assertNotIn(inserted_ids[3], visible_ids)
 
     def test_settings_include_new_summary_params(self):
         save_app_settings(

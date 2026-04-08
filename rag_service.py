@@ -193,6 +193,45 @@ def conversation_rag_source_key(source_type: str, conversation_id: int) -> str:
     return build_rag_source_key(source_type, str(conversation_id))
 
 
+def conversation_archived_rag_source_key(conversation_id: int) -> str:
+    return build_rag_source_key(RAG_SOURCE_CONVERSATION, f"{int(conversation_id)}:archived")
+
+
+def _conversation_archived_rag_source_name(conversation_id: int, title: str) -> str:
+    title = str(title or "Untitled")[:80]
+    return f"conversation_archive:{conversation_id}:{title}"
+
+
+def _build_archived_conversation_record(role: str, content: str, metadata: dict | None, deleted_at: str) -> dict | None:
+    normalized_role = str(role or "").strip().lower()
+    normalized_content = _clean_rag_text_block(content, limit=2_400)
+    if not normalized_content:
+        return None
+
+    prefix = f"Hidden transcript message from this conversation. Original role: {normalized_role or 'unknown'}."
+    deleted_at_text = str(deleted_at or "").strip()
+    if deleted_at_text:
+        prefix += f" Hidden at: {deleted_at_text}."
+
+    tool_lines: list[str] = []
+    for entry in extract_message_tool_results(metadata):
+        tool_name = str(entry.get("tool_name") or "tool").strip() or "tool"
+        tool_text = _clean_rag_text_block(
+            str(entry.get("summary") or entry.get("content") or entry.get("raw_content") or ""),
+            limit=320,
+        )
+        if tool_text:
+            tool_lines.append(f"- {tool_name}: {tool_text}")
+
+    parts = [prefix, normalized_content]
+    if tool_lines:
+        parts.append("Associated tool findings:\n" + "\n".join(tool_lines[:6]))
+    return {
+        "role": "archived_conversation",
+        "content": "\n\n".join(part for part in parts if part).strip(),
+    }
+
+
 def build_tool_memory_source_key(tool_name: str, args_hash: str) -> str:
     normalized_tool_name = normalize_category(tool_name) or "tool"
     normalized_args_hash = str(args_hash or "").strip() or "unknown"
@@ -722,6 +761,12 @@ def _compact_auto_injected_rag_match(match: dict) -> dict | None:
     similarity = match.get("similarity")
     if isinstance(similarity, (int, float)):
         compact_match["similarity"] = round(float(similarity), 4)
+    if match.get("archived_conversation") is True:
+        compact_match["archived_conversation"] = True
+        compact_match["source_key"] = str(match.get("source_key") or "").strip() or None
+    archived_message_count = match.get("archived_message_count")
+    if isinstance(archived_message_count, (int, float)) and int(archived_message_count) > 0:
+        compact_match["archived_message_count"] = int(archived_message_count)
     return compact_match
 
 
@@ -757,6 +802,8 @@ def _normalize_rag_hits(
                 "source_type": source_type,
                 "category": normalize_rag_category(metadata.get("category"), default=source_type),
                 "chunk_index": metadata.get("chunk_index"),
+                "archived_conversation": metadata.get("archived_conversation") is True,
+                "archived_message_count": int(metadata.get("archived_message_count") or 0) if metadata.get("archived_message_count") not in (None, "") else 0,
                 "_expires_at_ts": expires_at_ts,
                 "expires_at_utc": _format_utc_timestamp(expires_at_ts),
                 "similarity": round(float(similarity), 4) if similarity is not None else None,
@@ -1182,15 +1229,22 @@ def get_conversation_records_for_rag(
         conversations = []
         for row in rows:
             messages = conn.execute(
-                "SELECT role, content, metadata FROM messages WHERE conversation_id = ? AND deleted_at IS NULL ORDER BY position, id",
+                "SELECT role, content, metadata, deleted_at FROM messages WHERE conversation_id = ? ORDER BY position, id",
                 (row["id"],),
             ).fetchall()
             conversation_messages = []
             tool_messages = []
+            archived_messages = []
             for msg in messages:
                 role = str(msg["role"] or "").strip()
                 metadata = parse_message_metadata(msg["metadata"])
                 content = str(msg["content"] or "").strip()
+                deleted_at = str(msg["deleted_at"] or "").strip()
+                if deleted_at:
+                    archived_record = _build_archived_conversation_record(role, content, metadata, deleted_at)
+                    if archived_record is not None:
+                        archived_messages.append(archived_record)
+                    continue
                 if role == "user":
                     content = _build_compact_clarification_rag_text(content, metadata)
                 if role == "summary" and content:
@@ -1212,6 +1266,7 @@ def get_conversation_records_for_rag(
                     "title": row["title"],
                     "updated_at": row["updated_at"],
                     "messages": conversation_messages,
+                    "archived_messages": archived_messages,
                     "tool_results": tool_messages,
                 }
             )
@@ -1244,10 +1299,16 @@ def sync_conversations_to_rag(conversation_id: int | None = None, force: bool = 
     sync_plan: list[dict] = []
     for candidate in _get_conversation_sync_candidates(conversation_id):
         conversation_key = conversation_rag_source_key(RAG_SOURCE_CONVERSATION, candidate["conversation_id"])
+        archived_conversation_key = conversation_archived_rag_source_key(candidate["conversation_id"])
         tool_key = conversation_rag_source_key(RAG_SOURCE_TOOL_RESULT, candidate["conversation_id"])
         sync_marker = candidate.get("updated_at")
         sync_conversation = _conversation_source_needs_sync(
             conversation_key,
+            sync_marker=sync_marker,
+            force=force,
+        )
+        sync_archived_conversation = _conversation_source_needs_sync(
+            archived_conversation_key,
             sync_marker=sync_marker,
             force=force,
         )
@@ -1256,11 +1317,12 @@ def sync_conversations_to_rag(conversation_id: int | None = None, force: bool = 
             sync_marker=sync_marker,
             force=force,
         )
-        if sync_conversation or sync_tool_results:
+        if sync_conversation or sync_archived_conversation or sync_tool_results:
             sync_plan.append(
                 {
                     **candidate,
                     "sync_conversation": sync_conversation,
+                    "sync_archived_conversation": sync_archived_conversation,
                     "sync_tool_results": sync_tool_results,
                 }
             )
@@ -1312,6 +1374,45 @@ def sync_conversations_to_rag(conversation_id: int | None = None, force: bool = 
                     _delete_rag_source_if_present(conversation_key)
             else:
                 _delete_rag_source_if_present(conversation_key)
+
+        archived_conversation_key = conversation_archived_rag_source_key(conversation["conversation_id"])
+        archived_conversation_name = _conversation_archived_rag_source_name(
+            conversation["conversation_id"],
+            conversation["title"],
+        )
+        if planned["sync_archived_conversation"]:
+            archived_signature = _build_rag_sync_signature(
+                {
+                    "title": conversation["title"],
+                    "archived_messages": conversation.get("archived_messages") or [],
+                }
+            )
+            archived_metadata = _build_conversation_sync_metadata(conversation, archived_conversation_key, archived_signature)
+            archived_metadata["archived_conversation"] = True
+            archived_metadata["archived_message_count"] = len(conversation.get("archived_messages") or [])
+            if conversation.get("archived_messages"):
+                archived_chunks = chunks_from_records(
+                    conversation["archived_messages"],
+                    source_name=archived_conversation_name,
+                    source_type=RAG_SOURCE_CONVERSATION,
+                    category=RAG_SOURCE_CONVERSATION,
+                    metadata=archived_metadata,
+                )
+                if archived_chunks:
+                    synced.append(
+                        ingest_rag_chunks(
+                            source_key=archived_conversation_key,
+                            source_name=archived_conversation_name,
+                            source_type=RAG_SOURCE_CONVERSATION,
+                            category=RAG_SOURCE_CONVERSATION,
+                            chunks=archived_chunks,
+                            metadata=archived_metadata,
+                        )
+                    )
+                else:
+                    _delete_rag_source_if_present(archived_conversation_key)
+            else:
+                _delete_rag_source_if_present(archived_conversation_key)
 
         tool_key = conversation_rag_source_key(RAG_SOURCE_TOOL_RESULT, conversation["conversation_id"])
         tool_name = _conversation_rag_source_name(

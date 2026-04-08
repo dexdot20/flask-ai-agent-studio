@@ -187,8 +187,8 @@ LOGGER = logging.getLogger(__name__)
 SUMMARY_TOOL_RESULT_LIMIT = 3
 SUMMARY_TOOL_RESULT_TEXT_LIMIT = 280
 SUMMARY_TOOL_MESSAGE_TEXT_LIMIT = 320
-SUMMARY_MAX_OUTPUT_CHARS = 2_200
-SUMMARY_MAX_BULLETS = 10
+SUMMARY_MAX_OUTPUT_CHARS = 4_800
+SUMMARY_MAX_BULLETS = 18
 SUMMARY_TOOL_TRACE_LIMIT = 8
 OMITTED_TOOL_OUTPUT_TEXT = "[Tool output omitted from older history to save context budget.]"
 SUMMARY_FOCUS_STOPWORDS = {
@@ -528,10 +528,18 @@ def _build_summary_detail_instruction(summary_detail_level: str) -> str:
     if normalized == "concise":
         return "Write a concise summary that keeps only the highest-value reusable facts, decisions, and open questions."
     if normalized == "detailed":
-        return "Write a more detailed summary that preserves important context while staying compact and continuation-oriented."
+        return (
+            "Write a detailed summary that preserves chronology, user intent, constraints, partial progress, failed attempts, "
+            "decisions, and unresolved work while still remaining continuation-oriented."
+        )
     if normalized == "comprehensive":
-        return "Write a comprehensive summary that preserves key context, decisions, open questions, and important nuance while still remaining readable."
-    return "Write a balanced summary that keeps the most important reusable facts, decisions, and open questions."
+        return (
+            "Write a comprehensive summary that preserves chronology, task state, constraints, user preferences, decisions, open questions, "
+            "important nuance, and any tool findings that may matter for future turns. Favor recall over compression as long as the result stays readable."
+        )
+    return (
+        "Write a balanced but context-rich summary that keeps reusable facts, decisions, constraints, open questions, active work, and important nuance."
+    )
 
 
 def _parse_structured_summary_payload(summary_text: str) -> dict | None:
@@ -558,11 +566,11 @@ def _parse_structured_summary_payload(summary_text: str) -> dict | None:
             continue
 
         normalized = {
-            "facts": _normalize_summary_items(parsed.get("facts"), max_items=5, item_limit=220),
-            "decisions": _normalize_summary_items(parsed.get("decisions"), max_items=4, item_limit=200),
-            "open_issues": _normalize_summary_items(parsed.get("open_issues"), max_items=4, item_limit=200),
-            "entities": _normalize_summary_items(parsed.get("entities"), max_items=10, item_limit=120),
-            "tool_outcomes": _normalize_summary_items(parsed.get("tool_outcomes"), max_items=6, item_limit=220),
+            "facts": _normalize_summary_items(parsed.get("facts"), max_items=10, item_limit=320),
+            "decisions": _normalize_summary_items(parsed.get("decisions"), max_items=8, item_limit=280),
+            "open_issues": _normalize_summary_items(parsed.get("open_issues"), max_items=8, item_limit=280),
+            "entities": _normalize_summary_items(parsed.get("entities"), max_items=14, item_limit=180),
+            "tool_outcomes": _normalize_summary_items(parsed.get("tool_outcomes"), max_items=10, item_limit=320),
         }
         if any(normalized.values()):
             return normalized
@@ -876,13 +884,17 @@ def _resolve_summary_restore_message_ids(
     ]
     covers_from_position = int(summary_metadata.get("covers_from_position") or 0) if isinstance(summary_metadata, dict) else 0
     covers_to_position = int(summary_metadata.get("covers_to_position") or 0) if isinstance(summary_metadata, dict) else 0
+    summary_deleted_at = str(summary_metadata.get("generated_at") or "").strip() if isinstance(summary_metadata, dict) else ""
 
     if covers_from_position > 0 and covers_to_position >= covers_from_position:
         for message in _collect_summary_block_messages(canonical_messages, covers_from_position, covers_to_position):
             message_id = int(message.get("id") or 0)
             if message_id <= 0 or message_id == summary_message_id:
                 continue
-            if message.get("deleted_at") is None:
+            message_deleted_at = str(message.get("deleted_at") or "").strip()
+            if not message_deleted_at:
+                continue
+            if summary_deleted_at and message_deleted_at != summary_deleted_at:
                 continue
             if message_id not in restored_ids:
                 restored_ids.append(message_id)
@@ -967,6 +979,10 @@ def _build_summary_prompt_payload(
             f"{normalized_focus[:400]}\n"
             "Prioritize older facts, decisions, constraints, unresolved questions, and tool findings that are most likely to matter for continuing this exact request."
         )
+    instruction += (
+        "\n\nPreserve continuity carefully: retain concrete user requirements, confirmed constraints, in-progress work, unfinished subproblems, "
+        "rejected approaches that matter, important chronology, and any details needed so a future assistant can resume without guessing."
+    )
 
     prompt_source_messages: list[dict] = []
     empty_message_count = 0
@@ -1197,6 +1213,49 @@ def _trim_rag_context_to_token_budget(retrieved_context: dict | None, max_tokens
         "query": retrieved_context.get("query"),
         "count": len(trimmed_matches),
         "matches": trimmed_matches,
+    }
+
+
+def _summarize_archived_rag_matches(retrieved_context: dict | None) -> dict[str, int]:
+    empty = {
+        "archived_conversation_match_count": 0,
+        "archived_conversation_source_count": 0,
+        "archived_conversation_message_count": 0,
+        "archived_conversation_tokens": 0,
+    }
+    if not isinstance(retrieved_context, dict):
+        return empty
+
+    matches = retrieved_context.get("matches") if isinstance(retrieved_context.get("matches"), list) else []
+    archived_matches = [
+        match
+        for match in matches
+        if isinstance(match, dict) and match.get("archived_conversation") is True
+    ]
+    if not archived_matches:
+        return empty
+
+    unique_source_keys: set[str] = set()
+    archived_message_count = 0
+    for match in archived_matches:
+        source_key = str(match.get("source_key") or "").strip()
+        if source_key:
+            unique_source_keys.add(source_key)
+        try:
+            archived_message_count += max(0, int(match.get("archived_message_count") or 0))
+        except (TypeError, ValueError):
+            continue
+
+    archived_only_context = {
+        "query": retrieved_context.get("query"),
+        "count": len(archived_matches),
+        "matches": archived_matches,
+    }
+    return {
+        "archived_conversation_match_count": len(archived_matches),
+        "archived_conversation_source_count": len(unique_source_keys),
+        "archived_conversation_message_count": archived_message_count,
+        "archived_conversation_tokens": estimate_text_tokens(format_knowledge_base_auto_context(archived_only_context)),
     }
 
 
@@ -1749,6 +1808,7 @@ def _build_budgeted_prompt_messages(
         min(get_prompt_rag_max_tokens(settings), PROMPT_RAG_AUTO_MAX_TOKENS, remaining_context_budget),
     )
     rag_tokens = estimate_text_tokens(format_knowledge_base_auto_context(rag_context)) if rag_context else 0
+    archived_rag_stats = _summarize_archived_rag_matches(rag_context)
     remaining_context_budget = max(0, remaining_context_budget - rag_tokens)
     tool_trace_budget_cap = get_prompt_tool_trace_max_tokens(settings)
     tool_memory_budget_cap = get_prompt_tool_memory_max_tokens(settings)
@@ -1817,6 +1877,7 @@ def _build_budgeted_prompt_messages(
         "summary_tokens": count_visible_message_tokens(selected_summaries),
         "recent_tokens": recent_tokens,
         "rag_tokens": rag_tokens,
+        **archived_rag_stats,
         "tool_trace_tokens": tool_trace_tokens,
         "tool_memory_tokens": estimate_text_tokens(trimmed_tool_memory or ""),
         "estimated_total_tokens": _estimate_prompt_tokens(api_messages),
@@ -3594,9 +3655,14 @@ def register_chat_routes(app) -> None:
         skip_first_override = data.get("skip_first")
         skip_last_override = data.get("skip_last")
         summary_focus = str(data.get("summary_focus") or "").strip()
-        summary_detail_level = str(data.get("summary_detail_level") or "balanced").strip().lower()
+        settings = get_app_settings()
+        summary_detail_level = str(
+            data.get("summary_detail_level") or settings.get("chat_summary_detail_level") or "comprehensive"
+        ).strip().lower()
         if summary_detail_level not in {"very_concise", "concise", "balanced", "detailed", "comprehensive"}:
-            summary_detail_level = "balanced"
+            summary_detail_level = str(settings.get("chat_summary_detail_level") or "comprehensive").strip().lower()
+            if summary_detail_level not in {"very_concise", "concise", "balanced", "detailed", "comprehensive"}:
+                summary_detail_level = "comprehensive"
 
         message_count = None
         if raw_message_count not in (None, "") and not summarize_all_messages:
@@ -3605,13 +3671,8 @@ def register_chat_routes(app) -> None:
             except (TypeError, ValueError):
                 return jsonify({"error": "message_count must be an integer between 1 and 500."}), 400
 
-        settings = get_app_settings()
         effective_settings = dict(settings)
         effective_settings["chat_summary_detail_level"] = summary_detail_level
-
-        if summarize_all_messages:
-            effective_settings["summary_skip_first"] = "1"
-            effective_settings["summary_skip_last"] = "1"
 
         if skip_first_override is not None:
             try:
@@ -3708,8 +3769,7 @@ def register_chat_routes(app) -> None:
             if not resolved_covered_message_ids:
                 return jsonify({"error": "This summary cannot be undone because its source messages are missing."}), 400
 
-            restored_message_count = len(resolved_covered_message_ids)
-            restore_soft_deleted_messages(conn, conv_id, resolved_covered_message_ids)
+            restored_message_count = restore_soft_deleted_messages(conn, conv_id, resolved_covered_message_ids)
             conn.execute(
                 "DELETE FROM messages WHERE conversation_id = ? AND id = ?",
                 (conv_id, summary_id),

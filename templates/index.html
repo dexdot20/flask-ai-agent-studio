@@ -137,7 +137,7 @@
         <input id="summary-all-messages-checkbox" type="checkbox" checked />
         <span>Summarize all eligible messages</span>
       </label>
-      <p class="summary-support-copy">Preserves the first and last messages, then compresses the rest.</p>
+      <p class="summary-support-copy">Preserves the protected message window from Settings, then compresses the rest.</p>
       <p id="summary-selection-note" class="summary-support-copy">Eligible messages: —</p>
       <p id="summary-settings-note" class="summary-support-copy">Current Settings: —</p>
     </section>
@@ -315,6 +315,10 @@
     <div class="stats-row">
       <span class="stats-label">Provider</span>
       <span class="stats-value" id="stat-last-provider">—</span>
+    </div>
+    <div class="stats-row">
+      <span class="stats-label">Archived conversation RAG</span>
+      <span class="stats-value" id="stat-last-archived-rag">—</span>
     </div>
     </div>
     <p class="stats-note">Includes every model call made while producing the latest assistant reply, including tool-execution rounds. The billed prompt total can exceed a model's single-call context window because later calls rebill prior history and tool results; compare the peak single-call prompt to the per-call cap.</p>
