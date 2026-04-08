@@ -13,7 +13,12 @@ const bootstrapData = (() => {
 const appSettings = bootstrapData.settings || {};
 const featureFlags = bootstrapData.features || appSettings.features || {};
 
-const preferencesEl = document.getElementById("preferences-input");
+const generalInstructionsEl = document.getElementById("general-instructions-input");
+const generalInstructionsTemplateSelectEl = document.getElementById("general-instructions-template-select");
+const generalInstructionsTemplateApplyBtn = document.getElementById("general-instructions-template-apply-btn");
+const aiPersonalityEl = document.getElementById("ai-personality-input");
+const aiPersonalityTemplateSelectEl = document.getElementById("ai-personality-template-select");
+const aiPersonalityTemplateApplyBtn = document.getElementById("ai-personality-template-apply-btn");
 const temperatureEl = document.getElementById("temperature-input");
 const scratchpadListEl = document.getElementById("scratchpad-list");
 const scratchpadAddBtn = document.getElementById("scratchpad-add-btn");
@@ -133,6 +138,52 @@ const MODEL_PROVIDER_LABELS = {
   openrouter: "OpenRouter",
 };
 
+const GENERAL_INSTRUCTION_TEMPLATES = [
+  {
+    id: "concise_default",
+    label: "Concise default",
+    text: "Be concise and direct. Prefer short paragraphs. Use bullets only when they improve scanning. State assumptions briefly and include the next step when useful.",
+  },
+  {
+    id: "teaching_mode",
+    label: "Teaching mode",
+    text: "Explain clearly and step by step. Define non-obvious terms, surface the reasoning behind decisions, and include one concrete example when it materially helps understanding.",
+  },
+  {
+    id: "engineering_review",
+    label: "Engineering review",
+    text: "Prioritize correctness, edge cases, regressions, and verification. Keep summaries brief and focus first on concrete findings, risks, and what changed.",
+  },
+  {
+    id: "execution_first",
+    label: "Execution first",
+    text: "Take action by default instead of proposing abstract plans. Prefer minimal working changes, explain tradeoffs briefly, and avoid unnecessary theory.",
+  },
+];
+
+const AI_PERSONALITY_TEMPLATES = [
+  {
+    id: "pragmatic_engineer",
+    label: "Pragmatic engineer",
+    text: "Adopt the voice of a pragmatic senior engineer: calm, direct, rigorous, and low-fluff. Challenge weak assumptions politely and stay focused on what will actually work.",
+  },
+  {
+    id: "patient_teacher",
+    label: "Patient teacher",
+    text: "Sound like a patient technical teacher: structured, clear, encouraging without being overly casual, and attentive to knowledge gaps.",
+  },
+  {
+    id: "analytical_strategist",
+    label: "Analytical strategist",
+    text: "Sound analytical and deliberate. Compare options clearly, explain tradeoffs, and make recommendations with explicit reasoning and constraints.",
+  },
+  {
+    id: "creative_partner",
+    label: "Creative partner",
+    text: "Sound like a creative but disciplined collaborator: exploratory, idea-rich, and willing to suggest novel directions while staying grounded in the user's goal.",
+  },
+];
+
 const DEFAULT_SCRATCHPAD_SECTION_ID = "notes";
 const DEFAULT_SCRATCHPAD_SECTION_ORDER = [
   "lessons",
@@ -224,6 +275,48 @@ function autoResize(element) {
   }
   element.style.height = "auto";
   element.style.height = `${element.scrollHeight}px`;
+}
+
+function populateBehaviorTemplateSelect(selectEl, templates) {
+  if (!selectEl) {
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  const placeholderOption = document.createElement("option");
+  placeholderOption.value = "";
+  placeholderOption.textContent = "Choose a template";
+  fragment.append(placeholderOption);
+
+  templates.forEach((template) => {
+    const option = document.createElement("option");
+    option.value = template.id;
+    option.textContent = template.label;
+    fragment.append(option);
+  });
+
+  selectEl.replaceChildren(fragment);
+}
+
+function getBehaviorTemplateById(templates, templateId) {
+  return templates.find((template) => template.id === templateId) || null;
+}
+
+function applyBehaviorTemplate(selectEl, textareaEl, templates) {
+  if (!selectEl || !textareaEl) {
+    return;
+  }
+  const selectedTemplate = getBehaviorTemplateById(templates, selectEl.value);
+  if (!selectedTemplate) {
+    return;
+  }
+  textareaEl.value = selectedTemplate.text;
+  autoResize(textareaEl);
+  markDirty();
+}
+
+function initializeAssistantBehaviorTemplates() {
+  populateBehaviorTemplateSelect(generalInstructionsTemplateSelectEl, GENERAL_INSTRUCTION_TEMPLATES);
+  populateBehaviorTemplateSelect(aiPersonalityTemplateSelectEl, AI_PERSONALITY_TEMPLATES);
 }
 
 function setSettingsStatus(message, tone = "muted") {
@@ -1512,9 +1605,13 @@ function syncOverviewStats() {
 }
 
 function applySettingsToForm() {
-  if (preferencesEl) {
-    preferencesEl.value = appSettings.user_preferences || "";
-    autoResize(preferencesEl);
+  if (generalInstructionsEl) {
+    generalInstructionsEl.value = appSettings.general_instructions || appSettings.user_preferences || "";
+    autoResize(generalInstructionsEl);
+  }
+  if (aiPersonalityEl) {
+    aiPersonalityEl.value = appSettings.ai_personality || "";
+    autoResize(aiPersonalityEl);
   }
   if (temperatureEl) temperatureEl.value = String(appSettings.temperature ?? 0.7);
   if (maxStepsEl) maxStepsEl.value = String(appSettings.max_steps || 5);
@@ -1615,7 +1712,10 @@ function applyFeatureAvailability() {
 }
 
 function applyServerSettingsData(data) {
-  appSettings.user_preferences = data.user_preferences || "";
+  appSettings.general_instructions = data.general_instructions || data.user_preferences || "";
+  appSettings.ai_personality = data.ai_personality || "";
+  appSettings.user_preferences = appSettings.general_instructions;
+  appSettings.effective_user_preferences = data.effective_user_preferences || "";
   appSettings.scratchpad = data.scratchpad || "";
   appSettings.scratchpad_sections = data.scratchpad_sections && typeof data.scratchpad_sections === "object"
     ? data.scratchpad_sections
@@ -1694,8 +1794,12 @@ async function refreshSettings() {
 
 async function saveSettings() {
   const scratchpadSections = readScratchpadSectionsFromList();
+  const generalInstructions = generalInstructionsEl?.value.trim() || "";
+  const aiPersonality = aiPersonalityEl?.value.trim() || "";
   const payload = {
-    user_preferences: preferencesEl?.value.trim() || "",
+    user_preferences: generalInstructions,
+    general_instructions: generalInstructions,
+    ai_personality: aiPersonality,
     temperature: readFloatSetting(temperatureEl, 0.7, { min: 0, max: 2 }),
     max_steps: readNumericSetting(maxStepsEl, 5, { allowZero: false }),
     max_parallel_tools: readNumericSetting(maxParallelToolsEl, 4, { allowZero: false }),
@@ -2097,8 +2201,12 @@ function initializeTabs() {
 }
 
 function registerDirtyListeners() {
-  preferencesEl?.addEventListener("input", () => {
-    autoResize(preferencesEl);
+  generalInstructionsEl?.addEventListener("input", () => {
+    autoResize(generalInstructionsEl);
+    markDirty();
+  });
+  aiPersonalityEl?.addEventListener("input", () => {
+    autoResize(aiPersonalityEl);
     markDirty();
   });
   maxStepsEl?.addEventListener("input", markDirty);
@@ -2168,6 +2276,12 @@ function registerDirtyListeners() {
 }
 
 scratchpadAddBtn?.addEventListener("click", () => addScratchpadNote());
+generalInstructionsTemplateApplyBtn?.addEventListener("click", () => {
+  applyBehaviorTemplate(generalInstructionsTemplateSelectEl, generalInstructionsEl, GENERAL_INSTRUCTION_TEMPLATES);
+});
+aiPersonalityTemplateApplyBtn?.addEventListener("click", () => {
+  applyBehaviorTemplate(aiPersonalityTemplateSelectEl, aiPersonalityEl, AI_PERSONALITY_TEMPLATES);
+});
 addCustomModelBtn?.addEventListener("click", addCustomModelFromInputs);
 customModelReasoningModeEl?.addEventListener("change", syncCustomModelReasoningControls);
 customModelRoutingModeEl?.addEventListener("change", syncCustomModelProviderControls);
@@ -2217,6 +2331,7 @@ window.addEventListener("keydown", (event) => {
 });
 
 initializeTabs();
+initializeAssistantBehaviorTemplates();
 registerDirtyListeners();
 applySettingsToForm();
 applyFeatureAvailability();

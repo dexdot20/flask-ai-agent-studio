@@ -80,6 +80,7 @@ from canvas_service import (
 )
 from db import (
     append_to_scratchpad,
+    build_effective_user_preferences,
     build_user_profile_system_context,
     count_visible_message_tokens,
     create_image_asset,
@@ -250,6 +251,9 @@ class AppRoutesTestCase(unittest.TestCase):
         response = self.client.get("/api/settings")
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
+        self.assertEqual(payload["general_instructions"], "")
+        self.assertEqual(payload["ai_personality"], "")
+        self.assertEqual(payload["effective_user_preferences"], "")
         self.assertEqual(payload["scratchpad"], "")
         self.assertEqual(payload["max_steps"], 5)
         self.assertEqual(payload["max_parallel_tools"], 4)
@@ -329,7 +333,8 @@ class AppRoutesTestCase(unittest.TestCase):
         response = self.client.patch(
             "/api/settings",
             json={
-                "user_preferences": "Keep answers short.",
+                "general_instructions": "Keep answers short.",
+                "ai_personality": "Sound like a pragmatic senior engineer.",
                 "max_steps": 3,
                 "max_parallel_tools": 6,
                 "temperature": 1.1,
@@ -400,6 +405,10 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
         self.assertEqual(payload["user_preferences"], "Keep answers short.")
+        self.assertEqual(payload["general_instructions"], "Keep answers short.")
+        self.assertEqual(payload["ai_personality"], "Sound like a pragmatic senior engineer.")
+        self.assertIn("General instructions:\nKeep answers short.", payload["effective_user_preferences"])
+        self.assertIn("AI personality:\nSound like a pragmatic senior engineer.", payload["effective_user_preferences"])
         self.assertEqual(payload["scratchpad"], "")
         self.assertEqual(payload["max_steps"], 3)
         self.assertEqual(payload["max_parallel_tools"], 6)
@@ -2931,6 +2940,19 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("Knowledge Base", content)
         self.assertIn("Context block", content)
         self.assertNotIn("You are an advanced, capable, and helpful AI assistant.", content)
+
+    def test_build_effective_user_preferences_combines_general_and_personality(self):
+        combined = build_effective_user_preferences(
+            {
+                "general_instructions": "Keep answers short.",
+                "ai_personality": "Sound calm, direct, and rigorous.",
+            }
+        )
+
+        self.assertEqual(
+            combined,
+            "General instructions:\nKeep answers short.\n\nAI personality:\nSound calm, direct, and rigorous.",
+        )
 
     def test_runtime_system_message_places_volatile_context_after_tool_calling(self):
         message = build_runtime_system_message(

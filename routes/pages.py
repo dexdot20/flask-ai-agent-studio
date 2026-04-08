@@ -11,6 +11,7 @@ from config import (
     CLARIFICATION_QUESTION_LIMIT_MIN,
     DEFAULT_WEB_CACHE_TTL_HOURS,
     DEFAULT_SETTINGS,
+    MAX_AI_PERSONALITY_LENGTH,
     MAX_PARALLEL_TOOLS_MAX,
     MAX_PARALLEL_TOOLS_MIN,
     MAX_USER_PREFERENCES_LENGTH,
@@ -31,8 +32,10 @@ from config import (
 )
 from routes.auth import is_login_pin_enabled
 from db import (
+    build_effective_user_preferences,
     count_scratchpad_notes,
     get_active_tool_names,
+    get_ai_personality,
     get_all_scratchpad_sections,
     get_app_settings,
     get_canvas_expand_max_lines,
@@ -66,6 +69,7 @@ from db import (
     get_sub_agent_timeout_seconds,
     get_summary_skip_first,
     get_summary_skip_last,
+    get_general_instructions,
     get_tool_memory_auto_inject_enabled,
     get_web_cache_ttl_hours,
     normalize_active_tool_names,
@@ -321,8 +325,13 @@ def build_settings_payload() -> dict:
     raw = get_app_settings()
     available_models = get_all_models(raw)
     visible_chat_models = get_visible_chat_models(raw)
+    general_instructions = get_general_instructions(raw)
+    ai_personality = get_ai_personality(raw)
     return {
-        "user_preferences": raw["user_preferences"],
+        "user_preferences": general_instructions,
+        "general_instructions": general_instructions,
+        "ai_personality": ai_personality,
+        "effective_user_preferences": build_effective_user_preferences(raw),
         "scratchpad": raw.get("scratchpad", ""),
         "scratchpad_sections": build_scratchpad_sections_payload(raw),
         "max_steps": int(raw.get("max_steps", DEFAULT_SETTINGS["max_steps"])),
@@ -435,6 +444,8 @@ def register_page_routes(app) -> None:
     def update_settings():
         data = request.get_json(silent=True) or {}
         user_preferences = data.get("user_preferences")
+        general_instructions = data.get("general_instructions")
+        ai_personality = data.get("ai_personality")
         max_steps_raw = data.get("max_steps")
         max_parallel_tools_raw = data.get("max_parallel_tools")
         temperature_raw = data.get("temperature")
@@ -480,6 +491,8 @@ def register_page_routes(app) -> None:
 
         if (
             user_preferences is None
+            and general_instructions is None
+            and ai_personality is None
             and scratchpad is None
             and scratchpad_sections_raw is None
             and max_steps_raw is None
@@ -527,10 +540,20 @@ def register_page_routes(app) -> None:
 
         settings = get_app_settings()
 
-        if user_preferences is not None:
-            if not isinstance(user_preferences, str):
-                return jsonify({"error": "Invalid user preferences."}), 400
-            settings["user_preferences"] = user_preferences.strip()[:MAX_USER_PREFERENCES_LENGTH]
+        if general_instructions is None and user_preferences is not None:
+            general_instructions = user_preferences
+
+        if general_instructions is not None:
+            if not isinstance(general_instructions, str):
+                return jsonify({"error": "Invalid general instructions."}), 400
+            normalized_general_instructions = general_instructions.strip()[:MAX_USER_PREFERENCES_LENGTH]
+            settings["general_instructions"] = normalized_general_instructions
+            settings["user_preferences"] = normalized_general_instructions
+
+        if ai_personality is not None:
+            if not isinstance(ai_personality, str):
+                return jsonify({"error": "Invalid AI personality."}), 400
+            settings["ai_personality"] = ai_personality.strip()[:MAX_AI_PERSONALITY_LENGTH]
 
         if scratchpad is not None:
             if not isinstance(scratchpad, str):

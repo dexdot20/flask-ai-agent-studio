@@ -10,7 +10,7 @@ from config import (
     CLARIFICATION_QUESTION_LIMIT_MAX,
     CLARIFICATION_QUESTION_LIMIT_MIN,
     DEFAULT_MAX_PARALLEL_TOOLS,
-    MAX_USER_PREFERENCES_LENGTH,
+    MAX_ASSISTANT_BEHAVIOR_LENGTH,
     MAX_PARALLEL_TOOLS_MAX,
     MAX_PARALLEL_TOOLS_MIN,
     RAG_ENABLED,
@@ -1279,7 +1279,7 @@ def build_runtime_system_message(
     summary_count: int = 0,
 ):
     now = (now or datetime.now().astimezone()).astimezone()
-    preferences_text = (user_preferences or "").strip()[:MAX_USER_PREFERENCES_LENGTH]
+    preferences_text = (user_preferences or "").strip()[:MAX_ASSISTANT_BEHAVIOR_LENGTH]
     normalized_scratchpad_sections = _normalize_runtime_scratchpad_sections(
         scratchpad_sections=scratchpad_sections,
         scratchpad=scratchpad,

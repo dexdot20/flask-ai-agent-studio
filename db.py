@@ -2050,7 +2050,8 @@ def get_app_settings() -> dict:
     for row in rows:
         settings[row["key"]] = row["value"]
 
-    return _migrate_legacy_scratchpad_settings(settings)
+    settings = _migrate_legacy_scratchpad_settings(settings)
+    return _migrate_legacy_assistant_behavior_settings(settings)
 
 
 def get_proxy_enabled_operations(settings: dict | None = None) -> list[str]:
@@ -2072,6 +2073,34 @@ def normalize_scratchpad_text(value) -> str:
 
     normalized = "\n".join(lines)
     return normalized
+
+
+def normalize_assistant_behavior_text(value) -> str:
+    return str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def get_general_instructions(settings: dict | None = None) -> str:
+    source = settings if settings is not None else get_app_settings()
+    general_instructions = normalize_assistant_behavior_text(source.get("general_instructions", ""))
+    if general_instructions:
+        return general_instructions
+    return normalize_assistant_behavior_text(source.get("user_preferences", ""))
+
+
+def get_ai_personality(settings: dict | None = None) -> str:
+    source = settings if settings is not None else get_app_settings()
+    return normalize_assistant_behavior_text(source.get("ai_personality", ""))
+
+
+def build_effective_user_preferences(settings: dict | None = None) -> str:
+    general_instructions = get_general_instructions(settings)
+    ai_personality = get_ai_personality(settings)
+    parts = []
+    if general_instructions:
+        parts.append(f"General instructions:\n{general_instructions}")
+    if ai_personality:
+        parts.append(f"AI personality:\n{ai_personality}")
+    return "\n\n".join(parts).strip()
 
 
 def normalize_scratchpad_section_id(section: str | None) -> str:
@@ -2097,6 +2126,8 @@ def count_scratchpad_notes(value) -> int:
 def _normalize_app_setting_value(key: str, value):
     if key == "scratchpad" or key in SCRATCHPAD_SECTION_SETTING_KEYS.values():
         return normalize_scratchpad_text(value)
+    if key in {"user_preferences", "general_instructions", "ai_personality"}:
+        return normalize_assistant_behavior_text(value)
     return value
 
 
@@ -2132,6 +2163,32 @@ def _migrate_legacy_scratchpad_settings(settings: dict) -> dict:
         settings[section_key] = section_values.get(section_id, "")
 
     settings["scratchpad"] = section_values.get(SCRATCHPAD_DEFAULT_SECTION, "")
+    return settings
+
+
+def _migrate_legacy_assistant_behavior_settings(settings: dict) -> dict:
+    general_instructions = normalize_assistant_behavior_text(settings.get("general_instructions", ""))
+    legacy_preferences = normalize_assistant_behavior_text(settings.get("user_preferences", ""))
+    ai_personality = normalize_assistant_behavior_text(settings.get("ai_personality", ""))
+
+    should_persist = False
+    if legacy_preferences and not general_instructions:
+        general_instructions = legacy_preferences
+        should_persist = True
+
+    if legacy_preferences != general_instructions:
+        should_persist = True
+
+    settings["general_instructions"] = general_instructions
+    settings["user_preferences"] = general_instructions
+    settings["ai_personality"] = ai_personality
+
+    if should_persist:
+        with get_db() as conn:
+            _upsert_app_setting(conn, "general_instructions", general_instructions)
+            _upsert_app_setting(conn, "user_preferences", general_instructions)
+            _upsert_app_setting(conn, "ai_personality", ai_personality)
+
     return settings
 
 
@@ -2206,6 +2263,13 @@ def replace_scratchpad(new_content, section: str = SCRATCHPAD_DEFAULT_SECTION) -
 def save_app_settings(settings: dict) -> None:
     normalized_settings = dict(settings or {})
     has_section_keys = any(key in normalized_settings for key in SCRATCHPAD_SECTION_SETTING_KEYS.values())
+    if "user_preferences" in normalized_settings and "general_instructions" not in normalized_settings:
+        normalized_settings["general_instructions"] = normalize_assistant_behavior_text(normalized_settings.get("user_preferences"))
+    if "general_instructions" in normalized_settings:
+        normalized_settings["general_instructions"] = normalize_assistant_behavior_text(normalized_settings.get("general_instructions"))
+        normalized_settings["user_preferences"] = normalized_settings["general_instructions"]
+    if "ai_personality" in normalized_settings:
+        normalized_settings["ai_personality"] = normalize_assistant_behavior_text(normalized_settings.get("ai_personality"))
     if "scratchpad" in normalized_settings:
         legacy_value = normalize_scratchpad_text(normalized_settings.pop("scratchpad"))
         if not has_section_keys:

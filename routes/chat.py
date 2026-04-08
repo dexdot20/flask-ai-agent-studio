@@ -36,6 +36,7 @@ from config import (
     VISION_ENABLED,
 )
 from db import (
+    build_effective_user_preferences,
     build_user_profile_system_context,
     get_canvas_expand_max_lines,
     get_canvas_prompt_max_lines,
@@ -1386,6 +1387,7 @@ def _build_budgeted_prompt_messages(
     tool_trace_context = _build_tool_trace_context(ordered_messages)
     user_profile_context = build_user_profile_system_context(max_tokens=500)
     scratchpad_sections = get_all_scratchpad_sections(settings)
+    assistant_behavior = build_effective_user_preferences(settings)
     max_parallel_tools = get_max_parallel_tools(settings)
     runtime_tool_names = resolve_runtime_tool_names(
         active_tool_names,
@@ -1395,7 +1397,7 @@ def _build_budgeted_prompt_messages(
     prompt_budget = max(2_000, get_prompt_max_input_tokens(settings) - get_prompt_response_token_reserve(settings))
     base_runtime_messages = prepend_runtime_context(
         [],
-        settings["user_preferences"],
+        assistant_behavior,
         runtime_tool_names,
         retrieved_context=None,
         user_profile_context=user_profile_context,
@@ -1490,7 +1492,7 @@ def _build_budgeted_prompt_messages(
 
     api_messages = prepend_runtime_context(
         prompt_history_api,
-        settings["user_preferences"],
+        assistant_behavior,
         runtime_tool_names,
         clarification_response=clarification_response,
         all_clarification_rounds=all_clarification_rounds,
@@ -1805,7 +1807,8 @@ def maybe_create_conversation_summary(
             " ",
             str(continuation_focus or _extract_summary_continuation_focus(canonical_messages) or ""),
         ).strip()[:400]
-        summary_user_preferences_parts = [str(settings.get("user_preferences") or "").strip()]
+        assistant_behavior = build_effective_user_preferences(settings)
+        summary_user_preferences_parts = [assistant_behavior] if assistant_behavior else []
         detail_instruction = _build_summary_detail_instruction(summary_detail_level)
         if detail_instruction:
             summary_user_preferences_parts.append(detail_instruction)

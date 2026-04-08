@@ -235,6 +235,8 @@ PRIVATE_NETWORKS = [
 ]
 
 MAX_USER_PREFERENCES_LENGTH = 2000
+MAX_AI_PERSONALITY_LENGTH = 2000
+MAX_ASSISTANT_BEHAVIOR_LENGTH = MAX_USER_PREFERENCES_LENGTH + MAX_AI_PERSONALITY_LENGTH + 128
 SCRATCHPAD_DEFAULT_SECTION = "notes"
 SCRATCHPAD_SECTION_ORDER = (
     "lessons",
@@ -358,6 +360,8 @@ RAG_DEFAULT_CONTEXT_SIZE_PRESET = _nearest_preset_name(
 
 DEFAULT_SETTINGS = {
     "user_preferences": "",
+    "general_instructions": "",
+    "ai_personality": "",
     "scratchpad": "",
     "scratchpad_lessons": "",
     "scratchpad_profile": "",
@@ -371,6 +375,10 @@ DEFAULT_SETTINGS = {
     "temperature": "0.7",
     "clarification_max_questions": str(CLARIFICATION_DEFAULT_MAX_QUESTIONS),
     "sub_agent_max_steps": str(SUB_AGENT_DEFAULT_MAX_STEPS),
+    "sub_agent_timeout_seconds": str(SUB_AGENT_DEFAULT_TIMEOUT_SECONDS),
+    "sub_agent_retry_attempts": str(SUB_AGENT_DEFAULT_RETRY_ATTEMPTS),
+    "sub_agent_retry_delay_seconds": str(SUB_AGENT_DEFAULT_RETRY_DELAY_SECONDS),
+    "sub_agent_max_parallel_tools": "",
     "sub_agent_allowed_tool_names": json.dumps(SUB_AGENT_ALLOWED_TOOL_NAMES, ensure_ascii=False),
     "web_cache_ttl_hours": str(DEFAULT_WEB_CACHE_TTL_HOURS),
     "openrouter_prompt_cache_enabled": "true" if OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED else "false",
