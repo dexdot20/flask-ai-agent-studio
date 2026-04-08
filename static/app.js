@@ -2285,6 +2285,9 @@ function updateCanvasActiveDocumentDisplay(renderState) {
   const languageLabel = activeDocument.language ? ` · ${activeDocument.language}` : "";
   canvasSubtitle.textContent = `${modeLabel} · ${visibleDocuments.length}/${documents.length} files · ${detailLabel} · ${activeDocument.line_count} lines${pageLabel}${roleLabel}${languageLabel}`;
   renderCanvasMetaBar(renderState);
+  const activeToolNames = Array.isArray(appSettings.active_tools) ? new Set(appSettings.active_tools) : new Set();
+  const canScrollCanvas = activeToolNames.has("scroll_canvas_document");
+  const canExpandCanvas = activeToolNames.has("expand_canvas_document");
   const promptLineLimit = Number(appSettings.canvas_prompt_max_lines || 250);
   const expandLineLimit = Number(appSettings.canvas_expand_max_lines || 1600);
   if (isStreamingPreviewActive) {
@@ -2299,8 +2302,18 @@ function updateCanvasActiveDocumentDisplay(renderState) {
     const hasExpandedRoom = activeDocument.line_count > expandLineLimit;
     setCanvasHint(
       hasExpandedRoom
-        ? "Large canvas detected. The default view is truncated. Use scroll_canvas_document for a targeted range or expand_canvas_document for a wider slice."
-        : `Large canvas detected. The default view is truncated to the first ${promptLineLimit} lines; use scroll_canvas_document for a targeted range.`,
+        ? canScrollCanvas && canExpandCanvas
+          ? "Large canvas detected. The default view is truncated. Use scroll_canvas_document for a targeted range or expand_canvas_document for a wider slice."
+          : canExpandCanvas
+            ? "Large canvas detected. The default view is truncated. Use expand_canvas_document for a wider slice."
+            : canScrollCanvas
+              ? "Large canvas detected. The default view is truncated. Use scroll_canvas_document for a targeted range."
+              : "Large canvas detected. The default view is truncated."
+        : canScrollCanvas
+          ? `Large canvas detected. The default view is truncated to the first ${promptLineLimit} lines; use scroll_canvas_document for a targeted range.`
+          : canExpandCanvas
+            ? `Large canvas detected. The default view is truncated to the first ${promptLineLimit} lines; use expand_canvas_document for a wider slice.`
+            : `Large canvas detected. The default view is truncated to the first ${promptLineLimit} lines.`,
       "warning"
     );
   } else {

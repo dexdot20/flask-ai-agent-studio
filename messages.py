@@ -928,10 +928,111 @@ def _build_canvas_workspace_summary(canvas_payload: dict) -> list[str]:
     return lines
 
 
+def _canvas_inspection_tool_flags(active_tool_names: list[str]) -> dict[str, bool]:
+    active_set = set(active_tool_names or [])
+    return {
+        "search": "search_canvas_document" in active_set,
+        "scroll": "scroll_canvas_document" in active_set,
+        "expand": "expand_canvas_document" in active_set,
+    }
+
+
+def _build_canvas_search_guidance_line(active_tool_names: list[str]) -> str | None:
+    flags = _canvas_inspection_tool_flags(active_tool_names)
+    if not flags["search"]:
+        return None
+    if flags["scroll"] and flags["expand"]:
+        return "- If you first need to locate text or a symbol in a large canvas, use search_canvas_document before expanding or scrolling."
+    if flags["expand"]:
+        return "- If you first need to locate text or a symbol in a large canvas, use search_canvas_document before expanding."
+    if flags["scroll"]:
+        return "- If you first need to locate text or a symbol in a large canvas, use search_canvas_document before scrolling."
+    return "- If you first need to locate text or a symbol in a large canvas, use search_canvas_document first."
+
+
+def _build_canvas_inspect_first_line(active_tool_names: list[str]) -> str | None:
+    flags = _canvas_inspection_tool_flags(active_tool_names)
+    if flags["scroll"] and flags["expand"]:
+        return "- If the target lines are not visible yet, inspect first with scroll_canvas_document or expand_canvas_document."
+    if flags["expand"]:
+        return "- If the target lines are not visible yet, inspect first with expand_canvas_document."
+    if flags["scroll"]:
+        return "- If the target lines are not visible yet, inspect first with scroll_canvas_document."
+    return None
+
+
+def _build_canvas_parallel_read_guidance_line(active_tool_names: list[str]) -> str | None:
+    ordered_names = [
+        tool_name
+        for tool_name in ("search_canvas_document", "scroll_canvas_document", "expand_canvas_document")
+        if tool_name in set(active_tool_names or [])
+    ]
+    if not ordered_names:
+        return None
+    if len(ordered_names) == 1:
+        readable_names = ordered_names[0]
+    elif len(ordered_names) == 2:
+        readable_names = f"{ordered_names[0]} or {ordered_names[1]}"
+    else:
+        readable_names = f"{ordered_names[0]}, {ordered_names[1]}, or {ordered_names[2]}"
+    return (
+        "- Read-only canvas inspections can run in parallel, so prefer one answer that includes every needed "
+        f"{readable_names} call before the edit turn."
+    )
+
+
+def _build_canvas_hidden_excerpt_guidance_line(active_tool_names: list[str]) -> str | None:
+    flags = _canvas_inspection_tool_flags(active_tool_names)
+    if flags["scroll"]:
+        return "- If the excerpt says [Excerpt: lines 1–N of M], use scroll_canvas_document before editing hidden lines."
+    if flags["expand"]:
+        return "- If the excerpt says [Excerpt: lines 1–N of M], use expand_canvas_document before editing hidden lines."
+    return None
+
+
+def _build_canvas_preview_compaction_note(active_tool_names: list[str], clipped_line_count: int) -> str | None:
+    if clipped_line_count <= 0:
+        return None
+    flags = _canvas_inspection_tool_flags(active_tool_names)
+    if flags["scroll"] and flags["expand"]:
+        tool_guidance = "use scroll_canvas_document or expand_canvas_document if exact full line text matters"
+    elif flags["expand"]:
+        tool_guidance = "use expand_canvas_document if exact full line text matters"
+    elif flags["scroll"]:
+        tool_guidance = "use scroll_canvas_document if exact full line text matters"
+    else:
+        tool_guidance = "exact full line text may require enabling a canvas read tool"
+    return (
+        f"- Preview compaction: {int(clipped_line_count)} long line(s) were clipped for token efficiency; {tool_guidance}."
+    )
+
+
+def _build_canvas_truncated_excerpt_guidance(active_tool_names: list[str]) -> str:
+    flags = _canvas_inspection_tool_flags(active_tool_names)
+    if flags["scroll"] and flags["expand"]:
+        inspect_guidance = "Call expand_canvas_document for a larger view or scroll_canvas_document for a targeted range before editing."
+    elif flags["expand"]:
+        inspect_guidance = "Call expand_canvas_document for a larger view before editing."
+    elif flags["scroll"]:
+        inspect_guidance = "Call scroll_canvas_document for a targeted range before editing."
+    else:
+        inspect_guidance = "Do not guess line numbers outside the visible excerpt when no canvas read tool is enabled."
+    return (
+        "- Guidance: This canvas excerpt is truncated. Use visible line numbers for line-level canvas edits. "
+        "If an explicit document_path is listed in the workspace summary or active document block, use that exact value. Otherwise do not invent a path; target the active document or use document_id instead. "
+        f"{inspect_guidance} Never guess line numbers outside the visible excerpt."
+    )
+
+
 def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload: dict | None = None) -> list[str]:
     active_set = set(active_tool_names or [])
     if not active_set.intersection(CANVAS_MUTATING_TOOL_NAMES):
         return []
+
+    search_guidance_line = _build_canvas_search_guidance_line(active_tool_names)
+    inspect_first_line = _build_canvas_inspect_first_line(active_tool_names)
+    parallel_read_guidance_line = _build_canvas_parallel_read_guidance_line(active_tool_names)
+    hidden_excerpt_guidance_line = _build_canvas_hidden_excerpt_guidance_line(active_tool_names)
 
     lines = [
         "## Canvas Editing Guidance",
@@ -943,10 +1044,7 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
         "- Use update_canvas_metadata for title, summary, role, dependency, or symbol metadata changes that do not change document content.",
         "- If you will keep working in the same region for multiple turns, use set_canvas_viewport so the pinned lines are injected automatically in later prompts.",
         "- If the document is multi-page and the task is page-specific, use focus_canvas_page instead of manually estimating a page's line range.",
-        "- If you first need to locate text or a symbol in a large canvas, use search_canvas_document before expanding or scrolling.",
-        "- If the target lines are not visible yet, inspect first with scroll_canvas_document or expand_canvas_document.",
         "- When multiple files or canvas regions are involved, batch independent inspection calls together in one answer instead of requesting them one by one.",
-        "- Read-only canvas inspections can run in parallel, so prefer one answer that includes every needed search_canvas_document, scroll_canvas_document, or expand_canvas_document call before the edit turn.",
         "- If you do not know the document_id, use the document_path carefully: use document_path only when an explicit project path is shown in the Canvas Workspace Summary or Active Canvas Document block; otherwise do not invent a path and target the active document or use document_id.",
         "- Use rewrite_canvas_document when most of the document should change or when you already know the complete intended replacement content.",
         "- When you already know the required edits across multiple canvas documents, emit all of those edit tool calls in a single answer instead of editing one document, waiting, and then editing the next.",
@@ -959,8 +1057,15 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
         "- For source code files, use format='code'. If path is given, format and language are usually inferred automatically.",
         "- The content of a code document is raw source code — do NOT wrap it in triple-backtick fences.",
         "- When editing code lines, preserve indentation exactly. Each element of the lines array is one complete line.",
-        "- If the excerpt says [Excerpt: lines 1\u2013N of M], use scroll_canvas_document before editing hidden lines.",
     ]
+    if search_guidance_line:
+        lines.insert(9, search_guidance_line)
+    if inspect_first_line:
+        lines.insert(10, inspect_first_line)
+    if parallel_read_guidance_line:
+        lines.insert(12, parallel_read_guidance_line)
+    if hidden_excerpt_guidance_line:
+        lines.append(hidden_excerpt_guidance_line)
     if (canvas_payload or {}).get("mode") == "project":
         lines.append("- In project mode, prefer document_path for targeting, even when you do not know the document_id yet.")
     lines.append("")
@@ -1202,20 +1307,18 @@ def _build_runtime_volatile_parts(
             f"- Visible lines in prompt: 1-{canvas_payload['visible_line_end']}"
             + (" (truncated excerpt)" if canvas_payload["is_truncated"] else "")
         )
-        if int(canvas_payload.get("clipped_line_count") or 0) > 0:
-            volatile_parts.append(
-                f"- Preview compaction: {int(canvas_payload.get('clipped_line_count') or 0)} long line(s) were clipped for token efficiency; use scroll_canvas_document or expand_canvas_document if exact full line text matters."
-            )
-        volatile_parts.append(
-            "- Snapshot rule: expand_canvas_document returns a call-time snapshot. If the canvas may have changed after an earlier expansion, call it again before relying on that older view."
+        preview_compaction_note = _build_canvas_preview_compaction_note(
+            active_tool_names,
+            int(canvas_payload.get("clipped_line_count") or 0),
         )
-        if canvas_payload["is_truncated"]:
+        if preview_compaction_note:
+            volatile_parts.append(preview_compaction_note)
+        if "expand_canvas_document" in set(active_tool_names or []):
             volatile_parts.append(
-                "- Guidance: This canvas excerpt is truncated. Use visible line numbers for line-level canvas edits. "
-                "If an explicit document_path is listed in the workspace summary or active document block, use that exact value. Otherwise do not invent a path; target the active document or use document_id instead. "
-                "Call expand_canvas_document for a larger view or scroll_canvas_document for a targeted range before editing. "
-                "Never guess line numbers outside the visible excerpt."
+                "- Snapshot rule: expand_canvas_document returns a call-time snapshot. If the canvas may have changed after an earlier expansion, call it again before relying on that older view."
             )
+        if canvas_payload["is_truncated"]:
+            volatile_parts.append(_build_canvas_truncated_excerpt_guidance(active_tool_names))
         else:
             volatile_parts.append(
                 "- Guidance: The active canvas document is fully visible in the current excerpt. Canvas is already fully visible, so use the visible line numbers directly for line-level edits."

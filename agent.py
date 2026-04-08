@@ -184,6 +184,11 @@ CANVAS_MUTATION_TOOL_NAMES = {
     "delete_canvas_document",
     "clear_canvas",
 }
+CANVAS_CONTEXT_READ_TOOL_NAMES = {
+    "expand_canvas_document",
+    "batch_read_canvas_documents",
+    "scroll_canvas_document",
+}
 CANVAS_STREAM_OPEN_TOOL_NAMES = {
     "create_canvas_document",
     "rewrite_canvas_document",
@@ -2525,6 +2530,8 @@ def _prepare_tool_result_for_transcript(
             fetch_url_token_threshold=fetch_url_token_threshold,
             fetch_url_clip_aggressiveness=fetch_url_clip_aggressiveness,
         )
+    if tool_name in CANVAS_CONTEXT_READ_TOOL_NAMES and isinstance(result, dict):
+        return result
     if tool_name in CANVAS_MUTATION_TOOL_NAMES and isinstance(result, dict):
         compact_result: dict[str, object] = {}
         for key in (

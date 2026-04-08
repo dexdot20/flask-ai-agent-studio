@@ -3990,6 +3990,29 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("expand_canvas_document returns a call-time snapshot", content)
         self.assertIn("call it again before relying on that older view", content)
 
+    def test_runtime_system_message_omits_disabled_scroll_guidance(self):
+        message = build_runtime_system_message(
+            active_tool_names=[
+                "rewrite_canvas_document",
+                "replace_canvas_lines",
+                "expand_canvas_document",
+            ],
+            canvas_documents=[
+                {
+                    "id": "canvas-1",
+                    "title": "report.md",
+                    "format": "markdown",
+                    "language": "markdown",
+                    "content": "\n".join(f"line {index}" for index in range(1, 80)),
+                }
+            ],
+            canvas_prompt_max_lines=10,
+        )
+
+        content = message["content"]
+        self.assertIn("expand_canvas_document", content)
+        self.assertNotIn("scroll_canvas_document", content)
+
     def test_openai_tool_specs_include_expand_canvas_document_with_canvas_documents(self):
         tools = get_openai_tool_specs(
             [
@@ -11629,6 +11652,27 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(result["document_id"], "canvas-1")
         self.assertEqual(result["expected_start_line"], 18)
         self.assertEqual(result["expected_lines"], ["def main():", "    return 1"])
+
+    def test_prepare_tool_result_for_transcript_preserves_canvas_expand_payloads(self):
+        visible_lines = [f"{index}: {'x' * 80}" for index in range(1, 700)]
+
+        result = _prepare_tool_result_for_transcript(
+            "expand_canvas_document",
+            {
+                "status": "ok",
+                "action": "expanded",
+                "document_id": "canvas-1",
+                "title": "large.txt",
+                "line_count": len(visible_lines),
+                "visible_lines": visible_lines,
+                "visible_line_end": len(visible_lines),
+                "is_truncated": False,
+            },
+        )
+
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result["visible_line_end"], len(visible_lines))
+        self.assertEqual(result["visible_lines"], visible_lines)
 
     def test_apply_tool_output_budget_compacts_large_results_before_next_turn(self):
         base_messages = [{"role": "user", "content": "Summarize the fetched docs."}]

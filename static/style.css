@@ -6086,6 +6086,44 @@ kbd {
   max-width: 42ch;
 }
 
+.settings-page-section-card--summary-policy {
+  gap: 12px;
+  padding: 16px;
+}
+
+.settings-page-section-card--summary-policy .settings-page-grid--compact {
+  gap: 12px;
+}
+
+.settings-page-section-card--summary-policy .settings-form-cluster {
+  gap: 6px;
+}
+
+.settings-page-section-card--summary-policy .settings-form-cluster--split {
+  gap: 8px;
+}
+
+.settings-page-section-card--summary-policy .settings-inline-grid {
+  gap: 8px;
+}
+
+.settings-page-section-card--summary-policy .settings-inline-grid > div {
+  min-width: 0;
+}
+
+.settings-page-section-card--summary-policy .settings-mini-label {
+  margin-bottom: 5px;
+  line-height: 1.25;
+}
+
+.settings-page-section-card--summary-policy .settings-number {
+  width: 100%;
+}
+
+.settings-page-section-card--summary-policy .settings-copy {
+  max-width: 56ch;
+}
+
 .settings-page-note-list {
   margin: 10px 0 0;
   padding-left: 18px;
