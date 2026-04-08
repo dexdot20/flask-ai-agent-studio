@@ -23,7 +23,6 @@ warnings.filterwarnings(
 import requests as http_requests
 from bs4 import BeautifulSoup, NavigableString, Tag
 from ddgs import DDGS
-from pypdf import PdfReader
 from urllib3.exceptions import InsecureRequestWarning
 
 from config import (
@@ -563,19 +562,45 @@ def _render_inline_markdown(node, base_url: str) -> str:
     return children_text
 
 
+def _parse_span_value(raw_value) -> int:
+    try:
+        return max(1, int(str(raw_value or "1").strip()))
+    except (TypeError, ValueError):
+        return 1
+
+
 def _render_table_markdown(table: Tag, base_url: str) -> str:
-    rows: list[list[str]] = []
-    for row in table.find_all("tr"):
-        cells = row.find_all(["th", "td"])
-        if not cells:
-            continue
-        normalized_cells = []
-        for cell in cells:
+    row_tags = table.find_all("tr")
+    if not row_tags:
+        return ""
+
+    grid: dict[int, dict[int, str]] = {}
+    max_columns = 0
+    for row_index, row in enumerate(row_tags):
+        row_map = grid.setdefault(row_index, {})
+        col_index = 0
+        for cell in row.find_all(["th", "td"], recursive=False):
+            while col_index in row_map:
+                col_index += 1
             cell_text = _clean_markdown_inline_text(_render_inline_markdown(cell, base_url)) or _clean_extracted_text(
                 cell.get_text(separator=" ")
             )
-            normalized_cells.append(cell_text.replace("|", "\\|"))
-        rows.append(normalized_cells)
+            normalized_text = cell_text.replace("|", "\\|")
+            colspan = _parse_span_value(cell.get("colspan"))
+            rowspan = _parse_span_value(cell.get("rowspan"))
+            for row_offset in range(rowspan):
+                target_row = grid.setdefault(row_index + row_offset, {})
+                for col_offset in range(colspan):
+                    target_row[col_index + col_offset] = normalized_text
+            col_index += colspan
+        max_columns = max(max_columns, len(row_map), col_index)
+
+    rows: list[list[str]] = []
+    for row_index in range(len(row_tags)):
+        row_map = grid.get(row_index, {})
+        normalized_row = [row_map.get(col_index, "") for col_index in range(max_columns)]
+        if any(cell for cell in normalized_row):
+            rows.append(normalized_row)
     if not rows:
         return ""
     column_count = max(len(row) for row in rows)
@@ -634,6 +659,30 @@ def _render_list_markdown(list_tag: Tag, base_url: str, depth: int = 0) -> str:
     return "\n".join(line for line in lines if line is not None).strip()
 
 
+def _render_definition_list_markdown(list_tag: Tag, base_url: str) -> str:
+    lines: list[str] = []
+    current_term = ""
+    for child in list_tag.children:
+        if isinstance(child, NavigableString):
+            continue
+        if not isinstance(child, Tag) or _is_probably_noise_block(child):
+            continue
+        if child.name == "dt":
+            current_term = _clean_markdown_inline_text(_render_inline_markdown(child, base_url))
+            continue
+        if child.name != "dd":
+            continue
+        blocks = _render_markdown_blocks(child, base_url)
+        definition = _clean_markdown_inline_text(" ".join(blocks)) if blocks else _clean_extracted_text(child.get_text(separator=" "))
+        if not definition:
+            continue
+        if current_term:
+            lines.append(f"**{current_term}**: {definition}")
+        else:
+            lines.append(definition)
+    return "\n".join(lines).strip()
+
+
 def _render_markdown_blocks(node, base_url: str) -> list[str]:
     if isinstance(node, NavigableString):
         cleaned = _clean_markdown_inline_text(str(node))
@@ -650,6 +699,9 @@ def _render_markdown_blocks(node, base_url: str) -> list[str]:
         return [text] if text else []
     if tag_name in {"ul", "ol"}:
         rendered_list = _render_list_markdown(node, base_url)
+        return [rendered_list] if rendered_list else []
+    if tag_name == "dl":
+        rendered_list = _render_definition_list_markdown(node, base_url)
         return [rendered_list] if rendered_list else []
     if tag_name == "pre":
         code_text = (node.get_text(separator="\n") or "").replace("\r\n", "\n").strip("\n")
@@ -832,24 +884,28 @@ def _extract_html(html: str, url: str) -> dict:
 
 def _extract_pdf(data: bytes, url: str) -> dict:
     try:
-        reader = PdfReader(BytesIO(data))
-        total_pages = len(reader.pages)
-        pages = []
-        for index, page in enumerate(reader.pages):
-            if index >= 50:
-                pages.append("[More pages available, truncated]")
-                break
-            pages.append(page.extract_text() or "")
-        pages_extracted = min(total_pages, 50)
-        text = _clean_extracted_text("\n\n".join(page for page in pages if page.strip()))
-        return {
+        from doc_service import _extract_text_from_pdf
+
+        total_pages = None
+        try:
+            import pdfplumber
+
+            with pdfplumber.open(BytesIO(data)) as pdf:
+                total_pages = len(pdf.pages)
+        except Exception:
+            total_pages = None
+
+        text = _clean_extracted_text(_extract_text_from_pdf(data))
+        result = {
             "url": url,
             "title": f"PDF: {url.rstrip('/').split('/')[-1]}",
             "content": _truncate_content(text),
             "content_format": "pdf",
-            "page_count": total_pages,
-            "pages_extracted": pages_extracted,
         }
+        if total_pages is not None:
+            result["page_count"] = total_pages
+            result["pages_extracted"] = total_pages
+        return result
     except Exception as exc:
         return {"url": url, "title": "", "content": "", "error": f"Could not read PDF: {exc}"}
 
@@ -1049,6 +1105,9 @@ def fetch_url_tool(url: str) -> dict:
                     session.close()
 
     if best_result is not None and best_result.get("content"):
+        status_code = int(best_result.get("status", 0) or 0)
+        if status_code >= 400 and not best_result.get("partial_content") and not _has_useful_fetch_content(best_result):
+            return {"url": url, "error": f"HTTP {status_code}", "content": ""}
         return best_result
 
     return {"url": url, "error": last_error or "Could not fetch URL", "content": ""}

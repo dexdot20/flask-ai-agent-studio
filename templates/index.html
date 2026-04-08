@@ -40,6 +40,9 @@
       <span class="btn-canvas__label">Canvas</span>
       <span id="canvas-btn-indicator" class="canvas-btn-indicator" hidden></span>
     </button>
+    <button class="btn-ghost btn-memory" id="memory-toggle-btn" type="button" aria-controls="memory-panel" aria-expanded="false" title="Open Conversation Memory">
+      <span class="btn-canvas__label">Memory</span>
+    </button>
     <button class="btn-ghost mobile-tools-toggle" id="mobile-tools-btn" type="button" aria-controls="mobile-tools-panel" aria-expanded="false" title="More options">
       <span aria-hidden="true">⋯</span>
     </button>
@@ -68,6 +71,7 @@
   <div class="mobile-tools-panel__section mobile-tools-panel__section--actions">
     <button class="mobile-tools-action" id="mobile-summary-btn" type="button">Summarize Conversation</button>
     <button class="mobile-tools-action" id="mobile-canvas-btn" type="button">Canvas</button>
+    <button class="mobile-tools-action" id="mobile-memory-btn" type="button">Conversation memory</button>
     <button class="mobile-tools-action" id="mobile-export-btn" type="button">Export chat</button>
     <button class="mobile-tools-action" id="mobile-prune-btn" type="button">Prune history</button>
     <a class="mobile-tools-action" id="mobile-settings-btn" href="/settings">Settings</a>
@@ -193,6 +197,66 @@
   </div>
 </div>
 <div id="summary-overlay" class="summary-overlay"></div>
+
+<div id="memory-panel" class="summary-panel memory-panel" aria-hidden="true" aria-labelledby="memory-panel-title">
+  <div class="summary-panel__header">
+    <div>
+      <span id="memory-panel-title">Conversation Memory</span>
+      <p id="memory-panel-subtitle" class="summary-panel__subtitle">Open or create a conversation to view and manage memory entries.</p>
+    </div>
+    <button id="memory-close" title="Close" type="button">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>
+  </div>
+  <div class="summary-panel__body">
+    <section class="summary-card">
+      <div class="memory-status-row">
+        <span id="memory-status" class="memory-status">Waiting for a conversation.</span>
+        <span id="memory-count" class="memory-count">0 entries</span>
+      </div>
+      <p class="summary-support-copy">Saved entries are injected into the prompt for the active chat only. Delete stale items here when they stop being true.</p>
+    </section>
+
+    <section class="summary-card">
+      <div class="summary-card__header">
+        <div>
+          <span>Add entry</span>
+          <p>Store one compact fact, decision, constraint, or tool result.</p>
+        </div>
+      </div>
+      <div class="memory-form-grid">
+        <label class="summary-field">
+          <span>Type</span>
+          <select id="memory-new-type" class="summary-input"></select>
+        </label>
+        <label class="summary-field">
+          <span>Key</span>
+          <input id="memory-new-key" class="summary-input" type="text" maxlength="120" placeholder="Short label" />
+        </label>
+        <label class="summary-field memory-field--wide">
+          <span>Value</span>
+          <textarea id="memory-new-value" rows="3" placeholder="One compact factual line"></textarea>
+        </label>
+      </div>
+      <div class="memory-panel__actions">
+        <button class="btn-primary" id="memory-add-btn" type="button">Save entry</button>
+      </div>
+    </section>
+
+    <section class="summary-card">
+      <div class="summary-card__header">
+        <div>
+          <span>Entries</span>
+          <p>Edit the fields below and press Save, or remove an outdated entry.</p>
+        </div>
+      </div>
+      <div id="memory-list" class="memory-list"></div>
+    </section>
+  </div>
+</div>
+<div id="memory-overlay" class="summary-overlay"></div>
 
 <div id="export-panel" class="export-panel" aria-hidden="true" aria-labelledby="export-panel-title">
   <div class="export-panel-header">

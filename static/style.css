@@ -2324,6 +2324,122 @@ kbd {
   gap: 8px;
 }
 
+.memory-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.memory-status {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.memory-count {
+  flex: 0 0 auto;
+  border: 1px solid rgba(110, 166, 255, 0.18);
+  background: rgba(110, 166, 255, 0.08);
+  color: var(--text-primary);
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.memory-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.memory-field--wide {
+  grid-column: 1 / -1;
+}
+
+.memory-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.memory-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.memory-entry__header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.memory-entry__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.memory-entry__title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.memory-entry__badge {
+  border: 1px solid rgba(110, 166, 255, 0.22);
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text-primary);
+  background: rgba(110, 166, 255, 0.08);
+}
+
+.memory-entry__timestamp,
+.memory-entry__linked {
+  font-size: 0.73rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.memory-entry__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.memory-entry__actions,
+.memory-panel__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.memory-empty {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
 .summary-option {
   display: flex;
   flex-direction: column;
@@ -2367,6 +2483,11 @@ kbd {
 
 @media (max-width: 520px) {
   .summary-option-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .memory-form-grid,
+  .memory-entry__grid {
     grid-template-columns: 1fr;
   }
 }

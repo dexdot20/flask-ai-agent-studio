@@ -27,6 +27,7 @@ from conversation_export import (
     build_conversation_pdf_download,
 )
 from config import (
+    CONVERSATION_MEMORY_ENABLED,
     RAG_DISABLED_FEATURE_ERROR,
     RAG_ENABLED,
     RAG_SEARCH_DEFAULT_TOP_K,
@@ -35,6 +36,7 @@ from config import (
 )
 from db import (
     delete_conversation_file_assets,
+    delete_conversation_memory_entry,
     delete_conversation_image_assets,
     delete_conversation_video_assets,
     extract_message_attachments,
@@ -45,6 +47,9 @@ from db import (
     get_conversation_messages,
     get_db,
     insert_message,
+    insert_conversation_memory_entry,
+    get_conversation_memory,
+    get_conversation_memory_entry,
     message_row_to_dict,
     normalize_rag_source_types,
     parse_message_metadata,
@@ -52,6 +57,7 @@ from db import (
     sanitize_edited_user_message_metadata,
     serialize_message_metadata,
     soft_delete_messages,
+    update_conversation_memory_entry,
 )
 from doc_service import extract_document_text, read_uploaded_document
 from model_registry import (
@@ -99,6 +105,15 @@ def _load_conversation_payload(conv_id: int):
             return None, None
         messages = [message_row_to_dict(message) for message in get_conversation_message_rows(conn, conv_id)]
     return conversation, messages
+
+
+def _load_conversation_memory_payload(conv_id: int, limit: int = 200) -> dict:
+    memory_entries = get_conversation_memory(conv_id, limit=limit)
+    return {
+        "conversation_memory_enabled": CONVERSATION_MEMORY_ENABLED,
+        "memory": memory_entries,
+        "memory_count": len(memory_entries),
+    }
 
 
 def _parse_truthy_form_value(value, default: bool = True) -> bool:
@@ -402,8 +417,114 @@ def register_conversation_routes(app) -> None:
             {
                 "conversation": conversation_payload,
                 "messages": messages,
+                **_load_conversation_memory_payload(conv_id),
             }
         )
+
+    @app.route("/api/conversations/<int:conv_id>/memory", methods=["POST"])
+    def create_conversation_memory_entry(conv_id):
+        if not CONVERSATION_MEMORY_ENABLED:
+            return jsonify({"error": "Conversation memory is disabled."}), 400
+
+        data = request.get_json(silent=True) or {}
+        conversation, _ = _load_conversation_payload(conv_id)
+        if not conversation:
+            return jsonify({"error": "Not found."}), 404
+
+        entry_type = str(data.get("entry_type") or "").strip()
+        key = str(data.get("key") or "").strip()
+        value = str(data.get("value") or "").strip()
+        message_id = _parse_optional_int(data.get("message_id"))
+
+        try:
+            entry = insert_conversation_memory_entry(
+                conv_id,
+                entry_type,
+                key,
+                value,
+                message_id=message_id,
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
+                (conv_id,),
+            )
+
+        payload = _load_conversation_memory_payload(conv_id)
+        payload.update({"entry": entry})
+        return jsonify(payload), 201
+
+    @app.route("/api/conversations/<int:conv_id>/memory/<int:entry_id>", methods=["PATCH"])
+    def update_conversation_memory(conv_id, entry_id):
+        if not CONVERSATION_MEMORY_ENABLED:
+            return jsonify({"error": "Conversation memory is disabled."}), 400
+
+        data = request.get_json(silent=True) or {}
+        conversation, _ = _load_conversation_payload(conv_id)
+        if not conversation:
+            return jsonify({"error": "Not found."}), 404
+
+        current_entry = get_conversation_memory_entry(entry_id, conv_id)
+        if not current_entry:
+            return jsonify({"error": "Memory entry not found."}), 404
+
+        entry_type = str(data.get("entry_type") or current_entry["entry_type"]).strip()
+        key = str(data.get("key") or current_entry["key"]).strip()
+        value = str(data.get("value") or current_entry["value"]).strip()
+        message_id = _parse_optional_int(data.get("message_id"))
+        if message_id is None:
+            message_id = current_entry["message_id"]
+
+        try:
+            entry = update_conversation_memory_entry(
+                entry_id,
+                conv_id,
+                entry_type,
+                key,
+                value,
+                message_id=message_id,
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        if not entry:
+            return jsonify({"error": "Memory entry not found."}), 404
+
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
+                (conv_id,),
+            )
+
+        payload = _load_conversation_memory_payload(conv_id)
+        payload.update({"entry": entry})
+        return jsonify(payload)
+
+    @app.route("/api/conversations/<int:conv_id>/memory/<int:entry_id>", methods=["DELETE"])
+    def delete_conversation_memory(conv_id, entry_id):
+        if not CONVERSATION_MEMORY_ENABLED:
+            return jsonify({"error": "Conversation memory is disabled."}), 400
+
+        conversation, _ = _load_conversation_payload(conv_id)
+        if not conversation:
+            return jsonify({"error": "Not found."}), 404
+
+        deleted = delete_conversation_memory_entry(entry_id, conv_id)
+        if not deleted:
+            return jsonify({"error": "Memory entry not found."}), 404
+
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
+                (conv_id,),
+            )
+
+        payload = _load_conversation_memory_payload(conv_id)
+        payload.update({"deleted_entry_id": entry_id})
+        return jsonify(payload)
 
     @app.route("/api/conversations/<int:conv_id>/export", methods=["GET"])
     def export_conversation(conv_id):

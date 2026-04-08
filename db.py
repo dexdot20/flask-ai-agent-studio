@@ -443,7 +443,7 @@ def insert_conversation_memory_entry(
     normalized_entry_type = _normalize_conversation_memory_entry_type(entry_type)
     normalized_key = _normalize_conversation_memory_key(key)
     normalized_value = _normalize_conversation_memory_value(value)
-    normalized_message_id = int(message_id) if message_id not in (None, "") else None
+    normalized_message_id = int(message_id) if message_id not in (None, "") and int(message_id) > 0 else None
 
     with get_db() as conn:
         cursor = conn.execute(
@@ -474,6 +474,81 @@ def insert_conversation_memory_entry(
         "value": str(row["value"] or "").strip(),
         "created_at": str(row["created_at"] or "").strip(),
     }
+
+
+def get_conversation_memory_entry(entry_id: int, conversation_id: int | None = None) -> dict | None:
+    normalized_entry_id = int(entry_id or 0)
+    if normalized_entry_id <= 0 or not CONVERSATION_MEMORY_ENABLED:
+        return None
+
+    normalized_conversation_id = int(conversation_id or 0) if conversation_id not in (None, "") else None
+    query = [
+        "SELECT id, conversation_id, message_id, entry_type, key, value, created_at",
+        "FROM conversation_memory",
+        "WHERE id = ?",
+    ]
+    params: list[int] = [normalized_entry_id]
+    if normalized_conversation_id is not None and normalized_conversation_id > 0:
+        query.append("AND conversation_id = ?")
+        params.append(normalized_conversation_id)
+
+    with get_db() as conn:
+        row = conn.execute("\n".join(query), tuple(params)).fetchone()
+    if not row:
+        return None
+    return {
+        "id": int(row["id"]),
+        "conversation_id": int(row["conversation_id"]),
+        "message_id": int(row["message_id"]) if row["message_id"] is not None else None,
+        "entry_type": str(row["entry_type"] or "").strip(),
+        "key": str(row["key"] or "").strip(),
+        "value": str(row["value"] or "").strip(),
+        "created_at": str(row["created_at"] or "").strip(),
+    }
+
+
+def update_conversation_memory_entry(
+    entry_id: int,
+    conversation_id: int,
+    entry_type: str,
+    key: str,
+    value: str,
+    message_id: int | None = None,
+) -> dict | None:
+    normalized_entry_id = int(entry_id or 0)
+    normalized_conversation_id = int(conversation_id or 0)
+    if normalized_entry_id <= 0 or normalized_conversation_id <= 0 or not CONVERSATION_MEMORY_ENABLED:
+        return None
+
+    current_entry = get_conversation_memory_entry(normalized_entry_id, normalized_conversation_id)
+    if not current_entry:
+        return None
+
+    normalized_entry_type = _normalize_conversation_memory_entry_type(entry_type)
+    normalized_key = _normalize_conversation_memory_key(key)
+    normalized_value = _normalize_conversation_memory_value(value)
+    normalized_message_id = (
+        int(message_id)
+        if message_id not in (None, "") and int(message_id) > 0
+        else current_entry.get("message_id")
+    )
+
+    with get_db() as conn:
+        conn.execute(
+            """UPDATE conversation_memory
+               SET entry_type = ?, key = ?, value = ?, message_id = ?
+               WHERE id = ? AND conversation_id = ?""",
+            (
+                normalized_entry_type,
+                normalized_key,
+                normalized_value,
+                normalized_message_id,
+                normalized_entry_id,
+                normalized_conversation_id,
+            ),
+        )
+
+    return get_conversation_memory_entry(normalized_entry_id, normalized_conversation_id)
 
 
 def get_conversation_memory(conversation_id: int, limit: int = 40) -> list[dict]:

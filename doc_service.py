@@ -133,6 +133,11 @@ _PDF_TEXT_TABLE_SETTINGS: dict = {
 
 _PDF_OCR_MIN_TEXT_CHARS = 20
 _PDF_OCR_RENDER_DPI = 200
+_PDF_HEADER_FOOTER_EDGE_RATIO = 0.08
+_PDF_REPEATED_EDGE_MIN_PAGES = 3
+_PDF_MULTI_COLUMN_MIN_WORDS = 40
+_PDF_MULTI_COLUMN_MIN_SHARE = 0.15
+_PDF_MULTI_COLUMN_MIN_GAP = 24
 
 
 def _looks_like_real_table(data: list[list]) -> bool:
@@ -200,6 +205,60 @@ def _extract_text_from_pdf_ocr(page) -> str:
         return ""
 
 
+def _normalize_pdf_line(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "")).strip().lower()
+
+
+def _collect_page_edge_lines(page) -> tuple[set[str], set[str]]:
+    page_height = float(getattr(page, "height", 0) or 0)
+    page_width = float(getattr(page, "width", 0) or 0)
+    if page_height <= 0 or page_width <= 0:
+        return set(), set()
+
+    edge_height = max(24.0, page_height * _PDF_HEADER_FOOTER_EDGE_RATIO)
+    regions = [
+        (0, (0, 0, page_width, edge_height)),
+        (1, (0, max(0.0, page_height - edge_height), page_width, page_height)),
+    ]
+    edge_lines: list[set[str]] = [set(), set()]
+    for index, bbox in regions:
+        try:
+            snippet = page.crop(bbox).extract_text(layout=True) or ""
+        except Exception:
+            snippet = ""
+        for line in snippet.splitlines():
+            normalized = _normalize_pdf_line(line)
+            if len(normalized) >= 4:
+                edge_lines[index].add(normalized)
+    return edge_lines[0], edge_lines[1]
+
+
+def _detect_repeating_page_edge_lines(pdf) -> set[str]:
+    counts: dict[str, int] = {}
+    for page in pdf.pages:
+        top_lines, bottom_lines = _collect_page_edge_lines(page)
+        for line in top_lines | bottom_lines:
+            counts[line] = counts.get(line, 0) + 1
+    return {
+        line
+        for line, count in counts.items()
+        if count >= _PDF_REPEATED_EDGE_MIN_PAGES
+    }
+
+
+def _filter_repeating_page_edge_lines(text: str, repeated_lines: set[str]) -> str:
+    if not text or not repeated_lines:
+        return text
+    filtered_lines = [
+        line
+        for line in text.splitlines()
+        if not _normalize_pdf_line(line) or _normalize_pdf_line(line) not in repeated_lines
+    ]
+    filtered = "\n".join(filtered_lines)
+    filtered = re.sub(r"\n{3,}", "\n\n", filtered)
+    return filtered.strip()
+
+
 # ---------------------------------------------------------------------------
 # Character-position based borderless-table extractor
 # ---------------------------------------------------------------------------
@@ -244,6 +303,67 @@ def _detect_borderless_col_edges(words: list[dict], page_width: float) -> list[i
     if not edges or edges[0] != first_content:
         edges.insert(0, first_content)
     return edges
+
+
+def _extract_column_ordered_text(page) -> str:
+    try:
+        words = page.extract_words(keep_blank_chars=False, use_text_flow=False)
+    except Exception:
+        return ""
+    if len(words) < _PDF_MULTI_COLUMN_MIN_WORDS:
+        return ""
+
+    col_edges = _detect_borderless_col_edges(words, page.width)
+    if len(col_edges) != 2:
+        return ""
+
+    def _assign(x0: float) -> int:
+        best = 0
+        for index, edge in enumerate(col_edges):
+            if edge <= x0 + 5:
+                best = index
+        return best
+
+    columns: list[list[dict]] = [[] for _ in range(len(col_edges))]
+    for word in words:
+        columns[_assign(word["x0"])] .append(word)
+
+    min_words_per_col = max(12, int(len(words) * _PDF_MULTI_COLUMN_MIN_SHARE))
+    significant_columns: list[tuple[float, float, list[dict]]] = []
+    for column_words in columns:
+        if len(column_words) < min_words_per_col:
+            continue
+        x0 = min(float(word["x0"]) for word in column_words)
+        x1 = max(float(word["x1"]) for word in column_words)
+        significant_columns.append((x0, x1, column_words))
+    if len(significant_columns) != 2:
+        return ""
+
+    significant_columns.sort(key=lambda item: item[0])
+    gap = significant_columns[1][0] - significant_columns[0][1]
+    if gap < max(_PDF_MULTI_COLUMN_MIN_GAP, float(page.width) * 0.03):
+        return ""
+
+    from collections import defaultdict
+
+    blocks: list[str] = []
+    for _, __, column_words in significant_columns:
+        lines_map: dict[int, list[dict]] = defaultdict(list)
+        for word in column_words:
+            y_key = round(float(word["top"]) / _BORDERLESS_Y_SNAP) * _BORDERLESS_Y_SNAP
+            lines_map[y_key].append(word)
+        lines: list[str] = []
+        for y_key in sorted(lines_map):
+            ordered_words = sorted(lines_map[y_key], key=lambda item: (item["x0"], item["x1"]))
+            line = " ".join(str(word["text"] or "").strip() for word in ordered_words if str(word["text"] or "").strip()).strip()
+            if line:
+                lines.append(line)
+        block = "\n".join(lines).strip()
+        if block:
+            blocks.append(block)
+    if len(blocks) != 2:
+        return ""
+    return re.sub(r"[ \t]{3,}", "  ", "\n\n".join(blocks)).strip()
 
 
 def _try_extract_borderless_table(page) -> str:
@@ -389,9 +509,11 @@ def _extract_text_from_pdf(doc_bytes: bytes) -> str:
     parts: list[str] = []
     with pdfplumber.open(io.BytesIO(doc_bytes)) as pdf:
         multi_page = len(pdf.pages) > 1
+        repeated_edge_lines = _detect_repeating_page_edge_lines(pdf)
         for page_num, page in enumerate(pdf.pages, start=1):
             page_parts: list[str] = []
             table_bboxes: list = []
+            column_ordered_text = ""
             # Try line-based detection first (explicit borders), then text-based
             # (implicit/borderless tables like whitespace-separated columns).
             for settings in (None, _PDF_TEXT_TABLE_SETTINGS):
@@ -420,9 +542,13 @@ def _extract_text_from_pdf(doc_bytes: bytes) -> str:
                     remaining = remaining.outside_bbox(bbox)
                 except Exception:
                     pass
+            if not table_bboxes:
+                # Prefer column reconstruction for prose-like two-column pages
+                # before trying the borderless-table path.
+                column_ordered_text = _extract_column_ordered_text(remaining)
             # When no structured table was found, attempt character-position
             # based extraction before falling back to plain text.
-            if not table_bboxes:
+            if not table_bboxes and not column_ordered_text:
                 borderless_md = _try_extract_borderless_table(page)
                 if borderless_md:
                     page_parts.append(borderless_md)
@@ -438,25 +564,28 @@ def _extract_text_from_pdf(doc_bytes: bytes) -> str:
             # When the page has no detected tables, use layout=True to preserve
             # spatial column ordering instead of the default linear read order.
             text_kwargs: dict = {} if table_bboxes else {"layout": True}
-            text = (remaining.extract_text(**text_kwargs) or "").strip()
+            text = column_ordered_text if not table_bboxes else ""
+            if not text:
+                text = (remaining.extract_text(**text_kwargs) or "").strip()
             if text:
                 if not table_bboxes:
                     # Collapse runs of 3+ spaces produced by layout=True into 2
                     # spaces so the output stays readable without being noisy.
                     text = re.sub(r"[ \t]{3,}", "  ", text)
+                text = _filter_repeating_page_edge_lines(text, repeated_edge_lines)
                 page_parts.insert(0, text)
                 if should_try_ocr and len(text) < _PDF_OCR_MIN_TEXT_CHARS:
                     # Very short text on an image-heavy page usually means the
                     # visible content is a scan or rasterized table.
                     ocr_text = _extract_text_from_pdf_ocr(page)
                     if ocr_text:
-                        page_parts = [ocr_text]
+                        page_parts = [_filter_repeating_page_edge_lines(ocr_text, repeated_edge_lines)]
             elif should_try_ocr:
                 # Image-only or nearly empty pages are often scans; render the
                 # page and run OCR as a fallback instead of dropping them.
                 ocr_text = _extract_text_from_pdf_ocr(page)
                 if ocr_text:
-                    page_parts.append(ocr_text)
+                    page_parts.append(_filter_repeating_page_edge_lines(ocr_text, repeated_edge_lines))
             if not page_parts:
                 continue
             page_content = "\n\n".join(page_parts)

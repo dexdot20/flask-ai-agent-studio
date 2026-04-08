@@ -47,6 +47,7 @@ const summaryInspectorToolMessages = document.getElementById("summary-inspector-
 const summaryInspectorReason = document.getElementById("summary-inspector-reason");
 const summaryInspectorLast = document.getElementById("summary-inspector-last");
 const canvasToggleBtn = document.getElementById("canvas-toggle-btn");
+const memoryToggleBtn = document.getElementById("memory-toggle-btn");
 const canvasPanel = document.getElementById("canvas-panel");
 const canvasOverlay = document.getElementById("canvas-overlay");
 const canvasClose = document.getElementById("canvas-close");
@@ -108,6 +109,7 @@ const mobileToolsPanel = document.getElementById("mobile-tools-panel");
 const mobileToolsOverlay = document.getElementById("mobile-tools-overlay");
 const mobileToolsClose = document.getElementById("mobile-tools-close");
 const mobileCanvasBtn = document.getElementById("mobile-canvas-btn");
+const mobileMemoryBtn = document.getElementById("mobile-memory-btn");
 const mobileExportBtn = document.getElementById("mobile-export-btn");
 const mobilePruneBtn = document.getElementById("mobile-prune-btn");
 const mobileSettingsBtn = document.getElementById("mobile-settings-btn");
@@ -121,6 +123,17 @@ const exportStatus = document.getElementById("export-status");
 const summaryPanel = document.getElementById("summary-panel");
 const summaryOverlay = document.getElementById("summary-overlay");
 const summaryClose = document.getElementById("summary-close");
+const memoryPanel = document.getElementById("memory-panel");
+const memoryOverlay = document.getElementById("memory-overlay");
+const memoryClose = document.getElementById("memory-close");
+const memorySubtitle = document.getElementById("memory-panel-subtitle");
+const memoryStatusEl = document.getElementById("memory-status");
+const memoryCountEl = document.getElementById("memory-count");
+const memoryListEl = document.getElementById("memory-list");
+const memoryAddBtn = document.getElementById("memory-add-btn");
+const memoryNewTypeEl = document.getElementById("memory-new-type");
+const memoryNewKeyEl = document.getElementById("memory-new-key");
+const memoryNewValueEl = document.getElementById("memory-new-value");
 const summaryFocusPresetGrid = document.getElementById("summary-focus-presets");
 const summaryFocusInput = document.getElementById("summary-focus-input");
 const summaryDetailSelect = document.getElementById("summary-detail-select");
@@ -217,6 +230,17 @@ const SUMMARY_SOURCE_LABELS = {
   conversation_history: "Conversation history",
   summary_history: "Summary history",
 };
+
+const CONVERSATION_MEMORY_ENTRY_TYPES = [
+  { value: "user_info", label: "User info" },
+  { value: "task_context", label: "Task context" },
+  { value: "tool_result", label: "Tool result" },
+  { value: "decision", label: "Decision" },
+];
+
+const CONVERSATION_MEMORY_ENTRY_LABELS = Object.fromEntries(
+  CONVERSATION_MEMORY_ENTRY_TYPES.map((entryType) => [entryType.value, entryType.label])
+);
 
 if (summaryDetailSelect) {
   summaryDetailSelect.value = String(appSettings.chat_summary_detail_level || "balanced").trim();
@@ -443,6 +467,8 @@ let isStreaming = false;
 let isFixing = false;
 let currentConvId = null;
 let currentConvTitle = "New Chat";
+let conversationMemoryEntries = [];
+let conversationMemoryEnabled = featureFlags.conversation_memory_enabled !== false;
 let activeAbortController = null;
 let activeAssistantStreamingBubble = null;
 let activeAssistantStreamingHasVisibleAnswer = false;
@@ -469,6 +495,7 @@ let lastCanvasTriggerEl = null;
 let lastCanvasConfirmTriggerEl = null;
 let lastExportTriggerEl = null;
 let lastSummaryTriggerEl = null;
+let lastMemoryTriggerEl = null;
 let streamingCanvasPreviews = new Map();
 let pendingCanvasPreviewTimer = 0;
 let lastCanvasStructureSignature = "";
@@ -479,8 +506,444 @@ let summaryProgressCurrentValue = 0;
 let conversationRefreshGeneration = 0;
 let pendingConversationRefreshTimers = new Set();
 let lastConversationSignature = "";
+let lastConversationMemorySignature = "";
 let userScrolledUp = false;
 let pendingCanvasConfirmAction = null;
+function renderConversationMemoryTypeOptions() {
+  if (!memoryNewTypeEl) {
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  CONVERSATION_MEMORY_ENTRY_TYPES.forEach((entryType) => {
+    const option = document.createElement("option");
+    option.value = entryType.value;
+    option.textContent = entryType.label;
+    fragment.append(option);
+  });
+  memoryNewTypeEl.replaceChildren(fragment);
+  if (!memoryNewTypeEl.value) {
+    memoryNewTypeEl.value = CONVERSATION_MEMORY_ENTRY_TYPES[0]?.value || "user_info";
+  }
+}
+
+function normalizeConversationMemoryEntry(entry) {
+  const normalizedId = Number(entry?.id);
+  const normalizedMessageId = Number(entry?.message_id);
+  return {
+    id: Number.isInteger(normalizedId) && normalizedId > 0 ? normalizedId : null,
+    conversation_id: Number.isInteger(Number(entry?.conversation_id)) ? Number(entry?.conversation_id) : null,
+    message_id: Number.isInteger(normalizedMessageId) && normalizedMessageId > 0 ? normalizedMessageId : null,
+    entry_type: String(entry?.entry_type || "").trim().toLowerCase(),
+    key: String(entry?.key || "").trim(),
+    value: String(entry?.value || "").trim(),
+    created_at: String(entry?.created_at || "").trim(),
+  };
+}
+
+function getConversationMemoryEntryLabel(entryType) {
+  const normalizedEntryType = String(entryType || "").trim().toLowerCase();
+  return CONVERSATION_MEMORY_ENTRY_LABELS[normalizedEntryType] || normalizedEntryType || "Entry";
+}
+
+function getConversationMemorySignature(entries) {
+  return JSON.stringify(
+    (Array.isArray(entries) ? entries : []).map((entry) => [
+      Number.isInteger(Number(entry?.id)) ? Number(entry.id) : null,
+      String(entry?.entry_type || "").trim().toLowerCase(),
+      String(entry?.key || "").trim(),
+      String(entry?.value || "").trim(),
+      Number.isInteger(Number(entry?.message_id)) ? Number(entry.message_id) : null,
+      String(entry?.created_at || "").trim(),
+    ])
+  );
+}
+
+function setMemoryStatus(message, tone = "muted") {
+  if (!memoryStatusEl) {
+    return;
+  }
+  memoryStatusEl.textContent = String(message || "").trim() || "Waiting for a conversation.";
+  memoryStatusEl.dataset.tone = tone;
+}
+
+function setMemoryFormDisabled(disabled) {
+  [memoryNewTypeEl, memoryNewKeyEl, memoryNewValueEl, memoryAddBtn].forEach((element) => {
+    if (element) {
+      element.disabled = Boolean(disabled);
+    }
+  });
+}
+
+function setMemoryPanelBusy(card, busy) {
+  if (!card) {
+    return;
+  }
+  card.querySelectorAll("button, input, textarea, select").forEach((element) => {
+    if (element.id === "memory-close") {
+      return;
+    }
+    element.disabled = Boolean(busy);
+  });
+}
+
+function renderConversationMemoryPanel() {
+  if (memoryNewTypeEl && memoryNewTypeEl.options.length === 0) {
+    renderConversationMemoryTypeOptions();
+  }
+
+  if (!memoryPanel) {
+    return;
+  }
+
+  const hasConversation = Boolean(currentConvId);
+  const isEditable = hasConversation && conversationMemoryEnabled;
+  const entryCount = conversationMemoryEntries.length;
+
+  if (memorySubtitle) {
+    memorySubtitle.textContent = hasConversation
+      ? `Current conversation: ${currentConvTitle || `Chat #${currentConvId}`}`
+      : "Open or create a conversation to view and manage memory entries.";
+  }
+
+  if (memoryCountEl) {
+    memoryCountEl.textContent = `${entryCount} entr${entryCount === 1 ? "y" : "ies"}`;
+  }
+
+  if (!conversationMemoryEnabled) {
+    setMemoryStatus("Conversation memory is disabled in Settings.", "warning");
+  } else if (!hasConversation) {
+    setMemoryStatus("Open a conversation to view memory entries.", "muted");
+  } else {
+    setMemoryStatus(entryCount ? "Edit, save, or delete the entries below." : "No memory entries yet. Add one below.", entryCount ? "success" : "muted");
+  }
+
+  setMemoryFormDisabled(!isEditable);
+
+  if (!memoryListEl) {
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  if (!entryCount) {
+    const empty = document.createElement("p");
+    empty.className = "memory-empty";
+    empty.textContent = hasConversation
+      ? "This conversation does not have any memory entries yet."
+      : "Open a conversation to manage its memory entries.";
+    fragment.append(empty);
+    memoryListEl.replaceChildren(fragment);
+    return;
+  }
+
+  conversationMemoryEntries.forEach((entry) => {
+    const card = document.createElement("article");
+    card.className = "memory-entry";
+    card.dataset.entryId = String(entry.id || "");
+
+    const header = document.createElement("div");
+    header.className = "memory-entry__header";
+
+    const meta = document.createElement("div");
+    meta.className = "memory-entry__meta";
+
+    const title = document.createElement("div");
+    title.className = "memory-entry__title";
+
+    const badge = document.createElement("span");
+    badge.className = "memory-entry__badge";
+    badge.textContent = getConversationMemoryEntryLabel(entry.entry_type);
+    title.append(badge);
+
+    const entryIdLabel = document.createElement("span");
+    entryIdLabel.textContent = entry.id ? `#${entry.id}` : "#?";
+    title.append(entryIdLabel);
+
+    meta.append(title);
+
+    const timestamp = document.createElement("div");
+    timestamp.className = "memory-entry__timestamp";
+    timestamp.textContent = entry.created_at ? `Created ${entry.created_at}` : "Created time unavailable";
+    meta.append(timestamp);
+
+    if (entry.message_id) {
+      const linked = document.createElement("div");
+      linked.className = "memory-entry__linked";
+      linked.textContent = `Linked to message #${entry.message_id}`;
+      meta.append(linked);
+    }
+
+    header.append(meta);
+
+    const actions = document.createElement("div");
+    actions.className = "memory-entry__actions";
+
+    const saveBtn = document.createElement("button");
+    saveBtn.type = "button";
+    saveBtn.className = "btn-primary";
+    saveBtn.textContent = "Save";
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "btn-ghost";
+    deleteBtn.textContent = "Delete";
+
+    actions.append(saveBtn, deleteBtn);
+    header.append(actions);
+    card.append(header);
+
+    const grid = document.createElement("div");
+    grid.className = "memory-entry__grid";
+
+    const typeField = document.createElement("label");
+    typeField.className = "summary-field";
+    const typeLabel = document.createElement("span");
+    typeLabel.textContent = "Type";
+    const typeSelect = document.createElement("select");
+    typeSelect.className = "summary-input";
+    CONVERSATION_MEMORY_ENTRY_TYPES.forEach((entryType) => {
+      const option = document.createElement("option");
+      option.value = entryType.value;
+      option.textContent = entryType.label;
+      typeSelect.append(option);
+    });
+    typeSelect.value = entry.entry_type || CONVERSATION_MEMORY_ENTRY_TYPES[0]?.value || "user_info";
+    typeField.append(typeLabel, typeSelect);
+
+    const keyField = document.createElement("label");
+    keyField.className = "summary-field";
+    const keyLabel = document.createElement("span");
+    keyLabel.textContent = "Key";
+    const keyInput = document.createElement("input");
+    keyInput.className = "summary-input";
+    keyInput.type = "text";
+    keyInput.maxLength = 120;
+    keyInput.value = entry.key || "";
+    keyField.append(keyLabel, keyInput);
+
+    const valueField = document.createElement("label");
+    valueField.className = "summary-field memory-field--wide";
+    const valueLabel = document.createElement("span");
+    valueLabel.textContent = "Value";
+    const valueInput = document.createElement("textarea");
+    valueInput.rows = 3;
+    valueInput.value = entry.value || "";
+    valueField.append(valueLabel, valueInput);
+
+    grid.append(typeField, keyField, valueField);
+    card.append(grid);
+
+    const setCardBusy = (busy) => {
+      [saveBtn, deleteBtn, typeSelect, keyInput, valueInput].forEach((element) => {
+        element.disabled = Boolean(busy);
+      });
+    };
+
+    saveBtn.addEventListener("click", () => {
+      void updateConversationMemoryFromCard(card, {
+        entryId: entry.id,
+        typeSelect,
+        keyInput,
+        valueInput,
+        saveBtn,
+        deleteBtn,
+        setCardBusy,
+      });
+    });
+
+    deleteBtn.addEventListener("click", () => {
+      void deleteConversationMemoryFromCard(card, entry.id, { saveBtn, deleteBtn, setCardBusy });
+    });
+
+    if (!isEditable) {
+      setCardBusy(true);
+    }
+
+    fragment.append(card);
+  });
+
+  memoryListEl.replaceChildren(fragment);
+}
+
+function applyConversationMemoryState(data) {
+  conversationMemoryEnabled = data?.conversation_memory_enabled !== false;
+  conversationMemoryEntries = conversationMemoryEnabled && Array.isArray(data?.memory)
+    ? data.memory.map(normalizeConversationMemoryEntry).filter((entry) => entry.id !== null && entry.key && entry.value)
+    : [];
+  lastConversationMemorySignature = getConversationMemorySignature(conversationMemoryEntries);
+  renderConversationMemoryPanel();
+}
+
+function isMemoryPanelOpen() {
+  return Boolean(memoryPanel?.classList.contains("open"));
+}
+
+function openMemoryPanel(triggerEl = null) {
+  closeMobileTools();
+  closeStats();
+  closeCanvas();
+  closeExportPanel();
+  closeSummaryPanel();
+  memoryPanel?.classList.add("open");
+  memoryOverlay?.classList.add("open");
+  memoryPanel?.setAttribute("aria-hidden", "false");
+  lastMemoryTriggerEl = triggerEl instanceof HTMLElement
+    ? triggerEl
+    : (document.activeElement instanceof HTMLElement ? document.activeElement : memoryToggleBtn);
+  renderConversationMemoryPanel();
+  window.setTimeout(() => {
+    if (memoryNewKeyEl && !memoryNewKeyEl.disabled) {
+      memoryNewKeyEl.focus({ preventScroll: true });
+      memoryNewKeyEl.select();
+    } else {
+      memoryClose?.focus();
+    }
+  }, 0);
+}
+
+function closeMemoryPanel({ restoreFocus = true } = {}) {
+  memoryPanel?.classList.remove("open");
+  memoryOverlay?.classList.remove("open");
+  memoryPanel?.setAttribute("aria-hidden", "true");
+  if (restoreFocus && lastMemoryTriggerEl && typeof lastMemoryTriggerEl.focus === "function") {
+    lastMemoryTriggerEl.focus();
+  }
+}
+
+async function updateConversationMemoryFromCard(card, { entryId, typeSelect, keyInput, valueInput, saveBtn, deleteBtn, setCardBusy }) {
+  if (!currentConvId || !conversationMemoryEnabled) {
+    showToast("Open a conversation before editing memory.", "warning");
+    return;
+  }
+
+  const entryType = String(typeSelect?.value || "").trim();
+  const key = String(keyInput?.value || "").trim();
+  const value = String(valueInput?.value || "").trim();
+  if (!key || !value) {
+    showToast("Memory key and value are required.", "warning");
+    return;
+  }
+
+  const payload = {
+    entry_type: entryType,
+    key,
+    value,
+  };
+
+  setCardBusy(true);
+  if (saveBtn) {
+    saveBtn.disabled = true;
+  }
+  if (deleteBtn) {
+    deleteBtn.disabled = true;
+  }
+
+  try {
+    const response = await fetch(`/api/conversations/${currentConvId}/memory/${entryId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(data?.error || "Unable to update memory entry.");
+    }
+
+    applyConversationMemoryState(data);
+    await loadSidebar();
+    showToast("Memory entry updated.", "success");
+  } catch (error) {
+    showError(error.message || "Unable to update memory entry.");
+    setCardBusy(false);
+  }
+}
+
+async function deleteConversationMemoryFromCard(card, entryId, { saveBtn, deleteBtn, setCardBusy }) {
+  if (!currentConvId || !conversationMemoryEnabled) {
+    showToast("Open a conversation before editing memory.", "warning");
+    return;
+  }
+
+  if (!window.confirm(`Delete memory entry #${entryId}?`)) {
+    return;
+  }
+
+  setCardBusy(true);
+  if (saveBtn) {
+    saveBtn.disabled = true;
+  }
+  if (deleteBtn) {
+    deleteBtn.disabled = true;
+  }
+
+  try {
+    const response = await fetch(`/api/conversations/${currentConvId}/memory/${entryId}`, {
+      method: "DELETE",
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(data?.error || "Unable to delete memory entry.");
+    }
+
+    applyConversationMemoryState(data);
+    await loadSidebar();
+    showToast("Memory entry deleted.", "success");
+  } catch (error) {
+    showError(error.message || "Unable to delete memory entry.");
+    setCardBusy(false);
+  }
+}
+
+async function createConversationMemoryEntry() {
+  if (!currentConvId || !conversationMemoryEnabled) {
+    showToast("Open a conversation before editing memory.", "warning");
+    return;
+  }
+
+  const entryType = String(memoryNewTypeEl?.value || "user_info").trim() || "user_info";
+  const key = String(memoryNewKeyEl?.value || "").trim();
+  const value = String(memoryNewValueEl?.value || "").trim();
+  if (!key || !value) {
+    showToast("Memory key and value are required.", "warning");
+    return;
+  }
+
+  if (memoryAddBtn) {
+    memoryAddBtn.disabled = true;
+  }
+  setMemoryFormDisabled(true);
+
+  try {
+    const response = await fetch(`/api/conversations/${currentConvId}/memory`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entry_type: entryType, key, value }),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(data?.error || "Unable to save memory entry.");
+    }
+
+    applyConversationMemoryState(data);
+    await loadSidebar();
+    if (memoryNewKeyEl) {
+      memoryNewKeyEl.value = "";
+    }
+    if (memoryNewValueEl) {
+      memoryNewValueEl.value = "";
+    }
+    if (memoryNewTypeEl) {
+      memoryNewTypeEl.value = entryType;
+    }
+    showToast("Memory entry saved.", "success");
+  } catch (error) {
+    showError(error.message || "Unable to save memory entry.");
+  } finally {
+    setMemoryFormDisabled(!currentConvId || !conversationMemoryEnabled);
+  }
+}
+
+renderConversationMemoryTypeOptions();
 const DEFAULT_CANVAS_CONFIRM_LABEL = "Open Canvas";
 const DEFAULT_CANVAS_CONFIRM_CANCEL_LABEL = "Later";
 let activeSidebarRename = null;
@@ -3160,6 +3623,7 @@ function renderCanvasPanel() {
 }
 
 function openCanvas(triggerEl = null) {
+  closeMemoryPanel();
   closeSummaryPanel();
   closeMobileTools();
   closeCanvasConfirmModal("cancel", false);
@@ -3233,6 +3697,7 @@ function openExportPanel(triggerEl = null) {
   closeStats();
   closeCanvas();
   closeSummaryPanel();
+  closeMemoryPanel();
   updateExportPanel();
   exportPanel?.classList.add("open");
   exportOverlay?.classList.add("open");
@@ -3309,6 +3774,7 @@ function openSummaryPanel(triggerEl = null) {
   closeStats();
   closeCanvas();
   closeExportPanel();
+  closeMemoryPanel();
   summaryPanel?.classList.add("open");
   summaryOverlay?.classList.add("open");
   summaryPanel?.setAttribute("aria-hidden", "false");
@@ -5661,22 +6127,33 @@ async function refreshConversationFromServer() {
 
   const serverHistory = Array.isArray(data.messages) ? data.messages.map(normalizeHistoryEntry) : [];
   const serverSignature = getConversationSignature(serverHistory);
-  if (serverSignature === lastConversationSignature) {
+  const serverMemorySignature = getConversationMemorySignature(data.memory || []);
+  const messagesChanged = serverSignature !== lastConversationSignature;
+  const memoryChanged = serverMemorySignature !== lastConversationMemorySignature;
+
+  if (!messagesChanged && !memoryChanged) {
     return false;
   }
 
-  history = serverHistory;
-  currentConvTitle = String(data.conversation?.title || currentConvTitle || "New Chat").trim() || "New Chat";
-  latestSummaryStatus = null;
-  clearPendingDeleteMessage({ render: false });
-  streamingCanvasDocuments = [];
-  resetStreamingCanvasPreview();
-  activeCanvasDocumentId = getActiveCanvasDocument(history)?.id || null;
-  lastConversationSignature = serverSignature;
-  renderConversationHistory({ preserveScroll: true });
-  renderCanvasPanel();
-  updateExportPanel();
-  rebuildTokenStatsFromHistory();
+  if (messagesChanged) {
+    history = serverHistory;
+    currentConvTitle = String(data.conversation?.title || currentConvTitle || "New Chat").trim() || "New Chat";
+    latestSummaryStatus = null;
+    clearPendingDeleteMessage({ render: false });
+    streamingCanvasDocuments = [];
+    resetStreamingCanvasPreview();
+    activeCanvasDocumentId = getActiveCanvasDocument(history)?.id || null;
+    lastConversationSignature = serverSignature;
+    renderConversationHistory({ preserveScroll: true });
+    renderCanvasPanel();
+    updateExportPanel();
+    rebuildTokenStatsFromHistory();
+  }
+
+  if (memoryChanged) {
+    applyConversationMemoryState(data);
+  }
+
   loadSidebar();
   return true;
 }
@@ -6360,6 +6837,7 @@ function openStats() {
   closeCanvas();
   closeExportPanel();
   closeSummaryPanel();
+  closeMemoryPanel();
   statsPanel.classList.add("open");
   statsOverlay.classList.add("open");
 }
@@ -6374,6 +6852,7 @@ function openMobileTools() {
   closeCanvas();
   closeExportPanel();
   closeSummaryPanel();
+  closeMemoryPanel();
   mobileToolsPanel?.classList.add("open");
   mobileToolsOverlay?.classList.add("open");
   mobileToolsBtn?.setAttribute("aria-expanded", "true");
@@ -6577,8 +7056,20 @@ if (canvasToggleBtn) {
     }
   });
 }
+if (memoryToggleBtn) {
+  memoryToggleBtn.addEventListener("click", () => {
+    if (isMemoryPanelOpen()) {
+      closeMemoryPanel();
+    } else {
+      openMemoryPanel(memoryToggleBtn);
+    }
+  });
+}
 if (mobileExportBtn) {
   mobileExportBtn.addEventListener("click", () => openExportPanel(mobileToolsBtn || mobileExportBtn));
+}
+if (mobileMemoryBtn) {
+  mobileMemoryBtn.addEventListener("click", () => openMemoryPanel(mobileToolsBtn || mobileMemoryBtn));
 }
 if (mobilePruneBtn) {
   mobilePruneBtn.addEventListener("click", () => {
@@ -6764,6 +7255,8 @@ if (mobileModelSel) {
 }
 summaryClose?.addEventListener("click", closeSummaryPanel);
 summaryOverlay?.addEventListener("click", closeSummaryPanel);
+memoryClose?.addEventListener("click", closeMemoryPanel);
+memoryOverlay?.addEventListener("click", closeMemoryPanel);
 summarySubmitBtn?.addEventListener("click", () => {
   void runConversationSummary({ triggerButton: summarySubmitBtn, closePanel: false });
 });
@@ -6774,6 +7267,17 @@ summaryAllMessagesCheckbox?.addEventListener("change", () => {
   }
   updateSummarySelectionUi();
 });
+memoryAddBtn?.addEventListener("click", () => {
+  void createConversationMemoryEntry();
+});
+if (memoryNewKeyEl) {
+  memoryNewKeyEl.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      void createConversationMemoryEntry();
+    }
+  });
+}
 
 window.addEventListener("resize", () => {
   updateHeaderOffset();
@@ -6805,6 +7309,10 @@ if (canvasResizeHandle) {
 }
 
 window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && isMemoryPanelOpen()) {
+    closeMemoryPanel();
+    return;
+  }
   if (event.key === "Escape" && isSummaryPanelOpen()) {
     closeSummaryPanel();
     return;
@@ -7147,6 +7655,7 @@ async function openConversation(id) {
   resetCanvasWorkspaceState();
 
   history = Array.isArray(data.messages) ? data.messages.map(normalizeHistoryEntry) : [];
+  applyConversationMemoryState(data);
   streamingCanvasDocuments = [];
   resetStreamingCanvasPreview();
   activeCanvasDocumentId = getActiveCanvasDocument(history)?.id || null;
@@ -7183,11 +7692,14 @@ function startNewChat() {
   currentConvId = null;
   currentConvTitle = "New Chat";
   history = [];
+  conversationMemoryEntries = [];
+  conversationMemoryEnabled = featureFlags.conversation_memory_enabled !== false;
   latestSummaryStatus = null;
   streamingCanvasDocuments = [];
   resetStreamingCanvasPreview();
   activeCanvasDocumentId = null;
   lastConversationSignature = "";
+  lastConversationMemorySignature = "";
   clearEditTarget();
   clearInlineEditingTarget();
   resetCanvasWorkspaceState();
@@ -7195,6 +7707,7 @@ function startNewChat() {
   resetTokenStats();
   renderConversationHistory();
   renderCanvasPanel();
+  renderConversationMemoryPanel();
   updateExportPanel();
   const preferredModelId = readModelPreference();
   if (preferredModelId) {

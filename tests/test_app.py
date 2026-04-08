@@ -621,6 +621,61 @@ class AppRoutesTestCase(unittest.TestCase):
             "Claude Sonnet 4.5",
         )
 
+    def test_conversation_payload_includes_memory_entries(self):
+        conversation_id = self._create_conversation()
+        insert_conversation_memory_entry(
+            conversation_id,
+            "decision",
+            "API",
+            "Flask will be used.",
+        )
+
+        response = self.client.get(f"/api/conversations/{conversation_id}")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["conversation_memory_enabled"])
+        self.assertEqual(payload["memory_count"], 1)
+        self.assertEqual(payload["memory"][0]["entry_type"], "decision")
+        self.assertEqual(payload["memory"][0]["key"], "API")
+
+    def test_conversation_memory_crud_routes_update_list(self):
+        conversation_id = self._create_conversation()
+
+        create_response = self.client.post(
+            f"/api/conversations/{conversation_id}/memory",
+            json={
+                "entry_type": "user_info",
+                "key": "Preferred language",
+                "value": "Turkish",
+            },
+        )
+        self.assertEqual(create_response.status_code, 201)
+        create_payload = create_response.get_json()
+        entry = create_payload["entry"]
+        self.assertEqual(create_payload["memory_count"], 1)
+        self.assertEqual(create_payload["memory"][0]["key"], "Preferred language")
+
+        update_response = self.client.patch(
+            f"/api/conversations/{conversation_id}/memory/{entry['id']}",
+            json={
+                "entry_type": "decision",
+                "key": "Preferred locale",
+                "value": "Turkish",
+            },
+        )
+        self.assertEqual(update_response.status_code, 200)
+        update_payload = update_response.get_json()
+        self.assertEqual(update_payload["entry"]["entry_type"], "decision")
+        self.assertEqual(update_payload["entry"]["key"], "Preferred locale")
+        self.assertEqual(update_payload["memory"][0]["key"], "Preferred locale")
+
+        delete_response = self.client.delete(f"/api/conversations/{conversation_id}/memory/{entry['id']}")
+        self.assertEqual(delete_response.status_code, 200)
+        delete_payload = delete_response.get_json()
+        self.assertEqual(delete_payload["memory_count"], 0)
+        self.assertEqual(get_conversation_memory(conversation_id), [])
+
     def test_custom_openrouter_models_can_share_the_same_base_model_id_with_different_profiles(self):
         response = self.client.patch(
             "/api/settings",
@@ -9315,6 +9370,112 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(result, "SCANNED PAGE TEXT")
         ocr_mock.assert_called_once()
 
+    def test_extract_text_from_pdf_orders_two_column_pages_by_column(self):
+        class FakeCrop:
+            def extract_text(self, **kwargs):
+                return ""
+
+        class FakePage:
+            width = 600
+            height = 800
+            images = []
+
+            def find_tables(self, **kwargs):
+                return []
+
+            def outside_bbox(self, bbox):
+                return self
+
+            def crop(self, bbox):
+                return FakeCrop()
+
+            def extract_words(self, **kwargs):
+                words = []
+                for line_index in range(1, 13):
+                    top = 40 + (line_index * 18)
+                    words.extend(
+                        [
+                            {"text": f"Left{line_index}", "x0": 20, "x1": 70, "top": top, "bottom": top + 10},
+                            {"text": "alpha", "x0": 78, "x1": 120, "top": top, "bottom": top + 10},
+                            {"text": f"Right{line_index}", "x0": 340, "x1": 405, "top": top, "bottom": top + 10},
+                            {"text": "beta", "x0": 408, "x1": 442, "top": top, "bottom": top + 10},
+                        ]
+                    )
+                return words
+
+            def extract_text(self, **kwargs):
+                return "INTERLEAVED LAYOUT TEXT"
+
+        class FakePDF:
+            def __init__(self):
+                self.pages = [FakePage()]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        with patch("doc_service.pdfplumber.open", return_value=FakePDF()):
+            result = _extract_text_from_pdf(b"%PDF-FAKE")
+
+        self.assertIn("Left1 alpha\nLeft2 alpha", result)
+        self.assertIn("Right1 beta\nRight2 beta", result)
+        self.assertLess(result.index("Left12 alpha"), result.index("Right1 beta"))
+        self.assertNotIn("INTERLEAVED LAYOUT TEXT", result)
+
+    def test_extract_text_from_pdf_filters_repeated_headers_and_footers(self):
+        class FakeCrop:
+            def __init__(self, text):
+                self._text = text
+
+            def extract_text(self, **kwargs):
+                return self._text
+
+        class FakePage:
+            width = 600
+            height = 800
+            images = []
+
+            def __init__(self, page_num):
+                self.page_num = page_num
+
+            def find_tables(self, **kwargs):
+                return []
+
+            def outside_bbox(self, bbox):
+                return self
+
+            def crop(self, bbox):
+                if bbox[1] == 0:
+                    return FakeCrop("Company Confidential")
+                return FakeCrop("Internal Use Only")
+
+            def extract_words(self, **kwargs):
+                return []
+
+            def extract_text(self, **kwargs):
+                return f"Company Confidential\nBody {self.page_num}\nInternal Use Only"
+
+        class FakePDF:
+            def __init__(self):
+                self.pages = [FakePage(1), FakePage(2), FakePage(3)]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        with patch("doc_service.pdfplumber.open", return_value=FakePDF()):
+            result = _extract_text_from_pdf(b"%PDF-FAKE")
+
+        self.assertIn("Body 1", result)
+        self.assertIn("Body 2", result)
+        self.assertIn("Body 3", result)
+        self.assertNotIn("Company Confidential", result)
+        self.assertNotIn("Internal Use Only", result)
+
     def test_extract_document_text_raises_clear_error_for_pdf_parser_failures(self):
         with patch("doc_service.pdfplumber.open", side_effect=RuntimeError("broken PDF parser")):
             with self.assertRaisesRegex(ValueError, "Could not read the PDF document: broken PDF parser"):
@@ -13014,6 +13175,45 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("Install dependencies", result["raw_content"])
         self.assertIn("pip install -r requirements.txt", result["raw_content"])
 
+    def test_extract_html_preserves_definition_lists_and_spanned_tables(self):
+        html = """
+        <html>
+            <body>
+                <main>
+                    <dl>
+                        <dt>Timeout</dt>
+                        <dd>20 seconds</dd>
+                        <dt>Output</dt>
+                        <dd>Markdown with preserved structure</dd>
+                    </dl>
+                    <table>
+                        <tr>
+                            <th rowspan="2">Plan</th>
+                            <th colspan="2">Limits</th>
+                        </tr>
+                        <tr>
+                            <th>Tokens</th>
+                            <th>Tools</th>
+                        </tr>
+                        <tr>
+                            <td>Pro</td>
+                            <td>128k</td>
+                            <td>12</td>
+                        </tr>
+                    </table>
+                </main>
+            </body>
+        </html>
+        """
+
+        result = _extract_html(html, "https://example.com/reference")
+
+        self.assertIn("**Timeout**: 20 seconds", result["content"])
+        self.assertIn("**Output**: Markdown with preserved structure", result["content"])
+        self.assertIn("| Plan | Limits | Limits |", result["content"])
+        self.assertIn("| Plan | Tokens | Tools |", result["content"])
+        self.assertIn("| Pro | 128k | 12 |", result["content"])
+
     def test_extract_html_outline_ignores_noise_regions(self):
         html = """
         <html>
@@ -13250,6 +13450,28 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertTrue(result["partial_content"])
         self.assertIn("partial page content was recovered", result["fetch_warning"])
         self.assertTrue(mocked_cache_set.called)
+
+    def test_fetch_pdf_uses_document_pdf_extractor_output(self):
+        class FakePDF:
+            def __init__(self):
+                self.pages = [object(), object()]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        with patch("doc_service._extract_text_from_pdf", return_value="## Page 1\n\n| A | B |\n| --- | --- |\n| 1 | 2 |"), patch(
+            "pdfplumber.open",
+            return_value=FakePDF(),
+        ):
+            result = web_tools._extract_pdf(b"%PDF-FAKE", "https://example.com/report.pdf")
+
+        self.assertEqual(result["content_format"], "pdf")
+        self.assertEqual(result["page_count"], 2)
+        self.assertEqual(result["pages_extracted"], 2)
+        self.assertIn("| A | B |", result["content"])
 
     def test_fetch_url_tool_uses_proxies_before_direct_fallback(self):
         attempts = []
