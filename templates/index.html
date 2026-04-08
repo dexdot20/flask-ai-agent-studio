@@ -100,10 +100,6 @@
         <span id="summary-inspector-badge" class="summary-inspector__badge" data-tone="muted">Waiting</span>
         <div class="summary-inspector__header-copy">
           <div id="summary-inspector-headline" class="summary-inspector__headline">Start chatting to see when automatic summary will run.</div>
-          <div class="summary-inspector__actions">
-            <button class="btn-ghost" id="summary-undo-btn" type="button">Undo last summary</button>
-            <button class="btn-ghost" id="summary-now-btn" type="button">Summarize now</button>
-          </div>
         </div>
       </div>
       <div class="summary-inspector__grid">
@@ -137,6 +133,11 @@
         <span>Message count</span>
         <input id="summary-message-count-input" class="summary-input" type="number" min="1" step="1" placeholder="Leave blank to auto-select eligible messages" />
       </label>
+      <label class="summary-toggle">
+        <input id="summary-all-messages-checkbox" type="checkbox" checked />
+        <span>Summarize all eligible messages</span>
+      </label>
+      <p class="summary-support-copy">Preserves the first and last messages, then compresses the rest.</p>
       <p id="summary-selection-note" class="summary-support-copy">Eligible messages: —</p>
       <p id="summary-settings-note" class="summary-support-copy">Current Settings: —</p>
     </section>

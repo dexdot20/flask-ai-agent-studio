@@ -122,6 +122,7 @@ const summaryFocusInput = document.getElementById("summary-focus-input");
 const summaryDetailSelect = document.getElementById("summary-detail-select");
 const summaryDetailOptionGrid = document.getElementById("summary-detail-options");
 const summaryMessageCountInput = document.getElementById("summary-message-count-input");
+const summaryAllMessagesCheckbox = document.getElementById("summary-all-messages-checkbox");
 const summarySelectionNote = document.getElementById("summary-selection-note");
 const summarySettingsNote = document.getElementById("summary-settings-note");
 const summarySubmitBtn = document.getElementById("summary-submit-btn");
@@ -2955,6 +2956,9 @@ async function runConversationSummary({ triggerButton = null, closePanel = false
     summary_focus: String(summaryFocusInput?.value || "").trim(),
     summary_detail_level: String(summaryDetailSelect?.value || "balanced").trim(),
   };
+  if (summaryAllMessagesCheckbox?.checked === true) {
+    requestBody.summarize_all_messages = true;
+  }
   if (requestedMessageCount !== null) {
     requestBody.message_count = requestedMessageCount;
   }
@@ -3938,7 +3942,7 @@ function normalizeHistoryEntry(entry) {
 }
 
 function buildRequestMessagesFromHistory(entries = history) {
-  return entries.map((item) => ({
+  return getVisibleHistoryEntries(entries).map((item) => ({
     role: item.role,
     content: item.content,
     metadata: item.metadata || null,
@@ -3953,6 +3957,11 @@ function isRenderableHistoryEntry(message) {
   }
 
   if (message.role === "assistant" && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+    return false;
+  }
+
+  const metadata = message.metadata && typeof message.metadata === "object" ? message.metadata : null;
+  if (metadata?.is_pruned === true) {
     return false;
   }
 
@@ -5445,6 +5454,10 @@ function estimateSummaryTriggerTokens(entries = history) {
     if (!role) {
       return total;
     }
+    const metadata = entry?.metadata && typeof entry.metadata === "object" ? entry.metadata : null;
+    if (metadata?.is_pruned === true) {
+      return total;
+    }
     if (role === "assistant" && Array.isArray(entry?.tool_calls) && entry.tool_calls.length > 0) {
       return total;
     }
@@ -5465,7 +5478,7 @@ function findLatestSummaryEntry(entries = history) {
   return null;
 }
 
-function getSummaryEligibleMessages(entries = history) {
+function getSummaryEligibleMessages(entries = history, skipFirst = getSummarySkipFirstValue(), skipLast = getSummarySkipLastValue()) {
   const candidates = (entries || [])
     .filter((entry) => isPrunableHistoryMessage(entry))
     .sort((left, right) => {
@@ -5477,8 +5490,6 @@ function getSummaryEligibleMessages(entries = history) {
       return Number(left?.id || 0) - Number(right?.id || 0);
     });
 
-  const skipFirst = getSummarySkipFirstValue();
-  const skipLast = getSummarySkipLastValue();
   if (skipFirst + skipLast >= candidates.length) {
     return [];
   }
@@ -5486,6 +5497,9 @@ function getSummaryEligibleMessages(entries = history) {
 }
 
 function parseSummaryMessageCount() {
+  if (summaryAllMessagesCheckbox?.checked === true) {
+    return null;
+  }
   const rawValue = String(summaryMessageCountInput?.value || "").trim();
   if (!rawValue) {
     return null;
@@ -5675,25 +5689,35 @@ function describeSummaryFailure(status) {
 function updateSummarySelectionUi() {
   const eligibleMessages = getSummaryEligibleMessages(history);
   const eligibleCount = eligibleMessages.length;
+  const allMessagesEligibleCount = getSummaryEligibleMessages(history, 1, 1).length;
   const skipFirst = getSummarySkipFirstValue();
   const skipLast = getSummarySkipLastValue();
   const mode = SUMMARY_MODE_LABELS[getSummaryModeValue()] || SUMMARY_MODE_LABELS.auto;
   const detailLabel = getSummaryDetailLabel(appSettings.chat_summary_detail_level || "balanced");
+  const summarizeAllMessages = summaryAllMessagesCheckbox?.checked === true;
 
   if (summaryMessageCountInput) {
     const requestedCount = parseSummaryMessageCount();
     summaryMessageCountInput.max = String(Math.max(eligibleCount, 1));
-    summaryMessageCountInput.disabled = isSummaryOperationInFlight || !currentConvId || eligibleCount === 0;
-    if (eligibleCount === 0) {
+    summaryMessageCountInput.disabled = isSummaryOperationInFlight || !currentConvId || eligibleCount === 0 || summarizeAllMessages;
+    if (eligibleCount === 0 || summarizeAllMessages) {
       summaryMessageCountInput.value = "";
     } else if (requestedCount !== null && requestedCount > eligibleCount) {
       summaryMessageCountInput.value = String(eligibleCount);
     }
   }
 
+  if (summaryAllMessagesCheckbox) {
+    summaryAllMessagesCheckbox.disabled = isSummaryOperationInFlight || !currentConvId || allMessagesEligibleCount === 0;
+  }
+
   if (summarySelectionNote) {
     if (!currentConvId) {
       summarySelectionNote.textContent = "Open a conversation to see which messages are currently eligible for summary.";
+    } else if (summarizeAllMessages) {
+      summarySelectionNote.textContent = allMessagesEligibleCount > 0
+        ? `All ${fmt(allMessagesEligibleCount)} eligible messages will be summarized. The first and last messages stay in place.`
+        : "No messages are currently eligible for summary.";
     } else if (!eligibleCount) {
       summarySelectionNote.textContent = "No messages are currently eligible after the protected first/last message window from Settings is applied.";
     } else {
@@ -6306,6 +6330,12 @@ summarySubmitBtn?.addEventListener("click", () => {
   void runConversationSummary({ triggerButton: summarySubmitBtn, closePanel: false });
 });
 summaryMessageCountInput?.addEventListener("input", updateSummarySelectionUi);
+summaryAllMessagesCheckbox?.addEventListener("change", () => {
+  if (summaryAllMessagesCheckbox.checked && summaryMessageCountInput) {
+    summaryMessageCountInput.value = "";
+  }
+  updateSummarySelectionUi();
+});
 
 window.addEventListener("resize", () => {
   updateHeaderOffset();

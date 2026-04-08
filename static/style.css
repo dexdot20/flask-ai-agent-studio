@@ -2299,6 +2299,21 @@ kbd {
   color: var(--text-secondary);
 }
 
+.summary-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.summary-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: rgb(110, 166, 255);
+}
+
 .summary-detail-select {
   display: none;
 }

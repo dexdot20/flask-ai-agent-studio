@@ -3579,6 +3579,7 @@ def register_chat_routes(app) -> None:
         data = request.get_json(silent=True) or {}
         force = _coerce_bool(data.get("force", True), default=True)
         raw_message_count = data.get("message_count")
+        summarize_all_messages = _coerce_bool(data.get("summarize_all_messages"), default=False)
         skip_first_override = data.get("skip_first")
         skip_last_override = data.get("skip_last")
         summary_focus = str(data.get("summary_focus") or "").strip()
@@ -3587,7 +3588,7 @@ def register_chat_routes(app) -> None:
             summary_detail_level = "balanced"
 
         message_count = None
-        if raw_message_count not in (None, ""):
+        if raw_message_count not in (None, "") and not summarize_all_messages:
             try:
                 message_count = max(1, min(500, int(raw_message_count)))
             except (TypeError, ValueError):
@@ -3596,6 +3597,10 @@ def register_chat_routes(app) -> None:
         settings = get_app_settings()
         effective_settings = dict(settings)
         effective_settings["chat_summary_detail_level"] = summary_detail_level
+
+        if summarize_all_messages:
+            effective_settings["summary_skip_first"] = "1"
+            effective_settings["summary_skip_last"] = "1"
 
         if skip_first_override is not None:
             try:
