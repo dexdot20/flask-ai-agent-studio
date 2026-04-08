@@ -2079,6 +2079,7 @@ def maybe_create_conversation_summary(
     bypass_mode: bool = False,
     continuation_focus: str = "",
     message_count: int | None = None,
+    summarize_all_messages: bool = False,
 ) -> dict:
     summary_lock = _get_summary_lock(conversation_id)
     if not summary_lock.acquire(blocking=False):
@@ -2170,6 +2171,16 @@ def maybe_create_conversation_summary(
                 ]
             manual_excluded_message_count = max(0, len(all_candidates) - len(manual_candidate_pool))
             manual_source_messages = manual_candidate_pool[:requested_message_count]
+        elif summarize_all_messages:
+            manual_candidate_pool = all_candidates
+            if exclude_message_ids:
+                manual_candidate_pool = [
+                    message
+                    for message in all_candidates
+                    if int(message.get("id") or 0) not in exclude_message_ids
+                ]
+            manual_excluded_message_count = max(0, len(all_candidates) - len(manual_candidate_pool))
+            manual_source_messages = list(manual_candidate_pool)
 
         summary_model = _resolve_summary_model(settings, fallback_model=fallback_model)
         attempt_token_target = base_source_token_target
@@ -3638,6 +3649,7 @@ def register_chat_routes(app) -> None:
             bypass_mode=force,
             continuation_focus=summary_focus,
             message_count=message_count,
+            summarize_all_messages=summarize_all_messages,
         )
 
         if outcome.get("applied"):

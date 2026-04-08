@@ -92,6 +92,7 @@ from db import (
     get_conversation_memory,
     get_conversation_messages,
     get_canvas_expand_max_lines,
+    get_canvas_prompt_max_tokens,
     get_canvas_prompt_max_lines,
     get_canvas_scroll_window_lines,
     get_db,
@@ -263,7 +264,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["max_parallel_tools"], 4)
         self.assertEqual(payload["clarification_max_questions"], 5)
         self.assertAlmostEqual(payload["temperature"], 0.7)
-        self.assertEqual(payload["canvas_prompt_max_lines"], 100)
+        self.assertEqual(payload["canvas_prompt_max_lines"], 250)
         self.assertEqual(payload["canvas_prompt_max_tokens"], 2000)
         self.assertEqual(payload["canvas_expand_max_lines"], 1600)
         self.assertEqual(payload["canvas_scroll_window_lines"], 200)
@@ -1489,10 +1490,12 @@ class AppRoutesTestCase(unittest.TestCase):
     def test_canvas_limit_getters_clamp_values(self):
         settings = get_app_settings()
         settings["canvas_prompt_max_lines"] = "50000"
+        settings["canvas_prompt_max_tokens"] = "60000"
         settings["canvas_expand_max_lines"] = "-1"
         settings["canvas_scroll_window_lines"] = "nope"
 
         self.assertEqual(get_canvas_prompt_max_lines(settings), 3000)
+        self.assertEqual(get_canvas_prompt_max_tokens(settings), 50000)
         self.assertEqual(get_canvas_expand_max_lines(settings), 100)
         self.assertEqual(get_canvas_scroll_window_lines(settings), 200)
 
@@ -15277,7 +15280,7 @@ class AppRoutesTestCase(unittest.TestCase):
         )
 
         with get_db() as conn:
-            for index in range(6):
+            for index in range(72):
                 conn.execute(
                     "INSERT INTO messages (conversation_id, role, content, metadata, position) VALUES (?, 'user', ?, ?, ?)",
                     (conversation_id, f"Message {index + 1}", None, index + 1),
@@ -15291,7 +15294,10 @@ class AppRoutesTestCase(unittest.TestCase):
             "errors": [],
         }
 
-        with patch("routes.chat.collect_agent_response", return_value=fake_summary), patch(
+        with patch(
+            "routes.chat._select_summary_source_messages_by_token_budget",
+            side_effect=AssertionError("all-messages mode should not use token-budgeted source selection"),
+        ), patch("routes.chat.collect_agent_response", return_value=fake_summary), patch(
             "routes.chat.sync_conversations_to_rag_safe"
         ):
             response = self.client.post(
@@ -15303,11 +15309,13 @@ class AppRoutesTestCase(unittest.TestCase):
         data = response.get_json()
         self.assertTrue(data["applied"])
         self.assertIsNone(data["requested_message_count"])
-        self.assertEqual(data["eligible_message_count"], 4)
-        self.assertEqual(data["covered_message_count"], 4)
+        self.assertEqual(data["eligible_message_count"], 70)
+        self.assertEqual(data["covered_message_count"], 70)
 
         summary_message = next(message for message in data["messages"] if message["role"] == "summary")
-        self.assertEqual(summary_message["metadata"]["covered_message_ids"], [2, 3, 4, 5])
+        self.assertEqual(summary_message["metadata"]["covered_message_count"], 70)
+        self.assertEqual(summary_message["metadata"]["covers_from_position"], 2)
+        self.assertEqual(summary_message["metadata"]["covers_to_position"], 71)
 
     def test_manual_summarize_endpoint_threads_summary_preferences_into_prompt(self):
         conversation_id = self._create_conversation()

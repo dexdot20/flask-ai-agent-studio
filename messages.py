@@ -31,7 +31,7 @@ from tool_registry import resolve_runtime_tool_names
 
 SUMMARY_LABEL = "Conversation summary (generated from deleted messages):"
 CANVAS_PROMPT_MAX_CHARS = 20_000
-CANVAS_PROMPT_MAX_LINES = 100
+CANVAS_PROMPT_MAX_LINES = 250
 CANVAS_PROMPT_MAX_TOKENS = 2_000
 CANVAS_PROMPT_CODE_LINE_MAX_CHARS = 180
 CANVAS_PROMPT_TEXT_LINE_MAX_CHARS = 100

@@ -465,12 +465,12 @@
                 <div class="settings-page-grid settings-page-grid--two">
                   <div>
                     <label class="settings-label" for="canvas-prompt-lines-input">Prompt max lines (100-3000)</label>
-                    <input type="number" class="settings-number" id="canvas-prompt-lines-input" min="100" max="3000" value="800" />
-                    <p class="settings-copy">Injected automatically into each turn for the active canvas document.</p>
+                    <input type="number" class="settings-number" id="canvas-prompt-lines-input" min="100" max="3000" value="250" />
+                    <p class="settings-copy">Injected automatically into each turn for the active canvas document. The token budget below can still clip this earlier on very long or Unicode-heavy files.</p>
                   </div>
                   <div>
-                    <label class="settings-label" for="canvas-prompt-tokens-input">Prompt token budget (500-20000)</label>
-                    <input type="number" class="settings-number" id="canvas-prompt-tokens-input" min="500" max="20000" value="2000" />
+                    <label class="settings-label" for="canvas-prompt-tokens-input">Prompt token budget (500-50000)</label>
+                    <input type="number" class="settings-number" id="canvas-prompt-tokens-input" min="500" max="50000" value="2000" />
                     <p class="settings-copy">Hard cap on canvas visible-content tokens per turn. Reduce for Unicode-heavy documents (Turkish, Arabic, CJK) that tokenise at a higher rate than ASCII.</p>
                   </div>
                   <div>

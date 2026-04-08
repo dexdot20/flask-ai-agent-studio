@@ -2751,7 +2751,7 @@ def get_canvas_prompt_max_tokens(settings: dict | None = None) -> int:
         value = int(raw_value)
     except (TypeError, ValueError):
         value = CANVAS_PROMPT_DEFAULT_MAX_TOKENS
-    return max(500, min(20_000, value))
+    return max(500, min(50_000, value))
 
 
 def get_canvas_expand_max_lines(settings: dict | None = None) -> int:

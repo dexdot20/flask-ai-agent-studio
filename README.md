@@ -411,7 +411,7 @@ The scratchpad is organized into named sections: `lessons`, `profile`, `notes`, 
 - max upload image size: 10 MB
 - document upload max size: 20 MB
 - document max extracted text: 50,000 characters
-- canvas prompt max lines: 100
+- canvas prompt max lines: 250
 - canvas prompt max tokens: 2,000
 - canvas expand max lines: 1,600
 - canvas scroll window lines: 200

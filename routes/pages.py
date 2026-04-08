@@ -971,8 +971,8 @@ def register_page_routes(app) -> None:
                 canvas_prompt_max_tokens = int(canvas_prompt_max_tokens_raw)
             except (TypeError, ValueError):
                 return jsonify({"error": "canvas_prompt_max_tokens must be an integer."}), 400
-            if not (500 <= canvas_prompt_max_tokens <= 20_000):
-                return jsonify({"error": "canvas_prompt_max_tokens must be between 500 and 20000."}), 400
+            if not (500 <= canvas_prompt_max_tokens <= 50_000):
+                return jsonify({"error": "canvas_prompt_max_tokens must be between 500 and 50000."}), 400
             settings["canvas_prompt_max_tokens"] = str(canvas_prompt_max_tokens)
 
         if canvas_expand_max_lines_raw is not None:

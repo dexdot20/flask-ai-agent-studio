@@ -2285,7 +2285,7 @@ function updateCanvasActiveDocumentDisplay(renderState) {
   const languageLabel = activeDocument.language ? ` · ${activeDocument.language}` : "";
   canvasSubtitle.textContent = `${modeLabel} · ${visibleDocuments.length}/${documents.length} files · ${detailLabel} · ${activeDocument.line_count} lines${pageLabel}${roleLabel}${languageLabel}`;
   renderCanvasMetaBar(renderState);
-  const promptLineLimit = Number(appSettings.canvas_prompt_max_lines || 100);
+  const promptLineLimit = Number(appSettings.canvas_prompt_max_lines || 250);
   const expandLineLimit = Number(appSettings.canvas_expand_max_lines || 1600);
   if (isStreamingPreviewActive) {
     const previewTool = String(activeDocument.tool || "").trim();
