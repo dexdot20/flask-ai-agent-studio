@@ -559,6 +559,13 @@ function getConversationMemorySignature(entries) {
   );
 }
 
+function syncMemoryToggleButton() {
+  if (!memoryToggleBtn) {
+    return;
+  }
+  memoryToggleBtn.setAttribute("aria-expanded", String(isMemoryPanelOpen()));
+}
+
 function setMemoryStatus(message, tone = "muted") {
   if (!memoryStatusEl) {
     return;
@@ -787,6 +794,7 @@ function openMemoryPanel(triggerEl = null) {
   memoryPanel?.classList.add("open");
   memoryOverlay?.classList.add("open");
   memoryPanel?.setAttribute("aria-hidden", "false");
+  syncMemoryToggleButton();
   lastMemoryTriggerEl = triggerEl instanceof HTMLElement
     ? triggerEl
     : (document.activeElement instanceof HTMLElement ? document.activeElement : memoryToggleBtn);
@@ -805,6 +813,7 @@ function closeMemoryPanel({ restoreFocus = true } = {}) {
   memoryPanel?.classList.remove("open");
   memoryOverlay?.classList.remove("open");
   memoryPanel?.setAttribute("aria-hidden", "true");
+  syncMemoryToggleButton();
   if (restoreFocus && lastMemoryTriggerEl && typeof lastMemoryTriggerEl.focus === "function") {
     lastMemoryTriggerEl.focus();
   }
