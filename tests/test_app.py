@@ -15865,6 +15865,49 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(summary_message["metadata"]["covered_message_count"], 68)
         self.assertEqual(summary_message["metadata"]["covers_from_position"], 3)
         self.assertEqual(summary_message["metadata"]["covers_to_position"], 70)
+        self.assertTrue(summary_message["metadata"].get("covered_ids_truncated"))
+
+    def test_manual_summarize_preview_endpoint_returns_selected_candidates_without_writing(self):
+        conversation_id = self._create_conversation()
+        save_app_settings(
+            {
+                "user_preferences": "",
+                "max_steps": "1",
+                "active_tools": "[]",
+                "rag_auto_inject": "false",
+                "chat_summary_mode": "never",
+                "chat_summary_trigger_token_count": "1000",
+                "summary_skip_first": "1",
+                "summary_skip_last": "1",
+            }
+        )
+
+        with get_db() as conn:
+            for index in range(6):
+                conn.execute(
+                    "INSERT INTO messages (conversation_id, role, content, metadata, position) VALUES (?, 'user', ?, ?, ?)",
+                    (conversation_id, f"Message {index + 1}", None, index + 1),
+                )
+
+        with patch("routes.chat.collect_agent_response") as mocked_collect:
+            response = self.client.post(
+                f"/api/conversations/{conversation_id}/summarize/preview",
+                json={"force": True, "message_count": 2},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data["preview"])
+        self.assertFalse(data["applied"])
+        self.assertEqual(data["reason"], "preview")
+        self.assertEqual(data["candidate_message_count"], 2)
+        self.assertEqual(data["eligible_message_count"], 4)
+        self.assertEqual(data["requested_message_count"], 2)
+        self.assertGreater(data["estimated_source_tokens"], 0)
+        self.assertGreater(data["estimated_prompt_tokens"], 0)
+        self.assertEqual(data["prompt_message_count"], 2)
+        self.assertEqual([entry["id"] for entry in data["messages_preview"]], [2, 3])
+        mocked_collect.assert_not_called()
 
     def test_manual_summarize_endpoint_threads_summary_preferences_into_prompt(self):
         conversation_id = self._create_conversation()
@@ -16047,6 +16090,25 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertGreater(
             count_visible_message_tokens(injected_messages),
             count_visible_message_tokens(baseline_messages),
+        )
+
+    def test_visible_token_count_can_exclude_context_injection_metadata(self):
+        baseline_messages = [
+            {"role": "user", "content": "Visible user text"},
+            {"role": "assistant", "content": "Visible assistant text"},
+        ]
+        injected_messages = [
+            {
+                "role": "user",
+                "content": "Visible user text",
+                "metadata": {"context_injection": "## Tool Memory\nSaved result context for this turn."},
+            },
+            {"role": "assistant", "content": "Visible assistant text"},
+        ]
+
+        self.assertEqual(
+            count_visible_message_tokens(injected_messages, include_context_injections=False),
+            count_visible_message_tokens(baseline_messages, include_context_injections=False),
         )
 
     def test_budgeted_prompt_messages_use_separate_tool_trace_budget(self):

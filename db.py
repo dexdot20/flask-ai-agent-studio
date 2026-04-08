@@ -2201,6 +2201,8 @@ def serialize_message_metadata(metadata: dict | None) -> str | None:
         cleaned["pruned_original"] = pruned_original[:CONTENT_MAX_CHARS]
     if metadata.get("is_summary") is True:
         cleaned["is_summary"] = True
+    if metadata.get("covered_ids_truncated") is True:
+        cleaned["covered_ids_truncated"] = True
     if summary_source:
         cleaned["summary_source"] = summary_source[:120]
     if generated_at:
@@ -3379,7 +3381,7 @@ def is_renderable_chat_message(message: dict) -> bool:
     return role in VISIBLE_CHAT_ROLES
 
 
-def count_visible_message_tokens(messages: list[dict]) -> int:
+def count_visible_message_tokens(messages: list[dict], include_context_injections: bool = True) -> int:
     total = 0
     for message in messages:
         if not isinstance(message, dict):
@@ -3392,6 +3394,8 @@ def count_visible_message_tokens(messages: list[dict]) -> int:
         if role not in {"user", "assistant", "tool", "summary"}:
             continue
         total += estimate_text_tokens(str(message.get("content") or ""))
+        if not include_context_injections:
+            continue
         metadata = parse_message_metadata(message.get("metadata"))
         context_injection = str(metadata.get("context_injection") or "").strip()
         if context_injection:

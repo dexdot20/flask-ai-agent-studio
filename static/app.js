@@ -143,11 +143,15 @@ const summaryAllMessagesCheckbox = document.getElementById("summary-all-messages
 const summarySelectionNote = document.getElementById("summary-selection-note");
 const summarySettingsNote = document.getElementById("summary-settings-note");
 const summarySubmitBtn = document.getElementById("summary-submit-btn");
+const summaryPreviewBtn = document.getElementById("summary-preview-btn");
 const summaryProgress = document.getElementById("summary-progress");
 const summaryProgressLabel = document.getElementById("summary-progress-label");
 const summaryProgressValue = document.getElementById("summary-progress-value");
 const summaryProgressBar = document.getElementById("summary-progress-bar");
 const summaryProgressTrack = summaryProgress?.querySelector(".summary-progress__track") || null;
+const summaryPreviewCard = document.getElementById("summary-preview-card");
+const summaryPreviewMeta = document.getElementById("summary-preview-meta");
+const summaryPreviewList = document.getElementById("summary-preview-list");
 const summaryHistoryList = document.getElementById("summary-history-list");
 const mobileSummaryBtn = document.getElementById("mobile-summary-btn");
 const conversationExportMdBtn = document.getElementById("conversation-export-md-btn");
@@ -390,6 +394,9 @@ function setSummaryBusyState(isBusy) {
   if (summarySubmitBtn) {
     summarySubmitBtn.disabled = isSummaryOperationInFlight;
   }
+  if (summaryPreviewBtn) {
+    summaryPreviewBtn.disabled = isSummaryOperationInFlight;
+  }
   if (summaryNowBtn) {
     summaryNowBtn.disabled = isSummaryOperationInFlight || !currentConvId;
   }
@@ -405,6 +412,90 @@ function setSummaryBusyState(isBusy) {
   if (summaryMessageCountInput) {
     summaryMessageCountInput.disabled = isSummaryOperationInFlight || !currentConvId;
   }
+}
+
+function buildSummaryRequestBody() {
+  const requestedMessageCount = parseSummaryMessageCount();
+  const requestBody = {
+    force: true,
+    summary_focus: String(summaryFocusInput?.value || "").trim(),
+    summary_detail_level: String(summaryDetailSelect?.value || "balanced").trim(),
+  };
+  if (summaryAllMessagesCheckbox?.checked === true) {
+    requestBody.summarize_all_messages = true;
+  }
+  if (requestedMessageCount !== null) {
+    requestBody.message_count = requestedMessageCount;
+  }
+  return requestBody;
+}
+
+function resetSummaryPreview({ hide = true } = {}) {
+  if (summaryPreviewMeta) {
+    summaryPreviewMeta.textContent = "Run preview to inspect which messages will be summarized before applying changes.";
+  }
+  if (summaryPreviewList) {
+    summaryPreviewList.innerHTML = "";
+  }
+  if (summaryPreviewCard) {
+    summaryPreviewCard.hidden = hide;
+  }
+  if (hide) {
+    summaryPreviewConversationId = null;
+  }
+}
+
+function renderSummaryPreview(data) {
+  if (!summaryPreviewCard || !summaryPreviewMeta || !summaryPreviewList) {
+    return;
+  }
+
+  const previewRows = Array.isArray(data?.messages_preview) ? data.messages_preview : [];
+  const candidateCount = Number(data?.candidate_message_count || 0);
+  const sourceTokens = Number(data?.estimated_source_tokens || 0);
+  const promptTokens = Number(data?.estimated_prompt_tokens || 0);
+  const sourceKind = SUMMARY_SOURCE_LABELS[String(data?.source_kind || "").trim()] || "Conversation history";
+  const detailLevel = getSummaryDetailLabel(data?.detail_level || summaryDetailSelect?.value || "balanced");
+
+  summaryPreviewConversationId = currentConvId;
+  summaryPreviewCard.hidden = false;
+  summaryPreviewMeta.textContent =
+    `${fmt(candidateCount)} selected • ${fmt(sourceTokens)} source tokens • ${fmt(promptTokens)} prompt tokens • ${sourceKind} • ${detailLevel}`;
+
+  if (!previewRows.length) {
+    summaryPreviewList.innerHTML = '<div class="summary-preview-empty">No messages are currently eligible for summary with the current options.</div>';
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  previewRows.forEach((entry) => {
+    const article = document.createElement("article");
+    article.className = "summary-preview-item";
+
+    const header = document.createElement("div");
+    header.className = "summary-preview-item__header";
+
+    const roleText = String(entry?.role || "message").trim().toUpperCase();
+    const position = Number(entry?.position || 0);
+    const title = document.createElement("span");
+    title.className = "summary-preview-item__title";
+    title.textContent = position > 0 ? `${roleText} #${position}` : roleText;
+
+    const tokenChip = document.createElement("span");
+    tokenChip.className = "summary-preview-item__chip";
+    tokenChip.textContent = `${fmt(Number(entry?.token_estimate || 0))} tok`;
+
+    header.append(title, tokenChip);
+
+    const content = document.createElement("p");
+    content.className = "summary-preview-item__content";
+    content.textContent = String(entry?.content_preview || "").trim() || "(empty)";
+
+    article.append(header, content);
+    fragment.appendChild(article);
+  });
+
+  summaryPreviewList.replaceChildren(fragment);
 }
 
 async function refreshSummarySettingsFromServer() {
@@ -503,6 +594,7 @@ let latestSummaryStatus = null;
 let isSummaryOperationInFlight = false;
 let summaryProgressTimer = 0;
 let summaryProgressCurrentValue = 0;
+let summaryPreviewConversationId = null;
 let conversationRefreshGeneration = 0;
 let pendingConversationRefreshTimers = new Set();
 let lastConversationSignature = "";
@@ -3794,6 +3886,9 @@ function openSummaryPanel(triggerEl = null) {
   if (!isSummaryOperationInFlight) {
     resetSummaryProgress({ hide: true });
   }
+  if (summaryPreviewConversationId !== currentConvId) {
+    resetSummaryPreview({ hide: true });
+  }
   renderSummaryInspector();
   setSummaryBusyState(isSummaryOperationInFlight);
   void refreshSummarySettingsFromServer();
@@ -3817,20 +3912,8 @@ async function runConversationSummary({ triggerButton = null, closePanel = false
     return;
   }
 
-  const requestedMessageCount = parseSummaryMessageCount();
   const originalButtonText = triggerButton ? triggerButton.textContent : "";
-
-  const requestBody = {
-    force: true,
-    summary_focus: String(summaryFocusInput?.value || "").trim(),
-    summary_detail_level: String(summaryDetailSelect?.value || "balanced").trim(),
-  };
-  if (summaryAllMessagesCheckbox?.checked === true) {
-    requestBody.summarize_all_messages = true;
-  }
-  if (requestedMessageCount !== null) {
-    requestBody.message_count = requestedMessageCount;
-  }
+  const requestBody = buildSummaryRequestBody();
 
   setSummaryBusyState(true);
   startSummaryProgress("Selecting messages…");
@@ -3855,6 +3938,7 @@ async function runConversationSummary({ triggerButton = null, closePanel = false
         rebuildTokenStatsFromHistory();
         renderConversationHistory();
       }
+      resetSummaryPreview({ hide: true });
       const coveredCount = Number(data.covered_message_count || 0);
       finishSummaryProgress(
         coveredCount > 0
@@ -3887,6 +3971,58 @@ async function runConversationSummary({ triggerButton = null, closePanel = false
       }
     }
     renderSummaryInspector();
+  }
+}
+
+async function previewConversationSummary({ triggerButton = null } = {}) {
+  if (!currentConvId) {
+    showToast("No active conversation to preview.", "warning");
+    return;
+  }
+
+  const originalButtonText = triggerButton ? triggerButton.textContent : "";
+  const requestBody = buildSummaryRequestBody();
+
+  setSummaryBusyState(true);
+  startSummaryProgress("Preparing preview…");
+  if (triggerButton) {
+    triggerButton.disabled = true;
+    triggerButton.textContent = "Previewing…";
+  }
+
+  try {
+    const response = await fetch(`/api/conversations/${currentConvId}/summarize/preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "Failed to preview summary.");
+    }
+
+    if (data.preview && data.reason === "preview") {
+      renderSummaryPreview(data);
+      finishSummaryProgress("Preview ready.");
+      showToast("Summary preview updated.", "success");
+      return;
+    }
+
+    resetSummaryPreview({ hide: false });
+    if (summaryPreviewList) {
+      summaryPreviewList.innerHTML = `<div class="summary-preview-empty">${escHtml(String(data.failure_detail || data.reason || "No preview data available."))}</div>`;
+    }
+    failSummaryProgress(data.failure_detail || data.reason || "Preview was not available.");
+    showToast(data.failure_detail || data.reason || "Preview was not available.", "warning");
+  } catch (error) {
+    failSummaryProgress(error.message || "Failed to preview summary.");
+    showToast(error.message || "Failed to preview summary.", "error");
+  } finally {
+    setSummaryBusyState(false);
+    if (triggerButton) {
+      triggerButton.disabled = false;
+      triggerButton.textContent = originalButtonText || "Preview Selection";
+    }
   }
 }
 
@@ -6665,6 +6801,7 @@ async function undoConversationSummary(summaryId, { triggerButton = null } = {})
       rebuildTokenStatsFromHistory();
       renderConversationHistory();
     }
+    resetSummaryPreview({ hide: true });
 
     latestSummaryStatus = {
       applied: false,
@@ -6763,7 +6900,7 @@ function renderSummaryInspector() {
   summaryInspectorGap.textContent = overBy > 0 ? `${fmt(overBy)} over` : `${fmt(remaining)} left`;
 
   const detailParts = [
-    "Counts user, assistant, tool, and summary history toward the summary trigger, while ignoring assistant tool-call placeholders.",
+    "Counts user, assistant, tool, and summary history toward the summary trigger, while ignoring assistant tool-call placeholders and stored context-injection metadata.",
     "Does not count runtime system prompt, RAG context, or final-answer instructions.",
   ];
   if (latestServerCheck > 0) {
@@ -6837,6 +6974,12 @@ function renderSummaryInspector() {
     summaryNowBtn.title = currentConvId
       ? "Run a manual summary using the current panel settings."
       : "Open a conversation before running a summary.";
+  }
+  if (summaryPreviewBtn) {
+    summaryPreviewBtn.disabled = isSummaryOperationInFlight || !currentConvId;
+    summaryPreviewBtn.title = currentConvId
+      ? "Preview which messages will be summarized without applying changes."
+      : "Open a conversation before running a preview.";
   }
   updateSummarySelectionUi();
   renderSummaryHistoryList();
@@ -7269,6 +7412,9 @@ memoryClose?.addEventListener("click", closeMemoryPanel);
 memoryOverlay?.addEventListener("click", closeMemoryPanel);
 summarySubmitBtn?.addEventListener("click", () => {
   void runConversationSummary({ triggerButton: summarySubmitBtn, closePanel: false });
+});
+summaryPreviewBtn?.addEventListener("click", () => {
+  void previewConversationSummary({ triggerButton: summaryPreviewBtn });
 });
 summaryMessageCountInput?.addEventListener("input", updateSummarySelectionUi);
 summaryAllMessagesCheckbox?.addEventListener("change", () => {
@@ -9595,6 +9741,30 @@ function createMessageGroup(role, text, metadata = null, options = {}) {
   label.textContent = role === "user" ? "You" : role === "summary" ? "Summary" : "Assistant";
 
   labelGroup.appendChild(label);
+  if (role === "summary" && normalizedMetadata?.is_summary) {
+    const coveredCount = Number(normalizedMetadata.covered_message_count || 0);
+    const generatedAt = formatSummaryTimestamp(normalizedMetadata.generated_at);
+    const sourceLabel = SUMMARY_SOURCE_LABELS[String(normalizedMetadata.summary_source || "").trim()] || "Conversation history";
+    const formatLabel = String(normalizedMetadata.summary_format || "").trim() === "structured_json"
+      ? "Structured"
+      : "Plain text";
+    const summaryMetaParts = [];
+    if (coveredCount > 0) {
+      summaryMetaParts.push(`${coveredCount} msgs`);
+    }
+    summaryMetaParts.push(sourceLabel);
+    summaryMetaParts.push(formatLabel);
+    if (generatedAt && generatedAt !== "—") {
+      summaryMetaParts.push(generatedAt);
+    }
+    if (normalizedMetadata.covered_ids_truncated === true) {
+      summaryMetaParts.push("ID list truncated");
+    }
+    const summaryMeta = document.createElement("span");
+    summaryMeta.className = "summary-inline-meta";
+    summaryMeta.textContent = summaryMetaParts.join(" • ");
+    labelGroup.appendChild(summaryMeta);
+  }
   if (normalizedMetadata?.is_pruned === true) {
     const prunedBadge = document.createElement("span");
     prunedBadge.className = "pruned-badge";
@@ -9603,6 +9773,31 @@ function createMessageGroup(role, text, metadata = null, options = {}) {
   }
 
   metaRow.appendChild(labelGroup);
+
+  let summaryToggleButton = null;
+  let summaryUndoButton = null;
+  if (role === "summary" && normalizedMetadata?.is_summary) {
+    const summaryActions = document.createElement("div");
+    summaryActions.className = "msg-actions";
+
+    summaryToggleButton = document.createElement("button");
+    summaryToggleButton.type = "button";
+    summaryToggleButton.className = "msg-action-btn msg-action-btn--with-label";
+    summaryToggleButton.textContent = "Show summary";
+
+    summaryUndoButton = document.createElement("button");
+    summaryUndoButton.type = "button";
+    summaryUndoButton.className = "msg-action-btn msg-action-btn--with-label";
+    summaryUndoButton.textContent = "Undo";
+    const canUndoSummary = Number.isInteger(Number(options.messageId)) && Number(options.messageId) > 0 && Boolean(currentConvId);
+    summaryUndoButton.disabled = isSummaryOperationInFlight || !canUndoSummary;
+    summaryUndoButton.addEventListener("click", () => {
+      void undoConversationSummary(Number(options.messageId || 0), { triggerButton: summaryUndoButton });
+    });
+
+    summaryActions.append(summaryToggleButton, summaryUndoButton);
+    metaRow.appendChild(summaryActions);
+  }
 
   const bubble = document.createElement("div");
   bubble.className = "bubble";
@@ -9645,7 +9840,29 @@ function createMessageGroup(role, text, metadata = null, options = {}) {
       bubble.textContent = displayText;
     }
     if (displayText) {
+      if (role === "summary") {
+        bubble.classList.add("summary-inline-body");
+        bubble.hidden = true;
+      }
       group.appendChild(bubble);
+    }
+  }
+
+  if (summaryToggleButton) {
+    const canToggleSummary = Boolean(displayText);
+    summaryToggleButton.disabled = !canToggleSummary;
+    const syncSummaryToggleLabel = () => {
+      summaryToggleButton.textContent = bubble.hidden ? "Show summary" : "Hide summary";
+    };
+    syncSummaryToggleLabel();
+    if (canToggleSummary) {
+      summaryToggleButton.addEventListener("click", () => {
+        bubble.hidden = !bubble.hidden;
+        syncSummaryToggleLabel();
+        if (!bubble.hidden) {
+          scrollToBottom();
+        }
+      });
     }
   }
 
@@ -9954,7 +10171,13 @@ async function sendMessage(options = {}) {
     }
 
     await streamNdjsonResponse(response, (event) => {
-      if (event.type === "step_started") {
+      if (event.type === "status" && event.status === "compacting") {
+        const compactingMessage = String(event.message || "Compacting conversation...").trim() || "Compacting conversation...";
+        asstBubble.classList.add("thinking");
+        asstBubble.classList.add("cursor");
+        asstBubble.textContent = compactingMessage;
+        scrollToBottom();
+      } else if (event.type === "step_started") {
         latestStepInfo = {
           step: event.step || latestStepInfo.step,
           maxSteps: event.max_steps || latestStepInfo.maxSteps,

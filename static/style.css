@@ -574,6 +574,19 @@ body.sidebar-collapsed .chat-area {
   text-transform: uppercase;
 }
 
+.summary-inline-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.67rem;
+  line-height: 1.2;
+  color: var(--text-secondary);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .assistant-context-badge {
   display: inline-flex;
   align-items: center;
@@ -809,6 +822,12 @@ body.sidebar-collapsed .chat-area {
   border: 1px dashed rgba(79, 110, 247, 0.28);
   border-bottom-left-radius: 5px;
   white-space: normal;
+}
+
+.msg-group.summary .summary-inline-body {
+  margin-top: 2px;
+  border-style: solid;
+  box-shadow: 0 8px 22px rgba(24, 38, 76, 0.18);
 }
 
 .reasoning-panel {
@@ -2495,6 +2514,70 @@ kbd {
 .summary-panel__actions {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.summary-preview {
+  gap: 10px;
+}
+
+.summary-preview-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.summary-preview-empty {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.summary-preview-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.summary-preview-item__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.summary-preview-item__title {
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.summary-preview-item__chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(110, 166, 255, 0.25);
+  background: rgba(110, 166, 255, 0.09);
+  color: var(--text-primary);
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.summary-preview-item__content {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.55;
+  color: var(--text-primary);
 }
 
 .summary-progress {

@@ -182,6 +182,16 @@
       </div>
     </section>
 
+    <section id="summary-preview-card" class="summary-card summary-preview" hidden>
+      <div class="summary-card__header">
+        <div>
+          <span>Preview selection</span>
+          <p id="summary-preview-meta">Run preview to inspect which messages will be summarized before applying changes.</p>
+        </div>
+      </div>
+      <div id="summary-preview-list" class="summary-preview-list"></div>
+    </section>
+
     <section class="summary-card summary-history">
       <div class="summary-card__header">
         <div>
@@ -193,6 +203,7 @@
     </section>
   </div>
   <div class="summary-panel__actions">
+    <button class="btn-ghost" id="summary-preview-btn" type="button">Preview Selection</button>
     <button class="btn-primary" id="summary-submit-btn" type="button">Apply Summary</button>
   </div>
 </div>

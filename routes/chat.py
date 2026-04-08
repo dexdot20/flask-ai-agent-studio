@@ -979,11 +979,14 @@ def _build_summary_prompt_payload(
         "You are compressing earlier conversation history for later reuse. "
         "Analyze the dominant language of the conversation and write the summary in that language.\n\n"
         "Capture these sections: User Goals & Intentions, Key Facts & Information, Decisions & Agreements, Unresolved Questions & Open Issues, Important Context, and Important Tool Findings.\n"
-        "Return JSON with these keys: facts, decisions, open_issues, entities, tool_outcomes.\n"
+        "Return ONLY a valid raw JSON object with exactly these keys: facts, decisions, open_issues, entities, tool_outcomes.\n"
+        "All five keys are required. Use [] for keys with no items.\n"
         "Each key must contain an array of short strings in the conversation language.\n"
+        "Per-key limits: facts<=10, decisions<=8, open_issues<=8, entities<=14, tool_outcomes<=10.\n"
         "Include sufficient detail to let a future assistant continue accurately, but keep the output compact and continuation-oriented.\n"
         "Keep only continuation-critical information. Remove filler, repetition, and low-value chatter.\n"
         f"Keep the JSON compact, with at most {SUMMARY_MAX_BULLETS} total bullet-like items across all arrays and under {SUMMARY_MAX_OUTPUT_CHARS} characters when serialized. "
+        "The first character of the response must be '{' and the last character must be '}'. "
         "Do not use markdown headings, code fences, explanations, or extra keys.\n"
         "Do not mention tool internals unless they materially affect future replies.\n"
         "You MUST NOT call any tools or functions. Return only valid JSON."
@@ -2094,7 +2097,10 @@ def _maybe_run_preflight_summary(
     exclude_message_ids: set[int] | None = None,
 ) -> dict | None:
     canonical_messages = get_conversation_messages(conversation_id)
-    visible_token_count = count_visible_message_tokens(canonical_messages)
+    visible_token_count = count_visible_message_tokens(
+        canonical_messages,
+        include_context_injections=False,
+    )
     preflight_trigger = get_prompt_preflight_summary_token_count(settings)
     if visible_token_count < preflight_trigger:
         return None
@@ -2114,7 +2120,10 @@ def _maybe_run_preflight_summary(
         if not outcome.get("applied"):
             break
         canonical_messages = outcome.get("messages") or get_conversation_messages(conversation_id)
-        visible_token_count = count_visible_message_tokens(canonical_messages)
+        visible_token_count = count_visible_message_tokens(
+            canonical_messages,
+            include_context_injections=False,
+        )
         if visible_token_count < preflight_trigger:
             break
     return last_outcome
@@ -2168,6 +2177,91 @@ def _coerce_bool(value, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _build_summary_preview_entries(source_messages: list[dict], limit: int = 80) -> list[dict]:
+    previews = []
+    ordered_messages = sorted(
+        (message for message in source_messages if isinstance(message, dict)),
+        key=lambda message: (int(message.get("position") or 0), int(message.get("id") or 0)),
+    )
+    for message in ordered_messages:
+        role = str(message.get("role") or "").strip()
+        if role not in {"user", "assistant", "summary"}:
+            continue
+        content = re.sub(r"\s+", " ", str(message.get("content") or "")).strip()
+        if not content:
+            continue
+        previews.append(
+            {
+                "id": int(message.get("id") or 0),
+                "position": int(message.get("position") or 0),
+                "role": role,
+                "content_preview": content[:280],
+                "token_estimate": estimate_text_tokens(content),
+            }
+        )
+        if len(previews) >= max(1, limit):
+            break
+    return previews
+
+
+def _parse_manual_summary_request_options(data: dict, settings: dict) -> tuple[dict | None, tuple[str, int] | None]:
+    force = _coerce_bool(data.get("force", True), default=True)
+    raw_message_count = data.get("message_count")
+    summarize_all_messages = _coerce_bool(data.get("summarize_all_messages"), default=False)
+    skip_first_override = data.get("skip_first")
+    skip_last_override = data.get("skip_last")
+    summary_focus = str(data.get("summary_focus") or "").strip()
+    summary_detail_level = str(
+        data.get("summary_detail_level") or settings.get("chat_summary_detail_level") or "comprehensive"
+    ).strip().lower()
+    if summary_detail_level not in {"very_concise", "concise", "balanced", "detailed", "comprehensive"}:
+        summary_detail_level = str(settings.get("chat_summary_detail_level") or "comprehensive").strip().lower()
+        if summary_detail_level not in {"very_concise", "concise", "balanced", "detailed", "comprehensive"}:
+            summary_detail_level = "comprehensive"
+
+    message_count = None
+    if raw_message_count not in (None, "") and not summarize_all_messages:
+        try:
+            message_count = max(1, min(500, int(raw_message_count)))
+        except (TypeError, ValueError):
+            return None, ("message_count must be an integer between 1 and 500.", 400)
+
+    effective_settings = dict(settings)
+    effective_settings["chat_summary_detail_level"] = summary_detail_level
+
+    if skip_first_override is not None:
+        try:
+            effective_settings["summary_skip_first"] = str(max(0, min(20, int(skip_first_override))))
+        except (TypeError, ValueError):
+            pass
+    if skip_last_override is not None:
+        try:
+            effective_settings["summary_skip_last"] = str(max(0, min(20, int(skip_last_override))))
+        except (TypeError, ValueError):
+            pass
+
+    exclude_ids = set()
+    raw_exclude = data.get("exclude_message_ids")
+    if isinstance(raw_exclude, list):
+        for raw_id in raw_exclude:
+            try:
+                exclude_ids.add(int(raw_id))
+            except (TypeError, ValueError):
+                continue
+
+    return {
+        "force": force,
+        "message_count": message_count,
+        "summarize_all_messages": summarize_all_messages,
+        "summary_focus": summary_focus,
+        "effective_settings": effective_settings,
+        "exclude_ids": exclude_ids,
+        "fetch_url_token_threshold": get_fetch_url_token_threshold(effective_settings),
+        "fetch_url_clip_aggressiveness": get_fetch_url_clip_aggressiveness(effective_settings),
+        "model": normalize_model_id(data.get("model"), default=get_default_chat_model_id(effective_settings)),
+    }, None
+
+
 def maybe_create_conversation_summary(
     conversation_id: int,
     fallback_model: str,
@@ -2180,22 +2274,29 @@ def maybe_create_conversation_summary(
     continuation_focus: str = "",
     message_count: int | None = None,
     summarize_all_messages: bool = False,
+    dry_run: bool = False,
 ) -> dict:
     summary_lock = _get_summary_lock(conversation_id)
-    if not summary_lock.acquire(blocking=False):
-        return {
-            "applied": False,
-            "locked": True,
-            "reason": "locked",
-            "failure_stage": "locked",
-            "failure_detail": "A summary pass is already running for this conversation.",
-        }
+    acquired_summary_lock = False
+    if not dry_run:
+        acquired_summary_lock = summary_lock.acquire(blocking=False)
+        if not acquired_summary_lock:
+            return {
+                "applied": False,
+                "locked": True,
+                "reason": "locked",
+                "failure_stage": "locked",
+                "failure_detail": "A summary pass is already running for this conversation.",
+            }
 
     try:
         summary_mode = get_chat_summary_mode(settings)
         summary_detail_level = get_chat_summary_detail_level(settings)
         canonical_messages = get_conversation_messages(conversation_id)
-        visible_token_count = count_visible_message_tokens(canonical_messages)
+        visible_token_count = count_visible_message_tokens(
+            canonical_messages,
+            include_context_injections=False,
+        )
         trigger_token_count = _get_effective_summary_trigger_token_count(settings)
         checked_at = datetime.now().astimezone().isoformat(timespec="seconds")
         token_breakdown = _get_summary_token_breakdown(canonical_messages)
@@ -2223,6 +2324,7 @@ def maybe_create_conversation_summary(
                 "used_max_steps": 1,
                 "requested_message_count": requested_message_count,
                 "eligible_message_count": eligible_message_count,
+                "summary_detail_level": summary_detail_level,
                 **token_breakdown,
                 **extra,
             }
@@ -2352,6 +2454,24 @@ def maybe_create_conversation_summary(
                     **prompt_stats,
                 )
 
+            if dry_run:
+                return build_outcome(
+                    applied=False,
+                    dry_run=True,
+                    reason="preview",
+                    summary_model=summary_model,
+                    source_kind=summary_source_kind,
+                    candidate_message_count=candidate_message_count,
+                    excluded_message_count=excluded_message_count,
+                    estimated_source_tokens=count_visible_message_tokens(
+                        summary_source_messages,
+                        include_context_injections=False,
+                    ),
+                    estimated_prompt_tokens=_estimate_prompt_tokens(prompt_messages),
+                    messages_preview=_build_summary_preview_entries(source_messages),
+                    **prompt_stats,
+                )
+
             result = collect_agent_response(
                 prompt_messages,
                 summary_model,
@@ -2366,6 +2486,41 @@ def maybe_create_conversation_summary(
             structured_summary = _parse_structured_summary_payload(summary_text)
             summary_validation_text = build_summary_content(summary_text, structured_summary)
             is_error_text = summary_text.startswith(FINAL_ANSWER_ERROR_TEXT) or summary_text.startswith(FINAL_ANSWER_MISSING_TEXT)
+
+            if (
+                structured_summary is None
+                and not summary_errors
+                and not is_error_text
+                and len(summary_text) >= SUMMARY_MIN_TEXT_LENGTH
+            ):
+                reformat_result = collect_agent_response(
+                    [
+                        *prompt_messages,
+                        {
+                            "role": "user",
+                            "content": (
+                                "Reformat your previous response as strict JSON only. Return ONLY a valid raw JSON object "
+                                "with exactly these keys: facts, decisions, open_issues, entities, tool_outcomes. "
+                                "Each key must contain an array (use [] when empty). "
+                                "No markdown, no code fences, no commentary."
+                            ),
+                        },
+                    ],
+                    summary_model,
+                    1,
+                    [],
+                    temperature=0.0,
+                    fetch_url_token_threshold=fetch_url_token_threshold,
+                    fetch_url_clip_aggressiveness=fetch_url_clip_aggressiveness,
+                )
+                reformatted_summary_text = (reformat_result.get("content") or "").strip()
+                if reformatted_summary_text:
+                    summary_text = reformatted_summary_text
+                summary_errors = reformat_result.get("errors") or []
+                structured_summary = _parse_structured_summary_payload(summary_text)
+                summary_validation_text = build_summary_content(summary_text, structured_summary)
+                is_error_text = summary_text.startswith(FINAL_ANSWER_ERROR_TEXT) or summary_text.startswith(FINAL_ANSWER_MISSING_TEXT)
+
             if len(summary_validation_text) >= SUMMARY_MIN_TEXT_LENGTH and not summary_errors and not is_error_text:
                 break
 
@@ -2424,6 +2579,15 @@ def maybe_create_conversation_summary(
         covered_message_ids = list(
             dict.fromkeys([*covered_visible_message_ids, *covered_tool_call_message_ids, *covered_tool_message_ids])
         )
+        covered_ids_truncated = any(
+            len(values) > 64
+            for values in (
+                covered_message_ids,
+                covered_visible_message_ids,
+                covered_tool_call_message_ids,
+                covered_tool_message_ids,
+            )
+        )
         if not covered_message_ids:
             return build_outcome(
                 applied=False,
@@ -2461,6 +2625,7 @@ def maybe_create_conversation_summary(
                 "covered_visible_message_ids": covered_visible_message_ids,
                 "covered_tool_call_message_ids": covered_tool_call_message_ids,
                 "covered_tool_message_ids": covered_tool_message_ids,
+                "covered_ids_truncated": covered_ids_truncated,
                 "trigger_token_count": trigger_token_count,
                 "visible_token_count": visible_token_count,
                 "summary_mode": summary_mode,
@@ -2520,7 +2685,8 @@ def maybe_create_conversation_summary(
             **prompt_stats,
         }
     finally:
-        summary_lock.release()
+        if acquired_summary_lock:
+            summary_lock.release()
 
 
 def _run_chat_post_response_tasks(
@@ -3130,7 +3296,15 @@ def register_chat_routes(app) -> None:
             canonical_messages = get_conversation_messages(conv_id)
 
         preflight_summary_outcome = None
+        preflight_summary_required = False
         if conv_id and persisted_user_message_id is not None:
+            preflight_visible_token_count = count_visible_message_tokens(
+                canonical_messages,
+                include_context_injections=False,
+            )
+            preflight_summary_required = (
+                preflight_visible_token_count >= get_prompt_preflight_summary_token_count(settings)
+            )
             preflight_summary_outcome = _maybe_run_preflight_summary(
                 conv_id,
                 model,
@@ -3318,6 +3492,16 @@ def register_chat_routes(app) -> None:
 
             for video_event in video_events:
                 yield json.dumps(video_event, ensure_ascii=False) + "\n"
+
+            if preflight_summary_required:
+                yield json.dumps(
+                    {
+                        "type": "status",
+                        "status": "compacting",
+                        "message": "Compacting conversation...",
+                    },
+                    ensure_ascii=False,
+                ) + "\n"
 
             if preflight_summary_outcome and preflight_summary_outcome.get("applied"):
                 yield json.dumps(
@@ -3764,68 +3948,25 @@ def register_chat_routes(app) -> None:
                 return jsonify({"error": "Not found."}), 404
 
         data = request.get_json(silent=True) or {}
-        force = _coerce_bool(data.get("force", True), default=True)
-        raw_message_count = data.get("message_count")
-        summarize_all_messages = _coerce_bool(data.get("summarize_all_messages"), default=False)
-        skip_first_override = data.get("skip_first")
-        skip_last_override = data.get("skip_last")
-        summary_focus = str(data.get("summary_focus") or "").strip()
         settings = get_app_settings()
-        summary_detail_level = str(
-            data.get("summary_detail_level") or settings.get("chat_summary_detail_level") or "comprehensive"
-        ).strip().lower()
-        if summary_detail_level not in {"very_concise", "concise", "balanced", "detailed", "comprehensive"}:
-            summary_detail_level = str(settings.get("chat_summary_detail_level") or "comprehensive").strip().lower()
-            if summary_detail_level not in {"very_concise", "concise", "balanced", "detailed", "comprehensive"}:
-                summary_detail_level = "comprehensive"
+        parsed_options, parse_error = _parse_manual_summary_request_options(data, settings)
+        if parse_error:
+            return jsonify({"error": parse_error[0]}), parse_error[1]
 
-        message_count = None
-        if raw_message_count not in (None, "") and not summarize_all_messages:
-            try:
-                message_count = max(1, min(500, int(raw_message_count)))
-            except (TypeError, ValueError):
-                return jsonify({"error": "message_count must be an integer between 1 and 500."}), 400
-
-        effective_settings = dict(settings)
-        effective_settings["chat_summary_detail_level"] = summary_detail_level
-
-        if skip_first_override is not None:
-            try:
-                effective_settings["summary_skip_first"] = str(max(0, min(20, int(skip_first_override))))
-            except (TypeError, ValueError):
-                pass
-        if skip_last_override is not None:
-            try:
-                effective_settings["summary_skip_last"] = str(max(0, min(20, int(skip_last_override))))
-            except (TypeError, ValueError):
-                pass
-
-        exclude_ids = set()
-        raw_exclude = data.get("exclude_message_ids")
-        if isinstance(raw_exclude, list):
-            for raw_id in raw_exclude:
-                try:
-                    exclude_ids.add(int(raw_id))
-                except (TypeError, ValueError):
-                    pass
-
-        fetch_url_token_threshold = get_fetch_url_token_threshold(effective_settings)
-        fetch_url_clip_aggressiveness = get_fetch_url_clip_aggressiveness(effective_settings)
-
-        model = normalize_model_id(data.get("model"), default=get_default_chat_model_id(effective_settings))
+        assert parsed_options is not None
 
         outcome = maybe_create_conversation_summary(
             conv_id,
-            model,
-            effective_settings,
-            fetch_url_token_threshold,
-            fetch_url_clip_aggressiveness,
-            exclude_message_ids=exclude_ids or None,
-            force=force,
-            bypass_mode=force,
-            continuation_focus=summary_focus,
-            message_count=message_count,
-            summarize_all_messages=summarize_all_messages,
+            parsed_options["model"],
+            parsed_options["effective_settings"],
+            parsed_options["fetch_url_token_threshold"],
+            parsed_options["fetch_url_clip_aggressiveness"],
+            exclude_message_ids=parsed_options["exclude_ids"] or None,
+            force=parsed_options["force"],
+            bypass_mode=parsed_options["force"],
+            continuation_focus=parsed_options["summary_focus"],
+            message_count=parsed_options["message_count"],
+            summarize_all_messages=parsed_options["summarize_all_messages"],
         )
 
         if outcome.get("applied"):
@@ -3847,6 +3988,72 @@ def register_chat_routes(app) -> None:
             "requested_message_count": outcome.get("requested_message_count"),
             "eligible_message_count": outcome.get("eligible_message_count", 0),
         })
+
+    @app.route("/api/conversations/<int:conv_id>/summarize/preview", methods=["POST"])
+    def preview_summarize(conv_id):
+        with get_db() as conn:
+            conversation = conn.execute(
+                "SELECT id FROM conversations WHERE id = ?",
+                (conv_id,),
+            ).fetchone()
+            if not conversation:
+                return jsonify({"error": "Not found."}), 404
+
+        data = request.get_json(silent=True) or {}
+        settings = get_app_settings()
+        parsed_options, parse_error = _parse_manual_summary_request_options(data, settings)
+        if parse_error:
+            return jsonify({"error": parse_error[0]}), parse_error[1]
+
+        assert parsed_options is not None
+
+        outcome = maybe_create_conversation_summary(
+            conv_id,
+            parsed_options["model"],
+            parsed_options["effective_settings"],
+            parsed_options["fetch_url_token_threshold"],
+            parsed_options["fetch_url_clip_aggressiveness"],
+            exclude_message_ids=parsed_options["exclude_ids"] or None,
+            force=parsed_options["force"],
+            bypass_mode=parsed_options["force"],
+            continuation_focus=parsed_options["summary_focus"],
+            message_count=parsed_options["message_count"],
+            summarize_all_messages=parsed_options["summarize_all_messages"],
+            dry_run=True,
+        )
+
+        if outcome.get("dry_run"):
+            return jsonify(
+                {
+                    "preview": True,
+                    "applied": False,
+                    "reason": outcome.get("reason") or "preview",
+                    "summary_model": outcome.get("summary_model"),
+                    "detail_level": outcome.get("summary_detail_level"),
+                    "source_kind": outcome.get("source_kind") or "conversation_history",
+                    "candidate_message_count": outcome.get("candidate_message_count", 0),
+                    "excluded_message_count": outcome.get("excluded_message_count", 0),
+                    "requested_message_count": outcome.get("requested_message_count"),
+                    "eligible_message_count": outcome.get("eligible_message_count", 0),
+                    "estimated_source_tokens": outcome.get("estimated_source_tokens", 0),
+                    "estimated_prompt_tokens": outcome.get("estimated_prompt_tokens", 0),
+                    "prompt_message_count": outcome.get("prompt_message_count", 0),
+                    "messages_preview": outcome.get("messages_preview") or [],
+                }
+            )
+
+        return jsonify(
+            {
+                "preview": True,
+                "applied": False,
+                "reason": outcome.get("reason") or "unknown",
+                "failure_detail": outcome.get("failure_detail") or "",
+                "requested_message_count": outcome.get("requested_message_count"),
+                "eligible_message_count": outcome.get("eligible_message_count", 0),
+                "candidate_message_count": outcome.get("candidate_message_count", 0),
+                "excluded_message_count": outcome.get("excluded_message_count", 0),
+            }
+        )
 
     @app.route("/api/conversations/<int:conv_id>/summaries/<int:summary_id>/undo", methods=["POST"])
     def undo_summary(conv_id, summary_id):
