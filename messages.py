@@ -876,7 +876,7 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
         "- If the target lines are not visible yet, inspect first with scroll_canvas_document or expand_canvas_document.",
         "- When multiple files or canvas regions are involved, batch independent inspection calls together in one answer instead of requesting them one by one.",
         "- Read-only canvas inspections can run in parallel, so prefer one answer that includes every needed search_canvas_document, scroll_canvas_document, or expand_canvas_document call before the edit turn.",
-        "- If you do not know the document_id, use document_path only when an explicit project path is shown in the Canvas Workspace Summary or Active Canvas Document block; otherwise do not invent a path and target the active document or use document_id.",
+        "- If you do not know the document_id, use the document_path carefully: use document_path only when an explicit project path is shown in the Canvas Workspace Summary or Active Canvas Document block; otherwise do not invent a path and target the active document or use document_id.",
         "- Use rewrite_canvas_document when most of the document should change or when you already know the complete intended replacement content.",
         "- When you already know the required edits across multiple canvas documents, emit all of those edit tool calls in a single answer instead of editing one document, waiting, and then editing the next.",
         "- Preferred pattern for multi-file canvas work: batch inspections first, then batch all known edits in one answer.",

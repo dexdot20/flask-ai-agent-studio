@@ -14,8 +14,10 @@ from config import (
 
 CANVAS_DOCUMENT_TOOL_NAMES = {
     "expand_canvas_document",
+    "batch_read_canvas_documents",
     "scroll_canvas_document",
     "search_canvas_document",
+    "validate_canvas_document",
     "rewrite_canvas_document",
     "preview_canvas_changes",
     "batch_canvas_edits",
@@ -142,9 +144,9 @@ def build_canvas_decision_matrix(
     if enabled("batch_canvas_edits"):
         rows.append(
             {
-                "situation": "You already know several edits for multiple disjoint regions in the same canvas document.",
+                "situation": "You already know several edits for multiple disjoint regions in one or more canvas documents.",
                 "tool": "batch_canvas_edits",
-                "notes": "Prefer one batch tool call over serial line edits when several non-overlapping changes in the same canvas document are already known.",
+                "notes": "Prefer one batch tool call over serial line edits when several non-overlapping changes are already known, especially if they span multiple files.",
             }
         )
     if enabled("preview_canvas_changes"):
@@ -195,12 +197,28 @@ def build_canvas_decision_matrix(
                 "notes": "Read the smallest relevant hidden window before editing.",
             }
         )
+    if enabled("batch_read_canvas_documents"):
+        rows.append(
+            {
+                "situation": "You need content from several canvas documents or ranges at once.",
+                "tool": "batch_read_canvas_documents",
+                "notes": "Prefer this over multiple expand or scroll calls when reasoning depends on several files together.",
+            }
+        )
     if enabled("search_canvas_document"):
         rows.append(
             {
                 "situation": "You need to locate text, symbols, or a pattern inside a large canvas before deciding what to inspect or edit.",
                 "tool": "search_canvas_document",
                 "notes": "Use this before scrolling or expanding when you are still trying to find the right region.",
+            }
+        )
+    if enabled("validate_canvas_document"):
+        rows.append(
+            {
+                "situation": "You want a syntax or structure check after editing a canvas document.",
+                "tool": "validate_canvas_document",
+                "notes": "Use this after code or config edits to catch syntax issues before running anything.",
             }
         )
     if enabled("expand_canvas_document"):
@@ -819,7 +837,7 @@ TOOL_SPECS = [
         "name": "expand_canvas_document",
         "description": (
             "Load one canvas document beyond the active excerpt when you need more context. "
-            "Use this before broader reasoning or editing; when document_id and document_path are omitted it defaults to the active document."
+            "Use this before broader reasoning or editing; document_id is optional, and when document_id and document_path are omitted it defaults to the active document."
         ),
         "parameters": {
             "type": "object",
@@ -842,6 +860,59 @@ TOOL_SPECS = [
                 "After expanding, prefer the smallest valid edit that solves the request. "
                 "If you do not know the document_id, use document_path from the workspace summary or manifest instead of getting stuck. "
                 "In project mode, prefer document_path over document_id so file targeting stays stable."
+            ),
+        },
+    },
+    {
+        "name": "batch_read_canvas_documents",
+        "description": (
+            "Read multiple canvas documents or line ranges in one call. "
+            "Use this instead of multiple expand_canvas_document or scroll_canvas_document calls when you need context from several files together."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "documents": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 12,
+                    "description": "List of canvas documents or line ranges to read.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "document_id": {
+                                "type": "string",
+                                "description": "Optional target canvas document id."
+                            },
+                            "document_path": {
+                                "type": "string",
+                                "description": "Optional target project-relative path. Prefer this in project mode."
+                            },
+                            "start_line": {
+                                "type": "integer",
+                                "description": "Optional 1-based start line. Provide with end_line to read only a range."
+                            },
+                            "end_line": {
+                                "type": "integer",
+                                "description": "Optional 1-based end line. Provide with start_line to read only a range."
+                            },
+                            "max_lines": {
+                                "type": "integer",
+                                "description": "Optional max line budget for this request."
+                            }
+                        }
+                    }
+                }
+            },
+            "required": ["documents"]
+        },
+        "prompt": {
+            "purpose": "Loads several canvas documents or targeted ranges in a single tool call.",
+            "inputs": {"documents": "array of document selectors with optional start_line/end_line/max_lines"},
+            "guidance": (
+                "Use this when reasoning depends on several open files at once. "
+                "For each entry, omit start_line and end_line to expand the document excerpt, or provide both to read only a focused range. "
+                "In project mode, prefer document_path over document_id when possible."
             ),
         },
     },
@@ -884,7 +955,7 @@ TOOL_SPECS = [
             "guidance": (
                 "Use this when you know which region you need and the active excerpt is truncated. "
                 "After inspecting the right window, prefer line-level edit tools for localized changes instead of rewriting the whole file. "
-                "If you do not know the document_id, use document_path from the workspace summary or manifest instead of stopping to search for the id. "
+                "If you do not know the document_id, use the document_path from the workspace summary or manifest instead of stopping to search for the id. "
                 "In project mode, prefer document_path over document_id so file targeting stays stable."
             ),
         },
@@ -922,6 +993,17 @@ TOOL_SPECS = [
                     "type": "boolean",
                     "description": "Whether the search should be case-sensitive."
                 },
+                "context_lines": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10,
+                    "description": "Optional number of context lines to include above and below each match. Defaults to 0."
+                },
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Optional match offset for pagination. Defaults to 0."
+                },
                 "max_results": {
                     "type": "integer",
                     "minimum": 1,
@@ -946,6 +1028,39 @@ TOOL_SPECS = [
                 "Use this first when the user asks you to find something inside a large canvas or when you do not yet know which lines matter. "
                 "After locating the right lines, use scroll_canvas_document for the smallest relevant window or expand_canvas_document for a wider view. "
                 "In project mode, prefer document_path over document_id when you know the file path."
+            ),
+        },
+    },
+    {
+        "name": "validate_canvas_document",
+        "description": (
+            "Validate one canvas document without modifying it. "
+            "Checks Python syntax, JSON validity, or Markdown structure depending on validator or file type."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "document_id": {
+                    "type": "string",
+                    "description": "Optional target canvas document id."
+                },
+                "document_path": {
+                    "type": "string",
+                    "description": "Optional target project-relative path. Prefer this in project mode."
+                },
+                "validator": {
+                    "type": "string",
+                    "enum": ["python", "json", "markdown", "auto"],
+                    "description": "Validator to use. Defaults to auto based on document language or format."
+                }
+            }
+        },
+        "prompt": {
+            "purpose": "Runs a non-mutating syntax or structure check on one canvas document.",
+            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "validator": "python, json, markdown, or auto"},
+            "guidance": (
+                "Use this after editing code or config in the canvas when you want a fast correctness check before running anything. "
+                "Prefer validator='auto' unless you specifically need to override the inferred format."
             ),
         },
     },
@@ -1387,23 +1502,51 @@ TOOL_SPECS = [
                     "minItems": 1,
                     "items": {"oneOf": _build_canvas_edit_operation_variants()}
                 },
+                "targets": {
+                    "type": "array",
+                    "minItems": 1,
+                    "description": "Optional multi-document mode. Each target must include operations and may include document_id or document_path.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "document_id": {
+                                "type": "string",
+                                "description": "Optional target canvas document id."
+                            },
+                            "document_path": {
+                                "type": "string",
+                                "description": "Optional target project-relative path. Prefer this in project mode."
+                            },
+                            "operations": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {"oneOf": _build_canvas_edit_operation_variants()},
+                                "description": "Ordered list of non-overlapping replace, insert, or delete operations for this target."
+                            }
+                        },
+                        "required": ["operations"]
+                    }
+                },
                 "atomic": {
                     "type": "boolean",
-                    "description": "When true, restore the original document if any operation in the batch fails."
+                    "description": "When true, restore the original document or documents if any operation in the batch fails."
                 }
             },
-            "required": ["operations"]
+            "anyOf": [
+                {"required": ["operations"]},
+                {"required": ["targets"]}
+            ]
         },
         "prompt": {
-            "purpose": "Applies multiple disjoint line edits to one canvas document in a single call.",
-            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "operations": "ordered edit operations", "atomic": "optional rollback flag"},
+            "purpose": "Applies multiple disjoint line edits to one or more canvas documents in a single call.",
+            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "operations": "ordered edit operations for one document", "targets": "optional multi-document target array", "atomic": "optional rollback flag"},
             "guidance": (
-                "Use this when you already know several non-overlapping edits for the same canvas document. "
+                "Use this when you already know several non-overlapping edits for one document or multiple documents. "
                 "Prefer one batch_canvas_edits call over serial replace_canvas_lines, insert_canvas_lines, or delete_canvas_lines calls when the targets are already known. "
                 "Every operation must target a disjoint region or insertion anchor. "
                 "Line numbers are interpreted against the pre-batch document and adjusted automatically for earlier operations in the same batch. "
                 "When you are editing from a previously seen snippet, include expected_lines and expected_start_line on each operation so stale edits are rejected safely. "
-                "In project mode, prefer document_path when possible."
+                "Use targets when multiple files should change together. In project mode, prefer document_path when possible."
             ),
         },
     },
@@ -1435,7 +1578,7 @@ TOOL_SPECS = [
     },
     {
         "name": "update_canvas_metadata",
-        "description": "Update canvas document metadata such as title, summary, role, dependencies, or important symbols without changing content lines.",
+        "description": "Update canvas document metadata such as title, summary, role, imports, exports, dependencies, or important symbols without changing content lines.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -1444,6 +1587,10 @@ TOOL_SPECS = [
                 "title": {"type": "string"},
                 "summary": {"type": "string"},
                 "role": {"type": "string", "enum": ["source", "config", "dependency", "docs", "test", "script", "note"]},
+                "add_imports": {"type": "array", "items": {"type": "string"}},
+                "remove_imports": {"type": "array", "items": {"type": "string"}},
+                "add_exports": {"type": "array", "items": {"type": "string"}},
+                "remove_exports": {"type": "array", "items": {"type": "string"}},
                 "add_dependencies": {"type": "array", "items": {"type": "string"}},
                 "remove_dependencies": {"type": "array", "items": {"type": "string"}},
                 "add_symbols": {"type": "array", "items": {"type": "string"}}
@@ -1451,7 +1598,7 @@ TOOL_SPECS = [
         },
         "prompt": {
             "purpose": "Updates canvas metadata without touching document content.",
-            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "title": "new title", "summary": "new summary", "role": "new role", "add_dependencies": "dependencies to append", "remove_dependencies": "dependencies to remove", "add_symbols": "symbols to append"},
+            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "title": "new title", "summary": "new summary", "role": "new role", "add_imports": "imports to append", "remove_imports": "imports to remove", "add_exports": "exports to append", "remove_exports": "exports to remove", "add_dependencies": "dependencies to append", "remove_dependencies": "dependencies to remove", "add_symbols": "symbols to append"},
             "guidance": "Use this when only metadata should change and the document body must remain untouched.",
         },
     },
@@ -1465,15 +1612,16 @@ TOOL_SPECS = [
                 "document_path": {"type": "string", "description": "Optional target project-relative path. Prefer this over document_id in project mode."},
                 "start_line": {"type": "integer", "minimum": 1, "description": "1-based first line to pin."},
                 "end_line": {"type": "integer", "minimum": 1, "description": "1-based last line to pin."},
-                "ttl_turns": {"type": "integer", "minimum": 0, "description": "How many future turns to keep the viewport pinned. Use 0 to keep it pinned until explicitly cleared."},
+                "ttl_turns": {"type": "integer", "minimum": 0, "description": "How many future turns to keep the viewport pinned. Use 0 to keep it pinned until explicitly cleared. Ignored when permanent=true."},
+                "permanent": {"type": "boolean", "description": "When true, pin the viewport until explicitly cleared and ignore ttl_turns."},
                 "auto_unpin_on_edit": {"type": "boolean", "description": "When true, automatically clear the viewport if an overlapping edit changes that region."}
             },
             "required": ["start_line", "end_line"]
         },
         "prompt": {
             "purpose": "Pins a canvas range for automatic reuse in subsequent prompts.",
-            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "start_line": "viewport start", "end_line": "viewport end", "ttl_turns": "number of future turns to keep it pinned", "auto_unpin_on_edit": "whether overlapping edits clear it automatically"},
-            "guidance": "Use this when you expect to keep working in the same region for multiple turns and want to avoid repeated scroll or expand calls. Use ttl_turns=0 only when the range should stay pinned until you explicitly clear it.",
+            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "start_line": "viewport start", "end_line": "viewport end", "ttl_turns": "number of future turns to keep it pinned", "permanent": "pin until explicitly cleared", "auto_unpin_on_edit": "whether overlapping edits clear it automatically"},
+            "guidance": "Use this when you expect to keep working in the same region for multiple turns and want to avoid repeated scroll or expand calls. Use permanent=true when the range should stay pinned until you explicitly clear it.",
         },
     },
     {

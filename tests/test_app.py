@@ -58,6 +58,7 @@ from agent import (
 )
 from app import create_app
 from canvas_service import (
+    batch_read_canvas_documents,
     batch_canvas_edits,
     build_canvas_project_manifest,
     create_canvas_runtime_state,
@@ -75,6 +76,7 @@ from canvas_service import (
     scroll_canvas_document,
     transform_canvas_lines,
     update_canvas_metadata,
+    validate_canvas_document,
 )
 from db import (
     append_to_scratchpad,
@@ -1584,6 +1586,123 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(result["match_count"], 2)
         self.assertEqual([match["document_id"] for match in result["matches"]], ["doc-1", "doc-2"])
 
+    def test_search_canvas_document_supports_context_lines_and_offset(self):
+        runtime_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "doc-1",
+                    "title": "a.py",
+                    "path": "src/a.py",
+                    "format": "code",
+                    "content": "zero\nalpha\nbeta\ngamma\nbeta again\ndelta",
+                }
+            ],
+            active_document_id="doc-1",
+        )
+
+        result = search_canvas_document(runtime_state, "beta", context_lines=1, offset=1, max_results=1)
+
+        self.assertEqual(result["match_count"], 2)
+        self.assertEqual(result["returned_count"], 1)
+        self.assertFalse(result["has_more"])
+        self.assertEqual(result["matches"][0]["line"], 5)
+        self.assertEqual(result["matches"][0]["context_before"], ["4: gamma"])
+        self.assertEqual(result["matches"][0]["context_after"], ["6: delta"])
+
+    def test_batch_read_canvas_documents_combines_expand_and_scroll_requests(self):
+        runtime_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "doc-1",
+                    "title": "a.py",
+                    "path": "src/a.py",
+                    "format": "code",
+                    "content": "one\ntwo\nthree\nfour",
+                },
+                {
+                    "id": "doc-2",
+                    "title": "README.md",
+                    "path": "README.md",
+                    "format": "markdown",
+                    "content": "# Title\n\nHello",
+                },
+            ],
+            active_document_id="doc-1",
+        )
+
+        result = batch_read_canvas_documents(
+            runtime_state,
+            [
+                {"document_path": "src/a.py", "start_line": 2, "end_line": 3},
+                {"document_path": "README.md"},
+                {"document_path": "missing.py"},
+            ],
+        )
+
+        self.assertEqual(result["requested_count"], 3)
+        self.assertEqual(result["success_count"], 2)
+        self.assertEqual(result["results"][0]["action"], "scrolled")
+        self.assertEqual(result["results"][0]["visible_lines"], ["2: two", "3: three"])
+        self.assertEqual(result["results"][1]["action"], "expanded")
+        self.assertEqual(result["results"][2]["status"], "error")
+
+    def test_set_canvas_viewport_permanent_disables_auto_unpin(self):
+        runtime_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "doc-1",
+                    "title": "app.py",
+                    "path": "src/app.py",
+                    "format": "code",
+                    "content": "line 1\nline 2\nline 3",
+                }
+            ]
+        )
+
+        result = set_canvas_viewport(
+            runtime_state,
+            document_path="src/app.py",
+            start_line=2,
+            end_line=3,
+            permanent=True,
+            auto_unpin_on_edit=True,
+        )
+
+        self.assertTrue(result["pinned"]["permanent"])
+        self.assertFalse(result["pinned"]["auto_unpin_on_edit"])
+        self.assertEqual(result["pinned"]["ttl_turns"], 0)
+
+    def test_validate_canvas_document_detects_python_and_markdown_issues(self):
+        runtime_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "doc-1",
+                    "title": "broken.py",
+                    "path": "broken.py",
+                    "format": "code",
+                    "language": "python",
+                    "content": "def broken(:\n    pass\n",
+                },
+                {
+                    "id": "doc-2",
+                    "title": "README.md",
+                    "path": "README.md",
+                    "format": "markdown",
+                    "content": "# Title\n### Skipped\n```python\nprint('x')\n",
+                },
+            ],
+            active_document_id="doc-1",
+        )
+
+        python_result = validate_canvas_document(runtime_state, document_path="broken.py")
+        markdown_result = validate_canvas_document(runtime_state, document_path="README.md")
+
+        self.assertFalse(python_result["is_valid"])
+        self.assertEqual(python_result["validator_used"], "python")
+        self.assertEqual(python_result["issues"][0]["severity"], "error")
+        self.assertEqual(markdown_result["validator_used"], "markdown")
+        self.assertTrue(any(issue["message"] == "Unclosed fenced code block." for issue in markdown_result["issues"]))
+
     def test_focus_canvas_page_pins_detected_page_range(self):
         runtime_state = create_canvas_runtime_state(
             [
@@ -1851,6 +1970,63 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(preview["snapshot"]["language"], "python")
         self.assertEqual(preview["content_mode"], "replace")
         self.assertEqual(preview["content"], "print(1)\nprint(2)\nprint(3)")
+
+    def test_build_streaming_canvas_tool_preview_synthesizes_batch_canvas_preview_content(self):
+        canvas_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "doc-1",
+                    "title": "notes.md",
+                    "path": "docs/notes.md",
+                    "format": "markdown",
+                    "content": "alpha\nbeta\ngamma",
+                }
+            ],
+            active_document_id="doc-1",
+        )
+        tool_call_parts = [
+            {
+                "name": "batch_canvas_edits",
+                "arguments_parts": [
+                    '{"document_path":"docs/notes.md","operations":[{"action":"replace","start_line":2,"end_line":2,"lines":["beta updated"]}]',
+                ],
+            }
+        ]
+
+        preview = _build_streaming_canvas_tool_preview(tool_call_parts, canvas_state)
+
+        self.assertEqual(preview["tool"], "batch_canvas_edits")
+        self.assertEqual(preview["content_mode"], "replace")
+        self.assertEqual(preview["content"], "alpha\nbeta updated\ngamma")
+
+    def test_build_streaming_canvas_tool_preview_synthesizes_transform_canvas_preview_content(self):
+        canvas_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "doc-1",
+                    "title": "config.py",
+                    "path": "config.py",
+                    "format": "code",
+                    "language": "python",
+                    "content": "DEBUG = False\nprint('done')",
+                }
+            ],
+            active_document_id="doc-1",
+        )
+        tool_call_parts = [
+            {
+                "name": "transform_canvas_lines",
+                "arguments_parts": [
+                    '{"document_path":"config.py","pattern":"DEBUG = False","replacement":"DEBUG = True"}',
+                ],
+            }
+        ]
+
+        preview = _build_streaming_canvas_tool_preview(tool_call_parts, canvas_state)
+
+        self.assertEqual(preview["tool"], "transform_canvas_lines")
+        self.assertEqual(preview["content_mode"], "replace")
+        self.assertEqual(preview["content"], "DEBUG = True\nprint('done')")
 
     def test_create_conversation_rejects_invalid_model(self):
         response = self.client.post(
@@ -8876,6 +9052,77 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertEqual(get_canvas_runtime_documents(runtime_state)[0]["content"], "line 1\nline 2\nline 3")
 
+    def test_batch_canvas_edits_supports_multi_target_atomic_updates(self):
+        runtime_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "canvas-1",
+                    "title": "a.py",
+                    "path": "src/a.py",
+                    "format": "code",
+                    "content": "alpha\nbeta",
+                },
+                {
+                    "id": "canvas-2",
+                    "title": "b.py",
+                    "path": "src/b.py",
+                    "format": "code",
+                    "content": "one\ntwo",
+                },
+            ]
+        )
+
+        result = batch_canvas_edits(
+            runtime_state,
+            [],
+            atomic=True,
+            targets=[
+                {"document_path": "src/a.py", "operations": [{"action": "replace", "start_line": 2, "end_line": 2, "lines": ["beta updated"]}]},
+                {"document_path": "src/b.py", "operations": [{"action": "insert", "after_line": 2, "lines": ["three"]}]},
+            ],
+        )
+
+        self.assertEqual(result["action"], "batch_multi_edited")
+        self.assertEqual(result["target_count"], 2)
+        documents = {document["path"]: document for document in get_canvas_runtime_documents(runtime_state)}
+        self.assertEqual(documents["src/a.py"]["content"], "alpha\nbeta updated")
+        self.assertEqual(documents["src/b.py"]["content"], "one\ntwo\nthree")
+
+    def test_batch_canvas_edits_multi_target_atomic_rolls_back_all_documents(self):
+        runtime_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "canvas-1",
+                    "title": "a.py",
+                    "path": "src/a.py",
+                    "format": "code",
+                    "content": "alpha\nbeta",
+                },
+                {
+                    "id": "canvas-2",
+                    "title": "b.py",
+                    "path": "src/b.py",
+                    "format": "code",
+                    "content": "one\ntwo",
+                },
+            ]
+        )
+
+        with self.assertRaisesRegex(ValueError, "Line range exceeds"):
+            batch_canvas_edits(
+                runtime_state,
+                [],
+                atomic=True,
+                targets=[
+                    {"document_path": "src/a.py", "operations": [{"action": "replace", "start_line": 2, "end_line": 2, "lines": ["beta updated"]}]},
+                    {"document_path": "src/b.py", "operations": [{"action": "delete", "start_line": 99, "end_line": 99}]},
+                ],
+            )
+
+        documents = {document["path"]: document for document in get_canvas_runtime_documents(runtime_state)}
+        self.assertEqual(documents["src/a.py"]["content"], "alpha\nbeta")
+        self.assertEqual(documents["src/b.py"]["content"], "one\ntwo")
+
     def test_batch_canvas_edits_clears_auto_unpin_viewport_for_multi_line_delete(self):
         runtime_state = {"canvas": create_canvas_runtime_state(
             [
@@ -9069,6 +9316,35 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(result["document"]["dependencies"], ["app.py"])
         self.assertEqual(result["document"]["symbols"], ["create_app", "init_db"])
 
+    def test_update_canvas_metadata_updates_imports_and_exports(self):
+        runtime_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "canvas-1",
+                    "title": "app.py",
+                    "path": "src/app.py",
+                    "format": "code",
+                    "content": "print('ok')",
+                    "imports": ["flask"],
+                    "exports": ["create_app"],
+                }
+            ]
+        )
+
+        result = update_canvas_metadata(
+            runtime_state,
+            document_path="src/app.py",
+            add_imports=["sqlite3"],
+            remove_imports=["flask"],
+            add_exports=["main"],
+            remove_exports=["create_app"],
+        )
+
+        self.assertIn("imports", result["updated_fields"])
+        self.assertIn("exports", result["updated_fields"])
+        self.assertEqual(result["document"]["imports"], ["sqlite3"])
+        self.assertEqual(result["document"]["exports"], ["main"])
+
     def test_overlapping_edit_clears_auto_unpin_canvas_viewport(self):
         runtime_state = {"canvas": create_canvas_runtime_state(
             [
@@ -9136,10 +9412,12 @@ class AppRoutesTestCase(unittest.TestCase):
     def test_canvas_tool_sets_include_new_canvas_tools(self):
         self.assertTrue(
             {
+                "batch_read_canvas_documents",
                 "preview_canvas_changes",
                 "batch_canvas_edits",
                 "transform_canvas_lines",
                 "update_canvas_metadata",
+                "validate_canvas_document",
                 "set_canvas_viewport",
                 "focus_canvas_page",
                 "clear_canvas_viewport",
@@ -9244,6 +9522,47 @@ class AppRoutesTestCase(unittest.TestCase):
             runtime_state,
         )
         self.assertEqual(clear_result["action"], "viewport_cleared")
+
+    def test_execute_tool_runs_batch_read_and_validate_canvas_tools(self):
+        runtime_state = {
+            "canvas": create_canvas_runtime_state(
+                [
+                    {
+                        "id": "canvas-1",
+                        "title": "app.py",
+                        "path": "src/app.py",
+                        "format": "code",
+                        "language": "python",
+                        "content": "def broken(:\n    pass\n",
+                    },
+                    {
+                        "id": "canvas-2",
+                        "title": "README.md",
+                        "path": "README.md",
+                        "format": "markdown",
+                        "content": "# Title\n\nBody",
+                    },
+                ]
+            )
+        }
+
+        read_result, read_summary = _execute_tool(
+            "batch_read_canvas_documents",
+            {"documents": [{"document_path": "README.md"}, {"document_path": "src/app.py", "start_line": 1, "end_line": 2}]},
+            runtime_state,
+        )
+        validate_result, validate_summary = _execute_tool(
+            "validate_canvas_document",
+            {"document_path": "src/app.py"},
+            runtime_state,
+        )
+
+        self.assertEqual(read_result["action"], "batch_read")
+        self.assertEqual(read_result["success_count"], 2)
+        self.assertIn("Canvas batch read returned", read_summary)
+        self.assertEqual(validate_result["action"], "validated")
+        self.assertFalse(validate_result["is_valid"])
+        self.assertIn("Canvas validation found", validate_summary)
 
     def test_execute_tool_runs_batch_canvas_edits(self):
         runtime_state = {
@@ -11057,11 +11376,15 @@ class AppRoutesTestCase(unittest.TestCase):
 
     def test_tool_specs_include_preview_operation_schema_and_new_guidance(self):
         preview_specs = get_openai_tool_specs(
-            ["preview_canvas_changes"],
+            ["preview_canvas_changes", "validate_canvas_document", "batch_read_canvas_documents"],
             canvas_documents=[{"id": "doc-1", "title": "draft.py", "content": "print('x')\n"}],
         )
-        operations_items = preview_specs[0]["function"]["parameters"]["properties"]["operations"]["items"]
-        enabled_specs = {spec["name"]: spec for spec in get_enabled_tool_specs(["search_files", "set_canvas_viewport", "clear_canvas"])}
+        preview_spec_map = {spec["function"]["name"]: spec for spec in preview_specs}
+        operations_items = preview_spec_map["preview_canvas_changes"]["function"]["parameters"]["properties"]["operations"]["items"]
+        enabled_specs = {
+            spec["name"]: spec
+            for spec in get_enabled_tool_specs(["search_files", "set_canvas_viewport", "clear_canvas", "batch_canvas_edits", "search_canvas_document", "validate_canvas_document", "batch_read_canvas_documents"])
+        }
 
         self.assertIn("oneOf", operations_items)
         self.assertEqual(
@@ -11070,6 +11393,12 @@ class AppRoutesTestCase(unittest.TestCase):
         )
         self.assertIn("Prefer path-only search first", enabled_specs["search_files"]["prompt"]["guidance"])
         self.assertIn("Use 0 to keep it pinned", enabled_specs["set_canvas_viewport"]["parameters"]["properties"]["ttl_turns"]["description"])
+        self.assertIn("permanent", enabled_specs["set_canvas_viewport"]["parameters"]["properties"])
+        self.assertIn("targets", enabled_specs["batch_canvas_edits"]["parameters"]["properties"])
+        self.assertIn("context_lines", enabled_specs["search_canvas_document"]["parameters"]["properties"])
+        self.assertIn("offset", enabled_specs["search_canvas_document"]["parameters"]["properties"])
+        self.assertIn("validator", enabled_specs["validate_canvas_document"]["parameters"]["properties"])
+        self.assertIn("documents", enabled_specs["batch_read_canvas_documents"]["parameters"]["properties"])
         self.assertIn("explicitly requests deleting all canvas documents", enabled_specs["clear_canvas"]["prompt"]["guidance"])
 
     def test_format_tool_execution_error_hides_internal_exception_class_names(self):

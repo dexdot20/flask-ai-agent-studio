@@ -83,8 +83,8 @@ It is not a minimal prompt/response demo. The app keeps conversation history in 
 - The model can create and edit canvas documents (Markdown or code) attached to the current conversation
 - The model can also create code-format canvas documents with language metadata, path/role metadata, and project summaries when working in project mode
 - The UI can display multiple canvas documents, search within them, filter them, and export them
-- Canvas documents support line-level edits, batch edits, bulk find-replace transforms, and non-mutating diff previews
-- `search_canvas_document` locates text or patterns inside a large canvas before editing; `set_canvas_viewport` and `focus_canvas_page` pin regions for automatic reuse in later turns
+- Canvas documents support line-level edits, batch edits, bulk find-replace transforms, batch reads, validation checks, and non-mutating diff previews
+- `search_canvas_document` locates text or patterns inside a large canvas before editing; `batch_read_canvas_documents` can load several canvas regions at once; `set_canvas_viewport` and `focus_canvas_page` pin regions for automatic reuse in later turns; `validate_canvas_document` checks syntax or structure after edits
 - Project-mode canvas sessions include a file tree with active-file highlighting
 - Canvas documents can be downloaded as Markdown, HTML, or PDF
 
@@ -410,7 +410,7 @@ The scratchpad is organized into named sections: `lessons`, `profile`, `notes`, 
 - canvas prompt max tokens: 2,000
 - canvas expand max lines: 1,600
 - canvas scroll window lines: 200
-- canvas document limit: 12 documents per conversation
+- canvas document limit: 50 documents per conversation
 - canvas title length limit: 160 characters
 
 ### Settings stored in SQLite via the UI
@@ -791,6 +791,13 @@ Create a new canvas document for the current conversation.
   - `role` (string, optional) - optional semantic role inside a project workspace
   - `summary` (string, optional) - optional short responsibility summary
 
+#### `batch_read_canvas_documents`
+
+Read multiple canvas documents or targeted line ranges in a single call.
+
+- Arguments:
+  - `documents` (array, required) - list of canvas document selectors; each item can include `document_id`, `document_path`, `start_line`, `end_line`, and `max_lines`
+
 #### `search_canvas_document`
 
 Search for text, symbols, or a regex pattern inside a canvas document. Returns matching lines with surrounding context.
@@ -799,6 +806,17 @@ Search for text, symbols, or a regex pattern inside a canvas document. Returns m
   - `query` (string, required) - keyword, phrase, or regex pattern to search for
   - `document_id` (string, optional) - target canvas document id
   - `document_path` (string, optional) - target project-relative path
+  - `context_lines` (integer, optional) - number of lines of context to include around each match
+  - `offset` (integer, optional) - result offset for pagination
+
+#### `validate_canvas_document`
+
+Validate a canvas document without mutating it.
+
+- Arguments:
+  - `document_id` (string, optional) - target canvas document id
+  - `document_path` (string, optional) - target project-relative path
+  - `validator` (string, optional) - `python`, `json`, `markdown`, or `auto`
 
 #### `expand_canvas_document`
 
@@ -828,6 +846,7 @@ Pin a document line range so it is automatically injected into later prompts for
   - `document_id` (string, optional) - target canvas document id
   - `document_path` (string, optional) - target project-relative path
   - `ttl_turns` (integer, optional) - how many future turns to keep the viewport pinned; use `0` to pin until explicitly cleared
+  - `permanent` (boolean, optional) - pin until explicitly cleared and ignore `ttl_turns`
   - `auto_unpin_on_edit` (boolean, optional) - automatically clear the viewport when an overlapping edit changes that region
 
 #### `clear_canvas_viewport`
@@ -865,12 +884,13 @@ Rewrite the full active canvas document while keeping the same document id.
 
 #### `batch_canvas_edits`
 
-Apply multiple non-overlapping line edit operations to one canvas document in a single call. Each operation can be a `replace`, `insert`, or `delete`.
+Apply multiple non-overlapping line edit operations to one or more canvas documents in a single call. Each operation can be a `replace`, `insert`, or `delete`.
 
 - Arguments:
   - `operations` (array, required) - ordered list of edit operations, each with `action`, relevant line fields, and `lines` where applicable
   - `document_id` (string, optional)
   - `document_path` (string, optional)
+  - `targets` (array, optional) - multi-document mode; each target can include its own `document_id`, `document_path`, and `operations`
   - `atomic` (boolean, optional) - when `true`, restore the original document if any operation fails
 
 #### `preview_canvas_changes`
@@ -906,6 +926,10 @@ Update canvas document metadata such as title, summary, role, dependencies, or s
   - `title` (string, optional)
   - `summary` (string, optional)
   - `role` (string, optional) - `source`, `config`, `dependency`, `docs`, `test`, `script`, or `note`
+  - `add_imports` (array, optional) - imports to append
+  - `remove_imports` (array, optional) - imports to remove
+  - `add_exports` (array, optional) - exports to append
+  - `remove_exports` (array, optional) - exports to remove
   - `add_dependencies` (array, optional) - dependencies to append
   - `remove_dependencies` (array, optional) - dependencies to remove
   - `add_symbols` (array, optional) - symbols to append

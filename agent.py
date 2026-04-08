@@ -21,6 +21,7 @@ from logging.handlers import RotatingFileHandler
 from uuid import uuid4
 
 from canvas_service import (
+    batch_read_canvas_documents,
     batch_canvas_edits,
     build_canvas_document_context_result,
     build_canvas_tool_result,
@@ -48,6 +49,7 @@ from canvas_service import (
     scale_canvas_char_limit,
     transform_canvas_lines,
     update_canvas_metadata,
+    validate_canvas_document,
 )
 from project_workspace_service import (
     create_directory as workspace_create_directory,
@@ -145,8 +147,10 @@ MAX_REASONING_REPLAY_CHARS = 4_000
 MAX_REASONING_REPLAY_TOTAL_CHARS = 10_000
 CANVAS_TOOL_NAMES = {
     "expand_canvas_document",
+    "batch_read_canvas_documents",
     "scroll_canvas_document",
     "search_canvas_document",
+    "validate_canvas_document",
     "create_canvas_document",
     "rewrite_canvas_document",
     "preview_canvas_changes",
@@ -181,6 +185,8 @@ CANVAS_STREAM_OPEN_TOOL_NAMES = {
     "create_canvas_document",
     "rewrite_canvas_document",
     "expand_canvas_document",
+    "batch_canvas_edits",
+    "transform_canvas_lines",
     "replace_canvas_lines",
     "insert_canvas_lines",
     "delete_canvas_lines",
@@ -190,6 +196,8 @@ CANVAS_STREAM_CONTENT_TOOL_NAMES = {
     "rewrite_canvas_document",
 }
 CANVAS_STREAM_REPLACE_CONTENT_TOOL_NAMES = {
+    "batch_canvas_edits",
+    "transform_canvas_lines",
     "replace_canvas_lines",
     "insert_canvas_lines",
     "delete_canvas_lines",
@@ -242,8 +250,10 @@ PARALLEL_SAFE_TOOL_NAMES = WEB_TOOL_NAMES | {
     "validate_project_workspace",
     # Canvas inspection (non-mutating)
     "expand_canvas_document",
+    "batch_read_canvas_documents",
     "scroll_canvas_document",
     "search_canvas_document",
+    "validate_canvas_document",
     # Delegated read-only helper
     "sub_agent",
 }
@@ -3226,6 +3236,82 @@ def _build_streaming_canvas_line_edit_preview(
     return join_canvas_lines(next_lines), document
 
 
+def _build_streaming_canvas_batch_edit_preview(
+    canvas_state: dict | None,
+    tool_args: dict,
+) -> tuple[str | None, dict | None]:
+    if not isinstance(canvas_state, dict) or not isinstance(tool_args, dict):
+        return None, None
+
+    target_args = tool_args
+    raw_targets = tool_args.get("targets")
+    if isinstance(raw_targets, list):
+        if len(raw_targets) != 1 or not isinstance(raw_targets[0], dict):
+            return None, None
+        target_args = raw_targets[0]
+
+    document_id = str(target_args.get("document_id") or "").strip() or None
+    document_path = str(target_args.get("document_path") or "").strip() or None
+    try:
+        _, document = _find_canvas_document(canvas_state, document_id=document_id, document_path=document_path)
+    except Exception:
+        return None, None
+
+    operations = target_args.get("operations")
+    if not isinstance(operations, list) or not operations:
+        return None, document
+
+    preview_state = create_canvas_runtime_state([dict(document)], active_document_id=document.get("id"))
+    try:
+        result = batch_canvas_edits(
+            preview_state,
+            operations,
+            document_id=document.get("id"),
+            atomic=True,
+        )
+    except Exception:
+        return None, document
+
+    preview_document = result.get("document") if isinstance(result.get("document"), dict) else document
+    return str(preview_document.get("content") or ""), preview_document
+
+
+def _build_streaming_canvas_transform_preview(
+    canvas_state: dict | None,
+    tool_args: dict,
+) -> tuple[str | None, dict | None]:
+    if not isinstance(canvas_state, dict) or not isinstance(tool_args, dict):
+        return None, None
+
+    document_id = str(tool_args.get("document_id") or "").strip() or None
+    document_path = str(tool_args.get("document_path") or "").strip() or None
+    try:
+        _, document = _find_canvas_document(canvas_state, document_id=document_id, document_path=document_path)
+    except Exception:
+        return None, None
+
+    if tool_args.get("pattern") in (None, "") or tool_args.get("replacement") is None:
+        return None, document
+
+    preview_state = create_canvas_runtime_state([dict(document)], active_document_id=document.get("id"))
+    try:
+        result = transform_canvas_lines(
+            preview_state,
+            tool_args.get("pattern", ""),
+            tool_args.get("replacement", ""),
+            document_id=document.get("id"),
+            scope=tool_args.get("scope") or "all",
+            is_regex=tool_args.get("is_regex") is True,
+            case_sensitive=True if "case_sensitive" not in tool_args else tool_args.get("case_sensitive") is True,
+            count_only=False,
+        )
+    except Exception:
+        return None, document
+
+    preview_document = result.get("document") if isinstance(result.get("document"), dict) else document
+    return str(preview_document.get("content") or ""), preview_document
+
+
 def _build_streaming_canvas_tool_preview(
     tool_call_parts: list[dict],
     canvas_state: dict | None = None,
@@ -3258,7 +3344,12 @@ def _build_streaming_canvas_tool_preview(
             else:
                 content = _extract_partial_json_string_value(arguments_text, "content")
         elif tool_name in CANVAS_STREAM_REPLACE_CONTENT_TOOL_NAMES:
-            content, resolved_document = _build_streaming_canvas_line_edit_preview(canvas_state, tool_name, parsed_arguments or {})
+            if tool_name in {"replace_canvas_lines", "insert_canvas_lines", "delete_canvas_lines"}:
+                content, resolved_document = _build_streaming_canvas_line_edit_preview(canvas_state, tool_name, parsed_arguments or {})
+            elif tool_name == "batch_canvas_edits":
+                content, resolved_document = _build_streaming_canvas_batch_edit_preview(canvas_state, parsed_arguments or {})
+            else:
+                content, resolved_document = _build_streaming_canvas_transform_preview(canvas_state, parsed_arguments or {})
             if resolved_document:
                 resolved_document_id = str(resolved_document.get("id") or "").strip()
                 resolved_document_path = str(resolved_document.get("path") or "").strip()
@@ -4400,6 +4491,12 @@ def _run_expand_canvas_document(tool_args: dict, runtime_state: dict):
     return result, f"Canvas expanded: {target_label}"
 
 
+def _run_batch_read_canvas_documents(tool_args: dict, runtime_state: dict):
+    canvas_state = _get_canvas_runtime_state(runtime_state)
+    result = batch_read_canvas_documents(canvas_state, tool_args.get("documents") or [])
+    return result, f"Canvas batch read returned {result.get('success_count', 0)}/{result.get('requested_count', 0)} document(s)"
+
+
 def _run_scroll_canvas_document(tool_args: dict, runtime_state: dict):
     canvas_state = _get_canvas_runtime_state(runtime_state)
     canvas_limits = runtime_state.get("canvas_limits") if isinstance(runtime_state.get("canvas_limits"), dict) else {}
@@ -4426,6 +4523,8 @@ def _run_search_canvas_document(tool_args: dict, runtime_state: dict):
         all_documents=tool_args.get("all_documents") is True,
         is_regex=tool_args.get("is_regex") is True,
         case_sensitive=tool_args.get("case_sensitive") is True,
+        context_lines=tool_args.get("context_lines") or 0,
+        offset=tool_args.get("offset") or 0,
         max_results=tool_args.get("max_results") or 10,
     )
     if result.get("all_documents"):
@@ -4433,7 +4532,21 @@ def _run_search_canvas_document(tool_args: dict, runtime_state: dict):
     else:
         first_match = (result.get("matches") or [{}])[0]
         scope_label = str(first_match.get("document_path") or first_match.get("title") or "active canvas").strip()
-    return result, f"{len(result.get('matches') or [])} canvas matches found in {scope_label}"
+    return result, f"{result.get('returned_count', len(result.get('matches') or []))} canvas matches found in {scope_label}"
+
+
+def _run_validate_canvas_document(tool_args: dict, runtime_state: dict):
+    canvas_state = _get_canvas_runtime_state(runtime_state)
+    result = validate_canvas_document(
+        canvas_state,
+        document_id=tool_args.get("document_id"),
+        document_path=tool_args.get("document_path"),
+        validator=tool_args.get("validator"),
+    )
+    issue_count = int(result.get("issue_count") or 0)
+    if result.get("is_valid"):
+        return result, f"Canvas validation passed for {result.get('title') or 'Canvas'}"
+    return result, f"Canvas validation found {issue_count} issue(s) in {result.get('title') or 'Canvas'}"
 
 
 def _get_workspace_runtime_state(runtime_state: dict) -> dict:
@@ -4662,7 +4775,29 @@ def _run_batch_canvas_edits(tool_args: dict, runtime_state: dict):
         document_id=tool_args.get("document_id"),
         document_path=tool_args.get("document_path"),
         atomic=tool_args.get("atomic") is True,
+        targets=tool_args.get("targets"),
     )
+    if batch_result.get("action") == "batch_multi_edited":
+        for entry in batch_result.get("results") or []:
+            edit_start_line = entry.get("edit_start_line")
+            edit_end_line = entry.get("edit_end_line")
+            if edit_start_line is None or edit_end_line is None:
+                continue
+            clear_overlapping_canvas_viewports(
+                canvas_state,
+                document_id=entry.get("document_id"),
+                document_path=entry.get("document_path"),
+                edit_start_line=int(edit_start_line),
+                edit_end_line=int(edit_end_line),
+            )
+        return {
+            "status": "ok",
+            "action": "lines_batch_multi_edited",
+            "results": batch_result.get("results") or [],
+            "target_count": batch_result.get("target_count", 0),
+            "total_applied_count": batch_result.get("total_applied_count", 0),
+        }, f"Canvas batch edit applied across {batch_result.get('target_count', 0)} documents"
+
     changed_ranges = batch_result.get("changed_ranges") or []
     edit_start_line = None
     edit_end_line = None
@@ -4749,6 +4884,10 @@ def _run_update_canvas_metadata(tool_args: dict, runtime_state: dict):
         title=tool_args.get("title"),
         summary=tool_args.get("summary"),
         role=tool_args.get("role"),
+        add_imports=tool_args.get("add_imports"),
+        remove_imports=tool_args.get("remove_imports"),
+        add_exports=tool_args.get("add_exports"),
+        remove_exports=tool_args.get("remove_exports"),
         add_dependencies=tool_args.get("add_dependencies"),
         remove_dependencies=tool_args.get("remove_dependencies"),
         add_symbols=tool_args.get("add_symbols"),
@@ -4766,6 +4905,7 @@ def _run_set_canvas_viewport(tool_args: dict, runtime_state: dict):
         start_line=int(tool_args.get("start_line") or 0),
         end_line=int(tool_args.get("end_line") or 0),
         ttl_turns=int(tool_args.get("ttl_turns") or 0) if tool_args.get("ttl_turns") not in (None, "") else 3,
+        permanent=tool_args.get("permanent") is True,
         auto_unpin_on_edit=auto_unpin_on_edit,
         document_id=tool_args.get("document_id"),
         document_path=tool_args.get("document_path"),
@@ -4834,8 +4974,10 @@ _TOOL_EXECUTORS = {
     "fetch_url_summarized": _run_fetch_url_summarized,
     "grep_fetched_content": _run_grep_fetched_content,
     "expand_canvas_document": _run_expand_canvas_document,
+    "batch_read_canvas_documents": _run_batch_read_canvas_documents,
     "scroll_canvas_document": _run_scroll_canvas_document,
     "search_canvas_document": _run_search_canvas_document,
+    "validate_canvas_document": _run_validate_canvas_document,
     "create_directory": _run_create_directory,
     "create_file": _run_create_file,
     "update_file": _run_update_file,
