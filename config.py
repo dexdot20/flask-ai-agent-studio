@@ -92,6 +92,12 @@ DOCUMENT_ALLOWED_MIME_TYPES = {
 DOCUMENT_MAX_BYTES = 20 * 1024 * 1024
 DOCUMENT_MAX_TEXT_CHARS = 50_000
 DOCUMENT_STORAGE_DIR = (os.getenv("DOCUMENT_STORAGE_DIR") or os.path.join(BASE_DIR, "data", "documents")).strip()
+YOUTUBE_TRANSCRIPTS_ENABLED = _parse_bool_env("YOUTUBE_TRANSCRIPTS_ENABLED", False)
+YOUTUBE_TRANSCRIPTS_DISABLED_FEATURE_ERROR = "YouTube video transcript feature is disabled in .env."
+YOUTUBE_TRANSCRIPT_MODEL_SIZE = (os.getenv("YOUTUBE_TRANSCRIPT_MODEL_SIZE") or "small").strip() or "small"
+YOUTUBE_TRANSCRIPT_DEVICE = (os.getenv("YOUTUBE_TRANSCRIPT_DEVICE") or "auto").strip() or "auto"
+YOUTUBE_TRANSCRIPT_COMPUTE_TYPE = (os.getenv("YOUTUBE_TRANSCRIPT_COMPUTE_TYPE") or "int8").strip() or "int8"
+YOUTUBE_TRANSCRIPT_DEFAULT_LANGUAGE = (os.getenv("YOUTUBE_TRANSCRIPT_DEFAULT_LANGUAGE") or "").strip()
 VISION_ENABLED = _parse_bool_env("VISION_ENABLED", True)
 OCR_ENABLED = _parse_bool_env("OCR_ENABLED", VISION_ENABLED)
 CONVERSATION_MEMORY_ENABLED = _parse_bool_env("CONVERSATION_MEMORY_ENABLED", True)
@@ -446,6 +452,7 @@ def get_feature_flags() -> dict:
         "ocr_enabled": OCR_ENABLED,
         "conversation_memory_enabled": CONVERSATION_MEMORY_ENABLED,
         "image_uploads_enabled": IMAGE_UPLOADS_ENABLED,
+        "youtube_transcripts_enabled": YOUTUBE_TRANSCRIPTS_ENABLED,
         "vision_enabled": VISION_ENABLED,
         "deepseek_api_configured": bool(DEEPSEEK_API_KEY),
         "openrouter_api_configured": bool(OPENROUTER_API_KEY),

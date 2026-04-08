@@ -279,10 +279,27 @@ def init_db() -> None:
                 FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
                 FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE SET NULL
             );
+            CREATE TABLE IF NOT EXISTS video_assets (
+                video_id            TEXT PRIMARY KEY,
+                conversation_id     INTEGER NOT NULL,
+                message_id          INTEGER,
+                platform            TEXT NOT NULL DEFAULT 'youtube',
+                source_url          TEXT NOT NULL,
+                source_video_id     TEXT,
+                title               TEXT,
+                transcript_text     TEXT NOT NULL,
+                transcript_language TEXT,
+                duration_seconds    INTEGER,
+                created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE SET NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_image_assets_conversation_created
             ON image_assets(conversation_id, created_at, image_id);
             CREATE INDEX IF NOT EXISTS idx_file_assets_conversation_created
             ON file_assets(conversation_id, created_at, file_id);
+            CREATE INDEX IF NOT EXISTS idx_video_assets_conversation_created
+            ON video_assets(conversation_id, created_at, video_id);
             CREATE INDEX IF NOT EXISTS idx_conversation_memory_conversation_created
             ON conversation_memory(conversation_id, created_at, id);
             """
@@ -980,6 +997,131 @@ def delete_conversation_file_assets(conversation_id: int) -> list[str]:
     return deleted_paths
 
 
+def create_video_asset(
+    conversation_id: int,
+    *,
+    source_url: str,
+    source_video_id: str = "",
+    title: str = "",
+    transcript_text: str,
+    transcript_language: str = "",
+    duration_seconds: int | None = None,
+    platform: str = "youtube",
+) -> dict:
+    normalized_source_url = str(source_url or "").strip()[:2000]
+    normalized_source_video_id = str(source_video_id or "").strip()[:64]
+    normalized_title = str(title or "").strip()[:255]
+    normalized_text = str(transcript_text or "").strip()
+    normalized_language = str(transcript_language or "").strip()[:40]
+    normalized_platform = str(platform or "").strip().lower()[:40] or "youtube"
+    try:
+        normalized_duration = max(0, int(duration_seconds)) if duration_seconds is not None else None
+    except (TypeError, ValueError):
+        normalized_duration = None
+
+    if not conversation_id:
+        raise ValueError("conversation_id is required to persist a video transcript.")
+    if not normalized_source_url:
+        raise ValueError("source_url is required.")
+    if not normalized_text:
+        raise ValueError("transcript_text is required.")
+
+    video_id = uuid4().hex
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO video_assets (
+                   video_id, conversation_id, platform, source_url, source_video_id,
+                   title, transcript_text, transcript_language, duration_seconds
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                video_id,
+                conversation_id,
+                normalized_platform,
+                normalized_source_url,
+                normalized_source_video_id or None,
+                normalized_title or None,
+                normalized_text,
+                normalized_language or None,
+                normalized_duration,
+            ),
+        )
+        row = conn.execute(
+            """SELECT video_id, conversation_id, message_id, platform, source_url, source_video_id,
+                      title, transcript_text, transcript_language, duration_seconds, created_at
+               FROM video_assets WHERE video_id = ?""",
+            (video_id,),
+        ).fetchone()
+    return _video_asset_row_to_dict(row)
+
+
+def update_video_asset(video_id: str, *, message_id: int | None = None) -> dict | None:
+    normalized_id = str(video_id or "").strip()
+    if not normalized_id:
+        return None
+    if message_id is not None:
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE video_assets SET message_id = ? WHERE video_id = ?",
+                (int(message_id), normalized_id),
+            )
+    return get_video_asset(normalized_id)
+
+
+def _video_asset_row_to_dict(row) -> dict | None:
+    if not row:
+        return None
+    return {
+        "video_id": row["video_id"],
+        "conversation_id": row["conversation_id"],
+        "message_id": row["message_id"],
+        "platform": row["platform"],
+        "source_url": row["source_url"],
+        "source_video_id": row["source_video_id"],
+        "title": row["title"],
+        "transcript_text": row["transcript_text"],
+        "transcript_language": row["transcript_language"],
+        "duration_seconds": row["duration_seconds"],
+        "created_at": row["created_at"],
+    }
+
+
+def get_video_asset(video_id: str, conversation_id: int | None = None) -> dict | None:
+    normalized_id = str(video_id or "").strip()
+    if not normalized_id:
+        return None
+    query = (
+        "SELECT video_id, conversation_id, message_id, platform, source_url, source_video_id, "
+        "title, transcript_text, transcript_language, duration_seconds, created_at "
+        "FROM video_assets WHERE video_id = ?"
+    )
+    params = [normalized_id]
+    if conversation_id is not None:
+        query += " AND conversation_id = ?"
+        params.append(int(conversation_id))
+    with get_db() as conn:
+        row = conn.execute(query, tuple(params)).fetchone()
+    return _video_asset_row_to_dict(row)
+
+
+def delete_video_asset(video_id: str, conversation_id: int | None = None) -> bool:
+    asset = get_video_asset(video_id, conversation_id=conversation_id)
+    if not asset:
+        return False
+    with get_db() as conn:
+        conn.execute("DELETE FROM video_assets WHERE video_id = ?", (asset["video_id"],))
+    return True
+
+
+def delete_conversation_video_assets(conversation_id: int) -> list[str]:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT video_id FROM video_assets WHERE conversation_id = ?",
+            (conversation_id,),
+        ).fetchall()
+        conn.execute("DELETE FROM video_assets WHERE conversation_id = ?", (conversation_id,))
+    return [str(row["video_id"] or "").strip() for row in rows if str(row["video_id"] or "").strip()]
+
+
 def parse_message_metadata(raw_metadata) -> dict:
     if isinstance(raw_metadata, dict):
         return raw_metadata
@@ -997,7 +1139,7 @@ def _normalize_message_attachment(entry) -> dict | None:
         return None
 
     kind = str(entry.get("kind") or "").strip().lower()
-    if kind not in {"image", "document"}:
+    if kind not in {"image", "document", "video"}:
         return None
 
     cleaned = {"kind": kind}
@@ -1038,6 +1180,33 @@ def _normalize_message_attachment(entry) -> dict | None:
             return None
         return cleaned
 
+    if kind == "video":
+        video_id = str(entry.get("video_id") or "").strip()[:64]
+        video_title = str(entry.get("video_title") or "").strip()[:255]
+        video_url = str(entry.get("video_url") or "").strip()[:2000]
+        video_platform = str(entry.get("video_platform") or "").strip()[:40]
+        transcript_context_block = str(entry.get("transcript_context_block") or "").strip()[:CONTENT_MAX_CHARS]
+        transcript_language = str(entry.get("transcript_language") or "").strip()[:40]
+
+        if video_id:
+            cleaned["video_id"] = video_id
+        if video_title:
+            cleaned["video_title"] = video_title
+        if video_url:
+            cleaned["video_url"] = video_url
+        if video_platform:
+            cleaned["video_platform"] = video_platform
+        if transcript_context_block:
+            cleaned["transcript_context_block"] = transcript_context_block
+        if transcript_language:
+            cleaned["transcript_language"] = transcript_language
+        if entry.get("transcript_text_truncated") is True:
+            cleaned["transcript_text_truncated"] = True
+
+        if not cleaned.get("video_id") and not cleaned.get("video_url"):
+            return None
+        return cleaned
+
     file_id = str(entry.get("file_id") or "").strip()[:64]
     file_name = str(entry.get("file_name") or "").strip()[:255]
     file_mime_type = str(entry.get("file_mime_type") or "").strip()[:120]
@@ -1073,6 +1242,12 @@ def extract_message_attachments(metadata: dict | None) -> list[dict]:
                 "image",
                 cleaned.get("image_id") or "",
                 cleaned.get("image_name") or "",
+            )
+        elif cleaned["kind"] == "video":
+            dedupe_key = (
+                "video",
+                cleaned.get("video_id") or "",
+                cleaned.get("video_url") or "",
             )
         else:
             dedupe_key = (
@@ -1111,6 +1286,18 @@ def extract_message_attachments(metadata: dict | None) -> list[dict]:
         "file_context_block": source.get("file_context_block"),
     }
     append_attachment(legacy_document)
+
+    legacy_video = {
+        "kind": "video",
+        "video_id": source.get("video_id"),
+        "video_title": source.get("video_title"),
+        "video_url": source.get("video_url"),
+        "video_platform": source.get("video_platform"),
+        "transcript_context_block": source.get("transcript_context_block"),
+        "transcript_language": source.get("transcript_language"),
+        "transcript_text_truncated": source.get("transcript_text_truncated") is True,
+    }
+    append_attachment(legacy_video)
 
     return normalized
 

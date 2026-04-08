@@ -84,6 +84,7 @@ from db import (
     build_user_profile_system_context,
     count_visible_message_tokens,
     create_image_asset,
+    create_video_asset,
     delete_conversation_memory_entry,
     extract_pending_clarification,
     extract_message_usage,
@@ -98,6 +99,7 @@ from db import (
     get_db,
     get_file_asset,
     get_image_asset,
+    get_video_asset,
     get_user_profile_entries,
     insert_message,
     insert_conversation_memory_entry,
@@ -5719,6 +5721,110 @@ class AppRoutesTestCase(unittest.TestCase):
             asset = get_file_asset(attachment["file_id"], conversation_id=conversation_id)
             self.assertIsNotNone(asset)
             self.assertEqual(asset["message_id"], user_messages[0]["id"])
+
+    def test_chat_youtube_transcript_attachment_persists_and_reaches_prompt(self):
+        conversation_id = self._create_conversation()
+        captured = {}
+
+        def fake_run_agent_stream(api_messages, *args, **kwargs):
+            captured["api_messages"] = api_messages
+            return iter([{"type": "done"}])
+
+        with patch("routes.chat.YOUTUBE_TRANSCRIPTS_ENABLED", True), patch(
+            "routes.chat.read_youtube_video_reference",
+            return_value=("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+        ), patch(
+            "routes.chat.transcribe_youtube_video",
+            return_value={
+                "platform": "youtube",
+                "source_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                "source_video_id": "dQw4w9WgXcQ",
+                "title": "Demo Video",
+                "duration_seconds": 93,
+                "transcript_text": "Hello from the transcript. This is the main point.",
+                "transcript_language": "en",
+            },
+        ), patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream):
+            response = self.client.post(
+                "/chat",
+                json={
+                    "messages": [{"role": "user", "content": "Summarize this video"}],
+                    "model": "deepseek-chat",
+                    "conversation_id": conversation_id,
+                    "user_content": "Summarize this video",
+                    "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        events = [json.loads(line) for line in response.get_data(as_text=True).strip().splitlines()]
+        video_event = next((event for event in events if event["type"] == "video_transcript_ready"), None)
+        self.assertIsNotNone(video_event)
+        self.assertEqual(video_event["video_title"], "Demo Video")
+
+        conversation_response = self.client.get(f"/api/conversations/{conversation_id}")
+        self.assertEqual(conversation_response.status_code, 200)
+        messages = conversation_response.get_json()["messages"]
+        user_messages = [message for message in messages if message["role"] == "user"]
+        self.assertEqual(len(user_messages), 1)
+
+        metadata = user_messages[0]["metadata"]
+        attachments = metadata.get("attachments") or []
+        self.assertEqual(len(attachments), 1)
+        self.assertEqual(attachments[0]["kind"], "video")
+        self.assertEqual(attachments[0]["video_title"], "Demo Video")
+        self.assertIn("Hello from the transcript", attachments[0]["transcript_context_block"])
+
+        asset = get_video_asset(attachments[0]["video_id"], conversation_id=conversation_id)
+        self.assertIsNotNone(asset)
+        self.assertEqual(asset["message_id"], user_messages[0]["id"])
+        self.assertEqual(asset["title"], "Demo Video")
+
+        user_prompt_messages = [message for message in captured.get("api_messages", []) if message.get("role") == "user"]
+        self.assertTrue(any("[YouTube video transcript: Demo Video]" in str(message.get("content") or "") for message in user_prompt_messages))
+
+    def test_chat_rejects_invalid_youtube_url(self):
+        conversation_id = self._create_conversation()
+
+        with patch("routes.chat.YOUTUBE_TRANSCRIPTS_ENABLED", True), patch(
+            "routes.chat.read_youtube_video_reference",
+            side_effect=ValueError("Geçerli bir YouTube URL girin."),
+        ):
+            response = self.client.post(
+                "/chat",
+                json={
+                    "messages": [{"role": "user", "content": "Check this"}],
+                    "model": "deepseek-chat",
+                    "conversation_id": conversation_id,
+                    "user_content": "Check this",
+                    "youtube_url": "https://example.com/not-youtube",
+                },
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("YouTube", response.get_json()["error"])
+
+    def test_extract_youtube_video_id_rejects_lookalike_host(self):
+        from video_transcript_service import extract_youtube_video_id
+
+        self.assertIsNone(extract_youtube_video_id("https://notyoutube.com/watch?v=dQw4w9WgXcQ"))
+
+    def test_delete_conversation_removes_persisted_video_assets(self):
+        conversation_id = self._create_conversation()
+        asset = create_video_asset(
+            conversation_id,
+            source_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            source_video_id="dQw4w9WgXcQ",
+            title="Demo Video",
+            transcript_text="Transcript body",
+            transcript_language="en",
+            duration_seconds=93,
+        )
+
+        response = self.client.delete(f"/api/conversations/{conversation_id}")
+
+        self.assertEqual(response.status_code, 204)
+        self.assertIsNone(get_video_asset(asset["video_id"], conversation_id=conversation_id))
 
     def test_delete_conversation_removes_persisted_image_files(self):
         conversation_id = self._create_conversation()

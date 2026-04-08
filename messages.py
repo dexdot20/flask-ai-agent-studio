@@ -526,6 +526,7 @@ def build_user_message_for_model(
     attachments = extract_message_attachments(metadata)
     canvas_document_lookup = _build_canvas_document_lookup(canvas_documents)
     file_context_blocks = []
+    video_context_blocks = []
     vision_attachments = []
     for attachment in attachments:
         if attachment.get("kind") == "document":
@@ -534,6 +535,12 @@ def build_user_message_for_model(
                 continue
             if context_block and context_block not in file_context_blocks:
                 file_context_blocks.append(context_block)
+            continue
+
+        if attachment.get("kind") == "video":
+            context_block = str(attachment.get("transcript_context_block") or "").strip()
+            if context_block and context_block not in video_context_blocks:
+                video_context_blocks.append(context_block)
             continue
 
         image_id = str(attachment.get("image_id") or "").strip()
@@ -546,7 +553,7 @@ def build_user_message_for_model(
         if has_vision:
             vision_attachments.append(attachment)
 
-    if not file_context_blocks and not vision_attachments:
+    if not file_context_blocks and not video_context_blocks and not vision_attachments:
         return content
 
     parts = []
@@ -554,6 +561,7 @@ def build_user_message_for_model(
         parts.append(content)
 
     parts.extend(file_context_blocks)
+    parts.extend(video_context_blocks)
 
     for index, attachment in enumerate(vision_attachments, start=1):
         image_id = str(attachment.get("image_id") or "").strip()

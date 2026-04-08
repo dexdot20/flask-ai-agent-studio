@@ -36,6 +36,7 @@ from config import (
 from db import (
     delete_conversation_file_assets,
     delete_conversation_image_assets,
+    delete_conversation_video_assets,
     extract_message_attachments,
     extract_sub_agent_traces,
     get_app_settings,
@@ -911,6 +912,7 @@ def register_conversation_routes(app) -> None:
     def delete_conversation(conv_id):
         delete_conversation_image_assets(conv_id)
         delete_conversation_file_assets(conv_id)
+        delete_conversation_video_assets(conv_id)
         with get_db() as conn:
             conn.execute("DELETE FROM conversations WHERE id = ?", (conv_id,))
         if RAG_ENABLED:

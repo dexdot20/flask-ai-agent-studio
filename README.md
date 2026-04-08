@@ -196,6 +196,7 @@ Optional stacks:
 pip install -r requirements-rag.txt
 pip install -r requirements-ocr-easy.txt
 pip install -r requirements-vl.txt
+pip install -r requirements-youtube-transcript.txt
 ```
 
 If you want PaddleOCR instead of EasyOCR:
@@ -214,6 +215,15 @@ pip install -r requirements-dev.txt
 ```
 
 `requirements.txt` is the shared app baseline. RAG, OCR, and VL stacks live in separate requirement files so manual installs can stay targeted.
+
+For local YouTube transcript extraction, install `requirements-youtube-transcript.txt`, make sure `ffmpeg` is available on your machine, and enable the feature in `.env`:
+
+```env
+YOUTUBE_TRANSCRIPTS_ENABLED=true
+YOUTUBE_TRANSCRIPT_MODEL_SIZE=small
+YOUTUBE_TRANSCRIPT_DEVICE=auto
+YOUTUBE_TRANSCRIPT_COMPUTE_TYPE=int8
+```
 
 ### 3) Hardware and runtime requirements
 

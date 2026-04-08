@@ -18,6 +18,7 @@ const inputEl = document.getElementById("user-input");
 const imageInputEl = document.getElementById("image-input");
 const docInputEl = document.getElementById("doc-input");
 const attachBtn = document.getElementById("attach-btn");
+const youtubeUrlBtn = document.getElementById("youtube-url-btn");
 const attachmentPreviewEl = document.getElementById("attachment-preview");
 const chatAreaEl = document.getElementById("chat-area");
 const chatDropOverlay = document.getElementById("chat-drop-overlay");
@@ -444,6 +445,7 @@ let activeAssistantStreamingBubble = null;
 let activeAssistantStreamingHasVisibleAnswer = false;
 let selectedImageFiles = [];
 let selectedDocumentFiles = [];
+let selectedYouTubeUrl = "";
 let pendingDocumentCanvasOpen = null;
 let editingMessageId = null;
 let inlineEditingMessageId = null;
@@ -487,6 +489,9 @@ let activeToastTimers = new Map();
 let chatDragDepth = 0;
 let isCanvasMobileTreeOpen = false;
 const featureFlags = bootstrapData.features || appSettings.features || {};
+if (youtubeUrlBtn && !Boolean(featureFlags.youtube_transcripts_enabled)) {
+  youtubeUrlBtn.hidden = true;
+}
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 const MAX_DOCUMENT_BYTES = 20 * 1024 * 1024;
@@ -589,7 +594,7 @@ function normalizeMessageAttachment(entry) {
   }
 
   const kind = String(entry.kind || "").trim().toLowerCase();
-  if (kind !== "image" && kind !== "document") {
+  if (kind !== "image" && kind !== "document" && kind !== "video") {
     return null;
   }
 
@@ -615,8 +620,30 @@ function normalizeMessageAttachment(entry) {
   const fileId = String(entry.file_id || "").trim();
   const fileName = String(entry.file_name || "").trim();
   if (!fileId && !fileName) {
-    return null;
+    if (kind !== "video") {
+      return null;
+    }
   }
+
+  if (kind === "video") {
+    const videoId = String(entry.video_id || "").trim();
+    const videoTitle = String(entry.video_title || "").trim();
+    const videoUrl = String(entry.video_url || "").trim();
+    if (!videoId && !videoUrl) {
+      return null;
+    }
+    return {
+      kind,
+      video_id: videoId,
+      video_title: videoTitle,
+      video_url: videoUrl,
+      video_platform: String(entry.video_platform || "").trim(),
+      transcript_context_block: String(entry.transcript_context_block || "").trim(),
+      transcript_language: String(entry.transcript_language || "").trim(),
+      transcript_text_truncated: entry.transcript_text_truncated === true,
+    };
+  }
+
   return {
     kind,
     file_id: fileId,
@@ -638,6 +665,10 @@ function getAttachmentIdentityKeys(attachment) {
 
   if (attachment.kind === "document") {
     return [attachment.file_id, attachment.file_name].map((value) => String(value || "").trim()).filter(Boolean);
+  }
+
+  if (attachment.kind === "video") {
+    return [attachment.video_id, attachment.video_url].map((value) => String(value || "").trim()).filter(Boolean);
   }
 
   return [];
@@ -685,6 +716,16 @@ function getMessageAttachments(metadata) {
     file_mime_type: metadata.file_mime_type,
     file_text_truncated: metadata.file_text_truncated === true,
     file_context_block: metadata.file_context_block,
+  });
+  appendAttachment({
+    kind: "video",
+    video_id: metadata.video_id,
+    video_title: metadata.video_title,
+    video_url: metadata.video_url,
+    video_platform: metadata.video_platform,
+    transcript_context_block: metadata.transcript_context_block,
+    transcript_language: metadata.transcript_language,
+    transcript_text_truncated: metadata.transcript_text_truncated === true,
   });
 
   return attachments;
@@ -740,6 +781,13 @@ function mergeAttachmentMetadata(metadata, attachment) {
     "file_mime_type",
     "file_text_truncated",
     "file_context_block",
+    "video_id",
+    "video_title",
+    "video_url",
+    "video_platform",
+    "transcript_context_block",
+    "transcript_language",
+    "transcript_text_truncated",
   ];
   blockedKeys.forEach((key) => delete base[key]);
 
@@ -763,10 +811,11 @@ function mergeAttachmentMetadata(metadata, attachment) {
   };
 }
 
-function buildPendingAttachmentMetadata(imageFiles, documentFiles) {
+function buildPendingAttachmentMetadata(imageFiles, documentFiles, youtubeUrl = "") {
   const attachments = [
     ...(imageFiles || []).map((file) => ({ kind: "image", image_name: file.name })),
     ...(documentFiles || []).map((file) => ({ kind: "document", file_name: file.name })),
+    ...(youtubeUrl ? [{ kind: "video", video_url: youtubeUrl, video_title: "YouTube video" }] : []),
   ];
   return attachments.length
     ? {
@@ -7153,6 +7202,60 @@ docInputEl.addEventListener("change", () => {
   handleSelectedFiles(files, { documentsOnly: true });
 });
 
+function extractYouTubeVideoIdFromUrl(value) {
+  try {
+    const url = new URL(String(value || "").trim());
+    const host = url.hostname.toLowerCase();
+    if (host === "youtu.be" || host === "www.youtu.be") {
+      const candidate = url.pathname.replace(/^\//, "").split("/", 1)[0];
+      return /^[A-Za-z0-9_-]{11}$/.test(candidate) ? candidate : "";
+    }
+    if (!["youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"].includes(host)) {
+      return "";
+    }
+    if (url.pathname === "/watch") {
+      const candidate = url.searchParams.get("v") || "";
+      return /^[A-Za-z0-9_-]{11}$/.test(candidate) ? candidate : "";
+    }
+    const parts = url.pathname.split("/").filter(Boolean);
+    if (parts.length >= 2 && ["shorts", "embed", "live"].includes(parts[0])) {
+      return /^[A-Za-z0-9_-]{11}$/.test(parts[1]) ? parts[1] : "";
+    }
+  } catch (_error) {
+    return "";
+  }
+  return "";
+}
+
+function normalizeYouTubeUrlInput(value) {
+  const videoId = extractYouTubeVideoIdFromUrl(value);
+  return videoId ? `https://www.youtube.com/watch?v=${videoId}` : "";
+}
+
+function promptForYouTubeUrl() {
+  const initialValue = selectedYouTubeUrl || "https://www.youtube.com/watch?v=";
+  const nextValue = window.prompt("Paste a YouTube video URL", initialValue);
+  if (nextValue === null) {
+    return;
+  }
+  const normalizedUrl = normalizeYouTubeUrlInput(nextValue);
+  if (!normalizedUrl) {
+    showError("Enter a valid YouTube URL.");
+    return;
+  }
+  selectedYouTubeUrl = normalizedUrl;
+  renderAttachmentPreview();
+}
+
+youtubeUrlBtn?.addEventListener("click", () => {
+  if (isStreaming || isFixing) return;
+  if (!Boolean(featureFlags.youtube_transcripts_enabled)) {
+    showError("YouTube transcript feature is disabled in .env.");
+    return;
+  }
+  promptForYouTubeUrl();
+});
+
 function setChatDropOverlayVisible(visible) {
   if (!chatAreaEl || !chatDropOverlay) {
     return;
@@ -7273,6 +7376,9 @@ function setStreaming(active) {
   fixBtn.disabled = active;
   inputEl.disabled = active;
   attachBtn.disabled = active;
+  if (youtubeUrlBtn) {
+    youtubeUrlBtn.disabled = active;
+  }
   if (mobilePruneBtn) {
     mobilePruneBtn.disabled = active;
   }
@@ -7284,6 +7390,9 @@ function setFixing(active) {
   fixBtn.disabled = active;
   inputEl.disabled = active;
   attachBtn.disabled = active;
+  if (youtubeUrlBtn) {
+    youtubeUrlBtn.disabled = active;
+  }
 }
 
 function showToast(message, tone = "error") {
@@ -7483,8 +7592,10 @@ function clearSelectedDocument() {
 function removeSelectedAttachment(kind, fileKey) {
   if (kind === "image") {
     selectedImageFiles = selectedImageFiles.filter((file) => getAttachmentFileKey(file) !== fileKey);
-  } else {
+  } else if (kind === "document") {
     selectedDocumentFiles = selectedDocumentFiles.filter((file) => getAttachmentFileKey(file) !== fileKey);
+  } else if (kind === "video") {
+    selectedYouTubeUrl = "";
   }
   renderAttachmentPreview();
 }
@@ -7492,6 +7603,7 @@ function removeSelectedAttachment(kind, fileKey) {
 function clearAllAttachments() {
   selectedImageFiles = [];
   selectedDocumentFiles = [];
+  selectedYouTubeUrl = "";
   imageInputEl.value = "";
   docInputEl.value = "";
   renderAttachmentPreview();
@@ -7516,6 +7628,7 @@ function renderAttachmentPreview() {
   const attachments = [
     ...selectedImageFiles.map((file) => ({ kind: "image", file })),
     ...selectedDocumentFiles.map((file) => ({ kind: "document", file })),
+    ...(selectedYouTubeUrl ? [{ kind: "video", url: selectedYouTubeUrl }] : []),
   ];
 
   if (!attachments.length) {
@@ -7526,19 +7639,22 @@ function renderAttachmentPreview() {
 
   attachmentPreviewEl.hidden = false;
 
-  attachmentPreviewEl.innerHTML = attachments.map(({ kind, file }) => {
-    const fileKey = getAttachmentFileKey(file);
-    const icon = kind === "image" ? "🖼️" : "📄";
+  attachmentPreviewEl.innerHTML = attachments.map(({ kind, file, url }) => {
+    const fileKey = kind === "video" ? String(url || "") : getAttachmentFileKey(file);
+    const icon = kind === "image" ? "🖼️" : kind === "video" ? "▶️" : "📄";
     const preferredImageAnalysis = describePreferredImageAnalysisMethod();
     const description = kind === "image"
       ? `${preferredImageAnalysis} · ${formatFileSize(file.size)}`
-      : `${((file.name || "").split(".").pop() || "FILE").toUpperCase()} document · ${formatFileSize(file.size)}`;
-    const removeLabel = kind === "image" ? "Remove image" : "Remove document";
+      : kind === "video"
+        ? "YouTube transcript will be generated locally"
+        : `${((file.name || "").split(".").pop() || "FILE").toUpperCase()} document · ${formatFileSize(file.size)}`;
+    const name = kind === "video" ? String(url || "YouTube video") : file.name;
+    const removeLabel = kind === "image" ? "Remove image" : kind === "video" ? "Remove video" : "Remove document";
     return (
       `<div class="attachment-chip">` +
         `<span class="attachment-chip__icon">${icon}</span>` +
         `<span class="attachment-chip__meta">` +
-          `<strong>${escHtml(file.name)}</strong>` +
+          `<strong>${escHtml(name)}</strong>` +
           `<small>${escHtml(description)}</small>` +
         `</span>` +
         `<button type="button" class="attachment-chip__remove" data-kind="${escHtml(kind)}" data-file-key="${escHtml(fileKey)}" title="${removeLabel}">×</button>` +
@@ -7572,6 +7688,18 @@ function appendAttachmentBadge(group, metadata) {
         `<span class="message-attachment__icon">📄</span>` +
         `<span class="message-attachment__name">${escHtml(label)}</span>` +
         `<span class="message-attachment__state">Document uploaded · Canvas</span>`;
+      group.appendChild(badge);
+      return;
+    }
+
+    if (attachment.kind === "video") {
+      const videoTitle = String(attachment.video_title || "YouTube video").trim() || "YouTube video";
+      const transcriptReady = Boolean(String(attachment.transcript_context_block || "").trim());
+      const stateLabel = transcriptReady ? "Transcript ready" : "Video linked";
+      badge.innerHTML =
+        `<span class="message-attachment__icon">▶️</span>` +
+        `<span class="message-attachment__name">${escHtml(videoTitle)}</span>` +
+        `<span class="message-attachment__state">${escHtml(stateLabel)}</span>`;
       group.appendChild(badge);
       return;
     }
@@ -8732,7 +8860,8 @@ async function sendMessage(options = {}) {
   const text = forcedText || inputEl.value.trim();
   const pendingImages = [...selectedImageFiles];
   const pendingDocuments = [...selectedDocumentFiles];
-  if (!text && !pendingImages.length && !pendingDocuments.length) {
+  const pendingYouTubeUrl = selectedYouTubeUrl;
+  if (!text && !pendingImages.length && !pendingDocuments.length && !pendingYouTubeUrl) {
     return;
   }
 
@@ -8778,7 +8907,7 @@ async function sendMessage(options = {}) {
     updateExportPanel();
   }
 
-  let userMetadata = buildPendingAttachmentMetadata(pendingImages, pendingDocuments);
+  let userMetadata = buildPendingAttachmentMetadata(pendingImages, pendingDocuments, pendingYouTubeUrl);
   if (forcedMetadata) {
     userMetadata = {
       ...(userMetadata || {}),
@@ -8798,7 +8927,7 @@ async function sendMessage(options = {}) {
       return;
     }
 
-    if (!pendingImages.length && !pendingDocuments.length) {
+    if (!pendingImages.length && !pendingDocuments.length && !pendingYouTubeUrl) {
       userMetadata = sanitizeEditedUserMetadata(editingEntry.metadata);
     }
 
@@ -8920,6 +9049,9 @@ async function sendMessage(options = {}) {
       }
       pendingImages.forEach((file) => formData.append("image", file));
       pendingDocuments.forEach((file) => formData.append("document", file));
+      if (pendingYouTubeUrl) {
+        formData.append("youtube_url", pendingYouTubeUrl);
+      }
 
       response = await fetch("/chat", {
         method: "POST",
@@ -8937,6 +9069,7 @@ async function sendMessage(options = {}) {
           conversation_id: currentConvId,
           edited_message_id: editedMessageId,
           user_content: text,
+          youtube_url: pendingYouTubeUrl,
         }),
       });
     }
@@ -8968,6 +9101,20 @@ async function sendMessage(options = {}) {
           lastMessage.metadata = mergeAttachmentMetadata(lastMessage.metadata, attachment);
           updateAttachmentBadge(userGroup, lastMessage.metadata);
           updateVisionDetails(userGroup, lastMessage.metadata);
+        }
+        scrollToBottom();
+      } else if (event.type === "video_transcript_ready") {
+        const lastMessage = history[history.length - 1];
+        if (lastMessage && lastMessage.role === "user") {
+          const attachment = event.attachment || {
+            kind: "video",
+            video_id: event.video_id,
+            video_title: event.video_title,
+            video_url: event.video_url,
+            transcript_language: event.transcript_language,
+          };
+          lastMessage.metadata = mergeAttachmentMetadata(lastMessage.metadata, attachment);
+          updateAttachmentBadge(userGroup, lastMessage.metadata);
         }
         scrollToBottom();
       } else if (event.type === "document_processed") {

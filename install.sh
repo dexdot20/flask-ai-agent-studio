@@ -75,6 +75,10 @@ install_requirements() {
   if [[ "${VISION_ENABLED_VALUE}" == "true" ]]; then
     install_requirements_file "${ROOT_DIR}/requirements-vl.txt"
   fi
+
+  if [[ "${YOUTUBE_TRANSCRIPTS_VALUE}" == "true" ]]; then
+    install_requirements_file "${ROOT_DIR}/requirements-youtube-transcript.txt"
+  fi
 }
 
 install_requirements_file() {
@@ -319,6 +323,7 @@ QWEN_MODEL_PATH=""
 QWEN_PRELOAD="false"
 QWEN_LOAD_IN_4BIT="false"
 QWEN_DTYPE="float16"
+YOUTUBE_TRANSCRIPTS_VALUE="false"
 
 case "${PROFILE}" in
   Low)
@@ -374,6 +379,10 @@ if [[ "${OCR_ENABLED_VALUE}" == "true" ]]; then
   info "Selected OCR provider: ${OCR_PROVIDER_CHOICE}"
 fi
 
+if [[ "$(prompt_yes_no "Enable YouTube transcript uploads?" "n")" == "yes" ]]; then
+  YOUTUBE_TRANSCRIPTS_VALUE="true"
+fi
+
 if [[ "${ACCELERATOR}" == "CUDA" ]]; then
   BGE_DEVICE="cuda"
   BGE_PRELOAD="true"
@@ -412,6 +421,7 @@ fi
 
 write_env "${ENV_FILE}" \
   "DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}" \
+  "YOUTUBE_TRANSCRIPTS_ENABLED=${YOUTUBE_TRANSCRIPTS_VALUE}" \
   "OPENROUTER_API_KEY=${OPENROUTER_API_KEY}" \
   "OPENROUTER_HTTP_REFERER=${OPENROUTER_HTTP_REFERER}" \
   "OPENROUTER_APP_TITLE=${OPENROUTER_APP_TITLE}" \
@@ -421,6 +431,7 @@ write_env "${ENV_FILE}" \
   "OCR_ENABLED=${OCR_ENABLED_VALUE}" \
   "OCR_PROVIDER=${OCR_PROVIDER_VALUE}" \
   "OCR_PRELOAD=${OCR_PRELOAD}" \
+  "YOUTUBE_TRANSCRIPTS_ENABLED=${YOUTUBE_TRANSCRIPTS_VALUE}" \
   "VISION_ENABLED=${VISION_ENABLED_VALUE}" \
   "BGE_M3_MODEL_PATH=${BGE_MODEL_PATH}" \
   "BGE_M3_DEVICE=${BGE_DEVICE}" \
@@ -458,6 +469,7 @@ printf '  OCR_ENABLED: %s\n' "${OCR_ENABLED_VALUE}"
 if [[ "${OCR_ENABLED_VALUE}" == "true" ]]; then
   printf '  OCR_PROVIDER: %s\n' "${OCR_PROVIDER_VALUE}"
 fi
+printf '  YOUTUBE_TRANSCRIPTS_ENABLED: %s\n' "${YOUTUBE_TRANSCRIPTS_VALUE}"
 printf '  VISION_ENABLED: %s\n' "${VISION_ENABLED_VALUE}"
 printf '  model cache: %s\n' "${MODEL_DIR}"
 printf '  .env: %s\n' "${ENV_FILE}"

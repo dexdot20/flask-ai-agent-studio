@@ -35,6 +35,8 @@ from config import (
     RAG_SOURCE_CONVERSATION,
     RAG_SOURCE_TOOL_MEMORY,
     RAG_SOURCE_TOOL_RESULT,
+    YOUTUBE_TRANSCRIPTS_DISABLED_FEATURE_ERROR,
+    YOUTUBE_TRANSCRIPTS_ENABLED,
     VISION_ENABLED,
 )
 from db import (
@@ -47,6 +49,7 @@ from db import (
     count_visible_message_tokens,
     create_file_asset,
     create_image_asset,
+    create_video_asset,
     extract_clarification_response,
     extract_message_attachments,
     extract_pending_clarification,
@@ -55,6 +58,7 @@ from db import (
     extract_sub_agent_traces,
     delete_file_asset,
     delete_image_asset,
+    delete_video_asset,
     find_summary_covering_message_id,
     get_active_tool_names,
     get_all_scratchpad_sections,
@@ -109,6 +113,7 @@ from db import (
     upsert_user_profile_facts,
     update_file_asset,
     update_image_asset,
+    update_video_asset,
     update_message_metadata,
 )
 from doc_service import (
@@ -139,6 +144,11 @@ from rag_service import sync_conversations_to_rag_background, sync_conversations
 from routes.request_utils import is_valid_model_id, normalize_model_id, parse_messages_payload, parse_optional_int
 from token_utils import estimate_text_tokens
 from tool_registry import resolve_runtime_tool_names
+from video_transcript_service import (
+    build_video_transcript_context_block,
+    read_youtube_video_reference,
+    transcribe_youtube_video,
+)
 from vision import preload_local_vision_engine, read_uploaded_image
 from prune_service import is_prunable_message, prune_conversation_batch
 
@@ -2539,6 +2549,7 @@ def parse_chat_request_payload():
             "conversation_id": parse_optional_int(request.form.get("conversation_id")),
             "edited_message_id": parse_optional_int(request.form.get("edited_message_id")),
             "user_content": request.form.get("user_content", ""),
+            "youtube_url": request.form.get("youtube_url", ""),
             "images": image_files,
             "documents": document_files,
         }
@@ -2551,6 +2562,7 @@ def parse_chat_request_payload():
         "conversation_id": parse_optional_int(data.get("conversation_id")),
         "edited_message_id": parse_optional_int(data.get("edited_message_id")),
         "user_content": data.get("user_content", ""),
+        "youtube_url": data.get("youtube_url", ""),
         "images": [],
         "documents": [],
     }
@@ -2572,6 +2584,13 @@ def _strip_attachment_metadata(metadata: dict | None) -> dict:
         "file_mime_type",
         "file_text_truncated",
         "file_context_block",
+        "video_id",
+        "video_title",
+        "video_url",
+        "video_platform",
+        "transcript_context_block",
+        "transcript_language",
+        "transcript_text_truncated",
     }
     return {key: value for key, value in source.items() if key not in blocked_keys}
 
@@ -2784,6 +2803,7 @@ def register_chat_routes(app) -> None:
         conv_id = payload["conversation_id"]
         edited_message_id = payload["edited_message_id"]
         user_content = payload["user_content"]
+        youtube_url = str(payload.get("youtube_url") or "").strip()
         uploaded_images = payload["images"]
         uploaded_documents = payload["documents"]
 
@@ -2795,18 +2815,22 @@ def register_chat_routes(app) -> None:
 
         settings = get_app_settings()
         vision_events = []
+        video_events = []
         latest_user_message = messages[-1] if messages and messages[-1]["role"] == "user" else None
 
         processed_attachments = []
         processed_document_uploads = []
         created_image_assets = []
         created_file_assets = []
+        created_video_assets = []
 
-        if uploaded_images or uploaded_documents:
+        if uploaded_images or uploaded_documents or youtube_url:
             if latest_user_message is None:
                 return jsonify({"error": "Attachments require a user message."}), 400
             if uploaded_images and not IMAGE_UPLOADS_ENABLED:
                 return jsonify({"error": IMAGE_UPLOADS_DISABLED_FEATURE_ERROR}), 410
+            if youtube_url and not YOUTUBE_TRANSCRIPTS_ENABLED:
+                return jsonify({"error": YOUTUBE_TRANSCRIPTS_DISABLED_FEATURE_ERROR}), 410
             if conv_id is None:
                 return jsonify({"error": "Attachments require an existing saved conversation."}), 400
 
@@ -2879,25 +2903,77 @@ def register_chat_routes(app) -> None:
                             "canvas_language": infer_canvas_language(doc_name),
                         }
                     )
+
+                if youtube_url:
+                    processing_stage = "video"
+                    normalized_url, source_video_id = read_youtube_video_reference(youtube_url)
+                    transcript_result = transcribe_youtube_video(normalized_url)
+                    created_video_asset = create_video_asset(
+                        conv_id,
+                        source_url=transcript_result.get("source_url") or normalized_url,
+                        source_video_id=transcript_result.get("source_video_id") or source_video_id,
+                        title=transcript_result.get("title") or "YouTube video",
+                        transcript_text=transcript_result.get("transcript_text") or "",
+                        transcript_language=transcript_result.get("transcript_language") or "",
+                        duration_seconds=transcript_result.get("duration_seconds"),
+                        platform=transcript_result.get("platform") or "youtube",
+                    )
+                    created_video_assets.append(created_video_asset)
+                    context_block, transcript_truncated = build_video_transcript_context_block(
+                        created_video_asset.get("title") or "YouTube video",
+                        created_video_asset.get("transcript_text") or "",
+                        source_url=created_video_asset.get("source_url") or normalized_url,
+                        transcript_language=created_video_asset.get("transcript_language") or "",
+                        duration_seconds=created_video_asset.get("duration_seconds"),
+                    )
+                    attachment = {
+                        "kind": "video",
+                        "video_id": created_video_asset["video_id"],
+                        "video_title": created_video_asset.get("title") or "YouTube video",
+                        "video_url": created_video_asset.get("source_url") or normalized_url,
+                        "video_platform": created_video_asset.get("platform") or "youtube",
+                        "transcript_language": created_video_asset.get("transcript_language") or "",
+                        "transcript_text_truncated": transcript_truncated,
+                        "transcript_context_block": context_block,
+                    }
+                    processed_attachments.append(attachment)
+                    video_events.append(
+                        {
+                            "type": "video_transcript_ready",
+                            "attachment": attachment,
+                            "video_id": created_video_asset["video_id"],
+                            "video_title": created_video_asset.get("title") or "YouTube video",
+                            "video_url": created_video_asset.get("source_url") or normalized_url,
+                            "transcript_language": created_video_asset.get("transcript_language") or "",
+                        }
+                    )
             except ValueError as exc:
                 for asset in created_image_assets:
                     delete_image_asset(asset["image_id"], conversation_id=conv_id)
                 for asset in created_file_assets:
                     delete_file_asset(asset["file_id"], conversation_id=conv_id)
+                for asset in created_video_assets:
+                    delete_video_asset(asset["video_id"], conversation_id=conv_id)
                 return jsonify({"error": str(exc)}), 400
             except RuntimeError as exc:
                 for asset in created_image_assets:
                     delete_image_asset(asset["image_id"], conversation_id=conv_id)
                 for asset in created_file_assets:
                     delete_file_asset(asset["file_id"], conversation_id=conv_id)
+                for asset in created_video_assets:
+                    delete_video_asset(asset["video_id"], conversation_id=conv_id)
                 return jsonify({"error": str(exc)}), 410
             except Exception as exc:
                 for asset in created_image_assets:
                     delete_image_asset(asset["image_id"], conversation_id=conv_id)
                 for asset in created_file_assets:
                     delete_file_asset(asset["file_id"], conversation_id=conv_id)
+                for asset in created_video_assets:
+                    delete_video_asset(asset["video_id"], conversation_id=conv_id)
                 if processing_stage == "document":
                     return jsonify({"error": f"Document processing failed: {exc}"}), 502
+                if processing_stage == "video":
+                    return jsonify({"error": f"YouTube transcript processing failed: {exc}"}), 502
                 return jsonify({"error": f"Local image processing failed: {exc}"}), 502
 
             latest_user_message["metadata"] = _merge_attachment_metadata(
@@ -3008,6 +3084,12 @@ def register_chat_routes(app) -> None:
                                 message_id=persisted_user_message_id,
                                 initial_analysis=attachment,
                             )
+                        continue
+
+                    if attachment.get("kind") == "video":
+                        video_id = str(attachment.get("video_id") or "").strip()
+                        if video_id:
+                            update_video_asset(video_id, message_id=persisted_user_message_id)
                         continue
 
                     file_id = str(attachment.get("file_id") or "").strip()
@@ -3203,6 +3285,9 @@ def register_chat_routes(app) -> None:
 
             for vision_event in vision_events:
                 yield json.dumps(vision_event, ensure_ascii=False) + "\n"
+
+            for video_event in video_events:
+                yield json.dumps(video_event, ensure_ascii=False) + "\n"
 
             if preflight_summary_outcome and preflight_summary_outcome.get("applied"):
                 yield json.dumps(
