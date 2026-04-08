@@ -4293,6 +4293,28 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertIsNone(_validate_tool_arguments("search_web", tool_args))
 
+    def test_search_web_validator_normalizes_legacy_query_aliases(self):
+        from agent import _validate_tool_arguments
+
+        tool_args = {"search_query": "repo overview"}
+
+        self.assertIsNone(_validate_tool_arguments("search_web", tool_args))
+        self.assertEqual(tool_args["queries"], ["repo overview"])
+
+    def test_grep_fetched_content_validator_clamps_runtime_coercible_limits(self):
+        from agent import _validate_tool_arguments
+
+        tool_args = {
+            "url": "https://example.com",
+            "pattern": "Sağlık Yönetimi",
+            "context_lines": 10,
+            "max_matches": 99,
+        }
+
+        self.assertIsNone(_validate_tool_arguments("grep_fetched_content", tool_args))
+        self.assertEqual(tool_args["context_lines"], 5)
+        self.assertEqual(tool_args["max_matches"], 30)
+
     def test_execute_tool_batches_search_web_queries_above_schema_limit(self):
         queries = [f"query {index}" for index in range(1, 8)]
 
@@ -6063,6 +6085,14 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(mocked_search.call_args.args[0], ["repo overview"])
         self.assertEqual(summary, "1 web results found")
         self.assertEqual(result[0]["title"], "A")
+
+    def test_execute_tool_skips_empty_search_web_calls(self):
+        with patch("agent.search_web_tool") as mocked_search:
+            result, summary = _execute_tool("search_web", {})
+
+        mocked_search.assert_not_called()
+        self.assertEqual(result, [])
+        self.assertEqual(summary, "search_web skipped: no queries provided")
 
     def test_execute_tool_blocks_recursive_sub_agent_calls(self):
         result, summary = _execute_tool(
@@ -11278,6 +11308,34 @@ class AppRoutesTestCase(unittest.TestCase):
         )
         answer_start_index = next(index for index, event in enumerate(events) if event["type"] == "answer_start")
         self.assertLess(tool_result_index, answer_start_index)
+
+    def test_run_agent_stream_skips_empty_search_web_tool_calls_without_error(self):
+        responses = [
+            iter(
+                [
+                    self._tool_call_chunk("search_web", {}),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=1, total_tokens=3)),
+                ]
+            ),
+            iter(
+                [
+                    self._stream_chunk(content="Final answer."),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=4, total_tokens=6)),
+                ]
+            ),
+        ]
+
+        with patch("agent.client.chat.completions.create", side_effect=responses), patch("agent.search_web_tool") as mocked_search:
+            events = list(run_agent_stream([{"role": "user", "content": "Test"}], "deepseek-chat", 2, ["search_web"]))
+
+        mocked_search.assert_not_called()
+        self.assertFalse(any(event["type"] == "tool_error" and event.get("tool") == "search_web" for event in events))
+        tool_result = next(
+            event for event in events if event["type"] == "tool_result" and event.get("tool") == "search_web"
+        )
+        self.assertEqual(tool_result["step"], 1)
+        self.assertEqual(tool_result["call_id"], "tool-call-1")
+        self.assertEqual(tool_result["summary"], "search_web skipped: no queries provided")
 
     def test_run_agent_stream_allows_active_tool_calls_even_when_prompt_tools_are_pruned(self):
         responses = [

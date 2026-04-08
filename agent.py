@@ -219,6 +219,13 @@ SEARCH_QUERY_BATCHED_TOOL_NAMES = {
     "search_news_ddgs",
     "search_news_google",
 }
+SEARCH_QUERY_ARGUMENT_ALIASES = (
+    "queries",
+    "query",
+    "search_queries",
+    "search_query",
+    "q",
+)
 SEARCH_TOOL_QUERY_BATCH_SIZE = 5
 PARALLEL_SAFE_TOOL_NAMES = WEB_TOOL_NAMES | {
     "image_explain",
@@ -1023,11 +1030,32 @@ def _iter_search_query_batches(raw_queries, *, batch_size: int = SEARCH_TOOL_QUE
 
 
 def _get_search_tool_queries(tool_args: dict):
+    return _coerce_search_tool_queries(tool_args)
+
+
+def _coerce_search_tool_queries(tool_args: dict, *, ensure_key: bool = False):
     if not isinstance(tool_args, dict):
         return []
-    if "queries" in tool_args:
-        return tool_args.get("queries")
-    return tool_args.get("query", [])
+
+    matched_key = None
+    raw_queries = []
+    for key in SEARCH_QUERY_ARGUMENT_ALIASES:
+        if key not in tool_args:
+            continue
+        matched_key = key
+        raw_queries = tool_args.get(key)
+        break
+
+    if matched_key is None:
+        if ensure_key:
+            tool_args["queries"] = []
+        return []
+
+    normalized_queries = _normalize_search_queries(raw_queries)
+    if matched_key != "queries":
+        tool_args.pop(matched_key, None)
+    tool_args["queries"] = normalized_queries
+    return normalized_queries
 
 
 def _merge_batched_search_results(result_batches: list[list]) -> list:
@@ -3387,10 +3415,8 @@ def _validate_tool_arguments(tool_name: str, tool_args: dict) -> str | None:
         tool_args["notes"] = [legacy_note]
     if tool_name in {"append_scratchpad", "replace_scratchpad"} and "section" not in tool_args:
         tool_args["section"] = "notes"
-    if tool_name in {"search_web", "search_news_ddgs", "search_news_google"} and "queries" not in tool_args:
-        legacy_query = tool_args.pop("query", None)
-        if legacy_query is not None:
-            tool_args["queries"] = legacy_query if isinstance(legacy_query, list) else [legacy_query]
+    if tool_name in SEARCH_QUERY_BATCHED_TOOL_NAMES:
+        _coerce_search_tool_queries(tool_args, ensure_key=True)
 
     schema = spec.get("parameters") or {}
     properties = schema.get("properties") or {}
@@ -3463,7 +3489,10 @@ def _validate_tool_arguments(tool_name: str, tool_args: dict) -> str | None:
             if tool_name == "ask_clarifying_question" and key == "questions":
                 max_items = get_clarification_max_questions(get_app_settings())
             if isinstance(min_items, int) and len(value) < min_items:
-                return f"Argument '{key}' in {tool_name} requires at least {min_items} items"
+                if key == "queries" and tool_name in SEARCH_QUERY_BATCHED_TOOL_NAMES:
+                    pass
+                else:
+                    return f"Argument '{key}' in {tool_name} requires at least {min_items} items"
             if isinstance(max_items, int) and len(value) > max_items:
                 if key == "queries" and tool_name in SEARCH_QUERY_BATCHED_TOOL_NAMES:
                     pass
@@ -3476,9 +3505,17 @@ def _validate_tool_arguments(tool_name: str, tool_args: dict) -> str | None:
             minimum = property_schema.get("minimum")
             maximum = property_schema.get("maximum")
             if minimum is not None and value < minimum:
-                return f"Argument '{key}' in {tool_name} must be >= {minimum}"
+                if tool_name == "grep_fetched_content" and key in {"context_lines", "max_matches"}:
+                    value = minimum
+                    tool_args[key] = value
+                else:
+                    return f"Argument '{key}' in {tool_name} must be >= {minimum}"
             if maximum is not None and value > maximum:
-                return f"Argument '{key}' in {tool_name} must be <= {maximum}"
+                if tool_name == "grep_fetched_content" and key in {"context_lines", "max_matches"}:
+                    value = maximum
+                    tool_args[key] = value
+                else:
+                    return f"Argument '{key}' in {tool_name} must be <= {maximum}"
         enum_values = property_schema.get("enum")
         if enum_values and value not in enum_values:
             return f"Argument '{key}' in {tool_name} must be one of: {', '.join(str(item) for item in enum_values)}"
@@ -4235,13 +4272,19 @@ def _run_search_tool_memory(tool_args: dict, runtime_state: dict):
 
 def _run_search_web(tool_args: dict, runtime_state: dict):
     del runtime_state
-    result = _merge_batched_search_results([search_web_tool(batch) for batch in _iter_search_query_batches(_get_search_tool_queries(tool_args))])
+    query_batches = list(_iter_search_query_batches(_get_search_tool_queries(tool_args)))
+    if not query_batches:
+        return [], "search_web skipped: no queries provided"
+    result = _merge_batched_search_results([search_web_tool(batch) for batch in query_batches])
     ok_count = sum(1 for row in result if "error" not in row)
     return result, f"{ok_count} web results found"
 
 
 def _run_search_news_ddgs(tool_args: dict, runtime_state: dict):
     del runtime_state
+    query_batches = list(_iter_search_query_batches(_get_search_tool_queries(tool_args)))
+    if not query_batches:
+        return [], "search_news_ddgs skipped: no queries provided"
     result = _merge_batched_search_results(
         [
             search_news_ddgs_tool(
@@ -4249,7 +4292,7 @@ def _run_search_news_ddgs(tool_args: dict, runtime_state: dict):
                 lang=tool_args.get("lang", "tr"),
                 when=tool_args.get("when"),
             )
-            for batch in _iter_search_query_batches(_get_search_tool_queries(tool_args))
+            for batch in query_batches
         ]
     )
     ok_count = sum(1 for row in result if "error" not in row)
@@ -4258,6 +4301,9 @@ def _run_search_news_ddgs(tool_args: dict, runtime_state: dict):
 
 def _run_search_news_google(tool_args: dict, runtime_state: dict):
     del runtime_state
+    query_batches = list(_iter_search_query_batches(_get_search_tool_queries(tool_args)))
+    if not query_batches:
+        return [], "search_news_google skipped: no queries provided"
     result = _merge_batched_search_results(
         [
             search_news_google_tool(
@@ -4265,7 +4311,7 @@ def _run_search_news_google(tool_args: dict, runtime_state: dict):
                 lang=tool_args.get("lang", "tr"),
                 when=tool_args.get("when"),
             )
-            for batch in _iter_search_query_batches(_get_search_tool_queries(tool_args))
+            for batch in query_batches
         ]
     )
     ok_count = sum(1 for row in result if "error" not in row)
