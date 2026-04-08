@@ -2561,9 +2561,26 @@ function renderMarkdown(text) {
   return renderMathExpressionsInHtml(sanitizeHtml(escHtml(rawText).replace(/\n/g, "<br>")));
 }
 
+function renderStreamingCanvasDocumentBody(document) {
+  const content = String(document?.content || "");
+  const formatClass = document?.format === "code" ? " canvas-streaming-preview--code" : "";
+  const documentId = escHtml(String(document?.id || "").trim());
+  const format = escHtml(String(document?.format || "markdown").trim().toLowerCase() || "markdown");
+  return (
+    `<div class="canvas-document-shell">` +
+      `<article class="canvas-page-sheet canvas-page-sheet--streaming">` +
+        `<pre class="canvas-streaming-preview${formatClass}" data-canvas-streaming-preview-id="${documentId}" data-canvas-streaming-preview-format="${format}">${escHtml(content)}</pre>` +
+      `</article>` +
+    `</div>`
+  );
+}
+
 function renderCanvasDocumentBody(document) {
   if (!document) {
     return "";
+  }
+  if (document.isStreamingPreview) {
+    return renderStreamingCanvasDocumentBody(document);
   }
   if (document.format === "code") {
     return sanitizeHtml(`<div class="canvas-code-document">${renderHighlightedCodeBlock(document.content, document.language || null)}</div>`);
@@ -3525,8 +3542,21 @@ function updateCanvasActiveDocumentDisplay(renderState) {
     canvasDocumentEl.innerHTML = "";
   } else {
     canvasDocumentEl.hidden = false;
-    canvasDocumentEl.innerHTML = renderCanvasDocumentBody(activeDocument);
-    bindCanvasPageNavigation(activeDocument);
+    if (activeDocument.isStreamingPreview) {
+      const existingPreviewEl = canvasDocumentEl.querySelector(".canvas-streaming-preview");
+      const existingPreviewId = String(existingPreviewEl?.getAttribute("data-canvas-streaming-preview-id") || "").trim();
+      const existingPreviewFormat = String(existingPreviewEl?.getAttribute("data-canvas-streaming-preview-format") || "").trim();
+      const nextPreviewId = String(activeDocument.id || "").trim();
+      const nextPreviewFormat = String(activeDocument.format || "markdown").trim().toLowerCase() || "markdown";
+      if (existingPreviewEl && existingPreviewId === nextPreviewId && existingPreviewFormat === nextPreviewFormat) {
+        existingPreviewEl.textContent = String(activeDocument.content || "");
+      } else {
+        canvasDocumentEl.innerHTML = renderStreamingCanvasDocumentBody(activeDocument);
+      }
+    } else {
+      canvasDocumentEl.innerHTML = renderCanvasDocumentBody(activeDocument);
+      bindCanvasPageNavigation(activeDocument);
+    }
     if (canvasEditorEl) {
       canvasEditorEl.hidden = true;
     }
@@ -4433,7 +4463,6 @@ async function deleteCanvasDocuments({ documentId = null, clearAll = false, conf
   }
 
   cancelPendingConversationRefreshes();
-      anchor.download = getSuggestedDownloadFilename(response, `${currentConvTitle || "conversation"}.${format}`);
   try {
     const params = new URLSearchParams();
     if (targetDocumentId) {
@@ -4451,7 +4480,6 @@ async function deleteCanvasDocuments({ documentId = null, clearAll = false, conf
     if (!response.ok) {
       throw new Error(payload.error || "Canvas delete failed.");
     }
-      anchor.download = getSuggestedDownloadFilename(response, `${canvasDocument.title}.${format}`);
     history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
     streamingCanvasDocuments = [];
     pendingCanvasDiff = null;

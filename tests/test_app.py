@@ -8141,7 +8141,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(rows[1]["role"], "assistant")
         self.assertEqual(rows[1]["content"], "Hello world")
         assistant_metadata = json.loads(rows[1]["metadata"])
-        self.assertEqual(assistant_metadata["reasoning_content"], "Analyzing request")
+        self.assertNotIn("reasoning_content", assistant_metadata)
         self.assertEqual(assistant_metadata["tool_trace"][0]["tool_name"], "search_web")
         self.assertEqual(assistant_metadata["tool_trace"][0]["state"], "done")
         self.assertEqual(assistant_metadata["usage"]["estimated_input_tokens"], 11)
@@ -8879,9 +8879,9 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(len(assistant_messages), 1)
         self.assertEqual(assistant_messages[0]["content"], "Partial answer. Continued.")
         self.assertEqual(assistant_messages[0]["usage"]["total_tokens"], 11)
-        self.assertEqual(assistant_messages[0]["metadata"]["reasoning_content"], "Reasoning completed.")
+        self.assertNotIn("reasoning_content", assistant_messages[0]["metadata"])
 
-    def test_persist_streaming_assistant_message_keeps_reasoning_only_partial_output(self):
+    def test_persist_streaming_assistant_message_ignores_reasoning_only_partial_output(self):
         conversation_id = self._create_conversation()
 
         assistant_message_id = _persist_streaming_assistant_message(
@@ -8898,14 +8898,12 @@ class AppRoutesTestCase(unittest.TestCase):
             pending_clarification=None,
         )
 
-        self.assertIsInstance(assistant_message_id, int)
+        self.assertIsNone(assistant_message_id)
 
         conversation_response = self.client.get(f"/api/conversations/{conversation_id}")
         messages = conversation_response.get_json()["messages"]
         assistant_messages = [message for message in messages if message["role"] == "assistant"]
-        self.assertEqual(len(assistant_messages), 1)
-        self.assertEqual(assistant_messages[0]["content"], "")
-        self.assertEqual(assistant_messages[0]["metadata"]["reasoning_content"], "Reasoning only.")
+        self.assertEqual(assistant_messages, [])
 
     def test_uploaded_document_prompts_before_opening_canvas(self):
         conversation_id = self._create_conversation()
@@ -10057,6 +10055,17 @@ class AppRoutesTestCase(unittest.TestCase):
                 conn,
                 conversation_id,
                 "assistant",
+                "",
+                metadata=serialize_message_metadata(
+                    {
+                        "reasoning_content": "This stale reasoning should never be exported.",
+                    }
+                ),
+            )
+            insert_message(
+                conn,
+                conversation_id,
+                "assistant",
                 "Here is the answer. $A = {0, 1, 2}$ and $$x^2 + y^2 = z^2$$.",
                 metadata=serialize_message_metadata(
                     {
@@ -10078,7 +10087,12 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(markdown_response.status_code, 200)
         self.assertEqual(markdown_response.mimetype, "text/markdown")
         self.assertIn("attachment; filename=\"Exportable-Chat.md\"", markdown_response.headers["Content-Disposition"])
+        self.assertIn("Message count: 2", markdown_response.get_data(as_text=True))
         self.assertIn("## 1. User", markdown_response.get_data(as_text=True))
+        self.assertIn("## 2. Assistant", markdown_response.get_data(as_text=True))
+        self.assertNotIn("_(empty)_", markdown_response.get_data(as_text=True))
+        self.assertNotIn("### Reasoning", markdown_response.get_data(as_text=True))
+        self.assertNotIn("This stale reasoning should never be exported.", markdown_response.get_data(as_text=True))
         self.assertIn("### Tool Trace", markdown_response.get_data(as_text=True))
 
         docx_response = self.client.get(f"/api/conversations/{conversation_id}/export?format=docx")
@@ -10091,7 +10105,7 @@ class AppRoutesTestCase(unittest.TestCase):
 
         docx_document = Document(io.BytesIO(docx_response.data))
         docx_text = "\n".join(paragraph.text for paragraph in docx_document.paragraphs)
-        self.assertIn("Reasoned through the request.", docx_text)
+        self.assertNotIn("Reasoned through the request.", docx_text)
         self.assertIn("A = {0, 1, 2}", docx_text)
         self.assertIn("x^2 + y^2 = z^2", docx_text)
         self.assertNotIn("$A = {0, 1, 2}$", docx_text)
@@ -10105,7 +10119,7 @@ class AppRoutesTestCase(unittest.TestCase):
 
         with pdfplumber.open(io.BytesIO(pdf_response.data)) as pdf:
             pdf_text = "\n".join(page.extract_text() or "" for page in pdf.pages)
-        self.assertIn("Reasoned through the request.", pdf_text)
+        self.assertNotIn("Reasoned through the request.", pdf_text)
         self.assertIn("A = {0, 1, 2}", pdf_text)
         self.assertIn("x^2 + y^2 = z^2", pdf_text)
         self.assertNotIn("$A = {0, 1, 2}$", pdf_text)

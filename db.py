@@ -1197,16 +1197,24 @@ def delete_conversation_video_assets(conversation_id: int) -> list[str]:
     return [str(row["video_id"] or "").strip() for row in rows if str(row["video_id"] or "").strip()]
 
 
+def _strip_private_message_metadata_fields(metadata: dict | None) -> dict:
+    if not isinstance(metadata, dict):
+        return {}
+    cleaned = dict(metadata)
+    cleaned.pop("reasoning_content", None)
+    return cleaned
+
+
 def parse_message_metadata(raw_metadata) -> dict:
     if isinstance(raw_metadata, dict):
-        return raw_metadata
+        return _strip_private_message_metadata_fields(raw_metadata)
     if not raw_metadata:
         return {}
     try:
         parsed = json.loads(raw_metadata)
     except Exception:
         return {}
-    return parsed if isinstance(parsed, dict) else {}
+    return _strip_private_message_metadata_fields(parsed if isinstance(parsed, dict) else {})
 
 
 def _normalize_message_attachment(entry) -> dict | None:
@@ -2166,7 +2174,7 @@ def sanitize_edited_user_message_metadata(metadata: dict | None) -> dict:
 
 
 def serialize_message_metadata(metadata: dict | None) -> str | None:
-    metadata = metadata if isinstance(metadata, dict) else {}
+    metadata = _strip_private_message_metadata_fields(metadata if isinstance(metadata, dict) else {})
     cleaned = {}
     context_injection = str(metadata.get("context_injection") or "").strip()
 
@@ -2184,7 +2192,6 @@ def serialize_message_metadata(metadata: dict | None) -> str | None:
     image_mime_type = (metadata.get("image_mime_type") or (primary_image or {}).get("image_mime_type") or "").strip()
     image_id = (metadata.get("image_id") or (primary_image or {}).get("image_id") or "").strip()
     key_points = metadata.get("key_points") if isinstance(metadata.get("key_points"), list) else (primary_image or {}).get("key_points")
-    reasoning_content = (metadata.get("reasoning_content") or "").strip()
     summary_source = (metadata.get("summary_source") or "").strip()
     generated_at = (metadata.get("generated_at") or "").strip()
 
@@ -2213,8 +2220,6 @@ def serialize_message_metadata(metadata: dict | None) -> str | None:
                 normalized_points.append(point_text[:300])
         if normalized_points:
             cleaned["key_points"] = normalized_points[:8]
-    if reasoning_content:
-        cleaned["reasoning_content"] = reasoning_content[:CONTENT_MAX_CHARS]
     if metadata.get("is_pruned") is True:
         cleaned["is_pruned"] = True
     pruned_original = str(metadata.get("pruned_original") or "").strip()

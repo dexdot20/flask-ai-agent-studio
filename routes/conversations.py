@@ -5,7 +5,7 @@ import json
 import os
 import re
 
-from flask import Response, jsonify, request
+from flask import Response, current_app, jsonify, request
 
 from canvas_service import (
     build_html_download,
@@ -82,6 +82,7 @@ from rag_service import (
     ingest_uploaded_rag_document,
     list_rag_documents_db,
     search_knowledge_base_tool,
+    sync_conversations_to_rag_background,
     sync_conversations_to_rag_safe,
     sync_conversations_to_rag,
 )
@@ -670,7 +671,7 @@ def register_conversation_routes(app) -> None:
             )
 
         if RAG_ENABLED:
-            sync_conversations_to_rag_safe(conversation_id=conv_id)
+            sync_conversations_to_rag_background(current_app._get_current_object(), conversation_id=conv_id)
 
         _, updated_messages = _load_conversation_payload(conv_id)
         active_document_id = get_canvas_runtime_active_document_id(runtime_state)

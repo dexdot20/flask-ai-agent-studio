@@ -311,7 +311,6 @@ def _build_assistant_message_metadata(
             "canvas_viewports": canvas_viewports or {},
             "canvas_cleared": canvas_cleared,
             "tool_trace": tool_trace_entries or [],
-            "reasoning_content": reasoning,
             "pending_clarification": pending_clarification,
             "usage": usage_data,
         }
@@ -341,7 +340,6 @@ def _persist_streaming_assistant_message(
     normalized_content = str(content or "")
     has_meaningful_output = bool(
         normalized_content.strip()
-        or str(reasoning or "").strip()
         or pending_clarification
         or canvas_documents
         or canvas_cleared

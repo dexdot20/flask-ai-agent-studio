@@ -255,7 +255,8 @@ def _build_sub_agent_trace_details(traces: list[dict]) -> str | None:
 
 def _iter_message_sections(messages: list[dict]) -> list[dict]:
     sections = []
-    for index, message in enumerate(messages or [], start=1):
+    section_index = 0
+    for message in messages or []:
         if not isinstance(message, dict):
             continue
 
@@ -267,10 +268,6 @@ def _iter_message_sections(messages: list[dict]) -> list[dict]:
         message_metadata = _build_message_metadata_details(message)
         if message_metadata:
             details.append(("Message Metadata", message_metadata))
-
-        reasoning = str(metadata.get("reasoning_content") or "").strip()
-        if reasoning:
-            details.append(("Reasoning", reasoning))
 
         tool_trace = metadata.get("tool_trace") if isinstance(metadata.get("tool_trace"), list) else []
         if tool_trace:
@@ -316,9 +313,15 @@ def _iter_message_sections(messages: list[dict]) -> list[dict]:
             if canvas_details:
                 details.append(("Canvas Documents", canvas_details))
 
+        has_user_facing_details = any(label != "Message Metadata" for label, _ in details)
+        if role == "assistant" and not content and not has_user_facing_details:
+            continue
+
+        section_index += 1
+
         sections.append(
             {
-                "title": f"## {index}. {role.title()}",
+                "title": f"## {section_index}. {role.title()}",
                 "content": content,
                 "details": details,
             }
@@ -327,8 +330,9 @@ def _iter_message_sections(messages: list[dict]) -> list[dict]:
 
 
 def build_conversation_markdown_download(conversation: dict, messages: list[dict]) -> bytes:
-    lines = _build_export_header(conversation, len(messages or []))
-    for section in _iter_message_sections(messages):
+    sections = _iter_message_sections(messages)
+    lines = _build_export_header(conversation, len(sections))
+    for section in sections:
         lines.extend(["", section["title"], ""])
         lines.append(section["content"] or "_(empty)_")
         for label, value in section["details"]:
@@ -338,11 +342,12 @@ def build_conversation_markdown_download(conversation: dict, messages: list[dict
 
 
 def build_conversation_docx_download(conversation: dict, messages: list[dict]) -> bytes:
+    sections = _iter_message_sections(messages)
     document = Document()
     title = str(conversation.get("title") or "Conversation Export").strip() or "Conversation Export"
     document.add_heading(title, level=0)
     exported_at = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
-    meta_parts = [f"Exported at: {exported_at}", f"Message count: {len(messages or [])}"]
+    meta_parts = [f"Exported at: {exported_at}", f"Message count: {len(sections)}"]
     conversation_id = conversation.get("id")
     if conversation_id is not None:
         meta_parts.insert(1, f"Conversation ID: {conversation_id}")
@@ -351,7 +356,7 @@ def build_conversation_docx_download(conversation: dict, messages: list[dict]) -
         meta_parts.append(f"Model: {model}")
     document.add_paragraph(" | ".join(meta_parts))
 
-    for section in _iter_message_sections(messages):
+    for section in sections:
         document.add_heading(section["title"].replace("## ", ""), level=1)
         append_markdown_docx(document, section["content"] or "(empty)", heading_level_offset=2)
         for label, value in section["details"]:
@@ -364,6 +369,7 @@ def build_conversation_docx_download(conversation: dict, messages: list[dict]) -
 
 
 def build_conversation_pdf_download(conversation: dict, messages: list[dict]) -> bytes:
+    sections = _iter_message_sections(messages)
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle("ConversationTitle", parent=styles["Title"], fontName=_BOLD_FONT)
     heading_style = ParagraphStyle(
@@ -405,7 +411,7 @@ def build_conversation_pdf_download(conversation: dict, messages: list[dict]) ->
     title = str(conversation.get("title") or "Conversation Export").strip() or "Conversation Export"
     exported_at = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
     story = [Paragraph(_escape_pdf_text(title), title_style), Spacer(1, 6)]
-    meta_parts = [f"Exported at: {exported_at}", f"Message count: {len(messages or [])}"]
+    meta_parts = [f"Exported at: {exported_at}", f"Message count: {len(sections)}"]
     conversation_id = conversation.get("id")
     if conversation_id is not None:
         meta_parts.insert(1, f"Conversation ID: {conversation_id}")
@@ -414,7 +420,7 @@ def build_conversation_pdf_download(conversation: dict, messages: list[dict]) ->
         meta_parts.append(f"Model: {model}")
     story.append(Paragraph(_escape_pdf_text(" | ".join(meta_parts)), body_style))
 
-    for section in _iter_message_sections(messages):
+    for section in sections:
         story.append(Spacer(1, 6))
         story.append(Paragraph(_escape_pdf_text(section["title"].replace("## ", "")), heading_style))
         append_markdown_pdf_story(
