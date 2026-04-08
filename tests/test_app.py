@@ -150,6 +150,7 @@ from routes.auth import AUTH_LAST_SEEN_KEY, AUTH_REMEMBER_KEY, AUTH_SESSION_KEY
 from routes.chat import (
     OMITTED_TOOL_OUTPUT_TEXT,
     _build_budgeted_prompt_messages,
+    _get_effective_summary_trigger_token_count,
     _build_tool_trace_context,
     _count_prunable_message_tokens,
     _estimate_prompt_tokens,
@@ -479,6 +480,31 @@ class AppRoutesTestCase(unittest.TestCase):
             ["uploaded_document"] if payload["features"]["rag_enabled"] else [],
         )
         self.assertFalse(payload["tool_memory_auto_inject"])
+
+    def test_settings_accepts_extended_summary_options(self):
+        response = self.client.patch(
+            "/api/settings",
+            json={
+                "chat_summary_mode": "conservative",
+                "chat_summary_detail_level": "comprehensive",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["chat_summary_mode"], "conservative")
+        self.assertEqual(payload["chat_summary_detail_level"], "comprehensive")
+
+    def test_conservative_summary_mode_uses_rounded_up_threshold(self):
+        self.assertEqual(
+            _get_effective_summary_trigger_token_count(
+                {
+                    "chat_summary_mode": "conservative",
+                    "chat_summary_trigger_token_count": "1001",
+                }
+            ),
+            1502,
+        )
 
     def test_settings_patch_rejects_invalid_proxy_operations(self):
         response = self.client.patch(
@@ -4336,6 +4362,8 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("read_file", [tool["name"] for tool in workspace_tools])
         self.assertIn("validate_project_workspace", [tool["name"] for tool in workspace_tools])
         self.assertIn("search_canvas_document", [tool["name"] for tool in canvas_tools])
+        self.assertIn("batch_read_canvas_documents", [tool["name"] for tool in canvas_tools])
+        self.assertIn("validate_canvas_document", [tool["name"] for tool in canvas_tools])
         self.assertIn("focus_canvas_page", [tool["name"] for tool in canvas_tools])
 
     def test_sub_agent_allowed_tools_are_web_only(self):
@@ -4351,7 +4379,7 @@ class AppRoutesTestCase(unittest.TestCase):
             ],
         )
 
-    def test_settings_api_roundtrip_preserves_all_tool_permissions(self):
+    def test_settings_api_roundtrip_preserves_configured_tool_permissions(self):
         response = self.client.patch(
             "/api/settings",
             json={
@@ -4367,11 +4395,9 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         active_tools = response.get_json()["active_tools"]
         self.assertEqual(
-            active_tools[:4],
+            active_tools,
             ["append_scratchpad", "replace_scratchpad", "delete_canvas_document", "clear_canvas"],
         )
-        self.assertIn("expand_canvas_document", active_tools)
-        self.assertIn("scroll_canvas_document", active_tools)
 
     def test_proxy_candidates_for_operation_respect_saved_scope(self):
         save_app_settings({"proxy_enabled_operations": json.dumps([PROXY_OPERATION_FETCH_URL], ensure_ascii=False)})

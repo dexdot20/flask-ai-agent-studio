@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import math
 import logging
 import json
 import re
@@ -516,10 +517,14 @@ def _normalize_summary_items(values, *, max_items: int, item_limit: int) -> list
 
 def _build_summary_detail_instruction(summary_detail_level: str) -> str:
     normalized = str(summary_detail_level or "").strip().lower()
+    if normalized == "very_concise":
+        return "Write a very concise summary that keeps only the absolute essentials needed to continue the conversation."
     if normalized == "concise":
         return "Write a concise summary that keeps only the highest-value reusable facts, decisions, and open questions."
     if normalized == "detailed":
         return "Write a more detailed summary that preserves important context while staying compact and continuation-oriented."
+    if normalized == "comprehensive":
+        return "Write a comprehensive summary that preserves key context, decisions, open questions, and important nuance while still remaining readable."
     return "Write a balanced summary that keeps the most important reusable facts, decisions, and open questions."
 
 
@@ -1101,8 +1106,11 @@ def _resolve_summary_model(settings: dict | None = None, fallback_model: str | N
 
 def _get_effective_summary_trigger_token_count(settings: dict) -> int:
     base_threshold = get_chat_summary_trigger_token_count(settings)
-    if get_chat_summary_mode(settings) == "aggressive":
+    summary_mode = get_chat_summary_mode(settings)
+    if summary_mode == "aggressive":
         return max(1_000, base_threshold // 2)
+    if summary_mode == "conservative":
+        return min(200_000, max(1_000, math.ceil(base_threshold * 1.5)))
     return base_threshold
 
 
@@ -3261,7 +3269,7 @@ def register_chat_routes(app) -> None:
         skip_last_override = data.get("skip_last")
         summary_focus = str(data.get("summary_focus") or "").strip()
         summary_detail_level = str(data.get("summary_detail_level") or "balanced").strip().lower()
-        if summary_detail_level not in {"concise", "balanced", "detailed"}:
+        if summary_detail_level not in {"very_concise", "concise", "balanced", "detailed", "comprehensive"}:
             summary_detail_level = "balanced"
 
         settings = get_app_settings()

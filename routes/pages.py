@@ -258,6 +258,7 @@ def _get_tool_permission_section_key(name: str) -> str:
         "rewrite_canvas_document",
         "preview_canvas_changes",
         "batch_canvas_edits",
+        "batch_read_canvas_documents",
         "transform_canvas_lines",
         "update_canvas_metadata",
         "set_canvas_viewport",
@@ -268,6 +269,7 @@ def _get_tool_permission_section_key(name: str) -> str:
         "delete_canvas_lines",
         "delete_canvas_document",
         "clear_canvas",
+        "validate_canvas_document",
     }:
         return "canvas"
     return "workspace"
@@ -327,6 +329,9 @@ def build_settings_payload() -> dict:
     visible_chat_models = get_visible_chat_models(raw)
     general_instructions = get_general_instructions(raw)
     ai_personality = get_ai_personality(raw)
+    configured_active_tools = normalize_active_tool_names(raw.get("active_tools"))
+    if raw.get("active_tools") is None:
+        configured_active_tools = get_active_tool_names(raw)
     return {
         "user_preferences": general_instructions,
         "general_instructions": general_instructions,
@@ -345,7 +350,7 @@ def build_settings_payload() -> dict:
         "operation_model_preferences": get_operation_model_preferences(raw),
         "operation_model_fallback_preferences": get_operation_model_fallback_preferences(raw),
         "image_processing_method": normalize_image_processing_method(raw.get("image_processing_method")),
-        "active_tools": get_active_tool_names(raw),
+        "active_tools": configured_active_tools,
         "proxy_enabled_operations": get_proxy_enabled_operations(raw),
         "rag_auto_inject": get_rag_auto_inject_enabled(raw),
         "rag_sensitivity": get_rag_sensitivity(raw),
@@ -793,13 +798,13 @@ def register_page_routes(app) -> None:
         if chat_summary_mode_raw is not None:
             normalized_summary_mode = str(chat_summary_mode_raw or "").strip().lower()
             if normalized_summary_mode not in CHAT_SUMMARY_ALLOWED_MODES:
-                return jsonify({"error": "chat_summary_mode must be one of auto, never, or aggressive."}), 400
+                return jsonify({"error": "chat_summary_mode must be one of auto, conservative, never, or aggressive."}), 400
             settings["chat_summary_mode"] = normalized_summary_mode
 
         if chat_summary_detail_level_raw is not None:
             normalized_summary_detail_level = str(chat_summary_detail_level_raw or "").strip().lower()
-            if normalized_summary_detail_level not in {"concise", "balanced", "detailed"}:
-                return jsonify({"error": "chat_summary_detail_level must be one of concise, balanced, or detailed."}), 400
+            if normalized_summary_detail_level not in {"very_concise", "concise", "balanced", "detailed", "comprehensive"}:
+                return jsonify({"error": "chat_summary_detail_level must be one of very_concise, concise, balanced, detailed, or comprehensive."}), 400
             settings["chat_summary_detail_level"] = normalized_summary_detail_level
 
         if chat_summary_trigger_raw is not None:

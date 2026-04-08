@@ -5093,9 +5093,14 @@ function getSummaryTriggerValue() {
 
 function getEffectiveSummaryTriggerValue() {
   const baseTrigger = getSummaryTriggerValue();
-  return getSummaryModeValue() === "aggressive"
-    ? Math.max(1000, Math.floor(baseTrigger / 2))
-    : baseTrigger;
+  const mode = getSummaryModeValue();
+  if (mode === "aggressive") {
+    return Math.max(1000, Math.floor(baseTrigger / 2));
+  }
+  if (mode === "conservative") {
+    return Math.min(200000, Math.max(1000, Math.ceil(baseTrigger * 1.5)));
+  }
+  return baseTrigger;
 }
 
 function estimateSummaryTriggerTokens(entries = history) {
@@ -5211,6 +5216,10 @@ function renderSummaryInspector() {
     badgeTone = "warning";
     badgeText = "Disabled";
     headline = "Auto summary is disabled. Long chats will keep growing until you re-enable it.";
+  } else if (mode === "conservative") {
+    badgeTone = "muted";
+    badgeText = "Conservative";
+    headline = "Auto summary is using a higher threshold, so it will compress less often.";
   } else if (!currentConvId) {
     badgeTone = "muted";
     badgeText = "Idle";

@@ -372,19 +372,22 @@
                     <label class="settings-label" for="summary-mode-select">Conversation summary mode</label>
                     <select id="summary-mode-select">
                       <option value="auto">Auto</option>
-                      <option value="never">Never</option>
+                      <option value="conservative">Conservative</option>
                       <option value="aggressive">Aggressive</option>
+                      <option value="never">Never</option>
                     </select>
-                    <p class="settings-copy">Auto balances cost and continuity, Never disables background summarization, and Aggressive summarizes earlier and more often.</p>
+                    <p class="settings-copy">Auto balances cost and continuity, Conservative waits longer before compressing, Aggressive summarizes earlier and more often, and Never disables background summarization.</p>
                   </div>
                   <div class="settings-form-cluster">
                     <label class="settings-label" for="summary-detail-level-select">Summary detail level</label>
                     <select id="summary-detail-level-select">
-                      <option value="balanced">Balanced</option>
+                      <option value="very_concise">Very concise</option>
                       <option value="concise">Concise</option>
+                      <option value="balanced">Balanced</option>
                       <option value="detailed">Detailed</option>
+                      <option value="comprehensive">Comprehensive</option>
                     </select>
-                    <p class="settings-copy">Higher detail keeps more nuance and task history, but it also spends more prompt budget.</p>
+                    <p class="settings-copy">Lower detail trims harder for speed and cost, while higher detail preserves more nuance, decisions, and task history.</p>
                   </div>
                   <div class="settings-form-cluster">
                     <label class="settings-label" for="summary-trigger-input">Summary trigger in visible tokens (1000-200000)</label>
