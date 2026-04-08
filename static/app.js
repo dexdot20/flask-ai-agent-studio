@@ -735,10 +735,11 @@ function renderConversationMemoryPanel() {
     return;
   }
 
-  conversationMemoryEntries.forEach((entry) => {
+  conversationMemoryEntries.forEach((entry, index) => {
     const card = document.createElement("article");
     card.className = "memory-entry";
     card.dataset.entryId = String(entry.id || "");
+    card.dataset.entryIndex = String(index + 1);
 
     const header = document.createElement("div");
     header.className = "memory-entry__header";
@@ -754,9 +755,10 @@ function renderConversationMemoryPanel() {
     badge.textContent = getConversationMemoryEntryLabel(entry.entry_type);
     title.append(badge);
 
-    const entryIdLabel = document.createElement("span");
-    entryIdLabel.textContent = entry.id ? `#${entry.id}` : "#?";
-    title.append(entryIdLabel);
+    const entryIndexLabel = document.createElement("span");
+    entryIndexLabel.textContent = `#${index + 1}`;
+    entryIndexLabel.title = entry.id ? `Record ID #${entry.id}` : "Record ID unavailable";
+    title.append(entryIndexLabel);
 
     meta.append(title);
 
