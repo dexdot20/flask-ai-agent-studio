@@ -3076,6 +3076,19 @@ def _merge_stream_tool_call_delta(tool_call_parts: list[dict], delta) -> None:
             entry["arguments_parts"].append(arguments_part)
 
 
+def _stream_tool_call_entry_has_meaningful_content(raw_call: dict) -> bool:
+    if not isinstance(raw_call, dict):
+        return False
+    if str(raw_call.get("name") or "").strip():
+        return True
+    arguments_parts = raw_call.get("arguments_parts") if isinstance(raw_call.get("arguments_parts"), list) else []
+    return any(str(part or "") for part in arguments_parts)
+
+
+def _has_meaningful_stream_tool_calls(tool_call_parts: list[dict]) -> bool:
+    return any(_stream_tool_call_entry_has_meaningful_content(raw_call) for raw_call in tool_call_parts)
+
+
 def _extract_partial_json_string_value(arguments_text: str, field_name: str) -> str | None:
     raw_arguments = str(arguments_text or "")
     raw_field_name = str(field_name or "").strip()
@@ -3384,11 +3397,15 @@ def _build_streaming_canvas_tool_preview(
 
 
 def _finalize_stream_tool_calls(tool_call_parts: list[dict]) -> tuple[list[dict] | None, str | None]:
-    if not tool_call_parts:
+    meaningful_tool_call_parts = [
+        raw_call for raw_call in tool_call_parts
+        if _stream_tool_call_entry_has_meaningful_content(raw_call)
+    ]
+    if not meaningful_tool_call_parts:
         return None, None
 
     normalized_calls = []
-    for index, raw_call in enumerate(tool_call_parts, start=1):
+    for index, raw_call in enumerate(meaningful_tool_call_parts, start=1):
         tool_name = str(raw_call.get("name") or "").strip()
         if not tool_name:
             return None, f"tool_calls[{index}] is missing a tool name"
@@ -6494,7 +6511,7 @@ def run_agent_stream(
                         elif content_streaming_live:
                             for event in emit_turn_answer(content_delta):
                                 yield event
-                        elif tool_call_parts:
+                        elif _has_meaningful_stream_tool_calls(tool_call_parts):
                             buffered_content_deltas.append(content_delta)
                         else:
                             content_streaming_live = True

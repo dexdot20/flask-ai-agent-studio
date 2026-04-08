@@ -551,9 +551,6 @@ def register_conversation_routes(app) -> None:
         source_assistant_message_id = _parse_optional_int(data.get("source_assistant_message_id"))
         source_sub_agent_trace_index = _parse_optional_int(data.get("source_sub_agent_trace_index"))
 
-        if not content.strip():
-            return jsonify({"error": "content is required."}), 400
-
         conversation, messages = _load_conversation_payload(conv_id)
         if not conversation:
             return jsonify({"error": "Not found."}), 404

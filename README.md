@@ -480,6 +480,12 @@ The Settings page persists these values in `app_settings`:
 
 The delegated helper receives only explicit delegated task text, but users can configure its preferred model, fallback models, maximum step budget, parallel-tool limit, and which web research tools it may use from the Settings page. Cache behavior is also partially user-controlled via web cache TTL and the OpenRouter prompt-cache toggle.
 
+Prompt caching behavior is optimized in three different ways:
+
+- Built-in DeepSeek chat/reasoner calls rely on DeepSeek's automatic disk context caching, preserve a larger stable prefix when budgeting history, and surface `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` when the provider returns them.
+- OpenRouter Anthropic models use top-level `cache_control`, Gemini models inject explicit `cache_control` breakpoints on large stable blocks, and implicit-cache providers such as OpenRouter DeepSeek models are treated as cache-friendly for prefix retention and cache-hit estimation.
+- The chat runtime keeps the first system message stable and inserts volatile per-turn context later in the prompt so provider-side sticky routing and repeated-prefix caching have a better chance to hit.
+
 ## Using the app
 
 ### Basic chat flow

@@ -879,6 +879,25 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(merged["messages"][0]["content"], request_kwargs["messages"][0]["content"])
         self.assertEqual(merged["extra_body"], {"provider": {"sort": "throughput"}})
 
+    def test_build_openrouter_cache_estimate_context_supports_implicit_deepseek_caching(self):
+        messages = [
+            {"role": "system", "content": "Stable instructions."},
+            {"role": "user", "content": "Question about the same document."},
+        ]
+
+        cache_context = model_registry.build_openrouter_cache_estimate_context(
+            messages,
+            {
+                "provider": model_registry.OPENROUTER_PROVIDER,
+                "api_model": "deepseek/deepseek-chat",
+            },
+            {"openrouter_prompt_cache_enabled": True},
+        )
+
+        self.assertTrue(cache_context["supports_prompt_cache"])
+        self.assertEqual(cache_context["strategy"], "implicit")
+        self.assertIn('"role":"system"', cache_context["cacheable_text"])
+
     def test_openrouter_client_uses_proxy_candidates_before_direct_fallback(self):
         attempts = []
 
@@ -9149,6 +9168,34 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(trace_entry["canvas_document_title"], "Research - README setup")
         self.assertEqual(trace_entry["canvas_document_id"], payload["document"]["id"])
 
+    def test_canvas_post_endpoint_allows_blank_new_file_creation(self):
+        conversation_id = self._create_conversation()
+
+        response = self.client.post(
+            f"/api/conversations/{conversation_id}/canvas",
+            json={
+                "title": "notes.md",
+                "content": "",
+                "format": "markdown",
+            },
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.get_json()
+        self.assertEqual(payload["document"]["title"], "notes.md")
+        self.assertEqual(payload["document"]["content"], "")
+        self.assertEqual(payload["documents"][0]["title"], "notes.md")
+        self.assertEqual(payload["documents"][0]["content"], "")
+        self.assertEqual(payload["active_document_id"], payload["document"]["id"])
+
+        conversation_response = self.client.get(f"/api/conversations/{conversation_id}")
+        self.assertEqual(conversation_response.status_code, 200)
+        messages = conversation_response.get_json()["messages"]
+        latest_canvas = find_latest_canvas_documents(messages)
+        self.assertEqual(len(latest_canvas), 1)
+        self.assertEqual(latest_canvas[0]["title"], "notes.md")
+        self.assertEqual(latest_canvas[0]["content"], "")
+
     def test_document_canvas_inference_for_code_files(self):
         self.assertEqual(infer_canvas_format("main.py"), "code")
         self.assertEqual(infer_canvas_language("main.py"), "python")
@@ -12193,6 +12240,56 @@ class AppRoutesTestCase(unittest.TestCase):
         )
         answer_start_index = next(index for index, event in enumerate(events) if event["type"] == "answer_start")
         self.assertLess(tool_result_index, answer_start_index)
+
+    def test_run_agent_stream_does_not_buffer_openrouter_answer_on_placeholder_tool_call_delta(self):
+        responses = [
+            iter(
+                [
+                    self._tool_call_chunk("search_web", {"queries": ["latest"]}),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=2, total_tokens=4)),
+                ]
+            ),
+            iter(
+                [
+                    self._stream_chunk_openrouter(
+                        tool_calls=[
+                            {
+                                "index": 0,
+                                "id": "placeholder-call",
+                                "function": {"name": "", "arguments": ""},
+                            }
+                        ]
+                    ),
+                    self._stream_chunk_openrouter(content="Hello "),
+                    self._stream_chunk_openrouter(content="world"),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=3, total_tokens=5)),
+                ]
+            ),
+        ]
+
+        fake_create = Mock(side_effect=responses)
+        fake_target = {
+            "record": {"provider": model_registry.OPENROUTER_PROVIDER},
+            "client": SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))),
+            "api_model": "deepseek/deepseek-chat",
+            "extra_body": {},
+        }
+
+        with patch("agent.resolve_model_target", return_value=fake_target), patch(
+            "agent.search_web_tool",
+            return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+        ):
+            events = list(
+                run_agent_stream(
+                    [{"role": "user", "content": "Test"}],
+                    "openrouter:deepseek/deepseek-chat",
+                    2,
+                    ["search_web"],
+                )
+            )
+
+        answer_deltas = [event["text"] for event in events if event["type"] == "answer_delta"]
+        self.assertEqual(answer_deltas, ["Hello ", "world"])
 
     def test_run_agent_stream_skips_empty_search_web_tool_calls_without_error(self):
         responses = [
@@ -15791,6 +15888,51 @@ class AppRoutesTestCase(unittest.TestCase):
         )
         self.assertLess(first_user_index, first_summary_index)
         self.assertGreaterEqual(stats["prefix_message_count"], 1)
+
+    def test_budgeted_prompt_messages_bias_prefix_for_cache_friendly_models(self):
+        canonical_messages = normalize_chat_messages(
+            [
+                {"id": 1, "position": 1, "role": "user", "content": "Stable project brief. " * 160},
+                {"id": 2, "position": 2, "role": "assistant", "content": "Acknowledged. " * 120},
+                {"id": 3, "position": 3, "role": "user", "content": "Stable requirements list. " * 150},
+                {"id": 4, "position": 4, "role": "assistant", "content": "Captured. " * 120},
+                {"id": 5, "position": 5, "role": "user", "content": "Latest question with some new variation."},
+            ]
+        )
+        settings = {"user_preferences": "", "scratchpad": ""}
+
+        with patch("routes.chat.get_prompt_max_input_tokens", return_value=8000), patch(
+            "routes.chat.get_prompt_response_token_reserve", return_value=1000
+        ), patch("routes.chat.get_prompt_recent_history_max_tokens", return_value=900), patch(
+            "routes.chat.get_prompt_summary_max_tokens", return_value=0
+        ), patch("routes.chat.get_prompt_rag_max_tokens", return_value=0), patch(
+            "routes.chat.get_prompt_tool_trace_max_tokens", return_value=0
+        ), patch("routes.chat.get_prompt_tool_memory_max_tokens", return_value=0), patch(
+            "routes.chat.get_clarification_max_questions", return_value=5
+        ):
+            _, uncached_stats, _ = _build_budgeted_prompt_messages(
+                canonical_messages,
+                settings,
+                active_tool_names=[],
+                clarification_response=None,
+                all_clarification_rounds=None,
+                retrieved_context=None,
+                tool_memory_context=None,
+            )
+            _, cached_stats, _ = _build_budgeted_prompt_messages(
+                canonical_messages,
+                settings,
+                active_tool_names=[],
+                clarification_response=None,
+                all_clarification_rounds=None,
+                retrieved_context=None,
+                tool_memory_context=None,
+                model_id="deepseek-chat",
+            )
+
+        self.assertFalse(uncached_stats["cache_friendly_prefix"])
+        self.assertTrue(cached_stats["cache_friendly_prefix"])
+        self.assertGreaterEqual(cached_stats["prefix_tokens"], uncached_stats["prefix_tokens"])
 
     def test_undo_summary_restores_messages_in_original_order(self):
         conversation_id = self._create_conversation()

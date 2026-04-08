@@ -1826,6 +1826,65 @@ function setCanvasEditing(enabled) {
   renderCanvasPanel();
 }
 
+async function createCanvasDocumentFromPrompt() {
+  if (!currentConvId) {
+    setCanvasStatus("Conversation is not available yet.", "warning");
+    return;
+  }
+
+  const nextTitle = String(globalThis.prompt("New canvas file name", "Untitled") || "").trim();
+  if (!nextTitle) {
+    setCanvasStatus("Canvas file creation cancelled.", "muted");
+    return;
+  }
+
+  const nextFormat = canvasFormatSelect?.value === "code" ? "code" : "markdown";
+  if (canvasEditBtn) {
+    canvasEditBtn.disabled = true;
+  }
+
+  setCanvasStatus("Creating canvas file...", "muted");
+
+  try {
+    const response = await fetch(`/api/conversations/${currentConvId}/canvas`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        title: nextTitle,
+        content: "",
+        format: nextFormat,
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.error || "Canvas create failed.");
+    }
+
+    history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
+    streamingCanvasDocuments = [];
+    pendingCanvasDiff = null;
+    activeCanvasDocumentId = String(payload.active_document_id || payload.document?.id || "").trim() || null;
+    isCanvasEditing = true;
+    editingCanvasDocumentId = activeCanvasDocumentId;
+    renderConversationHistory();
+    renderCanvasPanel();
+    setCanvasStatus("Canvas file created.", "success");
+    globalThis.requestAnimationFrame(() => {
+      if (!canvasEditorEl) {
+        return;
+      }
+      canvasEditorEl.focus();
+      const cursorPosition = canvasEditorEl.value.length;
+      canvasEditorEl.setSelectionRange(cursorPosition, cursorPosition);
+    });
+  } catch (error) {
+    setCanvasStatus(error.message || "Canvas create failed.", "danger");
+    renderCanvasPanel();
+  }
+}
+
 function readCanvasWidthPreference() {
   try {
     const value = Number.parseInt(localStorage.getItem(CANVAS_PANEL_WIDTH_STORAGE_KEY) || "", 10);
@@ -2703,6 +2762,7 @@ function renderCanvasPanel() {
     canvasSubtitle.textContent = "No canvas document yet.";
     setCanvasHint("");
     canvasEmptyState.hidden = false;
+    canvasEmptyState.innerHTML = "<h3>No canvas document yet</h3><p>Create a blank file with New file, or ask the assistant to draft something substantial and keep refining it with line-based edits.</p>";
     if (canvasEditorEl) {
       canvasEditorEl.hidden = true;
       canvasEditorEl.value = "";
@@ -2718,7 +2778,8 @@ function renderCanvasPanel() {
       canvasDocumentTabsEl.innerHTML = "";
     }
     if (canvasEditBtn) {
-      canvasEditBtn.disabled = true;
+      canvasEditBtn.textContent = "New file";
+      canvasEditBtn.disabled = isStreamingPreviewActive;
       canvasEditBtn.hidden = false;
     }
     if (canvasSaveBtn) {
@@ -2732,6 +2793,9 @@ function renderCanvasPanel() {
     if (canvasCopyBtn) {
       canvasCopyBtn.disabled = true;
       canvasCopyBtn.hidden = true;
+    }
+    if (canvasFormatSelect) {
+      canvasFormatSelect.disabled = isStreamingPreviewActive;
     }
     if (canvasDeleteBtn) {
       canvasDeleteBtn.disabled = true;
@@ -2752,8 +2816,8 @@ function renderCanvasPanel() {
       canvasSearchInput.disabled = true;
     }
     if (canvasFormatSelect) {
-      canvasFormatSelect.disabled = true;
-      canvasFormatSelect.value = "markdown";
+      canvasFormatSelect.disabled = isStreamingPreviewActive;
+      canvasFormatSelect.value = canvasFormatSelect.value === "code" ? "code" : "markdown";
     }
     if (canvasRoleFilter) {
       canvasRoleFilter.disabled = true;
@@ -2784,7 +2848,8 @@ function renderCanvasPanel() {
       canvasDiffEl.innerHTML = "";
     }
     if (canvasEditBtn) {
-      canvasEditBtn.disabled = true;
+      canvasEditBtn.textContent = "New file";
+      canvasEditBtn.disabled = isStreamingPreviewActive;
       canvasEditBtn.hidden = false;
     }
     if (canvasSaveBtn) {
@@ -2798,6 +2863,9 @@ function renderCanvasPanel() {
     if (canvasCopyBtn) {
       canvasCopyBtn.disabled = true;
       canvasCopyBtn.hidden = true;
+    }
+    if (canvasFormatSelect) {
+      canvasFormatSelect.disabled = isStreamingPreviewActive;
     }
     if (canvasDeleteBtn) {
       canvasDeleteBtn.disabled = true;
@@ -2826,6 +2894,9 @@ function renderCanvasPanel() {
 
   updateCanvasActiveDocumentDisplay(renderState);
   renderCanvasDocumentTabs(visibleDocuments);
+  if (canvasEditBtn) {
+    canvasEditBtn.textContent = "Edit";
+  }
 }
 
 function openCanvas(triggerEl = null) {
@@ -6199,7 +6270,14 @@ if (canvasOverlay) {
   canvasOverlay.addEventListener("click", closeCanvas);
 }
 if (canvasEditBtn) {
-  canvasEditBtn.addEventListener("click", () => setCanvasEditing(true));
+  canvasEditBtn.addEventListener("click", () => {
+    const activeDocument = getActiveCanvasDocument();
+    if (activeDocument) {
+      setCanvasEditing(true);
+      return;
+    }
+    void createCanvasDocumentFromPrompt();
+  });
 }
 if (canvasSaveBtn) {
   canvasSaveBtn.addEventListener("click", () => {

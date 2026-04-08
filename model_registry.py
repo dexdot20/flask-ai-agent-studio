@@ -48,6 +48,14 @@ _EMPTY_PRICING = {"input": 0.0, "input_cache_hit": 0.0, "output": 0.0}
 _OPENROUTER_PROVIDER_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9._/-]{0,199}$")
 _OPENROUTER_GEMINI_CACHE_BREAKPOINT_MIN_TOKENS_DEFAULT = 1028
 _OPENROUTER_GEMINI_CACHE_BREAKPOINT_MIN_TOKENS_PRO = 2048
+_OPENROUTER_IMPLICIT_PROMPT_CACHE_MODEL_PREFIXES = (
+    "deepseek/",
+    "openai/",
+    "x-ai/",
+    "grok/",
+    "moonshotai/",
+    "groq/",
+)
 
 
 def _is_openrouter_prompt_cache_enabled(settings: dict[str, Any] | None) -> bool:
@@ -417,6 +425,11 @@ def _openrouter_requires_explicit_cache_breakpoints(api_model: Any) -> bool:
     return normalized_api_model.startswith("google/gemini")
 
 
+def _openrouter_supports_implicit_prompt_cache(api_model: Any) -> bool:
+    normalized_api_model = str(api_model or "").strip().lower()
+    return normalized_api_model.startswith(_OPENROUTER_IMPLICIT_PROMPT_CACHE_MODEL_PREFIXES)
+
+
 def _openrouter_gemini_cache_min_tokens(api_model: Any) -> int:
     normalized_api_model = str(api_model or "").strip().lower()
     if "flash" in normalized_api_model:
@@ -516,6 +529,13 @@ def build_openrouter_cache_estimate_context(messages: Any, record: dict[str, Any
             "supports_prompt_cache": True,
             "strategy": "explicit_breakpoint",
             "cacheable_text": _extract_openrouter_breakpoint_prefix(messages),
+        }
+
+    if _openrouter_supports_implicit_prompt_cache(api_model):
+        return {
+            "supports_prompt_cache": True,
+            "strategy": "implicit",
+            "cacheable_text": _serialize_openrouter_cache_payload(messages),
         }
 
     return {

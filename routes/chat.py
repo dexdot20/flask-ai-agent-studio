@@ -135,7 +135,16 @@ from messages import (
     prepend_runtime_context,
 )
 from image_service import analyze_uploaded_image
-from model_registry import DEFAULT_CHAT_MODEL, get_default_chat_model_id, get_operation_model, normalize_image_processing_method
+from model_registry import (
+    DEEPSEEK_PROVIDER,
+    OPENROUTER_PROVIDER,
+    DEFAULT_CHAT_MODEL,
+    build_openrouter_cache_estimate_context,
+    get_default_chat_model_id,
+    get_model_record,
+    get_operation_model,
+    normalize_image_processing_method,
+)
 from ocr_service import preload_ocr_engine
 from project_workspace_service import create_workspace_runtime_state, get_workspace_root
 from rag import preload_embedder
@@ -1713,6 +1722,20 @@ def _select_prefix_prompt_window(
     return selected_messages
 
 
+def _model_prefers_cache_friendly_prefix(model_id: str | None, settings: dict | None) -> bool:
+    record = get_model_record(str(model_id or "").strip(), settings)
+    if not isinstance(record, dict):
+        return False
+
+    provider = str(record.get("provider") or "").strip()
+    if provider == DEEPSEEK_PROVIDER:
+        return True
+    if provider == OPENROUTER_PROVIDER:
+        cache_context = build_openrouter_cache_estimate_context([], record, settings)
+        return bool(isinstance(cache_context, dict) and cache_context.get("supports_prompt_cache") is True)
+    return False
+
+
 def _build_budgeted_prompt_messages(
     canonical_messages: list[dict],
     settings: dict,
@@ -1728,6 +1751,7 @@ def _build_budgeted_prompt_messages(
     canvas_prompt_max_lines: int | None = None,
     canvas_prompt_max_tokens: int | None = None,
     workspace_root: str | None = None,
+    model_id: str | None = None,
 ) -> tuple[list[dict], dict, str | None]:
     ordered_messages = [message for message in canonical_messages if isinstance(message, dict)]
     tool_trace_context = _build_tool_trace_context(ordered_messages)
@@ -1780,8 +1804,12 @@ def _build_budgeted_prompt_messages(
     recent_messages = [message for message in ordered_messages if str(message.get("role") or "").strip() != "summary"]
 
     prefix_anchor_budget = 0
+    cache_friendly_prefix = _model_prefers_cache_friendly_prefix(model_id, settings)
     if history_budget >= 1_500:
-        prefix_anchor_budget = min(4_096, max(1_024, history_budget // 4))
+        if cache_friendly_prefix:
+            prefix_anchor_budget = min(8_192, max(2_048, history_budget // 3))
+        else:
+            prefix_anchor_budget = min(4_096, max(1_024, history_budget // 4))
     selected_prefix = _select_prefix_prompt_window(
         recent_messages,
         prefix_anchor_budget,
@@ -1883,6 +1911,7 @@ def _build_budgeted_prompt_messages(
         "entropy_profile": get_entropy_profile(settings),
         "rag_budget_reserve": rag_budget_reserve,
         "prefix_tokens": prefix_tokens,
+        "cache_friendly_prefix": cache_friendly_prefix,
         "history_tokens": history_tokens,
         "summary_tokens": count_visible_message_tokens(selected_summaries),
         "recent_tokens": recent_tokens,
@@ -3187,6 +3216,7 @@ def register_chat_routes(app) -> None:
             all_clarification_rounds,
             retrieved_context,
             tool_memory_context,
+            model_id=model,
             conversation_memory=conversation_memory,
             canvas_documents=initial_canvas_documents,
             canvas_active_document_id=initial_canvas_active_document_id,
