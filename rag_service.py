@@ -392,13 +392,17 @@ def ensure_supported_rag_sources(force: bool = False) -> int:
 def list_rag_documents_db() -> list[dict]:
     _require_rag_enabled()
     ensure_supported_rag_sources()
-    return [doc for doc in _fetch_rag_documents_db() if _is_supported_rag_source_type(doc["source_type"])]
+    return [
+        doc
+        for doc in _fetch_rag_documents_db()
+        if _is_supported_rag_source_type(doc["source_type"]) and int(doc.get("chunk_count") or 0) > 0
+    ]
 
 
 def get_rag_document_record(source_key: str):
     with get_db() as conn:
         return conn.execute(
-            "SELECT source_key, source_name, source_type, metadata, expires_at, updated_at FROM rag_documents WHERE source_key = ?",
+            "SELECT source_key, source_name, source_type, category, chunk_count, metadata, expires_at, updated_at FROM rag_documents WHERE source_key = ?",
             (source_key,),
         ).fetchone()
 
@@ -406,6 +410,21 @@ def get_rag_document_record(source_key: str):
 def delete_rag_document_record(source_key: str):
     with get_db() as conn:
         conn.execute("DELETE FROM rag_documents WHERE source_key = ?", (source_key,))
+
+
+def update_rag_document_record_metadata(source_key: str, metadata: dict | None, *, expires_at: str | None = None) -> None:
+    serialized_metadata = serialize_rag_metadata(metadata)
+    with get_db() as conn:
+        if expires_at is None:
+            conn.execute(
+                "UPDATE rag_documents SET metadata = ?, updated_at = datetime('now') WHERE source_key = ?",
+                (serialized_metadata, source_key),
+            )
+            return
+        conn.execute(
+            "UPDATE rag_documents SET metadata = ?, expires_at = ?, updated_at = datetime('now') WHERE source_key = ?",
+            (serialized_metadata, expires_at, source_key),
+        )
 
 
 def delete_rag_source_record(source_key: str) -> int:
@@ -420,6 +439,27 @@ def _delete_rag_source_if_present(source_key: str) -> int:
     if not existing:
         return 0
     return delete_rag_source_record(source_key)
+
+
+def _mark_rag_source_empty(
+    source_key: str,
+    source_name: str,
+    source_type: str,
+    category: str,
+    metadata: dict | None = None,
+    *,
+    expires_at: str | None = None,
+) -> None:
+    rag_delete_source(source_key)
+    upsert_rag_document_record(
+        source_key,
+        source_name,
+        source_type,
+        category,
+        0,
+        metadata=metadata,
+        expires_at=expires_at,
+    )
 
 
 def _build_conversation_sync_metadata(conversation: dict, source_key: str, sync_signature: str) -> dict:
@@ -453,6 +493,14 @@ def _conversation_source_needs_sync(
         return True
     if sync_signature is None:
         return False
+    return metadata.get("sync_signature") != sync_signature
+
+
+def _rag_source_content_changed(source_key: str, sync_signature: str) -> bool:
+    row = get_rag_document_record(source_key)
+    if not row:
+        return True
+    metadata = parse_rag_metadata(row["metadata"])
     return metadata.get("sync_signature") != sync_signature
 
 
@@ -727,6 +775,7 @@ def _query_rag_hits(
     normalized_query = re.sub(r"\s+", " ", str(query or "").strip())
     variants = _expand_query_variants(normalized_query) if expand_query else ([normalized_query] if normalized_query else [])
     source_type_hint = _resolve_source_type_hint(category, allowed_source_types)
+    deduped_hits: list[dict] = []
     for variant in variants:
         collected_hits.extend(
             rag_query_chunks(
@@ -736,7 +785,10 @@ def _query_rag_hits(
                 source_type_hint=source_type_hint,
             )
         )
-    return _dedupe_rag_hits(collected_hits)
+        deduped_hits = _dedupe_rag_hits(collected_hits)
+        if len(deduped_hits) >= candidate_top_k:
+            return deduped_hits
+    return deduped_hits or _dedupe_rag_hits(collected_hits)
 
 
 def _query_auto_injected_rag_hits(
@@ -744,7 +796,7 @@ def _query_auto_injected_rag_hits(
     top_k: int,
     threshold: float,
     allowed_source_types: set[str] | list[str] | tuple[str, ...] | None = None,
-) -> list[dict]:
+) -> tuple[list[dict], list[dict] | None]:
     normalized_top_k = max(1, int(top_k))
     base_hits = _query_rag_hits(
         query,
@@ -766,8 +818,8 @@ def _query_auto_injected_rag_hits(
         if isinstance(match.get("similarity"), (int, float)) and float(match["similarity"]) >= strong_threshold
     )
     if strong_match_count >= (1 if normalized_top_k == 1 else 2):
-        return base_hits
-    return _query_rag_hits(query, top_k=normalized_top_k, allowed_source_types=allowed_source_types)
+        return base_hits, base_matches
+    return _query_rag_hits(query, top_k=normalized_top_k, allowed_source_types=allowed_source_types), None
 
 
 def _compact_auto_injected_rag_match(match: dict) -> dict | None:
@@ -1062,7 +1114,7 @@ def build_rag_auto_context(
     try:
         ensure_supported_rag_sources()
         normalized_top_k = max(1, int(top_k))
-        hits = _query_auto_injected_rag_hits(
+        hits, prepared_matches = _query_auto_injected_rag_hits(
             query,
             top_k=normalized_top_k,
             threshold=max(0.0, min(1.0, float(threshold))),
@@ -1071,13 +1123,15 @@ def build_rag_auto_context(
     except Exception:
         return None
 
-    matches = _normalize_rag_hits(
-        query,
-        hits,
-        max(0.0, min(1.0, float(threshold))),
-        allowed_source_types=allowed_source_types,
-        auto_inject_only=True,
-    )
+    matches = prepared_matches
+    if matches is None:
+        matches = _normalize_rag_hits(
+            query,
+            hits,
+            max(0.0, min(1.0, float(threshold))),
+            allowed_source_types=allowed_source_types,
+            auto_inject_only=True,
+        )
     if exclude_source_keys:
         matches = [m for m in matches if m.get("source_key") not in exclude_source_keys]
     if not matches:
@@ -1374,7 +1428,9 @@ def sync_conversations_to_rag(conversation_id: int | None = None, force: bool = 
                 }
             )
             conversation_metadata = _build_conversation_sync_metadata(conversation, conversation_key, conversation_signature)
-            if conversation["messages"]:
+            if not _rag_source_content_changed(conversation_key, conversation_signature):
+                update_rag_document_record_metadata(conversation_key, conversation_metadata)
+            elif conversation["messages"]:
                 conversation_chunks = chunks_from_records(
                     conversation["messages"],
                     source_name=conversation_name,
@@ -1394,9 +1450,21 @@ def sync_conversations_to_rag(conversation_id: int | None = None, force: bool = 
                         )
                     )
                 else:
-                    _delete_rag_source_if_present(conversation_key)
+                    _mark_rag_source_empty(
+                        conversation_key,
+                        conversation_name,
+                        RAG_SOURCE_CONVERSATION,
+                        RAG_SOURCE_CONVERSATION,
+                        metadata=conversation_metadata,
+                    )
             else:
-                _delete_rag_source_if_present(conversation_key)
+                _mark_rag_source_empty(
+                    conversation_key,
+                    conversation_name,
+                    RAG_SOURCE_CONVERSATION,
+                    RAG_SOURCE_CONVERSATION,
+                    metadata=conversation_metadata,
+                )
 
         archived_conversation_key = conversation_archived_rag_source_key(conversation["conversation_id"])
         archived_conversation_name = _conversation_archived_rag_source_name(
@@ -1413,7 +1481,9 @@ def sync_conversations_to_rag(conversation_id: int | None = None, force: bool = 
             archived_metadata = _build_conversation_sync_metadata(conversation, archived_conversation_key, archived_signature)
             archived_metadata["archived_conversation"] = True
             archived_metadata["archived_message_count"] = len(conversation.get("archived_messages") or [])
-            if conversation.get("archived_messages"):
+            if not _rag_source_content_changed(archived_conversation_key, archived_signature):
+                update_rag_document_record_metadata(archived_conversation_key, archived_metadata)
+            elif conversation.get("archived_messages"):
                 archived_chunks = chunks_from_records(
                     conversation["archived_messages"],
                     source_name=archived_conversation_name,
@@ -1433,9 +1503,21 @@ def sync_conversations_to_rag(conversation_id: int | None = None, force: bool = 
                         )
                     )
                 else:
-                    _delete_rag_source_if_present(archived_conversation_key)
+                    _mark_rag_source_empty(
+                        archived_conversation_key,
+                        archived_conversation_name,
+                        RAG_SOURCE_CONVERSATION,
+                        RAG_SOURCE_CONVERSATION,
+                        metadata=archived_metadata,
+                    )
             else:
-                _delete_rag_source_if_present(archived_conversation_key)
+                _mark_rag_source_empty(
+                    archived_conversation_key,
+                    archived_conversation_name,
+                    RAG_SOURCE_CONVERSATION,
+                    RAG_SOURCE_CONVERSATION,
+                    metadata=archived_metadata,
+                )
 
         tool_key = conversation_rag_source_key(RAG_SOURCE_TOOL_RESULT, conversation["conversation_id"])
         tool_name = _conversation_rag_source_name(
@@ -1451,7 +1533,9 @@ def sync_conversations_to_rag(conversation_id: int | None = None, force: bool = 
                 }
             )
             tool_metadata = _build_conversation_sync_metadata(conversation, tool_key, tool_signature)
-            if conversation["tool_results"]:
+            if not _rag_source_content_changed(tool_key, tool_signature):
+                update_rag_document_record_metadata(tool_key, tool_metadata)
+            elif conversation["tool_results"]:
                 tool_chunks = chunks_from_records(
                     conversation["tool_results"],
                     source_name=tool_name,
@@ -1471,9 +1555,21 @@ def sync_conversations_to_rag(conversation_id: int | None = None, force: bool = 
                         )
                     )
                 else:
-                    _delete_rag_source_if_present(tool_key)
+                    _mark_rag_source_empty(
+                        tool_key,
+                        tool_name,
+                        RAG_SOURCE_TOOL_RESULT,
+                        RAG_SOURCE_TOOL_RESULT,
+                        metadata=tool_metadata,
+                    )
             else:
-                _delete_rag_source_if_present(tool_key)
+                _mark_rag_source_empty(
+                    tool_key,
+                    tool_name,
+                    RAG_SOURCE_TOOL_RESULT,
+                    RAG_SOURCE_TOOL_RESULT,
+                    metadata=tool_metadata,
+                )
     return synced
 
 

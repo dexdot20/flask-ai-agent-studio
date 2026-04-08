@@ -2349,8 +2349,8 @@ class AppRoutesTestCase(unittest.TestCase):
             insert_message(conn, conversation_id, "user", user_text)
             insert_message(conn, conversation_id, "assistant", assistant_text, metadata=assistant_metadata)
             conn.execute(
-                "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
-                (conversation_id,),
+                "UPDATE conversations SET updated_at = ? WHERE id = ?",
+                ("2026-04-08 10:00:00", conversation_id),
             )
 
         first_sync = sync_conversations_to_rag(conversation_id)
@@ -2362,6 +2362,49 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertEqual(second_sync, [])
         mocked_records.assert_not_called()
+
+    def test_sync_conversations_to_rag_skips_reindex_for_unchanged_tool_results(self):
+        conversation_id = self._create_conversation()
+        assistant_metadata = serialize_message_metadata(
+            {
+                "tool_results": [
+                    {
+                        "tool_name": "fetch_url",
+                        "content": "Indexed tool result " * 40,
+                    }
+                ]
+            }
+        )
+
+        with get_db() as conn:
+            insert_message(conn, conversation_id, "user", "First prompt " * 30)
+            insert_message(conn, conversation_id, "assistant", "First answer " * 40, metadata=assistant_metadata)
+            conn.execute(
+                "UPDATE conversations SET updated_at = ? WHERE id = ?",
+                ("2026-04-08 10:00:00", conversation_id),
+            )
+
+        first_sync = sync_conversations_to_rag(conversation_id)
+        self.assertTrue(first_sync)
+
+        with get_db() as conn:
+            insert_message(conn, conversation_id, "user", "Follow-up without tool change " * 20)
+            conn.execute(
+                "UPDATE conversations SET updated_at = ? WHERE id = ?",
+                ("2026-04-08 10:01:00", conversation_id),
+            )
+
+        ingested_source_keys: list[str] = []
+
+        def fake_ingest(*args, **kwargs):
+            ingested_source_keys.append(str(kwargs.get("source_key") or ""))
+            return {"source_key": kwargs.get("source_key")}
+
+        with patch("rag_service.ingest_rag_chunks", side_effect=fake_ingest):
+            sync_conversations_to_rag(conversation_id)
+
+        self.assertIn(rag_service.conversation_rag_source_key(rag_service.RAG_SOURCE_CONVERSATION, conversation_id), ingested_source_keys)
+        self.assertNotIn(rag_service.conversation_rag_source_key(rag_service.RAG_SOURCE_TOOL_RESULT, conversation_id), ingested_source_keys)
 
     def test_chat_edit_resyncs_rag_before_retrieval(self):
         fake_events = iter(
@@ -3668,6 +3711,35 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertGreaterEqual(mocked_query.call_count, 1)
         self.assertEqual(mocked_query.call_args.kwargs["top_k"], 6)
+
+    def test_search_knowledge_base_tool_stops_query_expansion_after_sufficient_first_variant_hits(self):
+        first_variant_hits = [
+            {
+                "id": f"hit-{index}",
+                "text": f"hit {index}",
+                "metadata": {
+                    "source_key": f"source-{index}",
+                    "source_name": f"Source {index}",
+                    "source_type": "uploaded_document",
+                    "category": "uploaded_document",
+                    "chunk_index": 0,
+                },
+                "similarity": 0.9 - (index * 0.01),
+            }
+            for index in range(4)
+        ]
+
+        with patch("rag_service.ensure_supported_rag_sources"), patch(
+            "rag_service._expand_query_variants",
+            return_value=["memory", "memory variant"],
+        ), patch(
+            "rag_service.rag_query_chunks",
+            side_effect=[first_variant_hits, RuntimeError("Second variant should not run")],
+        ) as mocked_query, patch("rag_service.RAG_MAX_CHUNKS_PER_SOURCE", 2):
+            result = search_knowledge_base_tool("memory", top_k=2)
+
+        self.assertEqual(mocked_query.call_count, 1)
+        self.assertEqual(result["count"], 2)
 
     def test_trim_rag_context_skips_oversized_high_score_match_and_keeps_smaller_relevant_matches(self):
         retrieved_context = {
