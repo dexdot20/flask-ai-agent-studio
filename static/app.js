@@ -7362,6 +7362,40 @@ function getLatestUnsavedCompletedSubAgentTrace(metadata) {
   return null;
 }
 
+function getSubAgentCanvasPromptStorageKey(conversationId, assistantMessageId, traceIndex) {
+  const normalizedConversationId = String(conversationId || "").trim();
+  const normalizedAssistantMessageId = String(assistantMessageId || "").trim();
+  const normalizedTraceIndex = Number.isInteger(traceIndex) ? traceIndex : Number.parseInt(traceIndex, 10);
+  if (!normalizedConversationId || !normalizedAssistantMessageId || !Number.isInteger(normalizedTraceIndex)) {
+    return null;
+  }
+  return `sub-agent-canvas-prompted:${normalizedConversationId}:${normalizedAssistantMessageId}:${normalizedTraceIndex}`;
+}
+
+function hasSubAgentCanvasPromptBeenShown(conversationId, assistantMessageId, traceIndex) {
+  const storageKey = getSubAgentCanvasPromptStorageKey(conversationId, assistantMessageId, traceIndex);
+  if (!storageKey) {
+    return false;
+  }
+  try {
+    return localStorage.getItem(storageKey) === "1";
+  } catch (_) {
+    return false;
+  }
+}
+
+function markSubAgentCanvasPromptShown(conversationId, assistantMessageId, traceIndex) {
+  const storageKey = getSubAgentCanvasPromptStorageKey(conversationId, assistantMessageId, traceIndex);
+  if (!storageKey) {
+    return;
+  }
+  try {
+    localStorage.setItem(storageKey, "1");
+  } catch (_) {
+    // Ignore storage errors.
+  }
+}
+
 function findPersistedAssistantEntryForSubAgentPrompt(preferredAssistantId = null) {
   const normalizedPreferredId = Number(preferredAssistantId || 0);
   if (isPersistedMessageId(normalizedPreferredId)) {
@@ -7473,6 +7507,12 @@ function maybePromptToSaveSubAgentResearch(assistantEntry) {
   if (!pendingTrace) {
     return;
   }
+
+  if (hasSubAgentCanvasPromptBeenShown(currentConvId, resolvedEntry.id, pendingTrace.index)) {
+    return;
+  }
+
+  markSubAgentCanvasPromptShown(currentConvId, resolvedEntry.id, pendingTrace.index);
 
   const taskHeading = getSubAgentTaskHeading(
     String(pendingTrace.entry.task_full || pendingTrace.entry.task || pendingTrace.entry.summary || "Research").trim(),
