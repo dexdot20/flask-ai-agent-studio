@@ -3554,6 +3554,7 @@ function renderCanvasPanel() {
   const {
     activeDocument,
     documents: renderDocuments,
+    isStreamingPreviewActive,
     visibleDocuments,
   } = renderState;
   lastCanvasStructureSignature = renderState.structureSignature;
@@ -7095,6 +7096,7 @@ function syncModelSelectors(value, label = "") {
   if (mobileModelSel && mobileModelSel.value !== nextValue) {
     mobileModelSel.value = nextValue;
   }
+  writeModelPreference(nextValue);
 }
 
 function isMobileViewport() {
