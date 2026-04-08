@@ -143,6 +143,7 @@ CONTEXT_OVERFLOW_RECOVERY_ERROR_TEXT = (
 MISSING_FINAL_ANSWER_MARKER = "[INSTRUCTION: MISSING FINAL ANSWER"
 CLARIFICATION_RETRY_MARKER = "[INSTRUCTION: CLARIFICATION TOOL REQUIRED"
 CLARIFICATION_TOOL_REPAIR_MARKER = "[INSTRUCTION: CLARIFICATION TOOL REPAIR"
+CANVAS_MUTATION_RETRY_MARKER = "[INSTRUCTION: CANVAS MUTATION TOOL REQUIRED"
 TOOL_EXECUTION_RESULTS_MARKER = "[TOOL EXECUTION RESULTS]"
 REASONING_REPLAY_MARKER = "[AGENT REASONING CONTEXT]"
 MAX_REASONING_REPLAY_ENTRIES = 2
@@ -1559,6 +1560,18 @@ def _has_clarification_tool_repair_instruction(messages: list[dict]) -> bool:
     return any(CLARIFICATION_TOOL_REPAIR_MARKER in str(message.get("content") or "") for message in messages)
 
 
+def _has_canvas_mutation_retry_instruction(messages: list[dict]) -> bool:
+    return any(CANVAS_MUTATION_RETRY_MARKER in str(message.get("content") or "") for message in messages)
+
+
+def _get_latest_user_message_index(messages: list[dict]) -> int:
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if str(message.get("role") or "").strip() == "user":
+            return index
+    return -1
+
+
 def _get_latest_user_message_text(messages: list[dict]) -> str:
     for message in reversed(messages):
         if str(message.get("role") or "").strip() != "user":
@@ -1604,6 +1617,59 @@ def _assistant_text_suggests_skipped_clarification(content_text: str, reasoning_
         "önce birkaç soru",
     )
     return any(indicator in combined for indicator in indicators)
+
+
+def _user_requested_canvas_mutation(messages: list[dict], prompt_tool_names: list[str]) -> bool:
+    if not set(prompt_tool_names or []).intersection(CANVAS_MUTATION_TOOL_NAMES):
+        return False
+
+    latest_user_text = _get_latest_user_message_text(messages)
+    if not latest_user_text:
+        return False
+
+    normalized = latest_user_text.casefold()
+    if "canvas" not in normalized:
+        return False
+
+    patterns = (
+        r"\bcanvas\b.{0,40}\b(?:güncelle|duzenle|düzenle|çevir|cevir|yaz|ekle|kaydet|sil|kaldır|rewrite|update|edit|translate|write|save|add|remove|delete|shorten|extend|revise|fix)\b",
+        r"\b(?:güncelle|duzenle|düzenle|çevir|cevir|yaz|ekle|kaydet|sil|kaldır|rewrite|update|edit|translate|write|save|add|remove|delete|shorten|extend|revise|fix)\b.{0,40}\bcanvas\b",
+    )
+    return any(re.search(pattern, normalized, re.IGNORECASE) for pattern in patterns)
+
+
+def _conversation_has_canvas_mutation_tool_call_after_latest_user(messages: list[dict]) -> bool:
+    latest_user_index = _get_latest_user_message_index(messages)
+    if latest_user_index < 0:
+        return False
+
+    for message in messages[latest_user_index + 1 :]:
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("role") or "").strip() != "assistant":
+            continue
+        tool_calls = parse_message_tool_calls(message.get("tool_calls"))
+        for tool_call in tool_calls:
+            if not isinstance(tool_call, dict):
+                continue
+            function_payload = tool_call.get("function") if isinstance(tool_call.get("function"), dict) else {}
+            tool_name = str(function_payload.get("name") or tool_call.get("name") or "").strip()
+            if tool_name in CANVAS_MUTATION_TOOL_NAMES:
+                return True
+    return False
+
+
+def _should_retry_for_skipped_canvas_mutation(
+    messages: list[dict],
+    prompt_tool_names: list[str],
+) -> bool:
+    if not _user_requested_canvas_mutation(messages, prompt_tool_names):
+        return False
+    if _has_canvas_mutation_retry_instruction(messages):
+        return False
+    if _conversation_has_canvas_mutation_tool_call_after_latest_user(messages):
+        return False
+    return True
 
 
 def _conversation_has_clarification_tool_call(messages: list[dict]) -> bool:
@@ -3677,6 +3743,8 @@ def _build_final_answer_instruction() -> dict:
             "If work remains unfinished, say so explicitly.\n"
             "Do not repeat, recap, or re-state any step-by-step planning or tool-invocation "
             "announcements from previous assistant turns. Begin your final answer directly.\n"
+            "Do not include stray JSON objects, status payloads, bracketed asides, insults, roleplay, "
+            "or meta commentary unrelated to the user's request.\n"
             "Place the final answer in assistant content, not reasoning_content."
         ),
     }
@@ -3713,6 +3781,33 @@ def _build_clarification_retry_instruction() -> dict:
             "Put every question only inside the tool arguments.\n"
             "Do not say that you prepared questions unless you emit the tool call.\n"
             "Do not place the questions in reasoning_content."
+        ),
+    }
+
+
+def _build_canvas_mutation_retry_instruction() -> dict:
+    return {
+        "role": "system",
+        "content": (
+            "[INSTRUCTION: CANVAS MUTATION TOOL REQUIRED — RETRY]\n\n"
+            "The latest user explicitly asked you to change canvas content.\n"
+            "Do not merely say that the canvas was updated, translated, rewritten, or saved.\n"
+            "First call an appropriate canvas mutation tool such as create_canvas_document, "
+            "rewrite_canvas_document, batch_canvas_edits, replace_canvas_lines, insert_canvas_lines, "
+            "or delete_canvas_lines.\n"
+            "After a real canvas mutation tool result exists, continue with the user-facing answer."
+        ),
+    }
+
+
+def _build_unfulfilled_canvas_request_instruction() -> dict:
+    return {
+        "role": "system",
+        "content": (
+            "[INSTRUCTION: CANVAS REQUEST NOT COMPLETED]\n\n"
+            "The user asked for a canvas update in this turn, but no successful canvas mutation tool result "
+            "was produced in this run. Do not claim that the canvas was updated. State explicitly that it was "
+            "not changed yet if needed."
         ),
     }
 
@@ -5954,6 +6049,7 @@ def run_agent_stream(
     fetch_attempt_counts: dict[str, int] = {}
     tool_call_counts: dict[str, int] = defaultdict(int)
     canvas_modified = False
+    successful_canvas_mutation = False
     usage_totals = {
         "prompt_tokens": 0,
         "prompt_cache_hit_tokens": 0,
@@ -6037,6 +6133,7 @@ def run_agent_stream(
             "active_document_id": active_canvas_document_id,
             "canvas_viewports": current_canvas_snapshot.get("viewports") or {},
             "canvas_modified": canvas_modified,
+            "successful_canvas_mutation": successful_canvas_mutation,
             "canvas_cleared": canvas_modified and not current_canvas_documents,
             "sub_agent_traces": sub_agent_traces,
         }
@@ -6720,6 +6817,17 @@ def run_agent_stream(
                 pending_step_retry_reason = "clarification_tool_retry"
                 step -= 1
                 continue
+            if _should_retry_for_skipped_canvas_mutation(messages, normalized_prompt_tool_names):
+                _trace_agent_event(
+                    "canvas_mutation_tool_retry_requested",
+                    trace_id=trace_id,
+                    step=step,
+                    content_excerpt=content_text,
+                )
+                messages.append(_build_canvas_mutation_retry_instruction())
+                pending_step_retry_reason = "canvas_mutation_tool_retry"
+                step -= 1
+                continue
             if content_text:
                 _trace_agent_event("final_answer_received", trace_id=trace_id, step=step, content_excerpt=content_text)
                 if (
@@ -7263,6 +7371,8 @@ def run_agent_stream(
                     )
                     if tool_name in CANVAS_MUTATION_TOOL_NAMES:
                         canvas_modified = True
+                        if not _tool_result_has_error(tool_name, result):
+                            successful_canvas_mutation = True
                     clarification_event = _extract_clarification_event(result)
                     if clarification_event is not None:
                         _trace_agent_event(
@@ -7383,6 +7493,8 @@ def run_agent_stream(
             pending_final_retry_reason = None
             working_memory_instruction = _build_working_state_instruction(working_state)
             final_extra_messages = [working_memory_instruction] if working_memory_instruction is not None else []
+            if _user_requested_canvas_mutation(messages, normalized_prompt_tool_names) and not successful_canvas_mutation:
+                final_extra_messages.append(_build_unfulfilled_canvas_request_instruction())
             final_messages, _ = apply_context_compaction(final_extra_messages, reason="pre_final_answer")
             final_messages = [*final_messages, final_instruction_builder()]
             final_messages = _strip_intermediate_tool_call_content(final_messages)

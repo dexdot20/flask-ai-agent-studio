@@ -4122,22 +4122,20 @@ kbd {
   padding: 24px 28px;
 }
 
-.canvas-streaming-preview {
-  margin: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.95rem;
-  line-height: 1.6;
-  color: #283142;
+.canvas-page-sheet--streaming > :first-child {
+  margin-top: 0;
 }
 
-.canvas-streaming-preview--code {
-  white-space: pre;
-  overflow-x: auto;
-  overflow-wrap: normal;
-  word-break: normal;
+.canvas-page-sheet--streaming > :last-child {
+  margin-bottom: 0;
+}
+
+.canvas-page-sheet--streaming .code-block-shell {
+  margin: 0;
+}
+
+.canvas-page-sheet--streaming .canvas-code-document {
+  padding-top: 0;
 }
 
 .canvas-visual-page {

@@ -404,6 +404,36 @@ def _persist_streaming_assistant_message(
         return assistant_message_id
 
 
+def _strip_buffered_tool_preamble(full_response: str, history_messages: list[dict]) -> str:
+    normalized_response = str(full_response or "")
+    if not normalized_response or not isinstance(history_messages, list):
+        return normalized_response
+
+    assistant_message = next(
+        (
+            message
+            for message in history_messages
+            if isinstance(message, dict)
+            and str(message.get("role") or "").strip() == "assistant"
+            and message.get("tool_calls")
+        ),
+        None,
+    )
+    if not isinstance(assistant_message, dict):
+        return normalized_response
+
+    preamble = str(assistant_message.get("content") or "").strip()
+    if not preamble:
+        return normalized_response
+
+    leading_trimmed = normalized_response.lstrip()
+    if not leading_trimmed.startswith(preamble):
+        return normalized_response
+
+    trimmed = leading_trimmed[len(preamble) :]
+    return trimmed.lstrip()
+
+
 def _select_title_source_messages(messages: list[dict]) -> list[dict]:
     selected = []
     for message in messages or []:
@@ -2978,7 +3008,7 @@ def register_chat_routes(app) -> None:
                 rows_to_insert.append(
                     {
                         "role": "assistant",
-                        "content": content,
+                        "content": "" if message.get("tool_calls") else content,
                         "tool_calls": serialize_message_tool_calls(message.get("tool_calls")),
                     }
                 )
@@ -3728,6 +3758,8 @@ def register_chat_routes(app) -> None:
                     elif event["type"] == "tool_history":
                         history_messages = normalize_chat_messages(event.get("messages") or [])
                         if history_messages:
+                            full_response = _strip_buffered_tool_preamble(full_response, history_messages)
+                            last_persisted_response_length = min(last_persisted_response_length, len(full_response))
                             if conv_id:
                                 persist_tool_history_rows(
                                     conv_id,

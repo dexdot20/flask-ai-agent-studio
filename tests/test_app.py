@@ -7605,6 +7605,73 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(instruction["role"], "system")
         self.assertIn("Do not claim that an action was completed", instruction["content"])
         self.assertIn("If work remains unfinished, say so explicitly", instruction["content"])
+        self.assertIn("Do not include stray JSON objects", instruction["content"])
+
+    def test_run_agent_stream_retries_when_canvas_update_requested_without_canvas_tool(self):
+        responses = [
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            reasoning_content="",
+                            content="Canvas'ı İngilizceye çevirdim.",
+                            tool_calls=[],
+                        )
+                    )
+                ],
+                usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            ),
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            reasoning_content="",
+                            content="",
+                            tool_calls=[
+                                {
+                                    "id": "call-1",
+                                    "function": {
+                                        "name": "create_canvas_document",
+                                        "arguments": json.dumps({"title": "English Prompt", "content": "# English version"}),
+                                    },
+                                }
+                            ],
+                        )
+                    )
+                ],
+                usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            ),
+            iter(
+                [
+                    self._stream_chunk(content="Canvas güncellendi."),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2)),
+                ]
+            ),
+        ]
+
+        with patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create:
+            events = list(
+                run_agent_stream(
+                    [{"role": "user", "content": "Promptu İngilizceye çevirip Canvas'a yaz."}],
+                    "deepseek-chat",
+                    3,
+                    ["create_canvas_document"],
+                )
+            )
+
+        leaked_claim = [event for event in events if event["type"] == "answer_delta" and "İngilizceye çevirdim" in event["text"]]
+        self.assertEqual(leaked_claim, [])
+        self.assertIn({"type": "answer_delta", "text": "Canvas güncellendi."}, events)
+
+        tool_capture_event = next(event for event in events if event["type"] == "tool_capture")
+        self.assertTrue(tool_capture_event["successful_canvas_mutation"])
+        self.assertEqual([doc["title"] for doc in tool_capture_event["canvas_documents"]], ["English Prompt"])
+
+        second_call_messages = mocked_create.call_args_list[1].kwargs["messages"]
+        retry_markers = [
+            message for message in second_call_messages if "CANVAS MUTATION TOOL REQUIRED" in str(message.get("content") or "")
+        ]
+        self.assertEqual(len(retry_markers), 1)
 
     def test_build_reasoning_replay_instruction_marks_reasoning_as_non_execution_evidence(self):
         instruction = _build_reasoning_replay_instruction(
@@ -8389,6 +8456,7 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertEqual([row["role"] for row in rows], ["user", "assistant", "tool", "assistant"])
         self.assertIn("search_web", rows[1]["tool_calls"])
+        self.assertEqual(rows[1]["content"], "")
         self.assertEqual(rows[2]["tool_call_id"], "call-1")
         self.assertEqual(rows[3]["content"], "Results are ready.")
 
@@ -8396,8 +8464,77 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(conversation_response.status_code, 200)
         messages = conversation_response.get_json()["messages"]
         self.assertEqual([message["role"] for message in messages], ["user", "assistant", "tool", "assistant"])
-        self.assertEqual(messages[1]["tool_calls"][0]["function"]["name"], "search_web")
-        self.assertEqual(messages[2]["tool_call_id"], "call-1")
+
+    def test_chat_stream_strips_buffered_tool_preamble_from_final_assistant_message(self):
+        conversation_id = self._create_conversation()
+        save_app_settings(
+            {
+                "user_preferences": "",
+                "max_steps": "2",
+                "active_tools": '["search_web"]',
+                "rag_auto_inject": "false",
+            }
+        )
+
+        fake_events = iter(
+            [
+                {"type": "answer_start"},
+                {"type": "answer_delta", "text": "Önce arama yapacağım."},
+                {
+                    "type": "tool_history",
+                    "step": 1,
+                    "messages": [
+                        {
+                            "role": "assistant",
+                            "content": "Önce arama yapacağım.",
+                            "tool_calls": [
+                                {
+                                    "id": "call-1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "search_web",
+                                        "arguments": '{"queries":["istanbul"]}',
+                                    },
+                                }
+                            ],
+                        },
+                        {
+                            "role": "tool",
+                            "tool_call_id": "call-1",
+                            "content": '{"ok":true}',
+                        },
+                    ],
+                },
+                {"type": "answer_delta", "text": "Sonucu buldum."},
+                {"type": "tool_capture", "tool_results": []},
+                {"type": "done"},
+            ]
+        )
+
+        with patch("routes.chat.run_agent_stream", return_value=fake_events):
+            response = self.client.post(
+                "/chat",
+                json={
+                    "conversation_id": conversation_id,
+                    "model": "deepseek-chat",
+                    "user_content": "Araştır ve söyle",
+                    "messages": [{"role": "user", "content": "Araştır ve söyle"}],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        response.get_data(as_text=True)
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT role, content, tool_calls, tool_call_id FROM messages WHERE conversation_id = ? ORDER BY id",
+                (conversation_id,),
+            ).fetchall()
+
+        self.assertEqual([row["role"] for row in rows], ["user", "assistant", "tool", "assistant"])
+        self.assertEqual(rows[1]["content"], "")
+        self.assertEqual(rows[3]["content"], "Sonucu buldum.")
+        self.assertIn("search_web", rows[1]["tool_calls"])
+        self.assertEqual(rows[2]["tool_call_id"], "call-1")
 
     def test_parse_message_tool_calls_compacts_large_canvas_payloads(self):
         large_content = "\n".join(f"print({index})" for index in range(200))

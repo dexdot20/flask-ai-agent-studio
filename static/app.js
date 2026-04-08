@@ -2561,15 +2561,20 @@ function renderMarkdown(text) {
   return renderMathExpressionsInHtml(sanitizeHtml(escHtml(rawText).replace(/\n/g, "<br>")));
 }
 
+function renderStreamingCanvasPreviewContent(document) {
+  if (document?.format === "code") {
+    return sanitizeHtml(`<div class="canvas-code-document canvas-code-document--streaming">${renderHighlightedCodeBlock(document.content, document.language || null)}</div>`);
+  }
+  return renderMarkdown(document?.content || "");
+}
+
 function renderStreamingCanvasDocumentBody(document) {
-  const content = String(document?.content || "");
-  const formatClass = document?.format === "code" ? " canvas-streaming-preview--code" : "";
   const documentId = escHtml(String(document?.id || "").trim());
   const format = escHtml(String(document?.format || "markdown").trim().toLowerCase() || "markdown");
   return (
     `<div class="canvas-document-shell">` +
-      `<article class="canvas-page-sheet canvas-page-sheet--streaming">` +
-        `<pre class="canvas-streaming-preview${formatClass}" data-canvas-streaming-preview-id="${documentId}" data-canvas-streaming-preview-format="${format}">${escHtml(content)}</pre>` +
+      `<article class="canvas-page-sheet canvas-page-sheet--streaming" data-canvas-streaming-preview-container="true" data-canvas-streaming-preview-id="${documentId}" data-canvas-streaming-preview-format="${format}">` +
+        `${renderStreamingCanvasPreviewContent(document)}` +
       `</article>` +
     `</div>`
   );
@@ -3543,13 +3548,13 @@ function updateCanvasActiveDocumentDisplay(renderState) {
   } else {
     canvasDocumentEl.hidden = false;
     if (activeDocument.isStreamingPreview) {
-      const existingPreviewEl = canvasDocumentEl.querySelector(".canvas-streaming-preview");
+      const existingPreviewEl = canvasDocumentEl.querySelector('[data-canvas-streaming-preview-container="true"]');
       const existingPreviewId = String(existingPreviewEl?.getAttribute("data-canvas-streaming-preview-id") || "").trim();
       const existingPreviewFormat = String(existingPreviewEl?.getAttribute("data-canvas-streaming-preview-format") || "").trim();
       const nextPreviewId = String(activeDocument.id || "").trim();
       const nextPreviewFormat = String(activeDocument.format || "markdown").trim().toLowerCase() || "markdown";
       if (existingPreviewEl && existingPreviewId === nextPreviewId && existingPreviewFormat === nextPreviewFormat) {
-        existingPreviewEl.textContent = String(activeDocument.content || "");
+        existingPreviewEl.innerHTML = renderStreamingCanvasPreviewContent(activeDocument);
       } else {
         canvasDocumentEl.innerHTML = renderStreamingCanvasDocumentBody(activeDocument);
       }
