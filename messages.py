@@ -1206,6 +1206,9 @@ def _build_runtime_volatile_parts(
             volatile_parts.append(
                 f"- Preview compaction: {int(canvas_payload.get('clipped_line_count') or 0)} long line(s) were clipped for token efficiency; use scroll_canvas_document or expand_canvas_document if exact full line text matters."
             )
+        volatile_parts.append(
+            "- Snapshot rule: expand_canvas_document returns a call-time snapshot. If the canvas may have changed after an earlier expansion, call it again before relying on that older view."
+        )
         if canvas_payload["is_truncated"]:
             volatile_parts.append(
                 "- Guidance: This canvas excerpt is truncated. Use visible line numbers for line-level canvas edits. "

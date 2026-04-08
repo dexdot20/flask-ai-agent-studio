@@ -2621,6 +2621,11 @@ def build_canvas_document_context_result(
         "visible_lines": numbered_lines,
         "visible_line_end": shown,
         "is_truncated": is_truncated,
+        "snapshot_semantics": "call_time",
+        "snapshot_notice": (
+            "This expansion is a call-time snapshot of the canvas runtime state. "
+            "If the canvas may have changed after this tool call, re-run expand_canvas_document to refresh it."
+        ),
         "primary_locator": extract_canvas_primary_locator(normalized),
         "manifest_excerpt": {
             "project_name": (manifest or {}).get("project_name"),

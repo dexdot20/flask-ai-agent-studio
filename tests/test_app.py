@@ -3930,9 +3930,35 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("Do not default to this when only part of the file needs to change", rewrite_guidance)
         self.assertIn("Multiple localized replace_canvas_lines calls are fine", replace_guidance)
         self.assertIn("document_id is optional", expand_description)
+        self.assertIn("call-time snapshot", expand_description)
         self.assertIn("use document_path from the workspace summary or manifest", expand_guidance)
+        self.assertIn("call expand_canvas_document again", expand_guidance)
         self.assertIn("before line-level edits", scroll_description)
         self.assertIn("Use this first when the user asks you to find something inside a large canvas", search_guidance)
+
+    def test_runtime_system_message_mentions_expand_snapshot_rule(self):
+        message = build_runtime_system_message(
+            active_tool_names=[
+                "create_canvas_document",
+                "rewrite_canvas_document",
+                "replace_canvas_lines",
+                "expand_canvas_document",
+            ],
+            canvas_documents=[
+                {
+                    "id": "canvas-1",
+                    "title": "report.md",
+                    "format": "markdown",
+                    "language": "markdown",
+                    "content": "line 1\nline 2",
+                }
+            ],
+        )
+
+        content = message["content"]
+        self.assertIn("Snapshot rule", content)
+        self.assertIn("expand_canvas_document returns a call-time snapshot", content)
+        self.assertIn("call it again before relying on that older view", content)
 
     def test_openai_tool_specs_include_expand_canvas_document_with_canvas_documents(self):
         tools = get_openai_tool_specs(
@@ -5443,6 +5469,9 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(expanded["document_path"], "src/app.py")
         self.assertEqual(expanded["visible_lines"][0], "1: import os")
         self.assertEqual(expanded["visible_lines"][2], "3: print('hello')")
+        self.assertEqual(expanded["snapshot_semantics"], "call_time")
+        self.assertIn("call-time snapshot", expanded["snapshot_notice"])
+        self.assertIn("re-run expand_canvas_document", expanded["snapshot_notice"])
         self.assertEqual(expanded["manifest_excerpt"]["active_file"], "src/config.py")
         self.assertIn("os", expanded["relationship_map"]["imports"])
 

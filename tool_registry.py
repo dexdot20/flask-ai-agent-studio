@@ -901,6 +901,7 @@ TOOL_SPECS = [
         "name": "expand_canvas_document",
         "description": (
             "Load one canvas document beyond the active excerpt when you need more context. "
+            "The result is a call-time snapshot, so re-run after later edits if you need a refreshed view. "
             "Use this before broader reasoning or editing; document_id is optional, and when document_id and document_path are omitted it defaults to the active document."
         ),
         "parameters": {
@@ -921,6 +922,7 @@ TOOL_SPECS = [
             "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path"},
             "guidance": (
                 "Use this when the manifest and active-document excerpt are insufficient and you need another canvas file in full detail. "
+                "Treat the result as a call-time snapshot of the canvas state; if later edits may have happened, call expand_canvas_document again instead of assuming the older expansion is still current. "
                 "After expanding, prefer the smallest valid edit that solves the request. "
                 "If you do not know the document_id, use document_path from the workspace summary or manifest instead of getting stuck. "
                 "In project mode, prefer document_path over document_id so file targeting stays stable."

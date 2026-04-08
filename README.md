@@ -588,7 +588,7 @@ The same extraction path is also used by the knowledge-base upload form in Setti
 - The model can create a canvas document with `create_canvas_document`.
 - Canvas documents may be markdown or code artifacts, and in project mode they can carry `path`, `role`, `summary`, `imports`, `exports`, `symbols`, `dependencies`, `project_id`, and `workspace_id` metadata.
 - Page-aware uploaded documents can also expose page counts and be pinned page-by-page with `focus_canvas_page` when the content includes `## Page N` markers.
-- The model can expand a non-active canvas file with `expand_canvas_document` when project summaries are insufficient.
+- The model can expand a non-active canvas file with `expand_canvas_document` when project summaries are insufficient; each expansion is a call-time snapshot, so later canvas edits require a fresh expand call.
 - Targeted reads use `scroll_canvas_document`; `search_canvas_document` locates text, symbols, or patterns inside large documents before editing.
 - `set_canvas_viewport` pins a line range and `focus_canvas_page` pins a whole page for automatic reuse in later turns; `clear_canvas_viewport` removes a pinned region.
 - Existing documents can be rewritten in full with `rewrite_canvas_document` or updated in bulk with `batch_canvas_edits` for multiple non-overlapping edits in one call.
@@ -849,6 +849,9 @@ Validate a canvas document without mutating it.
 #### `expand_canvas_document`
 
 Load the full context of a canvas document when the current excerpt is not enough.
+
+- Returns a call-time snapshot of the canvas state for that document.
+- Re-run after later canvas edits if you need a refreshed view.
 
 - Arguments:
   - `document_id` (string, optional) - target canvas document id
