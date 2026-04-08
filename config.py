@@ -94,6 +94,7 @@ DOCUMENT_MAX_TEXT_CHARS = 50_000
 DOCUMENT_STORAGE_DIR = (os.getenv("DOCUMENT_STORAGE_DIR") or os.path.join(BASE_DIR, "data", "documents")).strip()
 VISION_ENABLED = _parse_bool_env("VISION_ENABLED", True)
 OCR_ENABLED = _parse_bool_env("OCR_ENABLED", VISION_ENABLED)
+CONVERSATION_MEMORY_ENABLED = _parse_bool_env("CONVERSATION_MEMORY_ENABLED", True)
 OCR_PROVIDER = (os.getenv("OCR_PROVIDER") or "paddleocr").strip().lower() or "paddleocr"
 OCR_SUPPORTED_PROVIDERS = {"paddleocr", "easyocr"}
 OCR_PRELOAD_ON_STARTUP = _parse_bool_env("OCR_PRELOAD", True)
@@ -192,6 +193,8 @@ DEFAULT_ACTIVE_TOOL_NAMES = [
     "append_scratchpad",
     "replace_scratchpad",
     "read_scratchpad",
+    "save_to_conversation_memory",
+    "delete_conversation_memory_entry",
     "ask_clarifying_question",
     "sub_agent",
     "image_explain",
@@ -433,6 +436,7 @@ def get_feature_flags() -> dict:
     return {
         "rag_enabled": RAG_ENABLED,
         "ocr_enabled": OCR_ENABLED,
+        "conversation_memory_enabled": CONVERSATION_MEMORY_ENABLED,
         "image_uploads_enabled": IMAGE_UPLOADS_ENABLED,
         "vision_enabled": VISION_ENABLED,
         "deepseek_api_configured": bool(DEEPSEEK_API_KEY),

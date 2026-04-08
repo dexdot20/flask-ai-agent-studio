@@ -7,6 +7,7 @@ from config import (
     CLARIFICATION_DEFAULT_MAX_QUESTIONS,
     CLARIFICATION_QUESTION_LIMIT_MAX,
     CLARIFICATION_QUESTION_LIMIT_MIN,
+    CONVERSATION_MEMORY_ENABLED,
     RAG_ENABLED,
     SCRATCHPAD_SECTION_METADATA,
     SCRATCHPAD_SECTION_ORDER,
@@ -333,6 +334,69 @@ TOOL_SPECS = [
             ),
         },
     },
+        {
+            "name": "save_to_conversation_memory",
+            "description": (
+                "Save one compact conversation-scoped memory entry for this chat only. "
+                "Use it for important user details, active constraints, decisions, or critical tool outcomes that should not be lost later in the same conversation."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entry_type": {
+                        "type": "string",
+                        "enum": ["user_info", "task_context", "tool_result", "decision"],
+                        "description": "Classification for the memory entry.",
+                    },
+                    "key": {
+                        "type": "string",
+                        "description": "Short label for the fact or result. Keep it compact and specific.",
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": "Single-line micro-summary of the information to remember for later turns in this same chat.",
+                    },
+                },
+                "required": ["entry_type", "key", "value"],
+            },
+            "prompt": {
+                "purpose": "Writes one short conversation-specific memory entry that will be auto-injected in later turns of this same chat.",
+                "inputs": {
+                    "entry_type": "user_info, task_context, tool_result, or decision",
+                    "key": "short label",
+                    "value": "one compact factual line",
+                },
+                "guidance": (
+                    "Use this when the information is important within this conversation but not durable enough for the cross-conversation scratchpad. "
+                    "Prefer concise micro-summaries over raw outputs. Save critical tool outcomes only when they are likely to matter later in the same chat."
+                ),
+            },
+        },
+        {
+            "name": "delete_conversation_memory_entry",
+            "description": (
+                "Delete one outdated or incorrect conversation memory entry by id. "
+                "Use this to clean up stale memory inside the current chat."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entry_id": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Conversation memory entry id to remove.",
+                    },
+                },
+                "required": ["entry_id"],
+            },
+            "prompt": {
+                "purpose": "Removes one obsolete conversation-scoped memory entry.",
+                "inputs": {
+                    "entry_id": "id shown in the Conversation Memory prompt section",
+                },
+                "guidance": "Use this when an earlier conversation-memory entry is no longer valid, was superseded, or should not keep influencing later turns.",
+            },
+        },
     {
         "name": "ask_clarifying_question",
         "description": (
@@ -1887,6 +1951,12 @@ def get_enabled_tool_specs(active_tool_names: list[str], clarification_max_quest
     specs = [tool for tool in TOOL_SPECS if tool["name"] in active_set]
     if not RAG_ENABLED:
         specs = [tool for tool in specs if tool["name"] != "search_knowledge_base"]
+    if not CONVERSATION_MEMORY_ENABLED:
+        specs = [
+            tool
+            for tool in specs
+            if tool["name"] not in {"save_to_conversation_memory", "delete_conversation_memory_entry"}
+        ]
     return [_build_clarification_spec(tool, clarification_max_questions) for tool in specs]
 
 

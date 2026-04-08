@@ -84,10 +84,12 @@ from db import (
     build_user_profile_system_context,
     count_visible_message_tokens,
     create_image_asset,
+    delete_conversation_memory_entry,
     extract_pending_clarification,
     extract_message_usage,
     get_active_tool_names,
     get_app_settings,
+    get_conversation_memory,
     get_conversation_messages,
     get_canvas_expand_max_lines,
     get_canvas_prompt_max_lines,
@@ -97,6 +99,7 @@ from db import (
     get_image_asset,
     get_user_profile_entries,
     insert_message,
+    insert_conversation_memory_entry,
     normalize_active_tool_names,
     parse_message_tool_calls,
     parse_message_metadata,
@@ -2469,6 +2472,62 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("`append_scratchpad`", system_text)
         self.assertIn("`search_web`", system_text)
         self.assertNotIn("`rewrite_canvas_document`", system_text)
+
+    def test_chat_route_injects_conversation_memory_and_passes_agent_context(self):
+        captured = {}
+        conversation_id = self._create_conversation()
+        insert_conversation_memory_entry(
+            conversation_id,
+            "user_info",
+            "Preferred name",
+            "Kullanıcının adı Ahmet.",
+        )
+
+        save_app_settings(
+            {
+                "user_preferences": "",
+                "max_steps": "1",
+                "active_tools": json.dumps(["save_to_conversation_memory", "delete_conversation_memory_entry"], ensure_ascii=False),
+                "rag_auto_inject": "false",
+            }
+        )
+
+        def fake_run_agent_stream(api_messages, *args, **kwargs):
+            captured["api_messages"] = api_messages
+            captured["agent_context"] = kwargs.get("agent_context")
+            return iter(
+                [
+                    {"type": "answer_start"},
+                    {"type": "answer_delta", "text": "OK"},
+                    {"type": "tool_capture", "tool_results": []},
+                    {"type": "done"},
+                ]
+            )
+
+        with patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream), patch(
+            "routes.chat.sync_conversations_to_rag_safe"
+        ):
+            response = self.client.post(
+                "/chat",
+                json={
+                    "conversation_id": conversation_id,
+                    "model": "deepseek-chat",
+                    "messages": [{"role": "user", "content": "Bunu hatırla"}],
+                },
+            )
+            response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured["agent_context"]["conversation_id"], conversation_id)
+        self.assertIn("source_message_id", captured["agent_context"])
+        system_text = "\n\n".join(
+            str(message.get("content") or "")
+            for message in captured["api_messages"]
+            if message.get("role") == "system"
+        )
+        self.assertIn("## Conversation Memory", system_text)
+        self.assertIn("Preferred name", system_text)
+        self.assertIn("Kullanıcının adı Ahmet.", system_text)
 
     def test_chat_route_defers_postprocess_outside_testing(self):
         fake_events = iter(
@@ -6077,6 +6136,48 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(result["note_count"], 2)
         self.assertEqual(summary, "Scratchpad read")
 
+    def test_execute_tool_saves_conversation_memory_entry(self):
+        conversation_id = self._create_conversation()
+
+        result, summary = _execute_tool(
+            "save_to_conversation_memory",
+            {
+                "entry_type": "user_info",
+                "key": "Preferred language",
+                "value": "Kullanıcı bu konuşmada Türkçe istiyor.",
+            },
+            runtime_state={"agent_context": {"conversation_id": conversation_id}},
+        )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(summary, "Conversation memory saved: Preferred language")
+        entries = get_conversation_memory(conversation_id)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["entry_type"], "user_info")
+        self.assertEqual(entries[0]["key"], "Preferred language")
+
+    def test_execute_tool_does_not_delete_other_conversation_memory_entry(self):
+        source_conversation_id = self._create_conversation("Source")
+        other_conversation_id = self._create_conversation("Other")
+        entry = insert_conversation_memory_entry(
+            source_conversation_id,
+            "decision",
+            "API",
+            "Flask kullanılacak.",
+        )
+
+        result, summary = _execute_tool(
+            "delete_conversation_memory_entry",
+            {"entry_id": entry["id"]},
+            runtime_state={"agent_context": {"conversation_id": other_conversation_id}},
+        )
+
+        self.assertEqual(result["status"], "not_found")
+        self.assertEqual(summary, f"Conversation memory not found: {entry['id']}")
+        remaining_entries = get_conversation_memory(source_conversation_id)
+        self.assertEqual(len(remaining_entries), 1)
+        self.assertEqual(remaining_entries[0]["id"], entry["id"])
+
     def test_runtime_system_message_omits_empty_scratchpad_section_when_only_read_tool_is_active(self):
         message = build_runtime_system_message(active_tool_names=["read_scratchpad"], scratchpad="")
 
@@ -6085,6 +6186,26 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("read_scratchpad", content)
         self.assertNotIn("(All sections empty)", content)
         self.assertNotIn("### Memory Write Policy", content)
+
+    def test_runtime_system_message_renders_conversation_memory_and_policy(self):
+        message = build_runtime_system_message(
+            active_tool_names=["save_to_conversation_memory", "delete_conversation_memory_entry"],
+            conversation_memory=[
+                {
+                    "id": 7,
+                    "entry_type": "tool_result",
+                    "key": "Latest fetch",
+                    "value": "Belgelerde Python 3.12 hedefleniyor.",
+                    "created_at": "2026-04-08 10:23:00",
+                }
+            ],
+        )
+
+        content = message["content"]
+        self.assertIn("## Conversation Memory", content)
+        self.assertIn("#7 [tool_result] 10:23 - Latest fetch: Belgelerde Python 3.12 hedefleniyor.", content)
+        self.assertIn("## Conversation Memory Write Policy", content)
+        self.assertIn("save_to_conversation_memory", content)
 
     def test_run_agent_stream_caps_parallel_safe_tool_workers(self):
         responses = [

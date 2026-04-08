@@ -115,6 +115,63 @@ def _iter_non_empty_scratchpad_sections(scratchpad_sections: dict[str, str]) -> 
     ]
 
 
+def _format_conversation_memory_timestamp(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "--:--"
+    try:
+        normalized = text.replace("Z", "+00:00")
+        return datetime.fromisoformat(normalized).astimezone().strftime("%H:%M")
+    except ValueError:
+        return text[11:16] if len(text) >= 16 else "--:--"
+
+
+def _normalize_conversation_memory_entries(entries) -> list[dict]:
+    normalized_entries: list[dict] = []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        entry_type = str(entry.get("entry_type") or "").strip().lower()
+        key = str(entry.get("key") or "").strip()
+        value = str(entry.get("value") or "").strip()
+        created_at = str(entry.get("created_at") or "").strip()
+        try:
+            entry_id = int(entry.get("id"))
+        except (TypeError, ValueError):
+            entry_id = None
+        if not entry_type or not key or not value:
+            continue
+        normalized_entries.append(
+            {
+                "id": entry_id,
+                "entry_type": entry_type,
+                "key": key,
+                "value": value,
+                "created_at": created_at,
+            }
+        )
+    return normalized_entries
+
+
+def build_conversation_memory_section(entries) -> list[str]:
+    normalized_entries = _normalize_conversation_memory_entries(entries)
+    if not normalized_entries:
+        return []
+
+    parts = [
+        "## Conversation Memory",
+        "*Use this as conversation-scoped working memory for important user details, active constraints, decisions, and critical tool outcomes that should not be lost within this chat.*\n",
+    ]
+    for entry in normalized_entries:
+        entry_id = entry.get("id")
+        entry_prefix = f"#{entry_id}" if isinstance(entry_id, int) and entry_id > 0 else "#?"
+        parts.append(
+            f"- {entry_prefix} [{entry['entry_type']}] {_format_conversation_memory_timestamp(entry.get('created_at'))} - {entry['key']}: {entry['value']}"
+        )
+    parts.append("")
+    return parts
+
+
 def _build_image_policy_payload(active_tool_names: list[str]) -> dict | None:
     if "image_explain" not in set(active_tool_names or []):
         return None
@@ -1259,6 +1316,7 @@ def build_runtime_system_message(
     all_clarification_rounds: list[dict] | None = None,
     retrieved_context=None,
     user_profile_context=None,
+    conversation_memory=None,
     tool_trace_context=None,
     tool_memory_context=None,
     now=None,
@@ -1320,6 +1378,21 @@ def build_runtime_system_message(
             "*Use this as durable cross-conversation memory about the user when it is relevant to the current request. Do not treat it as higher priority than the user's latest explicit instruction.*\n"
         )
         parts.append(normalized_user_profile_context)
+        parts.append("")
+
+    conversation_memory_section = build_conversation_memory_section(conversation_memory)
+    if conversation_memory_section:
+        parts.extend(conversation_memory_section)
+
+    if any(name in {"save_to_conversation_memory", "delete_conversation_memory_entry"} for name in runtime_tool_names):
+        parts.append("## Conversation Memory Write Policy")
+        parts.append(
+            "- **Use save_to_conversation_memory** for important conversation-scoped facts that should survive later turns in this same chat.\n"
+            "- **DO save**: confirmed user details relevant to this chat, active goals, firm constraints, decisions, and critical tool results that may matter later in the conversation.\n"
+            "- **DO NOT save**: raw verbose outputs, broad summaries, speculative inferences, or durable cross-conversation facts better suited for the scratchpad.\n"
+            "- **Style**: `key` should be a short label and `value` should be one compact factual line.\n"
+            "- **Cleanup**: If an entry becomes wrong or obsolete, remove it with delete_conversation_memory_entry."
+        )
         parts.append("")
 
     # Scratchpad
@@ -1430,6 +1503,7 @@ def prepend_runtime_context(
     all_clarification_rounds: list[dict] | None = None,
     retrieved_context=None,
     user_profile_context=None,
+    conversation_memory=None,
     tool_trace_context=None,
     tool_memory_context=None,
     scratchpad="",
@@ -1469,6 +1543,7 @@ def prepend_runtime_context(
         all_clarification_rounds=all_clarification_rounds,
         retrieved_context=retrieved_context,
         user_profile_context=user_profile_context,
+        conversation_memory=conversation_memory,
         tool_trace_context=tool_trace_context,
         tool_memory_context=tool_memory_context,
         scratchpad=scratchpad,

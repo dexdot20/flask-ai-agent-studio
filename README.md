@@ -1,6 +1,6 @@
 # Flask ChatBot: Multi-Provider + Tools + RAG + OCR + Vision + Canvas + Memory + Workspace
 
-This is a single-page Flask chat application built around DeepSeek plus optional OpenRouter models, multi-step tool use, local RAG, dedicated local OCR, optional local vision analysis, conversation summarization, pruning, persistent memory, editable canvas documents, page-aware canvas navigation, and a per-conversation workspace sandbox.
+This is a single-page Flask chat application built around DeepSeek plus optional OpenRouter models, multi-step tool use, local RAG, dedicated local OCR, optional local vision analysis, conversation summarization, pruning, persistent memory, conversation-scoped memory, editable canvas documents, page-aware canvas navigation, and a per-conversation workspace sandbox.
 
 It is not a minimal prompt/response demo. The app keeps conversation history in SQLite, restores assistant metadata when a conversation is reopened, supports editing earlier user messages, streams tool progress and reasoning, can enrich a user turn with local OCR or extracted document text before the model sees it, and can compact older content with summaries and pruning.
 
@@ -47,7 +47,7 @@ It is not a minimal prompt/response demo. The app keeps conversation history in 
 - Supports model-emitted tool JSON fallback handling
 - Limits tool rounds with configurable `max_steps` from 1 to 50
 - Forces a final-answer phase when the tool budget is exhausted
-- Tracks estimated prompt composition locally across runtime instructions, tool specs, canvas context, scratchpad, tool trace, tool memory, RAG context, message history, tool calls, tool results, and provider overhead
+- Tracks estimated prompt composition locally across runtime instructions, tool specs, canvas context, conversation memory, scratchpad, tool trace, tool memory, RAG context, message history, tool calls, tool results, and provider overhead
 - Estimates per-turn and session cost when pricing is known for the selected provider; unsupported providers fall back to unknown-cost reporting
 - Writes rotating agent trace logs to `logs/agent-trace.log` by default
 
@@ -69,11 +69,13 @@ It is not a minimal prompt/response demo. The app keeps conversation history in 
 
 ### Memory and retrieval
 
+- Conversation-scoped memory for important user details, decisions, task context, and critical tool outcomes from the current chat
 - Persistent scratchpad for durable user-specific facts and preferences
 - Persistent user profile memory extracted from structured conversation summaries
 - Tool memory for successful web/news/URL results from earlier sessions
 - RAG knowledge base built from stored conversations, successful text-like tool results, remembered web results, and uploaded documents
 - Optional auto-injection of retrieved RAG context into each turn
+- Optional auto-injection of conversation memory into each turn
 - Optional auto-injection of remembered tool results into each turn
 - RAG source pools can be scoped in Settings to conversations, tool results, tool memory, and uploaded documents
 - Structured clarification tool for cases where the request is underspecified
@@ -106,7 +108,7 @@ Manual smoke test checklist for the Canvas UI is available in [docs/canvas-ui-sm
 5. If a document is attached, its text is extracted and added to the turn context.
 6. If RAG auto-injection is enabled, the user message is searched against the knowledge base.
 7. If tool-memory auto-injection is enabled, the same query searches remembered web results.
-8. A runtime system message is built with the current time, preferences, scratchpad, user profile facts, tool guidance, and any retrieved context.
+8. A runtime system message is built with the current time, preferences, conversation memory, scratchpad, user profile facts, tool guidance, and any retrieved context.
 9. The agent resolves the selected model to the correct provider client and streams model output.
 10. Tool calls are validated, executed, cached, and appended to the transcript.
 11. Tool progress, reasoning deltas, answer deltas, usage, and message IDs are streamed back as NDJSON.
@@ -300,6 +302,7 @@ At least one provider key is required.
 | `CANVAS_PROMPT_DEFAULT_MAX_TOKENS` | `2000` | Default token budget for canvas context injections |
 | `CANVAS_EXPAND_DEFAULT_MAX_LINES` | `1600` | Default number of canvas lines returned by expand |
 | `CANVAS_SCROLL_WINDOW_LINES` | `200` | Default targeted canvas scroll window |
+| `CONVERSATION_MEMORY_ENABLED` | `true` | Enables conversation-scoped memory storage and prompt injection |
 | `SCRATCHPAD_ADMIN_EDITING_ENABLED` | `false` | Shows scratchpad editing in the UI |
 
 ### Login and session protection
@@ -482,7 +485,7 @@ The delegated helper receives only explicit delegated task text, but users can c
 The app includes a dedicated `/settings` page.
 
 - Assistant tab: user preferences, OpenRouter model management, visible chat-model ordering, task-specific model preferences, temperature, image-processing method, tool-step budget, clarification limits, sub-agent controls, fetch clipping, canvas limits, summarization, and pruning
-- Memory tab: scratchpad, tool-memory auto-injection, RAG auto-injection, RAG source pools, and user profile memory behavior
+- Memory tab: conversation memory, scratchpad, tool-memory auto-injection, RAG auto-injection, RAG source pools, and user profile memory behavior
 - Tools tab: active tool permissions, including canvas and project-workspace tools
 - Knowledge tab: knowledge-base uploads, RAG maintenance, and sync controls
 
@@ -557,12 +560,21 @@ The same extraction path is also used by the knowledge-base upload form in Setti
 - The scratchpad is included in the runtime system prompt for every turn.
 - Use it for long-term user facts, preferences, or constraints that should survive across conversations.
 
+### Conversation memory workflow
+
+- Conversation memory is separate from the scratchpad and is scoped to the current chat only.
+- The model can save important chat-specific facts, decisions, constraints, or critical tool outcomes with `save_to_conversation_memory`.
+- The model can remove obsolete or incorrect chat-specific entries with `delete_conversation_memory_entry`.
+- Conversation memory is injected into the runtime system prompt on later turns in the same conversation.
+- Use it for information that should survive the rest of the chat but should not be promoted to long-term cross-conversation memory.
+
 ### User profile memory workflow
 
 - Structured conversation summaries can contain `facts`, `decisions`, `open_issues`, `entities`, and `tool_outcomes`.
 - Facts that look like durable user preferences or stable constraints are written to the persistent `user_profile` table.
 - Those facts are injected back into the runtime system context as a compact bullet list.
 - This is separate from the scratchpad and complements it with automatically extracted memory.
+- This is also separate from conversation memory, which stays scoped to a single chat.
 
 ### Tool memory workflow
 
@@ -643,6 +655,22 @@ The Settings page can scope retrieval to conversation, tool result, tool memory,
 Only tools enabled in Settings are exposed to the model. If RAG is disabled, `search_knowledge_base` is removed from the tool list even if it is enabled in settings.
 
 ### Memory and personalization
+
+#### `save_to_conversation_memory`
+
+Save one short conversation-scoped memory entry for the current chat only.
+
+- Arguments:
+  - `entry_type` (string, required) - one of `user_info`, `task_context`, `tool_result`, or `decision`
+  - `key` (string, required) - short label for the fact or result
+  - `value` (string, required) - one compact factual line to remember later in this chat
+
+#### `delete_conversation_memory_entry`
+
+Delete one outdated conversation memory entry by id.
+
+- Arguments:
+  - `entry_id` (integer, required) - the memory entry id to remove
 
 #### `append_scratchpad`
 

@@ -25,6 +25,7 @@ from config import (
     CLARIFICATION_DEFAULT_MAX_QUESTIONS,
     CLARIFICATION_QUESTION_LIMIT_MAX,
     CLARIFICATION_QUESTION_LIMIT_MIN,
+    CONVERSATION_MEMORY_ENABLED,
     DB_PATH,
     DEFAULT_WEB_CACHE_TTL_HOURS,
     DEFAULT_SETTINGS,
@@ -211,6 +212,17 @@ def init_db() -> None:
                 source     TEXT,
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
+            CREATE TABLE IF NOT EXISTS conversation_memory (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id INTEGER NOT NULL,
+                message_id      INTEGER,
+                entry_type      TEXT NOT NULL,
+                key             TEXT NOT NULL,
+                value           TEXT NOT NULL,
+                created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE SET NULL
+            );
             CREATE TABLE IF NOT EXISTS image_assets (
                 image_id         TEXT PRIMARY KEY,
                 conversation_id  INTEGER NOT NULL,
@@ -269,6 +281,8 @@ def init_db() -> None:
             ON image_assets(conversation_id, created_at, image_id);
             CREATE INDEX IF NOT EXISTS idx_file_assets_conversation_created
             ON file_assets(conversation_id, created_at, file_id);
+            CREATE INDEX IF NOT EXISTS idx_conversation_memory_conversation_created
+            ON conversation_memory(conversation_id, created_at, id);
             """
         )
 
@@ -370,6 +384,120 @@ def initialize_database() -> None:
 
 def _normalize_user_profile_value(value, max_length: int = 500) -> str:
     return " ".join(str(value or "").strip().split())[:max_length]
+
+
+CONVERSATION_MEMORY_ENTRY_TYPES = {"user_info", "task_context", "tool_result", "decision"}
+
+
+def _normalize_conversation_memory_entry_type(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized not in CONVERSATION_MEMORY_ENTRY_TYPES:
+        raise ValueError("Unsupported conversation memory entry type.")
+    return normalized
+
+
+def _normalize_conversation_memory_key(value: str, max_length: int = 120) -> str:
+    normalized = " ".join(str(value or "").strip().split())[:max_length]
+    if not normalized:
+        raise ValueError("Conversation memory key is required.")
+    return normalized
+
+
+def _normalize_conversation_memory_value(value: str, max_length: int = 1500) -> str:
+    normalized = " ".join(str(value or "").strip().split())[:max_length]
+    if not normalized:
+        raise ValueError("Conversation memory value is required.")
+    return normalized
+
+
+def insert_conversation_memory_entry(
+    conversation_id: int,
+    entry_type: str,
+    key: str,
+    value: str,
+    message_id: int | None = None,
+) -> dict:
+    normalized_conversation_id = int(conversation_id or 0)
+    if normalized_conversation_id <= 0:
+        raise ValueError("conversation_id is required.")
+
+    normalized_entry_type = _normalize_conversation_memory_entry_type(entry_type)
+    normalized_key = _normalize_conversation_memory_key(key)
+    normalized_value = _normalize_conversation_memory_value(value)
+    normalized_message_id = int(message_id) if message_id not in (None, "") else None
+
+    with get_db() as conn:
+        cursor = conn.execute(
+            """INSERT INTO conversation_memory (
+                   conversation_id, message_id, entry_type, key, value
+               ) VALUES (?, ?, ?, ?, ?)""",
+            (
+                normalized_conversation_id,
+                normalized_message_id,
+                normalized_entry_type,
+                normalized_key,
+                normalized_value,
+            ),
+        )
+        entry_id = int(cursor.lastrowid)
+        row = conn.execute(
+            """SELECT id, conversation_id, message_id, entry_type, key, value, created_at
+               FROM conversation_memory
+               WHERE id = ?""",
+            (entry_id,),
+        ).fetchone()
+    return {
+        "id": int(row["id"]),
+        "conversation_id": int(row["conversation_id"]),
+        "message_id": int(row["message_id"]) if row["message_id"] is not None else None,
+        "entry_type": str(row["entry_type"] or "").strip(),
+        "key": str(row["key"] or "").strip(),
+        "value": str(row["value"] or "").strip(),
+        "created_at": str(row["created_at"] or "").strip(),
+    }
+
+
+def get_conversation_memory(conversation_id: int, limit: int = 40) -> list[dict]:
+    normalized_conversation_id = int(conversation_id or 0)
+    if normalized_conversation_id <= 0 or not CONVERSATION_MEMORY_ENABLED:
+        return []
+
+    normalized_limit = max(1, min(200, int(limit or 40)))
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT id, conversation_id, message_id, entry_type, key, value, created_at
+               FROM conversation_memory
+               WHERE conversation_id = ?
+               ORDER BY created_at ASC, id ASC
+               LIMIT ?""",
+            (normalized_conversation_id, normalized_limit),
+        ).fetchall()
+    return [
+        {
+            "id": int(row["id"]),
+            "conversation_id": int(row["conversation_id"]),
+            "message_id": int(row["message_id"]) if row["message_id"] is not None else None,
+            "entry_type": str(row["entry_type"] or "").strip(),
+            "key": str(row["key"] or "").strip(),
+            "value": str(row["value"] or "").strip(),
+            "created_at": str(row["created_at"] or "").strip(),
+        }
+        for row in rows
+    ]
+
+
+def delete_conversation_memory_entry(entry_id: int, conversation_id: int) -> bool:
+    normalized_entry_id = int(entry_id or 0)
+    normalized_conversation_id = int(conversation_id or 0)
+    if normalized_entry_id <= 0 or normalized_conversation_id <= 0:
+        return False
+
+    with get_db() as conn:
+        cursor = conn.execute(
+            "DELETE FROM conversation_memory WHERE id = ? AND conversation_id = ?",
+            (normalized_entry_id, normalized_conversation_id),
+        )
+    return int(cursor.rowcount or 0) > 0
 
 
 def _build_user_profile_fact_key(value: str) -> str:
@@ -2405,6 +2533,12 @@ def get_active_tool_names(settings: dict | None = None) -> list[str]:
         names = [name for name in names if name != "search_knowledge_base"]
     if not VISION_ENABLED:
         names = [name for name in names if name != "image_explain"]
+    if not CONVERSATION_MEMORY_ENABLED:
+        names = [
+            name
+            for name in names
+            if name not in {"save_to_conversation_memory", "delete_conversation_memory_entry"}
+        ]
     if names:
         if any(name in names for name in {"append_scratchpad", "replace_scratchpad"}):
             names = _ensure_tool("replace_scratchpad", names)
@@ -2417,6 +2551,12 @@ def get_active_tool_names(settings: dict | None = None) -> list[str]:
             names = [name for name in names if name != "search_knowledge_base"]
         if not VISION_ENABLED:
             names = [name for name in names if name != "image_explain"]
+        if not CONVERSATION_MEMORY_ENABLED:
+            names = [
+                name
+                for name in names
+                if name not in {"save_to_conversation_memory", "delete_conversation_memory_entry"}
+            ]
         if any(name in names for name in {"append_scratchpad", "replace_scratchpad"}):
             names = _ensure_tool("replace_scratchpad", names)
             names = _ensure_tool("read_scratchpad", names)

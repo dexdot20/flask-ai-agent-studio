@@ -24,6 +24,7 @@ from canvas_service import (
 )
 from config import (
     CHAT_SUMMARY_MODEL,
+    CONVERSATION_MEMORY_ENABLED,
     IMAGE_UPLOADS_DISABLED_FEATURE_ERROR,
     IMAGE_UPLOADS_ENABLED,
     OCR_ENABLED,
@@ -61,6 +62,7 @@ from db import (
     get_chat_summary_mode,
     get_chat_summary_detail_level,
     get_chat_summary_trigger_token_count,
+    get_conversation_memory,
     get_conversation_messages,
     get_db,
     get_fetch_url_clip_aggressiveness,
@@ -1376,6 +1378,7 @@ def _build_budgeted_prompt_messages(
     all_clarification_rounds: list[dict] | None,
     retrieved_context: dict | None,
     tool_memory_context: str | None,
+    conversation_memory: list[dict] | None = None,
     canvas_documents: list[dict] | None = None,
     canvas_active_document_id: str | None = None,
     canvas_viewports: list[dict] | None = None,
@@ -1401,6 +1404,7 @@ def _build_budgeted_prompt_messages(
         runtime_tool_names,
         retrieved_context=None,
         user_profile_context=user_profile_context,
+        conversation_memory=conversation_memory,
         tool_trace_context=tool_trace_context,
         tool_memory_context=None,
         scratchpad_sections=scratchpad_sections,
@@ -1498,6 +1502,7 @@ def _build_budgeted_prompt_messages(
         all_clarification_rounds=all_clarification_rounds,
         retrieved_context=rag_context,
         user_profile_context=user_profile_context,
+        conversation_memory=conversation_memory,
         tool_trace_context=trimmed_tool_trace,
         tool_memory_context=trimmed_tool_memory,
         scratchpad_sections=scratchpad_sections,
@@ -2695,6 +2700,7 @@ def register_chat_routes(app) -> None:
             initial_canvas_active_document_id = get_canvas_runtime_active_document_id(pre_created_canvas_state)
             initial_canvas_viewports = get_canvas_viewport_payloads(pre_created_canvas_state)
         all_clarification_rounds = _collect_answered_clarification_rounds(canonical_messages)
+        conversation_memory = get_conversation_memory(conv_id) if conv_id and CONVERSATION_MEMORY_ENABLED else []
         api_messages, prompt_budget_stats, current_context_injection = _build_budgeted_prompt_messages(
             canonical_messages,
             settings,
@@ -2703,6 +2709,7 @@ def register_chat_routes(app) -> None:
             all_clarification_rounds,
             retrieved_context,
             tool_memory_context,
+            conversation_memory=conversation_memory,
             canvas_documents=initial_canvas_documents,
             canvas_active_document_id=initial_canvas_active_document_id,
             canvas_viewports=initial_canvas_viewports,
@@ -2760,6 +2767,10 @@ def register_chat_routes(app) -> None:
                 canvas_expand_max_lines=get_canvas_expand_max_lines(settings),
                 canvas_scroll_window_lines=get_canvas_scroll_window_lines(settings),
                 workspace_runtime_state=workspace_runtime_state,
+                agent_context={
+                    "conversation_id": conv_id,
+                    "source_message_id": persisted_user_message_id,
+                },
             )
 
             def persist_assistant_snapshot() -> None:

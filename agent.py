@@ -67,6 +67,7 @@ from config import (
     AGENT_CONTEXT_COMPACTION_THRESHOLD,
     AGENT_TOOL_RESULT_TRANSCRIPT_MAX_CHARS,
     AGENT_TRACE_LOG_PATH,
+    CONVERSATION_MEMORY_ENABLED,
     DEFAULT_MAX_PARALLEL_TOOLS,
     FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS,
     FETCH_SUMMARIZE_MAX_INPUT_CHARS,
@@ -88,6 +89,7 @@ from db import (
     MESSAGE_USAGE_BREAKDOWN_REDUCTION_ORDER,
     append_to_scratchpad,
     count_scratchpad_notes,
+    delete_conversation_memory_entry,
     get_fetch_url_clip_aggressiveness,
     get_fetch_url_token_threshold,
     get_all_scratchpad_sections,
@@ -101,6 +103,7 @@ from db import (
     get_sub_agent_retry_attempts,
     get_sub_agent_retry_delay_seconds,
     get_sub_agent_timeout_seconds,
+    insert_conversation_memory_entry,
     parse_message_tool_calls,
     read_image_asset_bytes,
     normalize_scratchpad_text,
@@ -3931,6 +3934,48 @@ def _run_read_scratchpad(tool_args: dict, runtime_state: dict):
     }, "Scratchpad read"
 
 
+def _run_save_to_conversation_memory(tool_args: dict, runtime_state: dict):
+    if not CONVERSATION_MEMORY_ENABLED:
+        return {"status": "error", "error": "Conversation memory is disabled."}, "Conversation memory disabled"
+
+    agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
+    conversation_id = int(agent_context.get("conversation_id") or 0)
+    if conversation_id <= 0:
+        return {"status": "error", "error": "No active conversation context was provided."}, "Conversation memory unavailable"
+
+    source_message_id = agent_context.get("source_message_id")
+    message_id = int(source_message_id) if source_message_id not in (None, "") else None
+    entry = insert_conversation_memory_entry(
+        conversation_id,
+        tool_args.get("entry_type", ""),
+        tool_args.get("key", ""),
+        tool_args.get("value", ""),
+        message_id=message_id,
+    )
+    return {
+        "status": "ok",
+        "entry": entry,
+    }, f"Conversation memory saved: {entry['key']}"
+
+
+def _run_delete_conversation_memory_entry(tool_args: dict, runtime_state: dict):
+    if not CONVERSATION_MEMORY_ENABLED:
+        return {"status": "error", "error": "Conversation memory is disabled."}, "Conversation memory disabled"
+
+    agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
+    conversation_id = int(agent_context.get("conversation_id") or 0)
+    if conversation_id <= 0:
+        return {"status": "error", "error": "No active conversation context was provided."}, "Conversation memory unavailable"
+
+    entry_id = int(tool_args.get("entry_id") or 0)
+    deleted = delete_conversation_memory_entry(entry_id, conversation_id)
+    return {
+        "status": "ok" if deleted else "not_found",
+        "deleted": deleted,
+        "entry_id": entry_id,
+    }, (f"Conversation memory deleted: {entry_id}" if deleted else f"Conversation memory not found: {entry_id}")
+
+
 def _run_ask_clarifying_question(tool_args: dict, runtime_state: dict):
     del runtime_state
     payload = _normalize_clarification_payload(tool_args)
@@ -4962,6 +5007,8 @@ _TOOL_EXECUTORS = {
     "append_scratchpad": _run_append_scratchpad,
     "replace_scratchpad": _run_replace_scratchpad,
     "read_scratchpad": _run_read_scratchpad,
+    "save_to_conversation_memory": _run_save_to_conversation_memory,
+    "delete_conversation_memory_entry": _run_delete_conversation_memory_entry,
     "ask_clarifying_question": _run_ask_clarifying_question,
     "sub_agent": _run_sub_agent,
     "image_explain": _run_image_explain,
@@ -5060,6 +5107,16 @@ def collect_agent_response(
 def _tool_input_preview(tool_name: str, tool_args: dict) -> str:
     tool_name = _normalize_tool_name(tool_name)
     tool_args = tool_args if isinstance(tool_args, dict) else {}
+    if tool_name == "save_to_conversation_memory":
+        entry_type = str(tool_args.get("entry_type") or "").strip()
+        key = str(tool_args.get("key") or "").strip()
+        value = str(tool_args.get("value") or "").strip()
+        compact = ": ".join(part for part in (key, value) if part)
+        if entry_type and compact:
+            return f"{entry_type} | {compact}"[:300]
+        return (compact or entry_type)[:300]
+    if tool_name == "delete_conversation_memory_entry":
+        return str(tool_args.get("entry_id") or "").strip()[:300]
     if tool_name in {"search_web", "search_news_ddgs", "search_news_google"}:
         values = _get_search_tool_queries(tool_args)
         if isinstance(values, list):
@@ -5893,6 +5950,8 @@ def run_agent_stream(
         "prompt_tool_names": normalized_prompt_tool_names,
         "max_parallel_tools": normalized_parallel_tool_limit,
         "sub_agent_depth": _coerce_int_range((agent_context or {}).get("sub_agent_depth"), 0, 0, 8),
+        "conversation_id": _coerce_int_range((agent_context or {}).get("conversation_id"), 0, 0, 2_147_483_647),
+        "source_message_id": _coerce_int_range((agent_context or {}).get("source_message_id"), 0, 0, 2_147_483_647),
     }
     working_state = {
         "current_goal": _extract_initial_goal(messages),
