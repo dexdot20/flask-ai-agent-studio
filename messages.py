@@ -852,6 +852,9 @@ def build_api_messages(
         (index for index, message in enumerate(messages) if message.get("role") == "user"),
         default=-1,
     )
+    active_tool_names_by_id: dict[str, str] = {}
+    active_tool_names_in_order: list[str] = []
+    active_tool_name_index = 0
 
     for index, message in enumerate(messages):
         if index in skip_indexes:
@@ -882,6 +885,17 @@ def build_api_messages(
             tool_calls = parse_message_tool_calls(message.get("tool_calls"))
             if tool_calls and not content.strip():
                 content = None
+            active_tool_names_by_id = {}
+            active_tool_names_in_order = []
+            active_tool_name_index = 0
+            for tool_call in tool_calls or []:
+                tool_call_id = str(tool_call.get("id") or "").strip()
+                tool_name = str(((tool_call.get("function") or {}).get("name") or "")).strip()
+                if not tool_name:
+                    continue
+                active_tool_names_in_order.append(tool_name)
+                if tool_call_id:
+                    active_tool_names_by_id[tool_call_id] = tool_name
 
         api_message = {
             "role": role,
@@ -893,6 +907,13 @@ def build_api_messages(
                 api_message["tool_calls"] = tool_calls
         elif role == "tool":
             tool_call_id = str(message.get("tool_call_id") or "").strip()
+            tool_name = active_tool_names_by_id.get(tool_call_id, "")
+            if not tool_name and active_tool_name_index < len(active_tool_names_in_order):
+                tool_name = active_tool_names_in_order[active_tool_name_index]
+                active_tool_name_index += 1
+            if not tool_name:
+                tool_name = "tool"
+            api_message["name"] = tool_name
             if tool_call_id:
                 api_message["tool_call_id"] = tool_call_id
 

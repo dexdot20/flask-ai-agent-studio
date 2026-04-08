@@ -1200,6 +1200,9 @@ def _build_sub_agent_retry_messages(child_history: list[dict]) -> list[dict]:
         return []
 
     retry_messages: list[dict] = []
+    tool_call_names_by_id: dict[str, str] = {}
+    tool_call_names_in_order: list[str] = []
+    tool_call_name_index = 0
     index = 0
     while index < len(child_history):
         message = child_history[index]
@@ -1218,6 +1221,9 @@ def _build_sub_agent_retry_messages(child_history: list[dict]) -> list[dict]:
             raw_tool_calls = message.get("tool_calls") if isinstance(message.get("tool_calls"), list) else []
             normalized_tool_calls = []
             tool_call_ids: list[str] = []
+            tool_call_names_by_id = {}
+            tool_call_names_in_order = []
+            tool_call_name_index = 0
             lookahead_index = index + 1
             while lookahead_index < len(child_history):
                 next_message = child_history[lookahead_index]
@@ -1240,6 +1246,8 @@ def _build_sub_agent_retry_messages(child_history: list[dict]) -> list[dict]:
                     tool_call_id = tool_call_ids[call_index - 1]
                 if not tool_call_id:
                     tool_call_id = str(raw_tool_call.get("id") or f"tool-call-{call_index}").strip()[:120]
+                tool_call_names_in_order.append(function_name)
+                tool_call_names_by_id[tool_call_id] = function_name
                 normalized_tool_calls.append(
                     {
                         "id": tool_call_id,
@@ -1259,8 +1267,14 @@ def _build_sub_agent_retry_messages(child_history: list[dict]) -> list[dict]:
             continue
 
         if role == "tool":
-            tool_message: dict[str, Any] = {"role": "tool", "content": content}
             tool_call_id = str(message.get("tool_call_id") or "").strip()[:120]
+            tool_name = tool_call_names_by_id.get(tool_call_id, "")
+            if not tool_name and tool_call_name_index < len(tool_call_names_in_order):
+                tool_name = tool_call_names_in_order[tool_call_name_index]
+                tool_call_name_index += 1
+            if not tool_name:
+                tool_name = "tool"
+            tool_message: dict[str, Any] = {"role": "tool", "content": content, "name": tool_name}
             if tool_call_id:
                 tool_message["tool_call_id"] = tool_call_id
             if tool_message.get("content"):

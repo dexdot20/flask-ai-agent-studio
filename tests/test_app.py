@@ -11725,6 +11725,33 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(api_messages[1]["tool_calls"][0]["function"]["name"], "search_web")
         self.assertEqual(api_messages[2]["tool_call_id"], "call-1")
 
+    def test_build_api_messages_adds_tool_name_when_tool_call_id_is_missing(self):
+        normalized = normalize_chat_messages(
+            [
+                {"role": "user", "content": "Hello"},
+                {
+                    "role": "assistant",
+                    "content": "I am searching.",
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {
+                                "name": "search_web",
+                                "arguments": '{"queries":["hello"]}',
+                            },
+                        }
+                    ],
+                },
+                {"role": "tool", "content": "{}"},
+            ]
+        )
+
+        api_messages = build_api_messages(normalized)
+
+        self.assertEqual(api_messages[2]["name"], "search_web")
+        self.assertNotIn("tool_call_id", api_messages[2])
+
     def test_build_api_messages_drops_outbound_message_ids_for_provider(self):
         normalized = normalize_chat_messages(
             [
