@@ -12,6 +12,7 @@ import warnings
 import xml.etree.ElementTree as ET
 from io import BytesIO
 from urllib.parse import quote as url_quote
+from urllib.parse import urljoin
 from urllib.parse import urlparse
 
 warnings.filterwarnings(
@@ -20,7 +21,7 @@ warnings.filterwarnings(
 )
 
 import requests as http_requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString, Tag
 from ddgs import DDGS
 from pypdf import PdfReader
 from urllib3.exceptions import InsecureRequestWarning
@@ -101,6 +102,81 @@ _HTML_LOW_PRIORITY_TAGS = (
     "header",
 )
 _HTML_NOISE_TAGS = _HTML_HARD_NOISE_TAGS + _HTML_LOW_PRIORITY_TAGS
+_HTML_CONTENT_ROOT_SELECTORS = (
+    "main",
+    "article",
+    "[role='main']",
+    ".main-content",
+    ".page-content",
+    ".content",
+    ".article-content",
+    ".article-body",
+    ".entry-content",
+    ".post-content",
+    ".post-body",
+    ".markdown-body",
+    ".doc-content",
+    ".documentation-content",
+)
+_HTML_NOISE_HINTS = (
+    "nav",
+    "menu",
+    "footer",
+    "header",
+    "cookie",
+    "consent",
+    "banner",
+    "popup",
+    "modal",
+    "dialog",
+    "share",
+    "social",
+    "subscribe",
+    "newsletter",
+    "promo",
+    "advert",
+    "ads",
+    "breadcrumb",
+    "comment",
+    "related",
+    "recommend",
+    "sidebar",
+    "toolbar",
+    "pagination",
+    "search",
+    "login",
+    "signup",
+    "register",
+)
+_HTML_NOISE_ROLES = {
+    "navigation",
+    "banner",
+    "contentinfo",
+    "complementary",
+    "search",
+    "dialog",
+    "alert",
+    "menu",
+}
+_HTML_CONTAINER_TAGS = {
+    "body",
+    "main",
+    "article",
+    "section",
+    "div",
+    "figure",
+    "details",
+}
+_HTML_PARAGRAPH_TAGS = {
+    "p",
+    "summary",
+    "figcaption",
+    "caption",
+    "legend",
+    "dd",
+    "dt",
+    "address",
+}
 _ZERO_WIDTH_TRANSLATION = dict.fromkeys(map(ord, "\u200b\u200c\u200d\ufeff"), None)
 
 
@@ -344,6 +420,334 @@ def _combine_distinct_text_blocks(blocks: list[str]) -> str:
     return "\n\n".join(combined)
 
 
+def _extract_tag_hints(tag: Tag) -> str:
+    attrs = tag.attrs if isinstance(getattr(tag, "attrs", None), dict) else {}
+    parts: list[str] = []
+    if attrs.get("id"):
+        parts.append(str(attrs.get("id") or ""))
+    classes = attrs.get("class") if isinstance(attrs.get("class"), list) else []
+    if classes:
+        parts.extend(str(item or "") for item in classes)
+    for attr_name in ("role", "aria-label", "data-testid"):
+        value = attrs.get(attr_name)
+        if value:
+            parts.append(str(value))
+    return " ".join(parts).strip().casefold()
+
+
+def _is_probably_noise_block(tag: Tag) -> bool:
+    attrs = tag.attrs if isinstance(getattr(tag, "attrs", None), dict) else {}
+    if tag.name in _HTML_NOISE_TAGS:
+        return True
+    if "hidden" in attrs:
+        return True
+    if str(attrs.get("aria-hidden") or "").strip().lower() == "true":
+        return True
+    role = str(attrs.get("role") or "").strip().lower()
+    if role in _HTML_NOISE_ROLES:
+        return True
+
+    hints = _extract_tag_hints(tag)
+    if hints and any(token in hints for token in _HTML_NOISE_HINTS):
+        text = _clean_extracted_text(tag.get_text(separator=" "))
+        if len(text) < 1_500:
+            return True
+
+    links = tag.find_all("a")
+    if links and tag.name in {"div", "section", "aside", "ul", "ol"}:
+        text = _clean_extracted_text(tag.get_text(separator=" "))
+        link_text = _clean_extracted_text(" ".join(link.get_text(separator=" ") for link in links))
+        if text and len(link_text) >= max(40, int(len(text) * 0.6)) and len(text) < 500:
+            return True
+    return False
+
+
+def _prune_html_noise(soup: BeautifulSoup) -> None:
+    for tag in list(soup.find_all(True)):
+        if _is_probably_noise_block(tag):
+            tag.decompose()
+
+
+def _pick_html_content_root(soup: BeautifulSoup):
+    candidates: list[tuple[int, Tag, str]] = []
+    seen_ids: set[int] = set()
+
+    def add_candidate(node, label: str):
+        if not isinstance(node, Tag):
+            return
+        identity = id(node)
+        if identity in seen_ids:
+            return
+        seen_ids.add(identity)
+        text = _clean_extracted_text(node.get_text(separator="\n"))
+        if not text:
+            return
+        score = len(text)
+        if label == "main":
+            score += 1_000
+        elif label == "article":
+            score += 900
+        elif label == "body":
+            score += 100
+        hints = _extract_tag_hints(node)
+        if any(token in hints for token in ("content", "article", "post", "entry", "markdown", "doc")):
+            score += 250
+        link_count = len(node.find_all("a"))
+        if link_count:
+            score -= min(400, link_count * 8)
+        candidates.append((score, node, label))
+
+    add_candidate(soup.find("main"), "main")
+    add_candidate(soup.find("article"), "article")
+    for selector in _HTML_CONTENT_ROOT_SELECTORS:
+        for node in soup.select(selector):
+            add_candidate(node, node.name if node.name in {"main", "article", "body"} else "root")
+    add_candidate(soup.body, "body")
+
+    if not candidates:
+        return soup, "root"
+
+    _, root, label = max(candidates, key=lambda item: item[0])
+    return root, label if label in {"main", "article", "body"} else "root"
+
+
+def _clean_markdown_inline_text(text: str) -> str:
+    cleaned = unicodedata.normalize("NFKC", str(text or ""))
+    cleaned = cleaned.translate(_ZERO_WIDTH_TRANSLATION)
+    cleaned = cleaned.replace("\xa0", " ").replace("\r\n", "\n").replace("\r", "\n")
+    cleaned = re.sub(r"[ \t]+", " ", cleaned)
+    cleaned = re.sub(r" *\n *", "\n", cleaned)
+    cleaned = "\n".join(part.strip() for part in cleaned.split("\n"))
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    cleaned = re.sub(r"\s+([,.;:!?])", r"\1", cleaned)
+    return cleaned.strip()
+
+
+def _render_inline_markdown(node, base_url: str) -> str:
+    if isinstance(node, NavigableString):
+        return str(node)
+    if not isinstance(node, Tag):
+        return ""
+    if _is_probably_noise_block(node):
+        return ""
+    if node.name == "br":
+        return "\n"
+    if node.name == "img":
+        return _clean_markdown_inline_text(node.get("alt") or "")
+    if node.name == "code" and isinstance(node.parent, Tag) and node.parent.name == "pre":
+        return ""
+
+    children_text = "".join(_render_inline_markdown(child, base_url) for child in node.children)
+    cleaned_text = _clean_markdown_inline_text(children_text)
+    if not cleaned_text:
+        return ""
+
+    if node.name in {"strong", "b"}:
+        return f"**{cleaned_text}**"
+    if node.name in {"em", "i"}:
+        return f"*{cleaned_text}*"
+    if node.name == "code":
+        return f"`{cleaned_text.replace('`', '')}`"
+    if node.name == "a":
+        href = str(node.get("href") or "").strip()
+        resolved = urljoin(base_url, href) if href else ""
+        if resolved.startswith(("http://", "https://")):
+            if cleaned_text == resolved:
+                return cleaned_text
+            return f"[{cleaned_text}]({resolved})"
+        return cleaned_text
+    if node.name == "sup":
+        return f"^{cleaned_text}"
+    if node.name == "sub":
+        return f"~{cleaned_text}"
+    return children_text
+
+
+def _render_table_markdown(table: Tag, base_url: str) -> str:
+    rows: list[list[str]] = []
+    for row in table.find_all("tr"):
+        cells = row.find_all(["th", "td"])
+        if not cells:
+            continue
+        normalized_cells = []
+        for cell in cells:
+            cell_text = _clean_markdown_inline_text(_render_inline_markdown(cell, base_url)) or _clean_extracted_text(
+                cell.get_text(separator=" ")
+            )
+            normalized_cells.append(cell_text.replace("|", "\\|"))
+        rows.append(normalized_cells)
+    if not rows:
+        return ""
+    column_count = max(len(row) for row in rows)
+    normalized_rows = [row + [""] * (column_count - len(row)) for row in rows]
+    if len(normalized_rows) == 1:
+        return " | ".join(normalized_rows[0]).strip()
+    header = normalized_rows[0]
+    separator = ["---"] * column_count
+    body = normalized_rows[1:]
+    lines = [
+        "| " + " | ".join(header) + " |",
+        "| " + " | ".join(separator) + " |",
+    ]
+    lines.extend("| " + " | ".join(row) + " |" for row in body)
+    return "\n".join(lines).strip()
+
+
+def _render_list_markdown(list_tag: Tag, base_url: str, depth: int = 0) -> str:
+    lines: list[str] = []
+    ordered = list_tag.name == "ol"
+    for index, item in enumerate(list_tag.find_all("li", recursive=False), start=1):
+        marker = f"{index}. " if ordered else "- "
+        prefix = "  " * depth + marker
+        lead_parts: list[str] = []
+        nested_lines: list[str] = []
+        for child in item.children:
+            if isinstance(child, NavigableString):
+                cleaned_child = _clean_markdown_inline_text(str(child))
+                if cleaned_child:
+                    lead_parts.append(cleaned_child)
+                continue
+            if not isinstance(child, Tag) or _is_probably_noise_block(child):
+                continue
+            if child.name in {"ul", "ol"}:
+                nested_markdown = _render_list_markdown(child, base_url, depth + 1)
+                if nested_markdown:
+                    nested_lines.extend(nested_markdown.splitlines())
+                continue
+            if child.name in _HTML_CONTAINER_TAGS | _HTML_PARAGRAPH_TAGS:
+                child_blocks = _render_markdown_blocks(child, base_url)
+                if child_blocks:
+                    if not lead_parts:
+                        lead_parts.append(child_blocks[0])
+                        extra_blocks = child_blocks[1:]
+                    else:
+                        extra_blocks = child_blocks
+                    for block in extra_blocks:
+                        nested_lines.extend(("  " * (depth + 1) + line) if line else "" for line in block.splitlines())
+                continue
+            rendered = _clean_markdown_inline_text(_render_inline_markdown(child, base_url))
+            if rendered:
+                lead_parts.append(rendered)
+        lead_text = _clean_markdown_inline_text(" ".join(part for part in lead_parts if part)) or "Item"
+        lines.append(prefix + lead_text)
+        lines.extend(nested_lines)
+    return "\n".join(line for line in lines if line is not None).strip()
+
+
+def _render_markdown_blocks(node, base_url: str) -> list[str]:
+    if isinstance(node, NavigableString):
+        cleaned = _clean_markdown_inline_text(str(node))
+        return [cleaned] if cleaned else []
+    if not isinstance(node, Tag) or _is_probably_noise_block(node):
+        return []
+
+    tag_name = node.name.lower()
+    if tag_name in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+        text = _clean_markdown_inline_text(_render_inline_markdown(node, base_url))
+        return [f"{'#' * int(tag_name[1])} {text}"] if text else []
+    if tag_name in _HTML_PARAGRAPH_TAGS:
+        text = _clean_markdown_inline_text(_render_inline_markdown(node, base_url))
+        return [text] if text else []
+    if tag_name in {"ul", "ol"}:
+        rendered_list = _render_list_markdown(node, base_url)
+        return [rendered_list] if rendered_list else []
+    if tag_name == "pre":
+        code_text = (node.get_text(separator="\n") or "").replace("\r\n", "\n").strip("\n")
+        if not code_text.strip():
+            return []
+        class_names = node.get("class") if isinstance(node.get("class"), list) else []
+        if not class_names:
+            code_child = node.find("code")
+            class_names = code_child.get("class") if isinstance(code_child, Tag) and isinstance(code_child.get("class"), list) else []
+        language = ""
+        for class_name in class_names or []:
+            match = re.search(r"language-([A-Za-z0-9_+-]+)", str(class_name or ""))
+            if match:
+                language = match.group(1)
+                break
+        return [f"```{language}\n{code_text}\n```".strip()]
+    if tag_name == "blockquote":
+        child_blocks: list[str] = []
+        for child in node.children:
+            child_blocks.extend(_render_markdown_blocks(child, base_url))
+        if not child_blocks:
+            quoted = _clean_markdown_inline_text(_render_inline_markdown(node, base_url))
+            child_blocks = [quoted] if quoted else []
+        if not child_blocks:
+            return []
+        quoted_lines = []
+        for block in child_blocks:
+            for line in block.splitlines() or [""]:
+                quoted_lines.append(f"> {line}" if line else ">")
+        return ["\n".join(quoted_lines).strip()]
+    if tag_name == "table":
+        table_markdown = _render_table_markdown(node, base_url)
+        return [table_markdown] if table_markdown else []
+    if tag_name == "hr":
+        return []
+    if tag_name in _HTML_CONTAINER_TAGS:
+        blocks: list[str] = []
+        for child in node.children:
+            blocks.extend(_render_markdown_blocks(child, base_url))
+        if blocks:
+            return blocks
+        fallback = _clean_markdown_inline_text(_render_inline_markdown(node, base_url))
+        return [fallback] if fallback else []
+
+    fallback = _clean_markdown_inline_text(_render_inline_markdown(node, base_url))
+    return [fallback] if fallback else []
+
+
+def _combine_distinct_markdown_blocks(blocks: list[str]) -> str:
+    combined: list[str] = []
+    seen = set()
+    for block in blocks:
+        cleaned_block = str(block or "").strip()
+        if not cleaned_block:
+            continue
+        dedupe_key = _clean_extracted_text(re.sub(r"[#>*`\[\]()_-]", " ", cleaned_block)).casefold()
+        if not dedupe_key or dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        combined.append(cleaned_block)
+    markdown = "\n\n".join(combined).strip()
+    markdown = re.sub(r"\n{3,}", "\n\n", markdown)
+    return markdown
+
+
+def _build_html_markdown(
+    *,
+    content_root: Tag,
+    url: str,
+    meta_description: str,
+    structured_text: str,
+    low_priority_blocks: list[str],
+    noscript_text: str,
+    primary_text: str,
+) -> str:
+    markdown_blocks = _render_markdown_blocks(content_root, url)
+    primary_markdown = _combine_distinct_markdown_blocks(markdown_blocks)
+    supplemental_blocks: list[str] = []
+    normalized_primary_text = _clean_extracted_text(primary_text).casefold()
+    normalized_primary_markdown = _clean_extracted_text(primary_markdown).casefold()
+    normalized_meta_description = _clean_extracted_text(meta_description).casefold()
+
+    if meta_description and normalized_meta_description not in {
+        normalized_primary_text,
+        normalized_primary_markdown,
+    }:
+        if normalized_meta_description and normalized_meta_description not in normalized_primary_text:
+            supplemental_blocks.append(meta_description)
+
+    if len(primary_text) < _THIN_CONTENT_MIN_CHARS:
+        if structured_text:
+            supplemental_blocks.append("## Structured Data Highlights\n\n" + structured_text)
+        supplemental_blocks.extend(low_priority_blocks)
+        if noscript_text:
+            supplemental_blocks.append(noscript_text)
+    return _combine_distinct_markdown_blocks([*supplemental_blocks, primary_markdown])
+
+
 def _extract_html_outline(root) -> list[str]:
     headings = []
     for tag in root.find_all(["h1", "h2", "h3", "h4"]):
@@ -360,18 +764,6 @@ def _collect_low_priority_html_blocks(soup: BeautifulSoup) -> list[str]:
         if text and len(text) >= _LOW_PRIORITY_BLOCK_MIN_CHARS:
             blocks.append(text)
     return blocks
-
-
-def _pick_html_content_root(soup: BeautifulSoup):
-    root = soup.find("main")
-    if root is not None:
-        return root, "main"
-    root = soup.find("article")
-    if root is not None:
-        return root, "article"
-    if soup.body is not None:
-        return soup.body, "body"
-    return soup, "root"
 
 
 def _coerce_bool(value, default: bool = False) -> bool:
@@ -401,10 +793,7 @@ def _extract_html(html: str, url: str) -> dict:
     structured_text = _extract_json_ld_text(soup)
     low_priority_blocks = _collect_low_priority_html_blocks(soup)
 
-    for tag in soup(_HTML_HARD_NOISE_TAGS):
-        tag.decompose()
-    for tag in soup(_HTML_LOW_PRIORITY_TAGS):
-        tag.decompose()
+    _prune_html_noise(soup)
 
     content_root, content_source_element = _pick_html_content_root(soup)
     outline = _extract_html_outline(content_root)
@@ -415,10 +804,20 @@ def _extract_html(html: str, url: str) -> dict:
         text = _combine_distinct_text_blocks([reusable_summary, primary_text, *low_priority_blocks, noscript_text])
     if not text:
         text = _combine_distinct_text_blocks([reusable_summary, *low_priority_blocks, noscript_text])
+    markdown_content = _build_html_markdown(
+        content_root=content_root,
+        url=url,
+        meta_description=meta_description,
+        structured_text=structured_text,
+        low_priority_blocks=low_priority_blocks,
+        noscript_text=noscript_text,
+        primary_text=primary_text,
+    )
     result = {
         "url": url,
         "title": title,
-        "content": _truncate_content(text),
+        "content": _truncate_content(markdown_content or text),
+        "raw_content": _truncate_content(text),
         "content_format": "html",
         "content_source_element": content_source_element,
     }
@@ -517,7 +916,8 @@ def _build_fetch_result_from_response(resp, raw: bytes, url: str, partial_error:
 
 
 def _has_useful_fetch_content(result: dict) -> bool:
-    return len(_clean_extracted_text(result.get("content") or "")) >= _THIN_CONTENT_MIN_CHARS
+    content = result.get("raw_content") or result.get("content") or ""
+    return len(_clean_extracted_text(content)) >= _THIN_CONTENT_MIN_CHARS
 
 
 def _append_fetch_warning(result: dict, warning: str):
@@ -900,7 +1300,7 @@ def grep_fetched_content_tool(
     cache_key = f"fetch:{hashlib.md5(url.encode()).hexdigest()}"
     cached = cache_get(cache_key)
     if isinstance(cached, dict):
-        raw_text = cached.get("content") or ""
+        raw_text = cached.get("raw_content") or cached.get("content") or ""
         if raw_text:
             searched_source = "fetch_cache"
     else:
@@ -921,7 +1321,7 @@ def grep_fetched_content_tool(
     # 3. Re-fetch live when no raw page text is available.
     if not raw_text and refresh_if_missing:
         refreshed = fetch_url_tool(url)
-        refreshed_text = _clean_extracted_text(refreshed.get("content") or "")
+        refreshed_text = _clean_extracted_text(refreshed.get("raw_content") or refreshed.get("content") or "")
         if refreshed_text and not refreshed.get("error"):
             raw_text = refreshed_text
             searched_source = "live_refetch"

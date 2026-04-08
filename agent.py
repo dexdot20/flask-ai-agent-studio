@@ -5175,7 +5175,10 @@ def _build_tool_result_storage_entry(tool_name: str, tool_args: dict, result, su
         if isinstance(result, dict):
             display_result = transcript_result if isinstance(transcript_result, dict) else result
             display_content = _clean_tool_text(display_result.get("content") or "", limit=RAG_TOOL_RESULT_MAX_TEXT_CHARS)
-            raw_content = _clean_tool_text(result.get("content") or "", limit=FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS)
+            raw_content = _clean_tool_text(
+                result.get("raw_content") or result.get("content") or "",
+                limit=FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS,
+            )
             parts = []
             title = str(result.get("title") or "").strip()
             url = str(result.get("url") or tool_args.get("url") or "").strip()
@@ -5257,7 +5260,10 @@ def _build_tool_result_storage_entry(tool_name: str, tool_args: dict, result, su
         entry["input_preview"] = input_preview
     if tool_name == "fetch_url" and isinstance(result, dict):
         display_result = transcript_result if isinstance(transcript_result, dict) else result
-        raw_content = _clean_tool_text(result.get("content") or "", limit=FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS)
+        raw_content = _clean_tool_text(
+            result.get("raw_content") or result.get("content") or "",
+            limit=FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS,
+        )
         display_content = _clean_tool_text(display_result.get("content") or "", limit=FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS)
         content_mode = str(display_result.get("content_mode") or "").strip()
         summary_notice = _clean_tool_text(display_result.get("summary_notice") or "", limit=300)

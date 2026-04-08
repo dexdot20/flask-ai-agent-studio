@@ -732,7 +732,7 @@ DuckDuckGo text search.
 
 #### `fetch_url`
 
-Fetch and read the content of a specific web page. Large pages are clipped automatically; a page outline is included when clipping occurs.
+Fetch and read the content of a specific web page. HTML pages are cleaned into an AI-friendly Markdown view, noisy layout chrome is stripped when possible, and large pages are clipped automatically; a page outline is included when clipping occurs.
 
 - Arguments:
   - `url` (string, required) - full HTTP or HTTPS URL
@@ -747,7 +747,7 @@ Fetch a specific web page and return only an AI-generated summary of its content
 
 #### `grep_fetched_content`
 
-Search for a keyword, phrase, or regex pattern inside the content of a previously fetched URL. Prefers cached page text but can re-fetch the page live when cached content is unavailable.
+Search for a keyword, phrase, or regex pattern inside the content of a previously fetched URL. Prefers cached raw page text when available, but can re-fetch the page live when cached content is unavailable.
 
 - Arguments:
   - `url` (string, required) - the URL whose content to search

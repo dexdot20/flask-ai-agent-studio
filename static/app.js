@@ -7401,42 +7401,23 @@ function buildSubAgentResearchCanvasTitle(entry) {
 }
 
 function buildSubAgentResearchCanvasContent(entry) {
-  const taskInstructions = String(entry?.task_full || entry?.task || "").trim();
-  const taskHeading = getSubAgentTaskHeading(taskInstructions || entry?.summary || "Research");
-  const lines = [`# ${buildSubAgentResearchCanvasTitle(entry)}`, "", `Saved from sub-agent research: ${taskHeading}`, ""];
-
-  if (taskInstructions) {
-    lines.push("## Task", "", taskInstructions, "");
-  }
+  const lines = [`# ${buildSubAgentResearchCanvasTitle(entry)}`, ""];
 
   const summaryText = String(entry?.summary || "").trim();
   if (summaryText) {
     lines.push("## Summary", "", summaryText, "");
   }
 
-  if (Array.isArray(entry?.tool_trace) && entry.tool_trace.length) {
-    lines.push("## Research Steps", "");
-    entry.tool_trace.forEach((traceEntry) => {
-      const label = getToolUiConfig(traceEntry.tool_name).label;
-      const detail = String(traceEntry.preview || traceEntry.summary || "").trim();
-      const state = traceEntry.state === "error" ? "failed" : traceEntry.cached ? "cached" : "done";
-      lines.push(`- ${label} (${state}): ${detail || "No detail recorded."}`);
-      const summary = String(traceEntry.summary || "").trim();
-      if (summary && summary !== detail) {
-        lines.push(`  ${summary}`);
-      }
-    });
-    lines.push("");
-  }
+  if (!summaryText) {
+    const fallbackNote = String(entry?.fallback_note || "").trim();
+    if (fallbackNote) {
+      lines.push("## Note", "", fallbackNote, "");
+    }
 
-  const fallbackNote = String(entry?.fallback_note || "").trim();
-  if (fallbackNote) {
-    lines.push("## Fallback Note", "", fallbackNote, "");
-  }
-
-  const errorText = String(entry?.error || "").trim();
-  if (errorText) {
-    lines.push("## Error", "", errorText, "");
+    const errorText = String(entry?.error || "").trim();
+    if (!fallbackNote && errorText) {
+      lines.push("## Error", "", errorText, "");
+    }
   }
 
   return lines.join("\n").trim();

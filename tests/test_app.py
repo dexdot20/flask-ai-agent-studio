@@ -549,9 +549,9 @@ class AppRoutesTestCase(unittest.TestCase):
             "/api/conversations",
             json={"title": "OR Chat", "model": "openrouter:anthropic/claude-sonnet-4.5"},
         )
-
         self.assertEqual(response.status_code, 201)
         payload = response.get_json()
+        self.assertEqual(payload["title"], "OR Chat")
         self.assertEqual(payload["model"], "openrouter:anthropic/claude-sonnet-4.5")
         self.assertEqual(payload["model_label"], "Claude Sonnet 4.5")
 
@@ -8633,7 +8633,7 @@ class AppRoutesTestCase(unittest.TestCase):
             f"/api/conversations/{conversation_id}/canvas",
             json={
                 "title": "Research - README setup",
-                "content": "# README setup\n\nInstall the dependencies first.",
+                "content": "# README setup\n\n## Task\n\nInspect the README setup section.\n\n## Research Steps\n\n- Read README.md (done): Setup section reviewed.\n- Checked install notes (done): Dependencies noted.",
                 "format": "markdown",
                 "source_assistant_message_id": assistant_message_id,
                 "source_sub_agent_trace_index": 0,
@@ -8645,6 +8645,12 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertTrue(payload["saved_sub_agent_trace"])
         self.assertEqual(payload["document"]["title"], "Research - README setup")
         self.assertEqual(payload["document"]["format"], "markdown")
+        self.assertEqual(
+            payload["document"]["content"],
+            "# Research - README setup\n\n## Summary\n\nFound the setup commands and dependency notes.",
+        )
+        self.assertNotIn("## Task", payload["document"]["content"])
+        self.assertNotIn("## Research Steps", payload["document"]["content"])
 
         conversation_response = self.client.get(f"/api/conversations/{conversation_id}")
         self.assertEqual(conversation_response.status_code, 200)
@@ -12291,21 +12297,21 @@ class AppRoutesTestCase(unittest.TestCase):
     def test_extract_html_cleans_noise_and_whitespace(self):
         html = """
         <html>
-          <head>
-            <title>Example Title</title>
-            <style>.hidden { display: none; }</style>
-            <script>console.log('ignore')</script>
-          </head>
-          <body>
-            <nav>Navigation</nav>
-            <main>
-              <h1>  Heading\u200b </h1>
-              <h1>  Heading\u200b </h1>
-              <p>First line&nbsp;&nbsp; here.</p>
-              <div>\n\nSecond   line\t\tcontinues.\n</div>
-              <div>-----</div>
-            </main>
-          </body>
+            <head>
+                <title>Example Title</title>
+                <style>.hidden { display: none; }</style>
+                <script>console.log('ignore')</script>
+            </head>
+            <body>
+                <nav>Navigation</nav>
+                <main>
+                    <h1>  Heading\u200b </h1>
+                    <h1>  Heading\u200b </h1>
+                    <p>First line&nbsp;&nbsp; here.</p>
+                    <div>\n\nSecond   line\t\tcontinues.\n</div>
+                    <div>-----</div>
+                </main>
+            </body>
         </html>
         """
 
@@ -12313,14 +12319,42 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertEqual(result["title"], "Example Title")
         self.assertEqual(result["content_format"], "html")
-        self.assertTrue(result["content"].startswith("Heading"))
-        self.assertTrue(result["content"].startswith("Heading"))
+        self.assertTrue(result["content"].startswith("# Heading"))
         self.assertIn("First line here.", result["content"])
         self.assertIn("Second line continues.", result["content"])
+        self.assertIn("Heading", result["raw_content"])
         self.assertNotIn("Navigation", result["content"])
         self.assertNotIn("console.log", result["content"])
         self.assertNotIn("-----", result["content"])
         self.assertNotIn("\u200b", result["content"])
+
+    def test_extract_html_converts_core_structure_to_markdown(self):
+        html = """
+        <html>
+            <body>
+                <main>
+                    <h1>API Docs</h1>
+                    <p>Read the <a href="/reference">reference</a> before calling <code>fetch_url</code>.</p>
+                    <ul>
+                        <li>Install dependencies</li>
+                        <li>Configure the API key</li>
+                    </ul>
+                    <pre><code class="language-bash">pip install -r requirements.txt</code></pre>
+                </main>
+            </body>
+        </html>
+        """
+
+        result = _extract_html(html, "https://example.com/docs")
+
+        self.assertIn("# API Docs", result["content"])
+        self.assertIn("[reference](https://example.com/reference)", result["content"])
+        self.assertIn("`fetch_url`", result["content"])
+        self.assertIn("- Install dependencies", result["content"])
+        self.assertIn("- Configure the API key", result["content"])
+        self.assertIn("```bash\npip install -r requirements.txt\n```", result["content"])
+        self.assertIn("Install dependencies", result["raw_content"])
+        self.assertIn("pip install -r requirements.txt", result["raw_content"])
 
     def test_extract_html_outline_ignores_noise_regions(self):
         html = """
@@ -12500,6 +12534,24 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(result["match_count"], 1)
         self.assertEqual(result["searched_source"], "live_refetch")
         self.assertTrue(result["refetched"])
+
+    def test_grep_fetched_content_tool_prefers_raw_content_from_fetch_cache(self):
+        with patch(
+            "web_tools.cache_get",
+            return_value={
+                "url": "https://example.com/page",
+                "content": "# Example\n\n- needle hidden inside markdown noise",
+                "raw_content": "Example\nalpha\nneedle\nomega",
+            },
+        ), patch("rag_service.get_exact_tool_memory_match", return_value=None):
+            result = web_tools.grep_fetched_content_tool(
+                "https://example.com/page",
+                "needle",
+            )
+
+        self.assertEqual(result["match_count"], 1)
+        self.assertEqual(result["matches"][0]["line"], "needle")
+        self.assertEqual(result["searched_source"], "fetch_cache")
 
     def test_fetch_url_tool_recovers_partial_chunked_content(self):
         class FakeResponse:

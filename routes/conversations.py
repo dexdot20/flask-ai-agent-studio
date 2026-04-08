@@ -164,6 +164,28 @@ def _mark_sub_agent_trace_canvas_saved(
     return True
 
 
+def _build_sub_agent_canvas_content(title: str, trace: dict | None, fallback_content: str = "") -> str:
+    cleaned_title = str(title or "Research").strip() or "Research"
+    sections = [f"# {cleaned_title}", ""]
+
+    summary = str(trace.get("summary") or "").strip() if isinstance(trace, dict) else ""
+    if summary:
+        sections.extend(["## Summary", "", summary, ""])
+    else:
+        fallback_note = str(trace.get("fallback_note") or "").strip() if isinstance(trace, dict) else ""
+        if fallback_note:
+            sections.extend(["## Note", "", fallback_note, ""])
+        else:
+            error_text = str(trace.get("error") or "").strip() if isinstance(trace, dict) else ""
+            if error_text:
+                sections.extend(["## Error", "", error_text, ""])
+
+    cleaned_content = "\n".join(sections).strip()
+    if cleaned_content:
+        return cleaned_content
+    return str(fallback_content or "").strip()
+
+
 def _parse_rag_source_type_filter(raw_value):
     if raw_value is None:
         return None, []
@@ -534,6 +556,24 @@ def register_conversation_routes(app) -> None:
         conversation, messages = _load_conversation_payload(conv_id)
         if not conversation:
             return jsonify({"error": "Not found."}), 404
+
+        source_sub_agent_trace = None
+        if source_assistant_message_id is not None and source_sub_agent_trace_index is not None:
+            source_message = next(
+                (
+                    message
+                    for message in messages
+                    if message.get("id") == source_assistant_message_id and str(message.get("role") or "").strip() == "assistant"
+                ),
+                None,
+            )
+            if source_message:
+                sub_agent_traces = extract_sub_agent_traces(source_message.get("metadata"))
+                if 0 <= source_sub_agent_trace_index < len(sub_agent_traces):
+                    source_sub_agent_trace = sub_agent_traces[source_sub_agent_trace_index]
+
+        if source_sub_agent_trace is not None:
+            content = _build_sub_agent_canvas_content(title, source_sub_agent_trace, fallback_content=content)
 
         latest_canvas_state = find_latest_canvas_state(messages)
         runtime_state = create_canvas_runtime_state(
