@@ -80,11 +80,11 @@ It is not a minimal prompt/response demo. The app keeps conversation history in 
 
 ### Canvas documents
 
-- The model can create and edit Markdown canvas documents attached to the current conversation
+- The model can create and edit canvas documents (Markdown or code) attached to the current conversation
 - The model can also create code-format canvas documents with language metadata, path/role metadata, and project summaries when working in project mode
 - The UI can display multiple canvas documents, search within them, filter them, and export them
-- Canvas documents can be edited line-by-line by the model
-- Targeted reads use `scroll_canvas_document`, while wider reads use `expand_canvas_document`
+- Canvas documents support line-level edits, batch edits, bulk find-replace transforms, and non-mutating diff previews
+- `search_canvas_document` locates text or patterns inside a large canvas before editing; `set_canvas_viewport` and `focus_canvas_page` pin regions for automatic reuse in later turns
 - Project-mode canvas sessions include a file tree with active-file highlighting
 - Canvas documents can be downloaded as Markdown, HTML, or PDF
 
@@ -128,13 +128,14 @@ Manual smoke test checklist for the Canvas UI is available in [docs/canvas-ui-sm
 ├── model_registry.py       # Built-in and custom model catalog, OpenRouter model normalization
 ├── messages.py             # Runtime prompt construction and API message preparation
 ├── ocr_service.py          # Dedicated OCR provider loading and text extraction
+├── markdown_rendering.py   # Shared Markdown-to-DOCX and Markdown-to-PDF rendering helpers
 ├── prune_service.py        # Message pruning helpers
 ├── project_workspace_service.py # Project-plan normalization and conversation workspace management
 ├── rag_service.py          # RAG sync/search orchestration and tool-memory storage
 ├── token_utils.py          # Token counting and prompt-source estimation
 ├── tool_registry.py        # Tool definitions and schemas exposed to the model
 ├── vision.py               # Local Qwen2.5-VL visual analysis and image follow-up pipeline
-├── web_tools.py            # Web search, news search, safe URL fetch, proxy rotation
+├── web_tools.py            # Web search, news search, safe URL fetch, proxy rotation, and fetch summarization
 ├── routes/
 │   ├── chat.py             # /chat, /api/fix-text, title generation, summarization, pruning helpers
 │   ├── conversations.py    # Conversation CRUD, export, RAG maintenance, canvas maintenance
@@ -370,7 +371,7 @@ Note: `rag_context_size` and `rag_sensitivity` are the runtime settings used dur
 | `FETCH_SUMMARY_QUERY_TOP_K` | `4` | Query-aware sentence count for fetch summarization |
 | `FETCH_SUMMARY_EXCERPT_MAX_CHARS` | `500` | Maximum excerpt length in summaries |
 | `FETCH_SUMMARIZE_MAX_INPUT_CHARS` | `80000` | Maximum raw text fed into fetch summarization |
-| `FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS` | `800` | Maximum tokens returned by fetch summarization |
+| `FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS` | `2400` | Maximum tokens returned by fetch summarization |
 | `FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS` | `24000` | Maximum raw tool-result text kept for fetch-style results |
 | `CHAT_SUMMARY_TRIGGER_TOKEN_COUNT` | `80000` | Visible-token count that triggers automatic summarization |
 | `CHAT_SUMMARY_MODE` | `auto` | `auto`, `never`, or `aggressive` |
@@ -392,7 +393,7 @@ Note: `rag_context_size` and `rag_sensitivity` are the runtime settings used dur
 
 ### Scratchpad and memory
 
-`SCRATCHPAD_ADMIN_EDITING_ENABLED` reveals scratchpad editing controls in the UI. User preferences are clipped to 2000 characters before storage.
+The scratchpad is organized into named sections: `lessons`, `profile`, `notes`, `problems`, `tasks`, `preferences`, and `domain`. `SCRATCHPAD_ADMIN_EDITING_ENABLED` reveals per-section editing controls in the UI. User preferences are clipped to 2000 characters before storage.
 
 ### Built-in runtime limits from code
 
@@ -445,13 +446,18 @@ The Settings page persists these values in `app_settings`:
 - `chat_summary_trigger_token_count`
 - `summary_skip_first`
 - `summary_skip_last`
-
-The delegated helper still receives only the explicit delegated task text, but users can now configure its preferred model, fallback models, maximum step budget, and which web research tools it may use from the Settings page. Cache behavior is also partially user-controlled there via web cache TTL and the OpenRouter prompt-cache toggle.
 - `pruning_enabled`
 - `pruning_token_threshold`
 - `pruning_batch_size`
 - `fetch_url_token_threshold`
 - `fetch_url_clip_aggressiveness`
+- `rag_auto_inject_source_types`
+- `operation_model_fallback_preferences`
+- `proxy_enabled_operations`
+- `sub_agent_max_parallel_tools`
+- `reasoning_auto_collapse`
+
+The delegated helper receives only explicit delegated task text, but users can configure its preferred model, fallback models, maximum step budget, parallel-tool limit, and which web research tools it may use from the Settings page. Cache behavior is also partially user-controlled via web cache TTL and the OpenRouter prompt-cache toggle.
 
 ## Using the app
 
@@ -543,8 +549,11 @@ The same extraction path is also used by the knowledge-base upload form in Setti
 
 ### Scratchpad workflow
 
-- The scratchpad is a persistent text area in the Settings page when `SCRATCHPAD_ADMIN_EDITING_ENABLED` is true.
-- The model can append one durable fact with `append_scratchpad` or replace the full scratchpad with `replace_scratchpad`.
+- The scratchpad is a persistent memory store organized into named sections: `lessons`, `profile`, `notes`, `problems`, `tasks`, `preferences`, and `domain`.
+- When `SCRATCHPAD_ADMIN_EDITING_ENABLED` is true, each section is editable directly from the Settings page.
+- The model appends one or more durable facts to a specific section with `append_scratchpad` (requires `section` and a `notes` array).
+- `replace_scratchpad` completely rewrites a single named section with new content.
+- `read_scratchpad` reads the current state of all sections exactly as stored, useful before reorganizing content.
 - The scratchpad is included in the runtime system prompt for every turn.
 - Use it for long-term user facts, preferences, or constraints that should survive across conversations.
 
@@ -568,7 +577,12 @@ The same extraction path is also used by the knowledge-base upload form in Setti
 - Canvas documents may be markdown or code artifacts, and in project mode they can carry `path`, `role`, `summary`, `imports`, `exports`, `symbols`, `dependencies`, `project_id`, and `workspace_id` metadata.
 - Page-aware uploaded documents can also expose page counts and be pinned page-by-page with `focus_canvas_page` when the content includes `## Page N` markers.
 - The model can expand a non-active canvas file with `expand_canvas_document` when project summaries are insufficient.
-- Targeted reads use `scroll_canvas_document`, while `set_canvas_viewport` pins a line range and `focus_canvas_page` pins a whole page for later turns; existing documents can then be rewritten with `rewrite_canvas_document`.
+- Targeted reads use `scroll_canvas_document`; `search_canvas_document` locates text, symbols, or patterns inside large documents before editing.
+- `set_canvas_viewport` pins a line range and `focus_canvas_page` pins a whole page for automatic reuse in later turns; `clear_canvas_viewport` removes a pinned region.
+- Existing documents can be rewritten in full with `rewrite_canvas_document` or updated in bulk with `batch_canvas_edits` for multiple non-overlapping edits in one call.
+- `preview_canvas_changes` previews planned batch edits as a diff without mutating the document.
+- `transform_canvas_lines` applies a plain-text or regex find-replace across a document or a bounded scope.
+- `update_canvas_metadata` updates document metadata such as title, summary, role, or symbols without touching content lines.
 - Line-level edits use `replace_canvas_lines`, `insert_canvas_lines`, and `delete_canvas_lines`.
 - Canvas documents can be deleted with `delete_canvas_document` or cleared with `clear_canvas`.
 - Canvas documents are stored in SQLite and attached to the current conversation.
@@ -632,17 +646,25 @@ Only tools enabled in Settings are exposed to the model. If RAG is disabled, `se
 
 #### `append_scratchpad`
 
-Append one durable user-specific fact or preference to the persistent scratchpad.
+Append one or more durable facts to one named section of the persistent scratchpad.
 
 - Arguments:
-  - `note` (string, required) - one short durable note to append
+  - `section` (string, required) - target section: `lessons`, `profile`, `notes`, `problems`, `tasks`, `preferences`, or `domain`
+  - `notes` (array of strings, required) - one short durable fact per item; minimum 1 item
 
 #### `replace_scratchpad`
 
-Completely replace the persistent scratchpad content.
+Completely replace one named section of the persistent scratchpad.
 
 - Arguments:
-  - `new_content` (string, required) - the new content that fully replaces the scratchpad
+  - `section` (string, required) - target section (same enum as `append_scratchpad`)
+  - `new_content` (string, required) - the new content that fully replaces the selected section
+
+#### `read_scratchpad`
+
+Read the current persistent scratchpad content across all sections exactly as stored. Use this to inspect live structured memory before editing it.
+
+- Arguments: none
 
 #### `ask_clarifying_question`
 
@@ -664,6 +686,18 @@ Answer a follow-up question about a previously uploaded image saved in the curre
   - `conversation_id` (integer, required) - current conversation id
   - `question` (string, required) - focused follow-up question about the image, written in English
 
+### Delegation
+
+#### `sub_agent`
+
+Delegate a bounded web-research or inspection task to a helper sub-agent. The helper runs its own bounded tool loop and returns a compact summary.
+
+- Arguments:
+  - `task` (string, required) - delegated task rewritten as clear English instructions; include only research-relevant details
+  - `max_steps` (integer, optional, 1-12) - legacy field; the runtime uses the user-configured Settings value instead
+
+The helper receives only read-only web tools from the user-configured allowlist. The model controls neither the helper's tool budget nor its tool set; both are configured from the Settings page.
+
 ### Knowledge base and tool memory
 
 #### `search_knowledge_base`
@@ -674,8 +708,9 @@ Semantic search over synced conversations, stored tool results, remembered web r
   - `query` (string, required) - semantic search query
   - `category` (string, optional) - optional category filter
   - `top_k` (integer, optional, 1-12) - maximum number of chunks to retrieve
+  - `min_similarity` (number, optional, 0.0-1.0) - minimum similarity threshold; higher values trade recall for precision
 
-The current code accepts conversation, tool_result, tool_memory, and uploaded_document categories.
+The current code accepts `conversation`, `tool_result`, `tool_memory`, and `uploaded_document` as category values.
 
 #### `search_tool_memory`
 
@@ -684,6 +719,7 @@ Search past web tool results stored from previous conversations.
 - Arguments:
   - `query` (string, required) - semantic search query for past web tool results
   - `top_k` (integer, optional, 1-10) - maximum number of remembered results to retrieve
+  - `min_similarity` (number, optional, 0.0-1.0) - minimum similarity threshold
 
 ### Web search and browsing
 
@@ -696,10 +732,29 @@ DuckDuckGo text search.
 
 #### `fetch_url`
 
-Fetch and read the content of a specific web page. Returns cleaned text and metadata.
+Fetch and read the content of a specific web page. Large pages are clipped automatically; a page outline is included when clipping occurs.
 
 - Arguments:
   - `url` (string, required) - full HTTP or HTTPS URL
+
+#### `fetch_url_summarized`
+
+Fetch a specific web page and return only an AI-generated summary of its contents. The full page text is not surfaced to the parent model.
+
+- Arguments:
+  - `url` (string, required) - full HTTP or HTTPS URL
+  - `focus` (string, optional) - optional question or angle to focus the summary on
+
+#### `grep_fetched_content`
+
+Search for a keyword, phrase, or regex pattern inside the content of a previously fetched URL. Prefers cached page text but can re-fetch the page live when cached content is unavailable.
+
+- Arguments:
+  - `url` (string, required) - the URL whose content to search
+  - `pattern` (string, required) - keyword, phrase, or Python regex pattern (case-insensitive)
+  - `context_lines` (integer, optional, 0-5) - lines of context to include around each match
+  - `max_matches` (integer, optional, 1-30) - maximum number of matches to return
+  - `refresh_if_missing` (boolean, optional) - re-fetch the page live when cached raw content is absent; defaults to `true`
 
 ### News search
 
@@ -736,6 +791,15 @@ Create a new canvas document for the current conversation.
   - `role` (string, optional) - optional semantic role inside a project workspace
   - `summary` (string, optional) - optional short responsibility summary
 
+#### `search_canvas_document`
+
+Search for text, symbols, or a regex pattern inside a canvas document. Returns matching lines with surrounding context.
+
+- Arguments:
+  - `query` (string, required) - keyword, phrase, or regex pattern to search for
+  - `document_id` (string, optional) - target canvas document id
+  - `document_path` (string, optional) - target project-relative path
+
 #### `expand_canvas_document`
 
 Load the full context of a canvas document when the current excerpt is not enough.
@@ -754,9 +818,29 @@ Read a targeted 1-based line range from a canvas document.
   - `start_line` (integer, required) - 1-based starting line number
   - `end_line` (integer, required) - 1-based ending line number
 
+#### `set_canvas_viewport`
+
+Pin a document line range so it is automatically injected into later prompts for a limited number of turns.
+
+- Arguments:
+  - `start_line` (integer, required) - 1-based first line to pin
+  - `end_line` (integer, required) - 1-based last line to pin
+  - `document_id` (string, optional) - target canvas document id
+  - `document_path` (string, optional) - target project-relative path
+  - `ttl_turns` (integer, optional) - how many future turns to keep the viewport pinned; use `0` to pin until explicitly cleared
+  - `auto_unpin_on_edit` (boolean, optional) - automatically clear the viewport when an overlapping edit changes that region
+
+#### `clear_canvas_viewport`
+
+Clear one pinned canvas viewport or all pinned viewports.
+
+- Arguments:
+  - `document_id` (string, optional)
+  - `document_path` (string, optional) - when both are omitted, all viewports are cleared
+
 #### `focus_canvas_page`
 
-Pin one specific page from a page-aware canvas document so it is reused in later prompts.
+Pin one specific page from a page-aware canvas document so it is automatically injected into later prompts.
 
 - Arguments:
   - `document_id` (string, optional) - target canvas document id
@@ -779,6 +863,53 @@ Rewrite the full active canvas document while keeping the same document id.
   - `summary` (string, optional) - optional short responsibility summary
   - `document_id` (string, optional) - optional target document id
 
+#### `batch_canvas_edits`
+
+Apply multiple non-overlapping line edit operations to one canvas document in a single call. Each operation can be a `replace`, `insert`, or `delete`.
+
+- Arguments:
+  - `operations` (array, required) - ordered list of edit operations, each with `action`, relevant line fields, and `lines` where applicable
+  - `document_id` (string, optional)
+  - `document_path` (string, optional)
+  - `atomic` (boolean, optional) - when `true`, restore the original document if any operation fails
+
+#### `preview_canvas_changes`
+
+Preview the effect of multiple non-overlapping line edits against one canvas document without mutating it. Uses the same operation schema as `batch_canvas_edits`.
+
+- Arguments:
+  - `operations` (array, required) - ordered list of non-overlapping replace, insert, or delete operations to preview
+  - `document_id` (string, optional)
+  - `document_path` (string, optional)
+
+#### `transform_canvas_lines`
+
+Apply a plain-text or regex find-replace across a full canvas document or a specific line scope.
+
+- Arguments:
+  - `pattern` (string, required) - search text or regex pattern
+  - `replacement` (string, required) - replacement text; regex capture groups may use `$1`, `$2`, etc.
+  - `document_id` (string, optional)
+  - `document_path` (string, optional)
+  - `scope` (string, optional) - `all` or `lines_<start>_<end>`
+  - `is_regex` (boolean, optional)
+  - `case_sensitive` (boolean, optional)
+  - `count_only` (boolean, optional) - report matches without mutating the document
+
+#### `update_canvas_metadata`
+
+Update canvas document metadata such as title, summary, role, dependencies, or symbols without changing content lines.
+
+- Arguments:
+  - `document_id` (string, optional)
+  - `document_path` (string, optional)
+  - `title` (string, optional)
+  - `summary` (string, optional)
+  - `role` (string, optional) - `source`, `config`, `dependency`, `docs`, `test`, `script`, or `note`
+  - `add_dependencies` (array, optional) - dependencies to append
+  - `remove_dependencies` (array, optional) - dependencies to remove
+  - `add_symbols` (array, optional) - symbols to append
+
 #### `replace_canvas_lines`
 
 Replace a 1-based inclusive line range inside the active canvas document.
@@ -786,17 +917,23 @@ Replace a 1-based inclusive line range inside the active canvas document.
 - Arguments:
   - `start_line` (integer, required)
   - `end_line` (integer, required)
-  - `lines` (array, required) - replacement lines without trailing newlines
+  - `lines` (array, required) - replacement lines without trailing newlines; each element is a properly quoted JSON string
   - `document_id` (string, optional)
+  - `document_path` (string, optional)
+  - `expected_start_line` (integer, optional) - optional first line that must still match before the edit is applied
+  - `expected_lines` (array, optional) - optional current lines that must still match; guards against stale edits
 
 #### `insert_canvas_lines`
 
-Insert one or more lines into the active canvas document after a given line number.
+Insert one or more lines into the active canvas document after a given line number. Use `after_line=0` to insert before the first line.
 
 - Arguments:
   - `after_line` (integer, required)
   - `lines` (array, required)
   - `document_id` (string, optional)
+  - `document_path` (string, optional)
+  - `expected_start_line` (integer, optional)
+  - `expected_lines` (array, optional)
 
 #### `delete_canvas_lines`
 
@@ -806,13 +943,17 @@ Delete a 1-based inclusive line range from the active canvas document.
   - `start_line` (integer, required)
   - `end_line` (integer, required)
   - `document_id` (string, optional)
+  - `document_path` (string, optional)
+  - `expected_start_line` (integer, optional)
+  - `expected_lines` (array, optional)
 
 #### `delete_canvas_document`
 
-Delete a single canvas document.
+Delete a single canvas document. Defaults to the active document when `document_id` is omitted.
 
 - Arguments:
   - `document_id` (string, optional)
+  - `document_path` (string, optional)
 
 #### `clear_canvas`
 
@@ -834,6 +975,9 @@ Workspace tools let the assistant validate and edit files in the conversation sa
 | --- | --- | --- |
 | `GET` | `/` | Main chat UI |
 | `GET` | `/settings` | Dedicated settings page |
+| `GET` | `/login` | Login page (only when `LOGIN_PIN` is set) |
+| `POST` | `/login` | Authenticate with PIN |
+| `POST` | `/logout` | Invalidate the current session |
 | `GET` | `/api/settings` | Read persisted settings |
 | `PATCH` | `/api/settings` | Update persisted settings |
 | `POST` | `/api/fix-text` | Rewrite the current draft before sending |
@@ -842,6 +986,7 @@ Workspace tools let the assistant validate and edit files in the conversation sa
 | `POST` | `/api/conversations/<id>/summarize` | Manually summarize a conversation |
 | `POST` | `/api/conversations/<id>/summaries/<summary_id>/undo` | Undo a summary message |
 | `POST` | `/api/messages/<id>/prune` | Prune a visible user or assistant message |
+| `POST` | `/api/conversations/<id>/prune-batch` | Batch-prune a conversation |
 | `GET` | `/api/conversations` | List conversations |
 | `POST` | `/api/conversations` | Create a conversation |
 | `GET` | `/api/conversations/<id>` | Load one conversation and all messages |
@@ -849,7 +994,11 @@ Workspace tools let the assistant validate and edit files in the conversation sa
 | `DELETE` | `/api/conversations/<id>` | Delete a conversation |
 | `GET` | `/api/conversations/<id>/export` | Export a conversation as Markdown, DOCX, or PDF |
 | `GET` | `/api/conversations/<id>/canvas/export` | Export a canvas document as Markdown, HTML, or PDF |
+| `POST` | `/api/conversations/<id>/canvas` | Save a sub-agent research result as a new canvas document |
+| `PATCH` | `/api/conversations/<id>/canvas` | Update metadata for an existing canvas document |
 | `DELETE` | `/api/conversations/<id>/canvas` | Delete one canvas document or clear all canvas documents |
+| `PATCH` | `/api/messages/<id>` | Update a stored message |
+| `DELETE` | `/api/messages/<id>` | Delete a stored message |
 | `GET` | `/api/rag/documents` | List indexed RAG sources |
 | `DELETE` | `/api/rag/documents/<source_key>` | Delete one indexed RAG source |
 | `GET` | `/api/rag/search?q=...` | Search the knowledge base |
