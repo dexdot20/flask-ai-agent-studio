@@ -468,7 +468,7 @@ let isFixing = false;
 let currentConvId = null;
 let currentConvTitle = "New Chat";
 let conversationMemoryEntries = [];
-let conversationMemoryEnabled = featureFlags.conversation_memory_enabled !== false;
+let conversationMemoryEnabled = false;
 let activeAbortController = null;
 let activeAssistantStreamingBubble = null;
 let activeAssistantStreamingHasVisibleAnswer = false;
@@ -964,6 +964,7 @@ let activeToastTimers = new Map();
 let chatDragDepth = 0;
 let isCanvasMobileTreeOpen = false;
 const featureFlags = bootstrapData.features || appSettings.features || {};
+conversationMemoryEnabled = featureFlags.conversation_memory_enabled !== false;
 if (youtubeUrlBtn && !Boolean(featureFlags.youtube_transcripts_enabled)) {
   youtubeUrlBtn.hidden = true;
 }
