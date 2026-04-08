@@ -121,7 +121,16 @@ const summaryFocusPresetGrid = document.getElementById("summary-focus-presets");
 const summaryFocusInput = document.getElementById("summary-focus-input");
 const summaryDetailSelect = document.getElementById("summary-detail-select");
 const summaryDetailOptionGrid = document.getElementById("summary-detail-options");
+const summaryMessageCountInput = document.getElementById("summary-message-count-input");
+const summarySelectionNote = document.getElementById("summary-selection-note");
+const summarySettingsNote = document.getElementById("summary-settings-note");
 const summarySubmitBtn = document.getElementById("summary-submit-btn");
+const summaryProgress = document.getElementById("summary-progress");
+const summaryProgressLabel = document.getElementById("summary-progress-label");
+const summaryProgressValue = document.getElementById("summary-progress-value");
+const summaryProgressBar = document.getElementById("summary-progress-bar");
+const summaryProgressTrack = summaryProgress?.querySelector(".summary-progress__track") || null;
+const summaryHistoryList = document.getElementById("summary-history-list");
 const mobileSummaryBtn = document.getElementById("mobile-summary-btn");
 const conversationExportMdBtn = document.getElementById("conversation-export-md-btn");
 const conversationExportDocxBtn = document.getElementById("conversation-export-docx-btn");
@@ -188,6 +197,22 @@ const SUMMARY_DETAIL_OPTIONS = [
   },
 ];
 
+const SUMMARY_DETAIL_LABELS = Object.fromEntries(
+  SUMMARY_DETAIL_OPTIONS.map((option) => [option.value, option.label])
+);
+
+const SUMMARY_MODE_LABELS = {
+  auto: "Auto",
+  conservative: "Conservative",
+  aggressive: "Aggressive",
+  never: "Never",
+};
+
+const SUMMARY_SOURCE_LABELS = {
+  conversation_history: "Conversation history",
+  summary_history: "Summary history",
+};
+
 if (summaryDetailSelect) {
   summaryDetailSelect.value = String(appSettings.chat_summary_detail_level || "balanced").trim();
 }
@@ -250,6 +275,131 @@ function renderSummaryDetailOptions() {
   }
   summaryDetailOptionGrid.replaceChildren(fragment);
   updateSummaryDetailOptionsState();
+}
+
+function getSummaryDetailLabel(value) {
+  const normalizedValue = String(value || "balanced").trim() || "balanced";
+  return SUMMARY_DETAIL_LABELS[normalizedValue] || SUMMARY_DETAIL_LABELS.balanced;
+}
+
+function clearSummaryProgressTimer() {
+  if (!summaryProgressTimer) {
+    return;
+  }
+  window.clearInterval(summaryProgressTimer);
+  summaryProgressTimer = 0;
+}
+
+function setSummaryProgressState(value, label, { visible = true } = {}) {
+  const normalizedValue = Math.max(0, Math.min(100, Number(value) || 0));
+  summaryProgressCurrentValue = normalizedValue;
+  if (summaryProgress) {
+    summaryProgress.hidden = !visible;
+  }
+  if (summaryProgressLabel) {
+    summaryProgressLabel.textContent = String(label || "Preparing summary…").trim() || "Preparing summary…";
+  }
+  if (summaryProgressValue) {
+    summaryProgressValue.textContent = `${Math.round(normalizedValue)}%`;
+  }
+  if (summaryProgressBar) {
+    summaryProgressBar.style.width = `${normalizedValue}%`;
+  }
+  if (summaryProgressTrack) {
+    summaryProgressTrack.setAttribute("aria-valuenow", String(Math.round(normalizedValue)));
+  }
+}
+
+function resetSummaryProgress({ hide = true } = {}) {
+  clearSummaryProgressTimer();
+  setSummaryProgressState(0, "Preparing summary…", { visible: !hide });
+  if (hide && summaryProgress) {
+    summaryProgress.hidden = true;
+  }
+}
+
+function startSummaryProgress(label = "Selecting messages…") {
+  clearSummaryProgressTimer();
+  setSummaryProgressState(8, label, { visible: true });
+  summaryProgressTimer = window.setInterval(() => {
+    const nextValue = summaryProgressCurrentValue < 42
+      ? summaryProgressCurrentValue + 7
+      : summaryProgressCurrentValue < 72
+        ? summaryProgressCurrentValue + 4
+        : summaryProgressCurrentValue + 2;
+    const clampedValue = Math.min(nextValue, 86);
+    const nextLabel = clampedValue < 28
+      ? "Selecting messages…"
+      : clampedValue < 70
+        ? "Generating summary…"
+        : "Applying summary…";
+    setSummaryProgressState(clampedValue, nextLabel, { visible: true });
+    if (clampedValue >= 86) {
+      clearSummaryProgressTimer();
+    }
+  }, 220);
+}
+
+function finishSummaryProgress(label = "Summary completed.") {
+  clearSummaryProgressTimer();
+  setSummaryProgressState(100, label, { visible: true });
+  window.setTimeout(() => {
+    if (!isSummaryOperationInFlight) {
+      resetSummaryProgress({ hide: true });
+    }
+  }, 900);
+}
+
+function failSummaryProgress(label = "Summary failed.") {
+  clearSummaryProgressTimer();
+  const fallbackValue = summaryProgressCurrentValue > 0 ? summaryProgressCurrentValue : 18;
+  setSummaryProgressState(fallbackValue, label, { visible: true });
+}
+
+function setSummaryBusyState(isBusy) {
+  isSummaryOperationInFlight = Boolean(isBusy);
+  if (summarySubmitBtn) {
+    summarySubmitBtn.disabled = isSummaryOperationInFlight;
+  }
+  if (summaryNowBtn) {
+    summaryNowBtn.disabled = isSummaryOperationInFlight || !currentConvId;
+  }
+  if (summaryFocusInput) {
+    summaryFocusInput.disabled = isSummaryOperationInFlight;
+  }
+  if (summaryDetailSelect) {
+    summaryDetailSelect.disabled = isSummaryOperationInFlight;
+  }
+  summaryDetailOptionGrid?.querySelectorAll("[data-summary-detail-value]").forEach((button) => {
+    button.disabled = isSummaryOperationInFlight;
+  });
+  if (summaryMessageCountInput) {
+    summaryMessageCountInput.disabled = isSummaryOperationInFlight || !currentConvId;
+  }
+}
+
+async function refreshSummarySettingsFromServer() {
+  try {
+    const response = await fetch("/api/settings");
+    if (!response.ok) {
+      return;
+    }
+    const data = await response.json().catch(() => null);
+    if (!data || typeof data !== "object") {
+      return;
+    }
+    Object.assign(appSettings, {
+      chat_summary_mode: data.chat_summary_mode,
+      chat_summary_detail_level: data.chat_summary_detail_level,
+      chat_summary_trigger_token_count: data.chat_summary_trigger_token_count,
+      summary_skip_first: data.summary_skip_first,
+      summary_skip_last: data.summary_skip_last,
+    });
+    setSummaryDetailLevel(String(appSettings.chat_summary_detail_level || "balanced").trim() || "balanced");
+    renderSummaryInspector();
+  } catch (_) {
+    // Ignore settings refresh failures and keep the bootstrapped values.
+  }
 }
 
 function applySummaryFocusPreset(preset) {
@@ -317,6 +467,9 @@ let streamingCanvasPreviews = new Map();
 let pendingCanvasPreviewTimer = 0;
 let lastCanvasStructureSignature = "";
 let latestSummaryStatus = null;
+let isSummaryOperationInFlight = false;
+let summaryProgressTimer = 0;
+let summaryProgressCurrentValue = 0;
 let conversationRefreshGeneration = 0;
 let pendingConversationRefreshTimers = new Set();
 let lastConversationSignature = "";
@@ -2768,6 +2921,12 @@ function openSummaryPanel(triggerEl = null) {
   lastSummaryTriggerEl = triggerEl instanceof HTMLElement
     ? triggerEl
     : (document.activeElement instanceof HTMLElement ? document.activeElement : mobileSummaryBtn);
+  if (!isSummaryOperationInFlight) {
+    resetSummaryProgress({ hide: true });
+  }
+  renderSummaryInspector();
+  setSummaryBusyState(isSummaryOperationInFlight);
+  void refreshSummarySettingsFromServer();
   if (summaryFocusInput) {
     window.setTimeout(() => summaryFocusInput.focus({ preventScroll: true }), 0);
   }
@@ -2788,19 +2947,23 @@ async function runConversationSummary({ triggerButton = null, closePanel = false
     return;
   }
 
+  const requestedMessageCount = parseSummaryMessageCount();
+  const originalButtonText = triggerButton ? triggerButton.textContent : "";
+
   const requestBody = {
     force: true,
     summary_focus: String(summaryFocusInput?.value || "").trim(),
     summary_detail_level: String(summaryDetailSelect?.value || "balanced").trim(),
   };
-
-  if (triggerButton) {
-    triggerButton.disabled = true;
-    triggerButton.textContent = closePanel ? "Summarizing…" : "Summarizing…";
+  if (requestedMessageCount !== null) {
+    requestBody.message_count = requestedMessageCount;
   }
 
-  if (closePanel) {
-    closeSummaryPanel({ restoreFocus: false });
+  setSummaryBusyState(true);
+  startSummaryProgress("Selecting messages…");
+  if (triggerButton) {
+    triggerButton.disabled = true;
+    triggerButton.textContent = "Summarizing…";
   }
 
   try {
@@ -2820,6 +2983,11 @@ async function runConversationSummary({ triggerButton = null, closePanel = false
         renderConversationHistory();
       }
       const coveredCount = Number(data.covered_message_count || 0);
+      finishSummaryProgress(
+        coveredCount > 0
+          ? `${coveredCount} message${coveredCount === 1 ? " was" : "s were"} summarized.`
+          : "Summary completed."
+      );
       showToast(
         coveredCount > 0
           ? `${coveredCount} message${coveredCount === 1 ? " was" : "s were"} summarized.`
@@ -2828,20 +2996,24 @@ async function runConversationSummary({ triggerButton = null, closePanel = false
       );
       latestSummaryStatus = { applied: true, reason: "applied", failure_stage: null, failure_detail: "Manual summary completed." };
     } else {
+      failSummaryProgress(data.failure_detail || data.reason || "Summary was not applied.");
       showToast(data.failure_detail || data.reason || "Summary was not applied.", "warning");
       latestSummaryStatus = { applied: false, reason: data.reason, failure_detail: data.failure_detail };
     }
     renderSummaryInspector();
   } catch (error) {
+    failSummaryProgress(error.message || "Failed to summarize.");
     showToast(error.message, "error");
   } finally {
+    setSummaryBusyState(false);
     if (triggerButton) {
       triggerButton.disabled = false;
-      triggerButton.textContent = closePanel ? "Summarize Conversation" : "Summarize now";
+      triggerButton.textContent = originalButtonText || (closePanel ? "Summarize Conversation" : "Summarize now");
       if (closePanel && typeof triggerButton.focus === "function") {
         triggerButton.focus();
       }
     }
+    renderSummaryInspector();
   }
 }
 
@@ -5240,6 +5412,16 @@ function getSummaryModeValue() {
   return String(appSettings.chat_summary_mode || "auto").trim() || "auto";
 }
 
+function getSummarySkipFirstValue() {
+  const rawValue = Number.parseInt(String(appSettings.summary_skip_first || "0"), 10);
+  return Number.isFinite(rawValue) ? Math.max(0, rawValue) : 0;
+}
+
+function getSummarySkipLastValue() {
+  const rawValue = Number.parseInt(String(appSettings.summary_skip_last || "0"), 10);
+  return Number.isFinite(rawValue) ? Math.max(0, rawValue) : 0;
+}
+
 function getSummaryTriggerValue() {
   const rawValue = parseInt(appSettings.chat_summary_trigger_token_count || 80000, 10);
   return Number.isFinite(rawValue) ? rawValue : 80000;
@@ -5281,6 +5463,153 @@ function findLatestSummaryEntry(entries = history) {
     }
   }
   return null;
+}
+
+function getSummaryEligibleMessages(entries = history) {
+  const candidates = (entries || [])
+    .filter((entry) => isPrunableHistoryMessage(entry))
+    .sort((left, right) => {
+      const leftPosition = Number(left?.position || 0);
+      const rightPosition = Number(right?.position || 0);
+      if (leftPosition !== rightPosition) {
+        return leftPosition - rightPosition;
+      }
+      return Number(left?.id || 0) - Number(right?.id || 0);
+    });
+
+  const skipFirst = getSummarySkipFirstValue();
+  const skipLast = getSummarySkipLastValue();
+  if (skipFirst + skipLast >= candidates.length) {
+    return [];
+  }
+  return skipLast > 0 ? candidates.slice(skipFirst, candidates.length - skipLast) : candidates.slice(skipFirst);
+}
+
+function parseSummaryMessageCount() {
+  const rawValue = String(summaryMessageCountInput?.value || "").trim();
+  if (!rawValue) {
+    return null;
+  }
+  const parsed = Number.parseInt(rawValue, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return null;
+  }
+  return parsed;
+}
+
+function getSummaryHistoryEntries(entries = history) {
+  return (entries || [])
+    .filter((entry) => entry?.role === "summary")
+    .slice()
+    .sort((left, right) => {
+      const leftMeta = left?.metadata && typeof left.metadata === "object" ? left.metadata : null;
+      const rightMeta = right?.metadata && typeof right.metadata === "object" ? right.metadata : null;
+      const leftGeneratedAt = String(leftMeta?.generated_at || "").trim();
+      const rightGeneratedAt = String(rightMeta?.generated_at || "").trim();
+      const leftTime = leftGeneratedAt ? Date.parse(leftGeneratedAt) : Number.NaN;
+      const rightTime = rightGeneratedAt ? Date.parse(rightGeneratedAt) : Number.NaN;
+      if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
+        return rightTime - leftTime;
+      }
+      const leftPosition = Number(left?.position || 0);
+      const rightPosition = Number(right?.position || 0);
+      if (leftPosition !== rightPosition) {
+        return rightPosition - leftPosition;
+      }
+      return Number(right?.id || 0) - Number(left?.id || 0);
+    });
+}
+
+function renderSummaryHistoryList() {
+  if (!summaryHistoryList) {
+    return;
+  }
+
+  const summaryEntries = getSummaryHistoryEntries(history);
+  if (!currentConvId) {
+    summaryHistoryList.innerHTML = '<div class="summary-history-empty">Open a conversation to review generated summaries.</div>';
+    return;
+  }
+  if (!summaryEntries.length) {
+    summaryHistoryList.innerHTML = '<div class="summary-history-empty">No summaries have been generated for this conversation yet.</div>';
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  const latestSummaryId = Number(findLatestSummaryEntry(history)?.id || 0);
+
+  summaryEntries.forEach((entry) => {
+    const metadata = entry?.metadata && typeof entry.metadata === "object" ? entry.metadata : {};
+    const article = document.createElement("article");
+    article.className = "summary-history-item";
+
+    const header = document.createElement("div");
+    header.className = "summary-history-item__header";
+
+    const copy = document.createElement("div");
+    const title = document.createElement("div");
+    title.className = "summary-history-item__title";
+    title.textContent = `Summary from ${formatSummaryTimestamp(metadata.generated_at)}`;
+    copy.appendChild(title);
+
+    const meta = document.createElement("div");
+    meta.className = "summary-history-item__meta";
+    const metaValues = [
+      Number(metadata.covered_message_count || 0) > 0 ? `${metadata.covered_message_count} messages` : "Summary",
+      SUMMARY_SOURCE_LABELS[String(metadata.summary_source || "").trim()] || "Conversation history",
+      `Level ${Math.max(1, Number(metadata.summary_level || 1) || 1)}`,
+      Number(entry?.id || 0) === latestSummaryId ? "Latest" : "Visible",
+    ];
+    metaValues.forEach((value) => {
+      const chip = document.createElement("span");
+      chip.className = "summary-history-item__chip";
+      chip.textContent = value;
+      meta.appendChild(chip);
+    });
+    copy.appendChild(meta);
+    header.appendChild(copy);
+
+    const actions = document.createElement("div");
+    actions.className = "summary-history-item__actions";
+
+    const viewButton = document.createElement("button");
+    viewButton.type = "button";
+    viewButton.className = "btn-ghost";
+    viewButton.textContent = "View summary";
+
+    const undoButton = document.createElement("button");
+    undoButton.type = "button";
+    undoButton.className = "btn-ghost";
+    undoButton.textContent = "Undo";
+    undoButton.disabled = isSummaryOperationInFlight;
+
+    actions.append(viewButton, undoButton);
+    header.appendChild(actions);
+
+    const preview = document.createElement("p");
+    preview.className = "summary-history-item__preview";
+    const normalizedPreview = String(entry?.content || "").replace(/\s+/g, " ").trim();
+    preview.textContent = normalizedPreview.length > 180 ? `${normalizedPreview.slice(0, 180).trimEnd()}…` : (normalizedPreview || "Summary content is empty.");
+
+    const body = document.createElement("div");
+    body.className = "summary-history-item__body";
+    body.hidden = true;
+    body.innerHTML = renderMarkdown(entry?.content || "");
+
+    viewButton.addEventListener("click", () => {
+      const nextHidden = !body.hidden;
+      body.hidden = nextHidden;
+      viewButton.textContent = nextHidden ? "View summary" : "Hide summary";
+    });
+    undoButton.addEventListener("click", () => {
+      void undoConversationSummary(Number(entry?.id || 0), { triggerButton: undoButton });
+    });
+
+    article.append(header, preview, body);
+    fragment.appendChild(article);
+  });
+
+  summaryHistoryList.replaceChildren(fragment);
 }
 
 function formatSummaryTimestamp(value) {
@@ -5341,6 +5670,103 @@ function describeSummaryFailure(status) {
     return "The provider returned an error while generating the summary.";
   }
   return detail || "The summary attempt failed validation, so no messages were compressed.";
+}
+
+function updateSummarySelectionUi() {
+  const eligibleMessages = getSummaryEligibleMessages(history);
+  const eligibleCount = eligibleMessages.length;
+  const skipFirst = getSummarySkipFirstValue();
+  const skipLast = getSummarySkipLastValue();
+  const mode = SUMMARY_MODE_LABELS[getSummaryModeValue()] || SUMMARY_MODE_LABELS.auto;
+  const detailLabel = getSummaryDetailLabel(appSettings.chat_summary_detail_level || "balanced");
+
+  if (summaryMessageCountInput) {
+    const requestedCount = parseSummaryMessageCount();
+    summaryMessageCountInput.max = String(Math.max(eligibleCount, 1));
+    summaryMessageCountInput.disabled = isSummaryOperationInFlight || !currentConvId || eligibleCount === 0;
+    if (eligibleCount === 0) {
+      summaryMessageCountInput.value = "";
+    } else if (requestedCount !== null && requestedCount > eligibleCount) {
+      summaryMessageCountInput.value = String(eligibleCount);
+    }
+  }
+
+  if (summarySelectionNote) {
+    if (!currentConvId) {
+      summarySelectionNote.textContent = "Open a conversation to see which messages are currently eligible for summary.";
+    } else if (!eligibleCount) {
+      summarySelectionNote.textContent = "No messages are currently eligible after the protected first/last message window from Settings is applied.";
+    } else {
+      summarySelectionNote.textContent = `Eligible after Settings protection: ${eligibleCount} messages. Leave the field blank for automatic selection or choose any value from 1 to ${eligibleCount}.`;
+    }
+  }
+
+  if (summarySettingsNote) {
+    summarySettingsNote.textContent = `Current Settings: mode ${mode}, detail ${detailLabel}, protect first ${skipFirst}, protect last ${skipLast}.`;
+  }
+}
+
+async function undoConversationSummary(summaryId, { triggerButton = null } = {}) {
+  const normalizedSummaryId = Number(summaryId || 0);
+  if (!currentConvId || !normalizedSummaryId) {
+    showToast("No summary is available to undo.", "warning");
+    return;
+  }
+
+  const originalButtonText = triggerButton ? triggerButton.textContent : "";
+  setSummaryBusyState(true);
+  startSummaryProgress("Restoring summary…");
+  if (triggerButton) {
+    triggerButton.disabled = true;
+    triggerButton.textContent = "Restoring…";
+  }
+
+  try {
+    const response = await fetch(`/api/conversations/${currentConvId}/summaries/${normalizedSummaryId}/undo`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "Failed to undo summary.");
+    }
+
+    if (Array.isArray(data.messages)) {
+      history = data.messages.map(normalizeHistoryEntry);
+      rebuildTokenStatsFromHistory();
+      renderConversationHistory();
+    }
+
+    latestSummaryStatus = {
+      applied: false,
+      reason: "summary_undone",
+      failure_stage: null,
+      failure_detail: "The selected summary was reverted and the covered messages were restored.",
+    };
+    const restoredCount = Number(data.restored_message_count || 0);
+    finishSummaryProgress(
+      restoredCount > 0
+        ? `${restoredCount} message${restoredCount === 1 ? " was" : "s were"} restored.`
+        : "Summary was undone."
+    );
+    showToast(
+      restoredCount > 0
+        ? `${restoredCount} message${restoredCount === 1 ? " was" : "s were"} restored.`
+        : "Summary was undone.",
+      "success"
+    );
+    renderSummaryInspector();
+  } catch (error) {
+    failSummaryProgress(error.message || "Failed to undo summary.");
+    showToast(error.message || "Failed to undo summary.", "error");
+    renderSummaryInspector();
+  } finally {
+    setSummaryBusyState(false);
+    if (triggerButton) {
+      triggerButton.textContent = originalButtonText || "Undo";
+    }
+    renderSummaryInspector();
+  }
 }
 
 function renderSummaryInspector() {
@@ -5472,11 +5898,19 @@ function renderSummaryInspector() {
   }
 
   if (summaryUndoBtn) {
-    summaryUndoBtn.disabled = !canUndoLatestSummary;
+    summaryUndoBtn.disabled = isSummaryOperationInFlight || !canUndoLatestSummary;
     summaryUndoBtn.title = canUndoLatestSummary
       ? "Restore the messages covered by the latest summary."
       : "No summary is available to undo in this conversation.";
   }
+  if (summaryNowBtn) {
+    summaryNowBtn.disabled = isSummaryOperationInFlight || !currentConvId;
+    summaryNowBtn.title = currentConvId
+      ? "Run a manual summary using the current panel settings."
+      : "Open a conversation before running a summary.";
+  }
+  updateSummarySelectionUi();
+  renderSummaryHistoryList();
 }
 
 function openStats() {
@@ -5869,8 +6303,9 @@ if (mobileModelSel) {
 summaryClose?.addEventListener("click", closeSummaryPanel);
 summaryOverlay?.addEventListener("click", closeSummaryPanel);
 summarySubmitBtn?.addEventListener("click", () => {
-  void runConversationSummary({ triggerButton: summarySubmitBtn, closePanel: true });
+  void runConversationSummary({ triggerButton: summarySubmitBtn, closePanel: false });
 });
+summaryMessageCountInput?.addEventListener("input", updateSummarySelectionUi);
 
 window.addEventListener("resize", () => {
   updateHeaderOffset();
@@ -6567,53 +7002,9 @@ if (summaryNowBtn) {
 }
 
 if (summaryUndoBtn) {
-  summaryUndoBtn.addEventListener("click", async () => {
+  summaryUndoBtn.addEventListener("click", () => {
     const latestSummary = findLatestSummaryEntry(history);
-    const summaryId = Number(latestSummary?.id || 0);
-    if (!currentConvId || !summaryId) {
-      showToast("No summary is available to undo.", "warning");
-      return;
-    }
-
-    summaryUndoBtn.disabled = true;
-    summaryUndoBtn.textContent = "Restoring…";
-    try {
-      const response = await fetch(`/api/conversations/${currentConvId}/summaries/${summaryId}/undo`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to undo summary.");
-      }
-
-      if (Array.isArray(data.messages)) {
-        history = data.messages.map(normalizeHistoryEntry);
-        rebuildTokenStatsFromHistory();
-        renderConversationHistory();
-      }
-
-      latestSummaryStatus = {
-        applied: false,
-        reason: "summary_undone",
-        failure_stage: null,
-        failure_detail: "The latest summary was reverted and the covered messages were restored.",
-      };
-      const restoredCount = Number(data.restored_message_count || 0);
-      showToast(
-        restoredCount > 0
-          ? `${restoredCount} message${restoredCount === 1 ? " was" : "s were"} restored.`
-          : "Summary was undone.",
-        "success"
-      );
-      renderSummaryInspector();
-    } catch (error) {
-      showToast(error.message || "Failed to undo summary.", "error");
-      renderSummaryInspector();
-    } finally {
-      summaryUndoBtn.textContent = "Undo last summary";
-      renderSummaryInspector();
-    }
+    void undoConversationSummary(Number(latestSummary?.id || 0), { triggerButton: summaryUndoBtn });
   });
 }
 

@@ -86,7 +86,7 @@
   <div class="summary-panel__header">
     <div>
       <span id="summary-panel-title">Summarize Conversation</span>
-      <p class="summary-panel__subtitle">Tell me what to emphasize before I compress the conversation.</p>
+      <p class="summary-panel__subtitle">Choose focus, optionally limit how many eligible messages to compress, and track progress without leaving the conversation.</p>
     </div>
     <button id="summary-close" title="Close" type="button">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
@@ -95,6 +95,52 @@
     </button>
   </div>
   <div class="summary-panel__body">
+    <section class="summary-card summary-inspector">
+      <div class="summary-inspector__header">
+        <span id="summary-inspector-badge" class="summary-inspector__badge" data-tone="muted">Waiting</span>
+        <div class="summary-inspector__header-copy">
+          <div id="summary-inspector-headline" class="summary-inspector__headline">Start chatting to see when automatic summary will run.</div>
+          <div class="summary-inspector__actions">
+            <button class="btn-ghost" id="summary-undo-btn" type="button">Undo last summary</button>
+            <button class="btn-ghost" id="summary-now-btn" type="button">Summarize now</button>
+          </div>
+        </div>
+      </div>
+      <div class="summary-inspector__grid">
+        <div class="summary-inspector__metric">
+          <span>Current estimate</span>
+          <strong id="summary-inspector-current">0</strong>
+        </div>
+        <div class="summary-inspector__metric">
+          <span>Trigger</span>
+          <strong id="summary-inspector-trigger">0</strong>
+        </div>
+        <div class="summary-inspector__metric">
+          <span>Gap</span>
+          <strong id="summary-inspector-gap">0 left</strong>
+        </div>
+      </div>
+      <p id="summary-inspector-detail" class="summary-inspector__detail"></p>
+      <p id="summary-inspector-tool-messages" class="summary-inspector__detail"></p>
+      <p id="summary-inspector-reason" class="summary-inspector__detail"></p>
+      <p id="summary-inspector-last" class="summary-inspector__detail"></p>
+    </section>
+
+    <section class="summary-card">
+      <div class="summary-card__header">
+        <div>
+          <span>Selection</span>
+          <p>Manual summary uses your current Settings rules first, then applies the optional message limit below.</p>
+        </div>
+      </div>
+      <label class="summary-field">
+        <span>Message count</span>
+        <input id="summary-message-count-input" class="summary-input" type="number" min="1" step="1" placeholder="Leave blank to auto-select eligible messages" />
+      </label>
+      <p id="summary-selection-note" class="summary-support-copy">Eligible messages: —</p>
+      <p id="summary-settings-note" class="summary-support-copy">Current Settings: —</p>
+    </section>
+
     <section class="summary-card">
       <div class="summary-card__header">
         <div>
@@ -118,9 +164,29 @@
       <div id="summary-detail-options" class="summary-option-grid" role="radiogroup" aria-label="Summary detail level"></div>
       <select id="summary-detail-select" class="summary-detail-select" aria-hidden="true" tabindex="-1"></select>
     </section>
+
+    <section id="summary-progress" class="summary-card summary-progress" hidden>
+      <div class="summary-progress__header">
+        <span id="summary-progress-label">Preparing summary…</span>
+        <span id="summary-progress-value">0%</span>
+      </div>
+      <div class="summary-progress__track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-labelledby="summary-progress-label">
+        <span id="summary-progress-bar" class="summary-progress__fill"></span>
+      </div>
+    </section>
+
+    <section class="summary-card summary-history">
+      <div class="summary-card__header">
+        <div>
+          <span>Generated summaries</span>
+          <p>Review current conversation summaries, inspect their content, and undo any visible summary pass.</p>
+        </div>
+      </div>
+      <div id="summary-history-list" class="summary-history-list"></div>
+    </section>
   </div>
   <div class="summary-panel__actions">
-    <button class="btn-primary" id="summary-submit-btn" type="button">Summarize Conversation</button>
+    <button class="btn-primary" id="summary-submit-btn" type="button">Apply Summary</button>
   </div>
 </div>
 <div id="summary-overlay" class="summary-overlay"></div>

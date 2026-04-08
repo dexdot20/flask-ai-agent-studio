@@ -1797,6 +1797,7 @@ def maybe_create_conversation_summary(
     force: bool = False,
     bypass_mode: bool = False,
     continuation_focus: str = "",
+    message_count: int | None = None,
 ) -> dict:
     summary_lock = _get_summary_lock(conversation_id)
     if not summary_lock.acquire(blocking=False):
@@ -1827,6 +1828,8 @@ def maybe_create_conversation_summary(
         if detail_instruction:
             summary_user_preferences_parts.append(detail_instruction)
         summary_user_preferences = "\n\n".join(part for part in summary_user_preferences_parts if part).strip()
+        requested_message_count: int | None = None
+        eligible_message_count = 0
 
         def build_outcome(**extra) -> dict:
             return {
@@ -1836,6 +1839,8 @@ def maybe_create_conversation_summary(
                 "trigger_token_count": trigger_token_count,
                 "checked_at": checked_at,
                 "used_max_steps": 1,
+                "requested_message_count": requested_message_count,
+                "eligible_message_count": eligible_message_count,
                 **token_breakdown,
                 **extra,
             }
@@ -1866,6 +1871,24 @@ def maybe_create_conversation_summary(
         all_candidates = get_unsummarized_visible_messages(
             canonical_messages, skip_first=skip_first, skip_last=skip_last,
         )
+        eligible_message_count = len(all_candidates)
+        manual_source_messages: list[dict] | None = None
+        manual_excluded_message_count = 0
+        if message_count is not None:
+            try:
+                requested_message_count = max(1, int(message_count))
+            except (TypeError, ValueError):
+                requested_message_count = None
+        if requested_message_count is not None:
+            manual_candidate_pool = all_candidates
+            if exclude_message_ids:
+                manual_candidate_pool = [
+                    message
+                    for message in all_candidates
+                    if int(message.get("id") or 0) not in exclude_message_ids
+                ]
+            manual_excluded_message_count = max(0, len(all_candidates) - len(manual_candidate_pool))
+            manual_source_messages = manual_candidate_pool[:requested_message_count]
 
         summary_model = _resolve_summary_model(settings, fallback_model=fallback_model)
         attempt_token_target = base_source_token_target
@@ -1880,30 +1903,35 @@ def maybe_create_conversation_summary(
         summary_source_kind = "conversation_history"
 
         while attempt_token_target >= retry_min_source_tokens:
-            candidate_source_messages = _select_summary_source_messages_by_token_budget(
-                canonical_messages,
-                all_candidates,
-                target_tokens=attempt_token_target,
-                user_preferences=summary_user_preferences,
-                continuation_focus=resolved_continuation_focus,
-            )
-            if not candidate_source_messages:
-                candidate_source_messages = _select_hierarchical_summary_source_messages(
+            if manual_source_messages is not None:
+                source_messages = list(manual_source_messages)
+                candidate_message_count = len(source_messages)
+                excluded_message_count = manual_excluded_message_count
+            else:
+                candidate_source_messages = _select_summary_source_messages_by_token_budget(
                     canonical_messages,
-                    settings,
-                    summary_user_preferences,
+                    all_candidates,
+                    target_tokens=attempt_token_target,
+                    user_preferences=summary_user_preferences,
                     continuation_focus=resolved_continuation_focus,
                 )
-                if candidate_source_messages:
-                    summary_source_kind = "summary_history"
-            raw_source_message_count = len(candidate_source_messages)
-            source_messages = candidate_source_messages
-            if exclude_message_ids:
-                source_messages = [
-                    m for m in candidate_source_messages
-                    if int(m.get("id") or 0) not in exclude_message_ids
-                ]
-            excluded_message_count = raw_source_message_count - len(source_messages)
+                if not candidate_source_messages:
+                    candidate_source_messages = _select_hierarchical_summary_source_messages(
+                        canonical_messages,
+                        settings,
+                        summary_user_preferences,
+                        continuation_focus=resolved_continuation_focus,
+                    )
+                    if candidate_source_messages:
+                        summary_source_kind = "summary_history"
+                raw_source_message_count = len(candidate_source_messages)
+                source_messages = candidate_source_messages
+                if exclude_message_ids:
+                    source_messages = [
+                        m for m in candidate_source_messages
+                        if int(m.get("id") or 0) not in exclude_message_ids
+                    ]
+                excluded_message_count = raw_source_message_count - len(source_messages)
             candidate_message_count = len(source_messages)
             if not source_messages:
                 return build_outcome(
@@ -1963,6 +1991,8 @@ def maybe_create_conversation_summary(
                 attempted_source_token_target=attempt_token_target,
                 **prompt_stats,
             )
+            if manual_source_messages is not None:
+                return failure_payload
             if failure_stage not in {"context_too_large", "provider_error", "empty_output"}:
                 return failure_payload
             next_target = int(attempt_token_target * 0.65)
@@ -2092,6 +2122,8 @@ def maybe_create_conversation_summary(
             "summary_error_count": len(summary_errors),
             "attempted_source_token_target": attempt_token_target,
             "stored_profile_fact_count": len(stored_profile_facts),
+            "requested_message_count": requested_message_count,
+            "eligible_message_count": eligible_message_count,
             **token_breakdown,
             **prompt_stats,
         }
@@ -3265,12 +3297,20 @@ def register_chat_routes(app) -> None:
 
         data = request.get_json(silent=True) or {}
         force = _coerce_bool(data.get("force", True), default=True)
+        raw_message_count = data.get("message_count")
         skip_first_override = data.get("skip_first")
         skip_last_override = data.get("skip_last")
         summary_focus = str(data.get("summary_focus") or "").strip()
         summary_detail_level = str(data.get("summary_detail_level") or "balanced").strip().lower()
         if summary_detail_level not in {"very_concise", "concise", "balanced", "detailed", "comprehensive"}:
             summary_detail_level = "balanced"
+
+        message_count = None
+        if raw_message_count not in (None, ""):
+            try:
+                message_count = max(1, min(500, int(raw_message_count)))
+            except (TypeError, ValueError):
+                return jsonify({"error": "message_count must be an integer between 1 and 500."}), 400
 
         settings = get_app_settings()
         effective_settings = dict(settings)
@@ -3311,6 +3351,7 @@ def register_chat_routes(app) -> None:
             force=force,
             bypass_mode=force,
             continuation_focus=summary_focus,
+            message_count=message_count,
         )
 
         if outcome.get("applied"):
@@ -3320,6 +3361,8 @@ def register_chat_routes(app) -> None:
                 "applied": True,
                 "summary_message_id": outcome.get("summary_message_id"),
                 "covered_message_count": outcome.get("covered_message_count", 0),
+                "requested_message_count": outcome.get("requested_message_count"),
+                "eligible_message_count": outcome.get("eligible_message_count", 0),
                 "messages": outcome.get("messages") or get_conversation_messages(conv_id),
             })
 
@@ -3327,6 +3370,8 @@ def register_chat_routes(app) -> None:
             "applied": False,
             "reason": outcome.get("reason") or "unknown",
             "failure_detail": outcome.get("failure_detail") or "",
+            "requested_message_count": outcome.get("requested_message_count"),
+            "eligible_message_count": outcome.get("eligible_message_count", 0),
         })
 
     @app.route("/api/conversations/<int:conv_id>/summaries/<int:summary_id>/undo", methods=["POST"])

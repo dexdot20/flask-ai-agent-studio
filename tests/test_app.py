@@ -6176,6 +6176,11 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn('id="summary-panel"', html_text)
         self.assertIn('id="summary-focus-presets"', html_text)
         self.assertIn('id="summary-detail-options"', html_text)
+        self.assertIn('id="summary-message-count-input"', html_text)
+        self.assertIn('id="summary-progress"', html_text)
+        self.assertIn('id="summary-history-list"', html_text)
+        self.assertIn('id="summary-now-btn"', html_text)
+        self.assertIn('id="summary-undo-btn"', html_text)
         self.assertIn('const canvasToggleBtn = document.getElementById("canvas-toggle-btn")', script_text)
         self.assertIn('const canvasSearchStatus = document.getElementById("canvas-search-status")', script_text)
         self.assertIn('const canvasMetaBar = document.getElementById("canvas-meta-bar")', script_text)
@@ -6202,9 +6207,14 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("async function deleteCanvasDocuments(", script_text)
         self.assertIn('const SUMMARY_FOCUS_PRESETS = [', script_text)
         self.assertIn('const SUMMARY_DETAIL_OPTIONS = [', script_text)
+        self.assertIn('const summaryMessageCountInput = document.getElementById("summary-message-count-input")', script_text)
+        self.assertIn('const summaryHistoryList = document.getElementById("summary-history-list")', script_text)
         self.assertIn('function renderSummaryFocusPresets()', script_text)
         self.assertIn('function renderSummaryDetailOptions()', script_text)
         self.assertIn('function setSummaryDetailLevel(value)', script_text)
+        self.assertIn('function updateSummarySelectionUi()', script_text)
+        self.assertIn('function renderSummaryHistoryList()', script_text)
+        self.assertIn('async function undoConversationSummary(summaryId', script_text)
         self.assertIn(".canvas-meta-bar", style_text)
         self.assertIn(".canvas-meta-chip", style_text)
         self.assertIn('.canvas-workspace-shell', style_text)
@@ -6216,6 +6226,8 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn('.summary-preset-grid', style_text)
         self.assertIn('.summary-option-grid', style_text)
         self.assertIn('.summary-option.is-active', style_text)
+        self.assertIn('.summary-progress', style_text)
+        self.assertIn('.summary-history-list', style_text)
 
     def test_settings_ui_exposes_fetch_threshold_input(self):
         html = self.client.get("/settings").get_data(as_text=True)
@@ -15090,6 +15102,54 @@ class AppRoutesTestCase(unittest.TestCase):
         data = response.get_json()
         self.assertTrue(data["applied"])
         self.assertGreater(data["covered_message_count"], 0)
+
+    def test_manual_summarize_endpoint_respects_requested_message_count(self):
+        conversation_id = self._create_conversation()
+        save_app_settings(
+            {
+                "user_preferences": "",
+                "max_steps": "1",
+                "active_tools": "[]",
+                "rag_auto_inject": "false",
+                "chat_summary_mode": "never",
+                "chat_summary_trigger_token_count": "1000",
+                "summary_skip_first": "1",
+                "summary_skip_last": "1",
+            }
+        )
+
+        with get_db() as conn:
+            for index in range(6):
+                conn.execute(
+                    "INSERT INTO messages (conversation_id, role, content, metadata, position) VALUES (?, 'user', ?, ?, ?)",
+                    (conversation_id, f"Message {index + 1}", None, index + 1),
+                )
+
+        fake_summary = {
+            "content": "Manual summary with enough retained detail to satisfy the minimum length validation threshold and preserve the requested message window.",
+            "reasoning_content": "",
+            "usage": None,
+            "tool_results": [],
+            "errors": [],
+        }
+
+        with patch("routes.chat.collect_agent_response", return_value=fake_summary), patch(
+            "routes.chat.sync_conversations_to_rag_safe"
+        ):
+            response = self.client.post(
+                f"/api/conversations/{conversation_id}/summarize",
+                json={"force": True, "message_count": 2},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data["applied"])
+        self.assertEqual(data["requested_message_count"], 2)
+        self.assertEqual(data["eligible_message_count"], 4)
+        self.assertEqual(data["covered_message_count"], 2)
+
+        summary_message = next(message for message in data["messages"] if message["role"] == "summary")
+        self.assertEqual(summary_message["metadata"]["covered_message_ids"], [2, 3])
 
     def test_manual_summarize_endpoint_threads_summary_preferences_into_prompt(self):
         conversation_id = self._create_conversation()
