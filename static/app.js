@@ -72,6 +72,9 @@ const canvasMetaChips = document.getElementById("canvas-meta-chips");
 const canvasCopyRefBtn = document.getElementById("canvas-copy-ref-btn");
 const canvasResetFiltersBtn = document.getElementById("canvas-reset-filters-btn");
 const canvasEditBtn = document.getElementById("canvas-edit-btn");
+const canvasNewBtn = document.getElementById("canvas-new-btn");
+const canvasUploadBtn = document.getElementById("canvas-upload-btn");
+const canvasUploadInput = document.getElementById("canvas-upload-input");
 const canvasSaveBtn = document.getElementById("canvas-save-btn");
 const canvasCancelBtn = document.getElementById("canvas-cancel-btn");
 const canvasCopyBtn = document.getElementById("canvas-copy-btn");
@@ -1826,24 +1829,77 @@ function setCanvasEditing(enabled) {
   renderCanvasPanel();
 }
 
-async function createCanvasDocumentFromPrompt() {
+const CANVAS_UPLOAD_MARKDOWN_EXTENSIONS = new Set([".md", ".markdown", ".mdx", ".txt", ".rst", ".adoc", ".org"]);
+const CANVAS_UPLOAD_LANGUAGE_MAP = {
+  ".py": "python",
+  ".pyw": "python",
+  ".js": "javascript",
+  ".mjs": "javascript",
+  ".cjs": "javascript",
+  ".ts": "typescript",
+  ".mts": "typescript",
+  ".tsx": "tsx",
+  ".jsx": "jsx",
+  ".json": "json",
+  ".jsonc": "json",
+  ".yaml": "yaml",
+  ".yml": "yaml",
+  ".html": "html",
+  ".htm": "html",
+  ".css": "css",
+  ".sh": "bash",
+  ".bash": "bash",
+  ".zsh": "bash",
+  ".sql": "sql",
+  ".xml": "xml",
+  ".toml": "toml",
+  ".ini": "ini",
+  ".cfg": "ini",
+  ".c": "c",
+  ".h": "c",
+  ".cpp": "cpp",
+  ".cc": "cpp",
+  ".cxx": "cpp",
+  ".hpp": "cpp",
+  ".hh": "cpp",
+  ".go": "go",
+  ".rs": "rust",
+  ".java": "java",
+  ".rb": "ruby",
+  ".php": "php",
+};
+
+function getCanvasUploadExtension(fileName) {
+  const normalizedName = String(fileName || "").trim().toLowerCase();
+  const dotIndex = normalizedName.lastIndexOf(".");
+  if (dotIndex < 0) {
+    return "";
+  }
+  return normalizedName.slice(dotIndex);
+}
+
+function inferCanvasUploadFormat(fileName) {
+  return CANVAS_UPLOAD_MARKDOWN_EXTENSIONS.has(getCanvasUploadExtension(fileName)) ? "markdown" : "code";
+}
+
+function inferCanvasUploadLanguage(fileName) {
+  return CANVAS_UPLOAD_LANGUAGE_MAP[getCanvasUploadExtension(fileName)] || null;
+}
+
+async function createCanvasDocumentFromData({ title, content, format, language = null, statusMessage = "Creating canvas file..." }) {
   if (!currentConvId) {
     setCanvasStatus("Conversation is not available yet.", "warning");
     return;
   }
 
-  const nextTitle = String(globalThis.prompt("New canvas file name", "Untitled") || "").trim();
-  if (!nextTitle) {
-    setCanvasStatus("Canvas file creation cancelled.", "muted");
-    return;
+  if (canvasNewBtn) {
+    canvasNewBtn.disabled = true;
+  }
+  if (canvasUploadBtn) {
+    canvasUploadBtn.disabled = true;
   }
 
-  const nextFormat = canvasFormatSelect?.value === "code" ? "code" : "markdown";
-  if (canvasEditBtn) {
-    canvasEditBtn.disabled = true;
-  }
-
-  setCanvasStatus("Creating canvas file...", "muted");
+  setCanvasStatus(statusMessage, "muted");
 
   try {
     const response = await fetch(`/api/conversations/${currentConvId}/canvas`, {
@@ -1852,9 +1908,10 @@ async function createCanvasDocumentFromPrompt() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        title: nextTitle,
-        content: "",
-        format: nextFormat,
+        title,
+        content,
+        format,
+        language,
       }),
     });
     const payload = await response.json().catch(() => ({}));
@@ -1883,6 +1940,49 @@ async function createCanvasDocumentFromPrompt() {
     setCanvasStatus(error.message || "Canvas create failed.", "danger");
     renderCanvasPanel();
   }
+}
+
+async function createCanvasDocumentFromPrompt() {
+  const nextTitle = String(globalThis.prompt("New canvas file name", "Untitled") || "").trim();
+  if (!nextTitle) {
+    setCanvasStatus("Canvas file creation cancelled.", "muted");
+    return;
+  }
+
+  const nextFormat = canvasFormatSelect?.value === "code" ? "code" : "markdown";
+  await createCanvasDocumentFromData({
+    title: nextTitle,
+    content: "",
+    format: nextFormat,
+  });
+}
+
+async function createCanvasDocumentFromFile(file) {
+  const nextTitle = String(file?.name || "").trim() || "Uploaded file";
+  let nextContent = "";
+  try {
+    nextContent = await file.text();
+  } catch (error) {
+    setCanvasStatus(error.message || "Failed to read uploaded file.", "danger");
+    return;
+  }
+
+  await createCanvasDocumentFromData({
+    title: nextTitle,
+    content: nextContent,
+    format: inferCanvasUploadFormat(nextTitle),
+    language: inferCanvasUploadLanguage(nextTitle),
+    statusMessage: `Uploading ${nextTitle}...`,
+  });
+}
+
+function openCanvasUploadPicker() {
+  if (!canvasUploadInput) {
+    setCanvasStatus("File upload is not available.", "warning");
+    return;
+  }
+  canvasUploadInput.value = "";
+  canvasUploadInput.click();
 }
 
 function readCanvasWidthPreference() {
@@ -2762,7 +2862,7 @@ function renderCanvasPanel() {
     canvasSubtitle.textContent = "No canvas document yet.";
     setCanvasHint("");
     canvasEmptyState.hidden = false;
-    canvasEmptyState.innerHTML = "<h3>No canvas document yet</h3><p>Create a blank file with New file, or ask the assistant to draft something substantial and keep refining it with line-based edits.</p>";
+    canvasEmptyState.innerHTML = "<h3>No canvas document yet</h3><p>Create a blank file with New file, upload an existing text file, or ask the assistant to draft something substantial and keep refining it with line-based edits.</p>";
     if (canvasEditorEl) {
       canvasEditorEl.hidden = true;
       canvasEditorEl.value = "";
@@ -2778,9 +2878,16 @@ function renderCanvasPanel() {
       canvasDocumentTabsEl.innerHTML = "";
     }
     if (canvasEditBtn) {
-      canvasEditBtn.textContent = "New file";
-      canvasEditBtn.disabled = isStreamingPreviewActive;
+      canvasEditBtn.disabled = true;
       canvasEditBtn.hidden = false;
+    }
+    if (canvasNewBtn) {
+      canvasNewBtn.disabled = isStreamingPreviewActive;
+      canvasNewBtn.hidden = false;
+    }
+    if (canvasUploadBtn) {
+      canvasUploadBtn.disabled = isStreamingPreviewActive;
+      canvasUploadBtn.hidden = false;
     }
     if (canvasSaveBtn) {
       canvasSaveBtn.disabled = true;
@@ -2848,9 +2955,16 @@ function renderCanvasPanel() {
       canvasDiffEl.innerHTML = "";
     }
     if (canvasEditBtn) {
-      canvasEditBtn.textContent = "New file";
-      canvasEditBtn.disabled = isStreamingPreviewActive;
+      canvasEditBtn.disabled = true;
       canvasEditBtn.hidden = false;
+    }
+    if (canvasNewBtn) {
+      canvasNewBtn.disabled = isStreamingPreviewActive;
+      canvasNewBtn.hidden = false;
+    }
+    if (canvasUploadBtn) {
+      canvasUploadBtn.disabled = isStreamingPreviewActive;
+      canvasUploadBtn.hidden = false;
     }
     if (canvasSaveBtn) {
       canvasSaveBtn.disabled = true;
@@ -2895,7 +3009,16 @@ function renderCanvasPanel() {
   updateCanvasActiveDocumentDisplay(renderState);
   renderCanvasDocumentTabs(visibleDocuments);
   if (canvasEditBtn) {
-    canvasEditBtn.textContent = "Edit";
+    canvasEditBtn.disabled = isStreamingPreviewActive;
+    canvasEditBtn.hidden = isCanvasEditing;
+  }
+  if (canvasNewBtn) {
+    canvasNewBtn.disabled = isStreamingPreviewActive;
+    canvasNewBtn.hidden = false;
+  }
+  if (canvasUploadBtn) {
+    canvasUploadBtn.disabled = isStreamingPreviewActive;
+    canvasUploadBtn.hidden = false;
   }
 }
 
@@ -6270,13 +6393,26 @@ if (canvasOverlay) {
   canvasOverlay.addEventListener("click", closeCanvas);
 }
 if (canvasEditBtn) {
-  canvasEditBtn.addEventListener("click", () => {
-    const activeDocument = getActiveCanvasDocument();
-    if (activeDocument) {
-      setCanvasEditing(true);
+  canvasEditBtn.addEventListener("click", () => setCanvasEditing(true));
+}
+if (canvasNewBtn) {
+  canvasNewBtn.addEventListener("click", () => {
+    void createCanvasDocumentFromPrompt();
+  });
+}
+if (canvasUploadBtn) {
+  canvasUploadBtn.addEventListener("click", () => {
+    openCanvasUploadPicker();
+  });
+}
+if (canvasUploadInput) {
+  canvasUploadInput.addEventListener("change", () => {
+    const selectedFile = canvasUploadInput.files?.[0] || null;
+    if (!selectedFile) {
       return;
     }
-    void createCanvasDocumentFromPrompt();
+    canvasUploadInput.value = "";
+    void createCanvasDocumentFromFile(selectedFile);
   });
 }
 if (canvasSaveBtn) {
