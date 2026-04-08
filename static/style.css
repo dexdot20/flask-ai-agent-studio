@@ -4473,6 +4473,16 @@ kbd {
   text-decoration-color: rgba(165, 180, 252, 0.7);
 }
 
+.canvas-document .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.2em 0;
+}
+
+.canvas-document .katex {
+  font-size: 1em;
+}
+
 /* Tables */
 .canvas-document table {
   width: 100%;

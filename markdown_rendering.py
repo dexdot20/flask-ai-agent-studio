@@ -24,6 +24,102 @@ def _escape_pdf_text(value: str) -> str:
     return html_escape(str(value or ""), quote=False)
 
 
+def _find_math_delimiter(text: str, start_index: int, delimiter: str) -> int:
+    search_index = start_index
+    while search_index < len(text):
+        delimiter_index = text.find(delimiter, search_index)
+        if delimiter_index < 0:
+            return -1
+        if delimiter_index > start_index and text[delimiter_index - 1] == "\\":
+            search_index = delimiter_index + len(delimiter)
+            continue
+        if delimiter == "$" and "\n" in text[start_index:delimiter_index]:
+            search_index = delimiter_index + len(delimiter)
+            continue
+        return delimiter_index
+    return -1
+
+
+def _split_inline_math_segments(text: str) -> list[dict[str, object]]:
+    value = _normalize_line_endings(text)
+    if not value:
+        return []
+    if "$" not in value:
+        return [{"type": "text", "text": value}]
+
+    segments: list[dict[str, object]] = []
+    buffer: list[str] = []
+    index = 0
+
+    def flush_buffer() -> None:
+        if buffer:
+            segments.append({"type": "text", "text": "".join(buffer)})
+            buffer.clear()
+
+    while index < len(value):
+        char = value[index]
+        if char == "\\":
+            next_char = value[index + 1] if index + 1 < len(value) else ""
+            if next_char == "$":
+                buffer.append("$")
+                index += 2
+                continue
+            buffer.append(char)
+            index += 1
+            continue
+
+        if char != "$":
+            buffer.append(char)
+            index += 1
+            continue
+
+        display_mode = index + 1 < len(value) and value[index + 1] == "$"
+        delimiter = "$$" if display_mode else "$"
+        math_start = index + len(delimiter)
+        math_end = _find_math_delimiter(value, math_start, delimiter)
+        if math_end < 0:
+            buffer.append(char)
+            index += 1
+            continue
+
+        math_text = value[math_start:math_end].strip()
+        if not math_text:
+            buffer.append(delimiter)
+            index = math_start
+            continue
+
+        flush_buffer()
+        segments.append({"type": "math", "text": math_text, "display": display_mode})
+        index = math_end + len(delimiter)
+
+    flush_buffer()
+    return segments
+
+
+def _render_pdf_inline_markup(text: str) -> str:
+    parts: list[str] = []
+    for segment in _split_inline_math_segments(text):
+        if str(segment.get("type") or "") == "math":
+            math_text = _escape_pdf_text(str(segment.get("text") or ""))
+            parts.append(f'<font face="Courier">{math_text}</font>')
+        else:
+            parts.append(_escape_pdf_text(str(segment.get("text") or "")))
+    return "".join(parts)
+
+
+def _append_docx_inline_runs(paragraph, text: str) -> None:
+    segments = _split_inline_math_segments(text)
+    if not segments:
+        paragraph.add_run(" ")
+        return
+
+    for segment in segments:
+        run = paragraph.add_run(str(segment.get("text") or ""))
+        if str(segment.get("type") or "") == "math":
+            run.italic = True
+            run.font.name = "Courier New"
+
+
 def _clean_markdown_inline(text: str) -> str:
     value = _normalize_line_endings(text)
 
@@ -229,17 +325,17 @@ def append_markdown_pdf_story(
         if block_type == "heading":
             level = min(6, max(1, int(block.get("level") or 1) + offset))
             style = heading1_style if level <= 1 else heading_style if level == 2 else subheading_style
-            story.append(Paragraph(_escape_pdf_text(str(block.get("text") or "Untitled")), style))
+            story.append(Paragraph(_render_pdf_inline_markup(str(block.get("text") or "Untitled")), style))
         elif block_type == "paragraph":
             paragraph_text = str(block.get("text") or "").strip()
             if paragraph_text:
-                story.append(Paragraph(_escape_pdf_text(paragraph_text), body_style))
+                story.append(Paragraph(_render_pdf_inline_markup(paragraph_text), body_style))
         elif block_type == "list":
             items = [str(item).strip() for item in block.get("items") or [] if str(item).strip()]
             if items:
                 story.append(
                     ListFlowable(
-                        [ListItem(Paragraph(_escape_pdf_text(item), body_style)) for item in items],
+                        [ListItem(Paragraph(_render_pdf_inline_markup(item), body_style)) for item in items],
                         bulletType="1" if str(block.get("kind") or "bullet") == "ordered" else "bullet",
                         leftIndent=18,
                     )
@@ -271,10 +367,12 @@ def append_markdown_docx(
         block_type = str(block.get("type") or "")
         if block_type == "heading":
             level = min(9, max(1, int(block.get("level") or 1) + offset))
-            document.add_heading(str(block.get("text") or "Untitled"), level=level)
+            paragraph = document.add_paragraph(style=f"Heading {level}")
+            _append_docx_inline_runs(paragraph, str(block.get("text") or "Untitled"))
         elif block_type == "paragraph":
             paragraph_text = str(block.get("text") or "").strip()
-            document.add_paragraph(paragraph_text or " ")
+            paragraph = document.add_paragraph()
+            _append_docx_inline_runs(paragraph, paragraph_text or " ")
         elif block_type == "list":
             style_name = "List Number" if str(block.get("kind") or "bullet") == "ordered" else "List Bullet"
             for item in block.get("items") or []:
@@ -282,10 +380,12 @@ def append_markdown_docx(
                 if not item_text:
                     continue
                 try:
-                    document.add_paragraph(item_text, style=style_name)
+                    paragraph = document.add_paragraph(style=style_name)
+                    _append_docx_inline_runs(paragraph, item_text)
                 except Exception:
                     prefix = "1. " if style_name == "List Number" else "- "
-                    document.add_paragraph(f"{prefix}{item_text}")
+                    paragraph = document.add_paragraph()
+                    _append_docx_inline_runs(paragraph, f"{prefix}{item_text}")
         elif block_type == "code":
             code_text = str(block.get("text") or "").rstrip()
             if code_text:

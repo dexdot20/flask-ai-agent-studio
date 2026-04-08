@@ -8854,6 +8854,33 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(html_response.status_code, 200)
         self.assertIn("language-python", html_response.get_data(as_text=True))
 
+    def test_canvas_export_endpoint_embeds_katex_for_math_documents(self):
+        conversation_id = self._create_conversation()
+        metadata = serialize_message_metadata(
+            {
+                "canvas_documents": [
+                    {
+                        "id": "canvas-math-export",
+                        "title": "Math Notes",
+                        "format": "markdown",
+                        "content": "# Math\n\nThe identity is $A = {0, 1, 2}$ and $$x^2 + y^2 = z^2$$.",
+                    }
+                ]
+            }
+        )
+
+        with get_db() as conn:
+            insert_message(conn, conversation_id, "assistant", "Math ready.", metadata=metadata)
+
+        html_response = self.client.get(
+            f"/api/conversations/{conversation_id}/canvas/export?format=html&document_id=canvas-math-export"
+        )
+        self.assertEqual(html_response.status_code, 200)
+        html_text = html_response.get_data(as_text=True)
+        self.assertIn("katex.min.js", html_text)
+        self.assertIn("auto-render.min.js", html_text)
+        self.assertIn("renderMathInElement", html_text)
+
     def test_canvas_delete_endpoint_updates_canvas_state(self):
         conversation_id = self._create_conversation()
         metadata = serialize_message_metadata(
@@ -9445,7 +9472,7 @@ class AppRoutesTestCase(unittest.TestCase):
                 conn,
                 conversation_id,
                 "assistant",
-                "Here is the answer.",
+                "Here is the answer. $A = {0, 1, 2}$ and $$x^2 + y^2 = z^2$$.",
                 metadata=serialize_message_metadata(
                     {
                         "reasoning_content": "Reasoned through the request.",
@@ -9480,6 +9507,9 @@ class AppRoutesTestCase(unittest.TestCase):
         docx_document = Document(io.BytesIO(docx_response.data))
         docx_text = "\n".join(paragraph.text for paragraph in docx_document.paragraphs)
         self.assertIn("Reasoned through the request.", docx_text)
+        self.assertIn("A = {0, 1, 2}", docx_text)
+        self.assertIn("x^2 + y^2 = z^2", docx_text)
+        self.assertNotIn("$A = {0, 1, 2}$", docx_text)
         self.assertNotIn("```markdown", docx_text)
         self.assertNotIn("### Canvas", docx_text)
 
@@ -9491,6 +9521,9 @@ class AppRoutesTestCase(unittest.TestCase):
         with pdfplumber.open(io.BytesIO(pdf_response.data)) as pdf:
             pdf_text = "\n".join(page.extract_text() or "" for page in pdf.pages)
         self.assertIn("Reasoned through the request.", pdf_text)
+        self.assertIn("A = {0, 1, 2}", pdf_text)
+        self.assertIn("x^2 + y^2 = z^2", pdf_text)
+        self.assertNotIn("$A = {0, 1, 2}$", pdf_text)
         self.assertNotIn("```markdown", pdf_text)
         self.assertNotIn("### Canvas", pdf_text)
 

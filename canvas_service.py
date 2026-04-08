@@ -2722,6 +2722,7 @@ def build_html_download(document: dict) -> bytes:
     <meta charset=\"utf-8\" />
     <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
     <title>{title}</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
     <style>
         :root {{
             color-scheme: light;
@@ -2755,11 +2756,14 @@ def build_html_download(document: dict) -> bytes:
         pre {{ background: var(--code-bg); border: 1px solid var(--border); border-radius: 14px; padding: 14px; overflow-x: auto; }}
         code {{ background: var(--code-bg); border-radius: 6px; padding: 0.15em 0.35em; font-family: \"Cascadia Code\", Consolas, monospace; }}
         pre code {{ background: transparent; padding: 0; }}
+                .katex-display {{ overflow-x: auto; overflow-y: hidden; padding: 0.35em 0; }}
         table {{ width: 100%; border-collapse: collapse; margin: 1rem 0; }}
         th, td {{ border: 1px solid var(--border); padding: 10px 12px; text-align: left; vertical-align: top; }}
         th {{ background: #f3f6fd; }}
         a {{ color: var(--accent); }}
     </style>
+        <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+        <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
 </head>
 <body>
     <main>
@@ -2767,6 +2771,18 @@ def build_html_download(document: dict) -> bytes:
             {rendered}
         </article>
     </main>
+        <script>
+            window.addEventListener('DOMContentLoaded', () => {{
+                if (window.renderMathInElement) {{
+                    window.renderMathInElement(document.querySelector('article'), {{
+                        delimiters: [
+                            {{ left: '$$', right: '$$', display: true }},
+                            {{ left: '$', right: '$', display: false }},
+                        ]
+                    }});
+                }}
+            }});
+        </script>
 </body>
 </html>
 """

@@ -1709,16 +1709,153 @@ function closeUnclosedCodeFences(text) {
   return fenceCount % 2 !== 0 ? text + "\n```" : text;
 }
 
+function canRenderCanvasMath() {
+  return Boolean(globalThis.katex && typeof globalThis.katex.renderToString === "function");
+}
+
+function findClosingMathDelimiter(text, startIndex, delimiter) {
+  let searchIndex = startIndex;
+  while (searchIndex < text.length) {
+    const delimiterIndex = text.indexOf(delimiter, searchIndex);
+    if (delimiterIndex < 0) {
+      return -1;
+    }
+    if (delimiterIndex > startIndex && text[delimiterIndex - 1] === "\\") {
+      searchIndex = delimiterIndex + delimiter.length;
+      continue;
+    }
+    if (delimiter === "$" && text.slice(startIndex, delimiterIndex).includes("\n")) {
+      searchIndex = delimiterIndex + delimiter.length;
+      continue;
+    }
+    return delimiterIndex;
+  }
+  return -1;
+}
+
+function appendCanvasMathFragment(fragment, mathText, displayMode) {
+  const wrapper = document.createElement("span");
+  try {
+    wrapper.innerHTML = globalThis.katex.renderToString(mathText, {
+      displayMode,
+      throwOnError: false,
+      strict: "warn",
+      trust: false,
+    });
+  } catch (_) {
+    fragment.appendChild(document.createTextNode(displayMode ? `$$${mathText}$$` : `$${mathText}$`));
+    return;
+  }
+
+  while (wrapper.firstChild) {
+    fragment.appendChild(wrapper.firstChild);
+  }
+}
+
+function renderMathExpressionsInHtml(html) {
+  const rawHtml = String(html || "");
+  if (!rawHtml || !rawHtml.includes("$") || !canRenderCanvasMath()) {
+    return rawHtml;
+  }
+
+  const container = document.createElement("div");
+  container.innerHTML = rawHtml;
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const text = String(node.textContent || "");
+      if (!text.includes("$")) {
+        return NodeFilter.FILTER_REJECT;
+      }
+      const parent = node.parentNode;
+      if (!parent || !(parent instanceof Element)) {
+        return NodeFilter.FILTER_REJECT;
+      }
+      if (parent.closest("pre, code, script, style, textarea, kbd, samp, svg, math, .katex")) {
+        return NodeFilter.FILTER_REJECT;
+      }
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+
+  const textNodes = [];
+  let currentNode;
+  while ((currentNode = walker.nextNode())) {
+    textNodes.push(currentNode);
+  }
+
+  textNodes.forEach((textNode) => {
+    const source = String(textNode.textContent || "");
+    const fragment = document.createDocumentFragment();
+    let buffer = "";
+    let index = 0;
+
+    const flushBuffer = () => {
+      if (!buffer) {
+        return;
+      }
+      fragment.appendChild(document.createTextNode(buffer));
+      buffer = "";
+    };
+
+    while (index < source.length) {
+      const character = source[index];
+      if (character === "\\") {
+        const nextCharacter = source[index + 1] || "";
+        if (nextCharacter === "$") {
+          buffer += "$";
+          index += 2;
+          continue;
+        }
+        buffer += character;
+        index += 1;
+        continue;
+      }
+
+      if (character !== "$") {
+        buffer += character;
+        index += 1;
+        continue;
+      }
+
+      const displayMode = source[index + 1] === "$";
+      const delimiter = displayMode ? "$$" : "$";
+      const mathStart = index + delimiter.length;
+      const mathEnd = findClosingMathDelimiter(source, mathStart, delimiter);
+      if (mathEnd < 0) {
+        buffer += character;
+        index += 1;
+        continue;
+      }
+
+      const mathText = source.slice(mathStart, mathEnd).trim();
+      if (!mathText) {
+        buffer += delimiter;
+        index = mathStart;
+        continue;
+      }
+
+      flushBuffer();
+      appendCanvasMathFragment(fragment, mathText, displayMode);
+      index = mathEnd + delimiter.length;
+    }
+
+    flushBuffer();
+    textNode.parentNode.replaceChild(fragment, textNode);
+  });
+
+  return container.innerHTML;
+}
+
 function renderMarkdown(text) {
   const rawText = closeUnclosedCodeFences(String(text || ""));
   if (markdownEngine && typeof markdownEngine.parse === "function") {
     try {
-      return sanitizeHtml(markdownEngine.parse(rawText));
+      return renderMathExpressionsInHtml(sanitizeHtml(markdownEngine.parse(rawText)));
     } catch (_) {
       // Fall through to plain-text fallback if the markdown engine throws.
     }
   }
-  return sanitizeHtml(escHtml(rawText).replace(/\n/g, "<br>"));
+  return renderMathExpressionsInHtml(sanitizeHtml(escHtml(rawText).replace(/\n/g, "<br>")));
 }
 
 function renderCanvasDocumentBody(document) {
