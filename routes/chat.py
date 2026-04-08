@@ -1160,6 +1160,17 @@ def _get_effective_summary_trigger_token_count(settings: dict) -> int:
 
 
 def _estimate_prompt_tokens(messages: list[dict]) -> int:
+    def _estimate_message_content_tokens(content) -> int:
+        if content in (None, ""):
+            return 0
+        if isinstance(content, str):
+            return estimate_text_tokens(content)
+        try:
+            serialized = json.dumps(content, ensure_ascii=False, separators=(",", ":"))
+        except (TypeError, ValueError):
+            serialized = str(content)
+        return estimate_text_tokens(serialized)
+
     total = 0
     for message in messages:
         if not isinstance(message, dict):
@@ -1167,7 +1178,7 @@ def _estimate_prompt_tokens(messages: list[dict]) -> int:
         message_id = str(message.get("id") or "").strip()
         if message_id:
             total += estimate_text_tokens(message_id)
-        total += estimate_text_tokens(str(message.get("content") or ""))
+        total += _estimate_message_content_tokens(message.get("content"))
         tool_calls = message.get("tool_calls")
         if isinstance(tool_calls, list) and tool_calls:
             total += estimate_text_tokens(json.dumps(tool_calls, ensure_ascii=False))
@@ -1955,6 +1966,9 @@ def _build_budgeted_prompt_messages(
         summary_count=len(selected_summaries),
     )
 
+    estimated_total_tokens = _estimate_prompt_tokens(api_messages)
+    request_estimated_total_tokens = _estimate_prompt_tokens(request_api_messages)
+
     stats = {
         "prompt_budget": prompt_budget,
         "base_system_tokens": base_system_tokens,
@@ -1970,7 +1984,9 @@ def _build_budgeted_prompt_messages(
         **archived_rag_stats,
         "tool_trace_tokens": tool_trace_tokens,
         "tool_memory_tokens": estimate_text_tokens(trimmed_tool_memory or ""),
-        "estimated_total_tokens": _estimate_prompt_tokens(api_messages),
+        "estimated_total_tokens": estimated_total_tokens,
+        "request_estimated_total_tokens": request_estimated_total_tokens,
+        "request_token_overhead": max(0, request_estimated_total_tokens - estimated_total_tokens),
         "summary_message_count": len(selected_summaries),
         "prefix_message_count": len(selected_prefix),
         "recent_message_count": len(selected_recent),

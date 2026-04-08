@@ -1227,6 +1227,12 @@ def _format_tool_name_list(values: list[str]) -> str:
     return ", ".join(f"`{name}`" for name in normalized)
 
 
+def _finalize_prompt_text(parts: list[str]) -> str:
+    text = "\n".join(str(part or "") for part in parts)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 def _build_active_tools_context(active_tool_names: list[str]) -> list[str]:
     normalized_tool_names = _normalize_tool_name_list(active_tool_names)
     if not normalized_tool_names:
@@ -1543,7 +1549,7 @@ def build_runtime_context_injection(
             canvas_documents=canvas_documents,
             workspace_root=workspace_root,
         )
-    return "\n".join(
+    return _finalize_prompt_text(
         _build_runtime_volatile_parts(
             active_tool_names=resolved_tool_names,
             clarification_response=clarification_response,
@@ -1561,7 +1567,7 @@ def build_runtime_context_injection(
             summary_count=summary_count,
             include_time_context=include_time_context,
         )
-    ).strip()
+    )
 
 
 def build_runtime_system_message(
@@ -1617,9 +1623,11 @@ def build_runtime_system_message(
         )
     
     parts = [
-        "You are a tool-using assistant that should reason from the provided conversation state, tool results, and runtime context with minimal redundancy.",
-        "You have access to a suite of tools that may enable you to explore workspaces, write code, recall memories, manage canvas documents, and search the web.",
-        "You must respect the rules, tool contracts, and guidelines provided below.\n"
+        "## Assistant Role",
+        "- You are a tool-using assistant.",
+        "- Base decisions on the conversation state, tool results, and runtime context with minimal redundancy.",
+        "- Follow the tool contracts, policies, and runtime guidance below.",
+        "",
     ]
 
     # User preferences
@@ -1746,7 +1754,7 @@ def build_runtime_system_message(
 
     return {
         "role": "system",
-        "content": "\n".join(parts).strip()
+        "content": _finalize_prompt_text(parts),
     }
 
 

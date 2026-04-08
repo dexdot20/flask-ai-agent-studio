@@ -5221,6 +5221,10 @@ def _build_compact_tool_message_content(
     storage_entry: dict | None = None,
 ) -> str:
     del result
+
+    def _clip_serialized_tool_content(value) -> str:
+        return _clean_tool_text(_serialize_tool_message_content(value), limit=RAG_TOOL_RESULT_MAX_TEXT_CHARS)
+
     if tool_name == "fetch_url" and isinstance(transcript_result, dict):
         return _build_fetch_tool_message_content(tool_args, summary, transcript_result)
 
@@ -5242,13 +5246,10 @@ def _build_compact_tool_message_content(
         if content:
             return content
 
-    if isinstance(transcript_result, str):
-        return _clean_tool_text(transcript_result, limit=RAG_TOOL_RESULT_MAX_TEXT_CHARS)
-
     try:
-        return _serialize_tool_message_content(transcript_result)
+        return _clip_serialized_tool_content(transcript_result)
     except Exception:
-        return _serialize_tool_message_content({"tool_name": tool_name, "summary": _clean_tool_text(summary, limit=300)})
+        return _clip_serialized_tool_content({"tool_name": tool_name, "summary": _clean_tool_text(summary, limit=300)})
 
 
 def _format_list_tool_result(items: list[dict], title: str, link_key: str, extra_keys: tuple[str, ...] = ()) -> str:

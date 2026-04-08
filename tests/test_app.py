@@ -3208,6 +3208,18 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertLess(content.index("## Tool Calling"), content.index("## Tool Memory"))
         self.assertLess(content.index("## Tool Calling"), content.index("## Knowledge Base"))
 
+    def test_runtime_system_message_uses_canonical_role_heading_without_excess_blank_lines(self):
+        message = build_runtime_system_message(
+            user_preferences="Keep answers short.",
+            scratchpad_sections={"notes": "One durable note."},
+            active_tool_names=["search_web"],
+        )
+
+        content = message["content"]
+        self.assertIn("## Assistant Role", content)
+        self.assertIn("- You are a tool-using assistant.", content)
+        self.assertNotIn("\n\n\n", content)
+
     def test_runtime_system_message_includes_user_profile_context(self):
         upsert_user_profile_entry("pref:concise", "The user prefers concise answers.", confidence=0.95, source="manual")
 
@@ -12603,6 +12615,21 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("[CLIPPED: original", result)
         self.assertIn("[CLIPPED: original", rendered)
 
+    def test_build_compact_tool_message_content_clips_large_structured_transcript_payloads(self):
+        transcript_result = {"items": ["x" * 30000]}
+        raw_serialized = json.dumps(transcript_result, ensure_ascii=False)
+
+        rendered = _build_compact_tool_message_content(
+            "search_web",
+            {},
+            {"ignored": True},
+            "summary",
+            transcript_result=transcript_result,
+        )
+
+        self.assertLess(len(rendered), len(raw_serialized))
+        self.assertTrue(rendered.startswith('{"items":'))
+
     def test_prepare_tool_result_for_transcript_compacts_canvas_mutation_payloads(self):
         result = _prepare_tool_result_for_transcript(
             "rewrite_canvas_document",
@@ -16700,6 +16727,55 @@ class AppRoutesTestCase(unittest.TestCase):
             count_visible_message_tokens(injected_messages, include_context_injections=False),
             count_visible_message_tokens(baseline_messages, include_context_injections=False),
         )
+
+    def test_budgeted_prompt_messages_report_request_token_overhead_for_visual_documents(self):
+        canonical_messages = normalize_chat_messages(
+            [
+                {
+                    "id": 1,
+                    "position": 1,
+                    "role": "user",
+                    "content": "Please inspect the uploaded PDF.",
+                    "metadata": {
+                        "attachments": [
+                            {
+                                "kind": "document",
+                                "file_id": "file-1",
+                                "file_name": "spec.pdf",
+                                "submission_mode": "visual",
+                                "visual_page_image_ids": ["img-1"],
+                                "visual_page_count": 1,
+                            }
+                        ]
+                    },
+                }
+            ]
+        )
+        settings = {"user_preferences": "", "scratchpad": ""}
+
+        with patch("messages.read_image_asset_bytes", return_value=({"mime_type": "image/jpeg"}, b"x" * 4096)), patch(
+            "routes.chat.get_prompt_max_input_tokens", return_value=6000
+        ), patch("routes.chat.get_prompt_response_token_reserve", return_value=1000), patch(
+            "routes.chat.get_prompt_recent_history_max_tokens", return_value=1200
+        ), patch("routes.chat.get_prompt_summary_max_tokens", return_value=0), patch(
+            "routes.chat.get_prompt_rag_max_tokens", return_value=0
+        ), patch("routes.chat.get_prompt_tool_trace_max_tokens", return_value=0), patch(
+            "routes.chat.get_prompt_tool_memory_max_tokens", return_value=0
+        ), patch("routes.chat.get_clarification_max_questions", return_value=5):
+            _api_messages, _request_api_messages, stats, _current_context_injection = _build_budgeted_prompt_messages(
+                canonical_messages,
+                settings,
+                active_tool_names=[],
+                clarification_response=None,
+                all_clarification_rounds=None,
+                retrieved_context=None,
+                tool_memory_context=None,
+            )
+
+        self.assertIn("request_estimated_total_tokens", stats)
+        self.assertIn("request_token_overhead", stats)
+        self.assertGreater(stats["request_estimated_total_tokens"], stats["estimated_total_tokens"])
+        self.assertGreater(stats["request_token_overhead"], 0)
 
     def test_budgeted_prompt_messages_use_separate_tool_trace_budget(self):
         canonical_messages = [
