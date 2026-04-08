@@ -66,6 +66,20 @@ CANVAS_ALLOWED_FORMATS = {"markdown", "code"}
 CANVAS_ALLOWED_ROLES = {"source", "config", "dependency", "docs", "test", "script", "note"}
 CANVAS_MODE_DOCUMENT = "document"
 CANVAS_MODE_PROJECT = "project"
+CANVAS_CONTENT_MODE_TEXT = "text"
+CANVAS_CONTENT_MODE_VISUAL = "visual"
+CANVAS_CONTENT_MODE_HYBRID = "hybrid"
+CANVAS_ALLOWED_CONTENT_MODES = {
+    CANVAS_CONTENT_MODE_TEXT,
+    CANVAS_CONTENT_MODE_VISUAL,
+    CANVAS_CONTENT_MODE_HYBRID,
+}
+CANVAS_DOCUMENT_MODE_EDITABLE = "editable"
+CANVAS_DOCUMENT_MODE_PREVIEW_ONLY = "preview_only"
+CANVAS_ALLOWED_DOCUMENT_MODES = {
+    CANVAS_DOCUMENT_MODE_EDITABLE,
+    CANVAS_DOCUMENT_MODE_PREVIEW_ONLY,
+}
 CANVAS_PAGE_HEADING_RE = re.compile(r"^\s{0,3}##\s+Page\s+(\d+)\s*$", re.IGNORECASE)
 CANVAS_FILE_PRIORITY = {
     "source": 10,
@@ -270,6 +284,95 @@ def _normalize_canvas_role(value) -> str | None:
     if role in CANVAS_ALLOWED_ROLES:
         return role
     return None
+
+
+def _normalize_canvas_content_mode(value) -> str:
+    normalized = re.sub(r"[^a-z]", "", str(value or "").strip().lower())
+    if normalized in CANVAS_ALLOWED_CONTENT_MODES:
+        return normalized
+    return CANVAS_CONTENT_MODE_TEXT
+
+
+def _normalize_canvas_document_mode(value, *, content_mode: str = CANVAS_CONTENT_MODE_TEXT) -> str:
+    normalized = re.sub(r"[^a-z_]", "", str(value or "").strip().lower())
+    if normalized in CANVAS_ALLOWED_DOCUMENT_MODES:
+        return normalized
+    if content_mode == CANVAS_CONTENT_MODE_VISUAL:
+        return CANVAS_DOCUMENT_MODE_PREVIEW_ONLY
+    return CANVAS_DOCUMENT_MODE_EDITABLE
+
+
+def _normalize_canvas_asset_ids(values, *, limit: int = 8) -> list[str]:
+    if not isinstance(values, (list, tuple, set)):
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_value in values:
+        asset_id = re.sub(r"[^a-z0-9]", "", str(raw_value or "").strip().lower())[:80]
+        if not asset_id or asset_id in seen:
+            continue
+        normalized.append(asset_id)
+        seen.add(asset_id)
+        if len(normalized) >= max(1, int(limit or 1)):
+            break
+    return normalized
+
+
+def get_canvas_document_content_mode(document: dict | None) -> str:
+    source = document if isinstance(document, dict) else {}
+    return _normalize_canvas_content_mode(source.get("content_mode"))
+
+
+def get_canvas_document_canvas_mode(document: dict | None) -> str:
+    source = document if isinstance(document, dict) else {}
+    return _normalize_canvas_document_mode(
+        source.get("canvas_mode"),
+        content_mode=get_canvas_document_content_mode(source),
+    )
+
+
+def is_canvas_document_visual(document: dict | None) -> bool:
+    return get_canvas_document_content_mode(document) == CANVAS_CONTENT_MODE_VISUAL
+
+
+def is_canvas_document_editable(document: dict | None) -> bool:
+    return get_canvas_document_canvas_mode(document) == CANVAS_DOCUMENT_MODE_EDITABLE
+
+
+def get_canvas_document_capabilities(document: dict | None) -> dict[str, bool]:
+    content_mode = get_canvas_document_content_mode(document)
+    return {
+        "editable": is_canvas_document_editable(document),
+        "line_addressable": content_mode != CANVAS_CONTENT_MODE_VISUAL,
+        "page_addressable": int((document or {}).get("page_count") or 0) > 0,
+        "region_addressable": content_mode in {CANVAS_CONTENT_MODE_VISUAL, CANVAS_CONTENT_MODE_HYBRID},
+        "visual": content_mode == CANVAS_CONTENT_MODE_VISUAL,
+        "hybrid": content_mode == CANVAS_CONTENT_MODE_HYBRID,
+    }
+
+
+def _raise_canvas_document_capability_error(document: dict, action: str, capability: str) -> None:
+    title = str(document.get("title") or "Canvas").strip() or "Canvas"
+    if capability == "editable":
+        raise ValueError(
+            f"{action} is not available for the read-only visual canvas document '{title}'. "
+            "Visual canvas documents must be inspected instead of edited."
+        )
+    raise ValueError(
+        f"{action} is not available for the visual canvas document '{title}'. "
+        "This action currently requires text-addressable canvas content."
+    )
+
+
+def _require_canvas_document_editable(document: dict, action: str) -> None:
+    if not is_canvas_document_editable(document):
+        _raise_canvas_document_capability_error(document, action, "editable")
+
+
+def _require_canvas_document_text_addressable(document: dict, action: str) -> None:
+    if not get_canvas_document_capabilities(document)["line_addressable"]:
+        _raise_canvas_document_capability_error(document, action, "line_addressable")
 
 
 def _normalize_canvas_string_list(values) -> list[str]:
@@ -750,6 +853,11 @@ def normalize_canvas_document(value, *, fallback_title: str = "Canvas") -> dict 
     dependencies = _normalize_canvas_string_list(value.get("dependencies"))
     project_id = _normalize_canvas_identifier(value.get("project_id"))
     workspace_id = _normalize_canvas_identifier(value.get("workspace_id"))
+    content_mode = _normalize_canvas_content_mode(value.get("content_mode"))
+    canvas_mode = _normalize_canvas_document_mode(value.get("canvas_mode"), content_mode=content_mode)
+    source_file_id = _normalize_canvas_identifier(value.get("source_file_id"))
+    source_mime_type = str(value.get("source_mime_type") or "").strip().lower()[:120]
+    visual_page_image_ids = _normalize_canvas_asset_ids(value.get("visual_page_image_ids"), limit=8)
 
     cleaned = {
         "id": document_id,
@@ -757,6 +865,8 @@ def normalize_canvas_document(value, *, fallback_title: str = "Canvas") -> dict 
         "format": format_name,
         "content": content,
         "line_count": _line_count(content),
+        "content_mode": content_mode,
+        "canvas_mode": canvas_mode,
     }
     raw_page_count = value.get("page_count")
     if format_name != "code":
@@ -768,6 +878,8 @@ def normalize_canvas_document(value, *, fallback_title: str = "Canvas") -> dict 
                 page_count = max(0, int(raw_page_count or 0))
             except (TypeError, ValueError):
                 page_count = 0
+        if visual_page_image_ids:
+            page_count = max(page_count, len(visual_page_image_ids))
         if page_count > 0:
             cleaned["page_count"] = page_count
 
@@ -791,6 +903,12 @@ def normalize_canvas_document(value, *, fallback_title: str = "Canvas") -> dict 
         cleaned["project_id"] = project_id
     if workspace_id:
         cleaned["workspace_id"] = workspace_id
+    if source_file_id:
+        cleaned["source_file_id"] = source_file_id
+    if source_mime_type:
+        cleaned["source_mime_type"] = source_mime_type
+    if visual_page_image_ids:
+        cleaned["visual_page_image_ids"] = visual_page_image_ids
 
     if created_at:
         cleaned["created_at"] = created_at
@@ -1055,6 +1173,11 @@ def create_canvas_document(
     dependencies: list[str] | None = None,
     project_id: str | None = None,
     workspace_id: str | None = None,
+    content_mode: str | None = None,
+    canvas_mode: str | None = None,
+    source_file_id: str | None = None,
+    source_mime_type: str | None = None,
+    visual_page_image_ids: list[str] | None = None,
 ) -> dict:
     documents = runtime_state.get("documents") if isinstance(runtime_state, dict) else None
     if isinstance(documents, list) and len(documents) >= CANVAS_MAX_DOCUMENTS:
@@ -1078,6 +1201,11 @@ def create_canvas_document(
             "dependencies": dependencies,
             "project_id": project_id,
             "workspace_id": workspace_id,
+            "content_mode": content_mode,
+            "canvas_mode": canvas_mode,
+            "source_file_id": source_file_id,
+            "source_mime_type": source_mime_type,
+            "visual_page_image_ids": visual_page_image_ids,
         }
     )
     return _store_canvas_document(runtime_state, normalized)
@@ -1102,6 +1230,7 @@ def rewrite_canvas_document(
     workspace_id: str | None = None,
 ) -> dict:
     _, document = _find_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
+    _require_canvas_document_editable(document, "rewrite_canvas_document")
     next_document = dict(document)
     next_document["content"] = _clip_text(content, CANVAS_MAX_CONTENT_LENGTH)
     if title is not None:
@@ -1142,6 +1271,7 @@ def replace_canvas_lines(
     expected_start_line: int | None = None,
 ) -> dict:
     _, document = _find_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
+    _require_canvas_document_editable(document, "replace_canvas_lines")
     existing_lines = list_canvas_lines(document.get("content") or "")
     if start_line < 1 or end_line < start_line:
         raise ValueError("start_line and end_line must define a valid 1-based inclusive range.")
@@ -1174,6 +1304,7 @@ def insert_canvas_lines(
     expected_start_line: int | None = None,
 ) -> dict:
     _, document = _find_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
+    _require_canvas_document_editable(document, "insert_canvas_lines")
     existing_lines = list_canvas_lines(document.get("content") or "")
     if after_line < 0 or after_line > len(existing_lines):
         raise ValueError("after_line must be between 0 and the current line count.")
@@ -1605,6 +1736,10 @@ def transform_canvas_lines(
     count_only: bool = False,
 ) -> dict:
     _, document = _find_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
+    if count_only:
+        _require_canvas_document_text_addressable(document, "transform_canvas_lines")
+    else:
+        _require_canvas_document_editable(document, "transform_canvas_lines")
     document_id = str(document.get("id") or "")
     all_lines = list_canvas_lines(document.get("content") or "")
     scope_start, scope_end = _parse_canvas_transform_scope(scope, len(all_lines))
@@ -1675,6 +1810,7 @@ def update_canvas_metadata(
     add_symbols: list[str] | None = None,
 ) -> dict:
     _, document = _find_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
+    _require_canvas_document_editable(document, "update_canvas_metadata")
     next_document = dict(document)
     updated_fields: list[str] = []
 
@@ -1743,6 +1879,7 @@ def preview_canvas_changes(
     document_path: str | None = None,
 ) -> dict:
     _, document = _find_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
+    _require_canvas_document_editable(document, "preview_canvas_changes")
     preview_state = create_canvas_runtime_state([document], active_document_id=document.get("id"))
     normalized_operations = _validate_batch_canvas_operations(operations)
     preview_entries: list[dict] = []
@@ -2071,6 +2208,7 @@ def scroll_canvas_document(
     max_chars: int | None = None,
 ) -> dict:
     _, document = _find_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
+    _require_canvas_document_text_addressable(document, "scroll_canvas_document")
     existing_lines = list_canvas_lines(document.get("content") or "")
     total_lines = len(existing_lines)
     if start_line < 1 or end_line < start_line:
@@ -2167,7 +2305,14 @@ def search_canvas_document(
             document_id=document_id,
             document_path=document_path,
         )
+        _require_canvas_document_text_addressable(target_document, "search_canvas_document")
         target_documents = [target_document]
+    else:
+        target_documents = [
+            document
+            for document in target_documents
+            if get_canvas_document_capabilities(document)["line_addressable"]
+        ]
 
     matches: list[dict] = []
     total_match_count = 0
@@ -2417,6 +2562,23 @@ def validate_canvas_document(
     validator: str | None = None,
 ) -> dict:
     _, document = _find_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
+    if not get_canvas_document_capabilities(document)["line_addressable"]:
+        return {
+            "status": "ok",
+            "action": "validated",
+            "document_id": document.get("id"),
+            "document_path": document.get("path"),
+            "title": document.get("title"),
+            "validator_used": "none",
+            "is_valid": True,
+            "issue_count": 1,
+            "issues": [
+                _build_canvas_validation_issue(
+                    "info",
+                    "Validation is not available for visual canvas documents because they are image-backed previews.",
+                )
+            ],
+        }
     resolved_validator = _detect_canvas_validator(document, validator)
     content = str(document.get("content") or "")
 
@@ -2503,18 +2665,23 @@ def build_canvas_document_result_snapshot(document: dict | None) -> dict | None:
         "title": normalized["title"],
         "format": normalized["format"],
         "line_count": normalized["line_count"],
+        "content_mode": normalized.get("content_mode") or CANVAS_CONTENT_MODE_TEXT,
+        "canvas_mode": normalized.get("canvas_mode") or CANVAS_DOCUMENT_MODE_EDITABLE,
     }
     if int(normalized.get("page_count") or 0) > 0:
         snapshot["page_count"] = int(normalized["page_count"])
     if normalized.get("language"):
         snapshot["language"] = normalized["language"]
-    for key in ("path", "role", "summary", "project_id", "workspace_id"):
+    for key in ("path", "role", "summary", "project_id", "workspace_id", "source_file_id", "source_mime_type"):
         if normalized.get(key):
             snapshot[key] = normalized[key]
     for key in ("imports", "exports", "symbols", "dependencies"):
         values = normalized.get(key) if isinstance(normalized.get(key), list) else []
         if values:
             snapshot[key] = values
+    visual_page_image_ids = normalized.get("visual_page_image_ids") if isinstance(normalized.get("visual_page_image_ids"), list) else []
+    if visual_page_image_ids:
+        snapshot["visual_page_image_ids"] = visual_page_image_ids
     return snapshot
 
 
@@ -2588,6 +2755,7 @@ def build_canvas_document_context_result(
     max_chars: int | None = None,
 ) -> dict:
     _, document = _find_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
+    _require_canvas_document_text_addressable(document, "expand_canvas_document")
     normalized = normalize_canvas_document(document)
     if not normalized:
         raise ValueError("Canvas document is invalid.")

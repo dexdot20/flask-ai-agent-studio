@@ -1286,6 +1286,10 @@ def _normalize_message_attachment(entry) -> dict | None:
     file_name = str(entry.get("file_name") or "").strip()[:255]
     file_mime_type = str(entry.get("file_mime_type") or "").strip()[:120]
     file_context_block = str(entry.get("file_context_block") or "").strip()[:CONTENT_MAX_CHARS]
+    submission_mode = str(entry.get("submission_mode") or "").strip().lower()[:20]
+    canvas_mode = str(entry.get("canvas_mode") or "").strip().lower()[:40]
+    visual_page_image_ids = entry.get("visual_page_image_ids") if isinstance(entry.get("visual_page_image_ids"), list) else []
+    visual_page_count = entry.get("visual_page_count")
 
     if file_id:
         cleaned["file_id"] = file_id
@@ -1297,6 +1301,23 @@ def _normalize_message_attachment(entry) -> dict | None:
         cleaned["file_text_truncated"] = True
     if file_context_block:
         cleaned["file_context_block"] = file_context_block
+    if submission_mode in {"text", "visual"}:
+        cleaned["submission_mode"] = submission_mode
+    if canvas_mode:
+        cleaned["canvas_mode"] = canvas_mode
+    normalized_visual_page_ids = []
+    for value in visual_page_image_ids[:8]:
+        image_id = str(value or "").strip()[:64]
+        if image_id and image_id not in normalized_visual_page_ids:
+            normalized_visual_page_ids.append(image_id)
+    if normalized_visual_page_ids:
+        cleaned["visual_page_image_ids"] = normalized_visual_page_ids
+    try:
+        page_count = int(visual_page_count)
+    except (TypeError, ValueError):
+        page_count = 0
+    if page_count > 0:
+        cleaned["visual_page_count"] = min(page_count, len(normalized_visual_page_ids) or page_count)
 
     if not cleaned.get("file_id") and not cleaned.get("file_name"):
         return None

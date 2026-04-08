@@ -3454,6 +3454,33 @@ def _build_assistant_tool_call_message(content_text: str, tool_calls: list[dict]
     return message
 
 
+def _strip_intermediate_tool_call_content(messages: list[dict]) -> list[dict]:
+    """Return a copy of *messages* with ``content`` set to ``None`` for every
+    assistant message that also carries ``tool_calls``.
+
+    When a model writes planning/announcement text before a tool call (e.g.
+    "Now I will expand the canvas document…"), that text is stored in the
+    assistant message alongside the tool_calls.  On the next model turn the
+    model sees its own earlier announcement in the conversation history and
+    tends to reproduce it verbatim, causing the same text to appear multiple
+    times across multi-step runs.  Nullifying the content of those intermediate
+    messages prevents the reproduction while keeping all tool-call/result pairs
+    intact for continuity.  The reasoning-replay mechanism already captures the
+    model's step-by-step thinking, so nothing of value is lost.
+    """
+    result = []
+    for msg in messages:
+        if (
+            isinstance(msg, dict)
+            and str(msg.get("role") or "").strip() == "assistant"
+            and msg.get("tool_calls")
+            and str(msg.get("content") or "").strip()
+        ):
+            msg = {**msg, "content": None}
+        result.append(msg)
+    return result
+
+
 def _has_native_reasoning_details(messages: list[dict]) -> bool:
     for message in reversed(messages or []):
         if not isinstance(message, dict):
@@ -3648,6 +3675,8 @@ def _build_final_answer_instruction() -> dict:
             "Respond with the best possible final answer using the available context.\n"
             "Do not claim that an action was completed unless a tool result in this run confirms it. "
             "If work remains unfinished, say so explicitly.\n"
+            "Do not repeat, recap, or re-state any step-by-step planning or tool-invocation "
+            "announcements from previous assistant turns. Begin your final answer directly.\n"
             "Place the final answer in assistant content, not reasoning_content."
         ),
     }
@@ -6602,6 +6631,7 @@ def run_agent_stream(
         if working_memory_instruction:
             extra_messages.append(working_memory_instruction)
         turn_messages, _ = apply_context_compaction(extra_messages, reason="pre_model_turn")
+        turn_messages = _strip_intermediate_tool_call_content(turn_messages)
 
         try:
             turn_result = yield from stream_model_turn(
@@ -7354,6 +7384,7 @@ def run_agent_stream(
             final_extra_messages = [working_memory_instruction] if working_memory_instruction is not None else []
             final_messages, _ = apply_context_compaction(final_extra_messages, reason="pre_final_answer")
             final_messages = [*final_messages, final_instruction_builder()]
+            final_messages = _strip_intermediate_tool_call_content(final_messages)
             turn_result = yield from stream_model_turn(
                 final_messages,
                 allow_tools=False,

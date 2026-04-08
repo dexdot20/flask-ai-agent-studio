@@ -54,6 +54,7 @@ from db import (
     normalize_rag_source_types,
     parse_message_metadata,
     parse_message_tool_calls,
+    read_image_asset_bytes,
     sanitize_edited_user_message_metadata,
     serialize_message_metadata,
     soft_delete_messages,
@@ -535,20 +536,24 @@ def register_conversation_routes(app) -> None:
 
         base_name = _sanitize_download_filename(conversation["title"] or "conversation", fallback="conversation")
         payload_conversation = dict(conversation)
-        if format_name == "md":
-            payload = build_conversation_markdown_download(payload_conversation, messages)
-            mime_type = "text/markdown; charset=utf-8"
-            filename = f"{base_name}.md"
-        elif format_name == "docx":
-            payload = build_conversation_docx_download(payload_conversation, messages)
-            mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            filename = f"{base_name}.docx"
-        elif format_name == "pdf":
-            payload = build_conversation_pdf_download(payload_conversation, messages)
-            mime_type = "application/pdf"
-            filename = f"{base_name}.pdf"
-        else:
-            return jsonify({"error": "format must be md, docx, or pdf."}), 400
+        try:
+            if format_name == "md":
+                payload = build_conversation_markdown_download(payload_conversation, messages)
+                mime_type = "text/markdown; charset=utf-8"
+                filename = f"{base_name}.md"
+            elif format_name == "docx":
+                payload = build_conversation_docx_download(payload_conversation, messages)
+                mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                filename = f"{base_name}.docx"
+            elif format_name == "pdf":
+                payload = build_conversation_pdf_download(payload_conversation, messages)
+                mime_type = "application/pdf"
+                filename = f"{base_name}.pdf"
+            else:
+                return jsonify({"error": "format must be md, docx, or pdf."}), 400
+        except Exception:
+            app.logger.exception("Failed to export conversation %s as %s", conv_id, format_name)
+            return jsonify({"error": "Conversation export failed."}), 500
 
         return Response(
             payload,
@@ -592,6 +597,25 @@ def register_conversation_routes(app) -> None:
             content_type=mime_type,
             headers={
                 "Content-Disposition": f'attachment; filename="{filename}"',
+            },
+        )
+
+    @app.route("/api/conversations/<int:conv_id>/images/<image_id>", methods=["GET"])
+    def get_conversation_image_asset(conv_id, image_id):
+        conversation, _ = _load_conversation_payload(conv_id)
+        if not conversation:
+            return jsonify({"error": "Not found."}), 404
+
+        asset, image_bytes = read_image_asset_bytes(image_id, conversation_id=conv_id)
+        if not asset or not image_bytes:
+            return jsonify({"error": "Image asset not found."}), 404
+
+        return Response(
+            image_bytes,
+            content_type=str(asset.get("mime_type") or "image/jpeg").strip() or "image/jpeg",
+            headers={
+                "Content-Disposition": f'inline; filename="{_sanitize_download_filename(asset.get("filename") or image_id, fallback="image")}"',
+                "Cache-Control": "private, max-age=3600",
             },
         )
 

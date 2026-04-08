@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
 from datetime import datetime
 
-from canvas_service import build_canvas_project_manifest, extract_canvas_documents, scale_canvas_char_limit
+from canvas_service import (
+    build_canvas_project_manifest,
+    extract_canvas_documents,
+    get_canvas_document_capabilities,
+    get_canvas_document_canvas_mode,
+    get_canvas_document_content_mode,
+    scale_canvas_char_limit,
+)
 from config import (
     CLARIFICATION_DEFAULT_MAX_QUESTIONS,
     CLARIFICATION_QUESTION_LIMIT_MAX,
@@ -26,6 +34,7 @@ from db import (
     extract_sub_agent_traces,
     parse_message_metadata,
     parse_message_tool_calls,
+    read_image_asset_bytes,
 )
 from tool_registry import resolve_runtime_tool_names
 
@@ -528,8 +537,16 @@ def build_user_message_for_model(
     file_context_blocks = []
     video_context_blocks = []
     vision_attachments = []
+    visual_document_notices = []
     for attachment in attachments:
         if attachment.get("kind") == "document":
+            if str(attachment.get("submission_mode") or "").strip().lower() == "visual":
+                file_name = str(attachment.get("file_name") or "PDF").strip() or "PDF"
+                page_count = max(1, int(attachment.get("visual_page_count") or len(attachment.get("visual_page_image_ids") or []) or 1))
+                visual_document_notices.append(
+                    f"Uploaded PDF for visual analysis: {file_name}. The first {page_count} page{'s are' if page_count != 1 else ' is'} attached as image input below."
+                )
+                continue
             context_block = str(attachment.get("file_context_block") or "").strip()
             if _document_attachment_is_represented_in_canvas(attachment, canvas_document_lookup):
                 continue
@@ -553,7 +570,7 @@ def build_user_message_for_model(
         if has_vision:
             vision_attachments.append(attachment)
 
-    if not file_context_blocks and not video_context_blocks and not vision_attachments:
+    if not file_context_blocks and not video_context_blocks and not vision_attachments and not visual_document_notices:
         return content
 
     parts = []
@@ -562,6 +579,7 @@ def build_user_message_for_model(
 
     parts.extend(file_context_blocks)
     parts.extend(video_context_blocks)
+    parts.extend(visual_document_notices)
 
     for index, attachment in enumerate(vision_attachments, start=1):
         image_id = str(attachment.get("image_id") or "").strip()
@@ -593,6 +611,48 @@ def build_user_message_for_model(
         parts.append("\n\n".join(vision_parts))
 
     return "\n\n".join(parts)
+
+
+def _build_visual_document_api_blocks(metadata: dict | None) -> list[dict]:
+    attachments = extract_message_attachments(metadata)
+    blocks: list[dict] = []
+    for attachment in attachments:
+        if attachment.get("kind") != "document":
+            continue
+        if str(attachment.get("submission_mode") or "").strip().lower() != "visual":
+            continue
+        image_ids = attachment.get("visual_page_image_ids") if isinstance(attachment.get("visual_page_image_ids"), list) else []
+        for image_id in image_ids:
+            asset, image_bytes = read_image_asset_bytes(str(image_id or "").strip())
+            if not asset or not image_bytes:
+                continue
+            mime_type = str(asset.get("mime_type") or "image/jpeg").strip() or "image/jpeg"
+            image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+            blocks.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime_type};base64,{image_b64}"},
+                }
+            )
+    return blocks
+
+
+def build_user_message_for_api(
+    content: str,
+    metadata: dict | None = None,
+    *,
+    canvas_documents: list[dict] | None = None,
+) -> str | list[dict]:
+    text_content = build_user_message_for_model(content, metadata, canvas_documents=canvas_documents)
+    visual_blocks = _build_visual_document_api_blocks(metadata)
+    if not visual_blocks:
+        return text_content
+
+    prompt_text = str(text_content or "").strip() or "Analyze the attached PDF pages carefully."
+    return [
+        {"type": "text", "text": prompt_text},
+        *visual_blocks,
+    ]
 
 
 def _strip_volatile_sections_from_context_injection(context_injection: str) -> str:
@@ -744,7 +804,12 @@ def _collect_canvas_saved_sub_agent_skip_indexes(messages: list[dict]) -> set[in
     return skip_indexes
 
 
-def build_api_messages(messages: list[dict], *, canvas_documents: list[dict] | None = None) -> list[dict]:
+def build_api_messages(
+    messages: list[dict],
+    *,
+    canvas_documents: list[dict] | None = None,
+    embed_visual_documents: bool = False,
+) -> list[dict]:
     api_messages = []
     skip_indexes = _collect_answered_clarification_skip_indexes(messages)
     skip_indexes.update(_collect_canvas_saved_sub_agent_skip_indexes(messages))
@@ -771,7 +836,10 @@ def build_api_messages(messages: list[dict], *, canvas_documents: list[dict] | N
                         "content": context_injection,
                     }
                 )
-            content = build_user_message_for_model(content, metadata, canvas_documents=canvas_documents)
+            if embed_visual_documents:
+                content = build_user_message_for_api(content, metadata, canvas_documents=canvas_documents)
+            else:
+                content = build_user_message_for_model(content, metadata, canvas_documents=canvas_documents)
         elif role == "summary":
             role = "assistant"
             content = _format_summary_message_for_model(content, metadata)
@@ -832,6 +900,27 @@ def _build_canvas_prompt_payload(
     visible_char_count = 0
     clipped_line_count = 0
     line_format = str(active_document.get("format") or "").strip().lower()
+    document_capabilities = get_canvas_document_capabilities(active_document)
+
+    if not document_capabilities["line_addressable"]:
+        return {
+            "mode": (manifest or {}).get("mode") or "document",
+            "manifest": manifest,
+            "relationship_map": (manifest or {}).get("relationship_map"),
+            "document_count": len(documents),
+            "active_document": active_document,
+            "other_documents": [
+                entry
+                for entry in ((manifest or {}).get("file_list") or [])
+                if entry.get("id") != active_document.get("id")
+            ],
+            "visible_lines": [],
+            "clipped_line_count": 0,
+            "is_truncated": False,
+            "visible_line_end": 0,
+            "total_lines": int(active_document.get("line_count") or len(all_lines)),
+            "viewports": [viewport for viewport in (canvas_viewports or []) if isinstance(viewport, dict)],
+        }
 
     for index, line in enumerate(all_lines, start=1):
         preview_line, line_was_clipped = _clip_canvas_preview_line(line, format_name=line_format)
@@ -1049,6 +1138,16 @@ def _build_canvas_truncated_excerpt_guidance(active_tool_names: list[str]) -> st
 
 
 def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload: dict | None = None) -> list[str]:
+    active_document = (canvas_payload or {}).get("active_document") if isinstance((canvas_payload or {}).get("active_document"), dict) else {}
+    if active_document and not get_canvas_document_capabilities(active_document)["editable"]:
+        return [
+            "## Canvas Editing Guidance",
+            "- The active canvas document is a read-only visual preview backed by images.",
+            "- Do not use line-based canvas editing tools on this document.",
+            "- Metadata and content edits should wait until a text or hybrid document representation exists.",
+            "",
+        ]
+
     active_set = set(active_tool_names or [])
     if not active_set.intersection(CANVAS_MUTATING_TOOL_NAMES):
         return []
@@ -1322,15 +1421,20 @@ def _build_runtime_volatile_parts(
         if active_document.get("role"):
             volatile_parts.append(f"- Role: {active_document['role']}")
         volatile_parts.append(f"- Format: {active_document['format']}")
+        volatile_parts.append(f"- Content mode: {get_canvas_document_content_mode(active_document)}")
+        volatile_parts.append(f"- Canvas mode: {get_canvas_document_canvas_mode(active_document)}")
         if active_document.get("language"):
             volatile_parts.append(f"- Language: {active_document['language']}")
         volatile_parts.append(f"- Total lines: {canvas_payload['total_lines']}")
         if int(active_document.get("page_count") or 0) > 1:
             volatile_parts.append(f"- Total pages: {int(active_document.get('page_count') or 0)}")
-        volatile_parts.append(
-            f"- Visible lines in prompt: 1-{canvas_payload['visible_line_end']}"
-            + (" (truncated excerpt)" if canvas_payload["is_truncated"] else "")
-        )
+        if get_canvas_document_capabilities(active_document)["line_addressable"]:
+            volatile_parts.append(
+                f"- Visible lines in prompt: 1-{canvas_payload['visible_line_end']}"
+                + (" (truncated excerpt)" if canvas_payload["is_truncated"] else "")
+            )
+        else:
+            volatile_parts.append("- Visual preview: page images are available in the UI, but line excerpts are not injected for this document type.")
         preview_compaction_note = _build_canvas_preview_compaction_note(
             active_tool_names,
             int(canvas_payload.get("clipped_line_count") or 0),
@@ -1341,7 +1445,11 @@ def _build_runtime_volatile_parts(
             volatile_parts.append(
                 "- Snapshot rule: expand_canvas_document returns a call-time snapshot. If the canvas may have changed after an earlier expansion, call it again before relying on that older view."
             )
-        if canvas_payload["is_truncated"]:
+        if not get_canvas_document_capabilities(active_document)["line_addressable"]:
+            volatile_parts.append(
+                "- Guidance: This active canvas document is an image-backed visual preview. Treat it as read-only and avoid line-based canvas inspection or editing tools."
+            )
+        elif canvas_payload["is_truncated"]:
             volatile_parts.append(_build_canvas_truncated_excerpt_guidance(active_tool_names))
         else:
             volatile_parts.append(
@@ -1357,7 +1465,7 @@ def _build_runtime_volatile_parts(
             )
         if canvas_payload["visible_lines"]:
             volatile_parts.append("```text\n" + "\n".join(canvas_payload["visible_lines"]) + "\n```\n")
-        else:
+        elif get_canvas_document_capabilities(active_document)["line_addressable"]:
             volatile_parts.append("(The active canvas document is empty.)\n")
         viewport_payloads = canvas_payload.get("viewports") if isinstance(canvas_payload.get("viewports"), list) else []
         if viewport_payloads:

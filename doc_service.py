@@ -135,6 +135,8 @@ _PDF_TEXT_TABLE_SETTINGS: dict = {
 _PDF_OCR_MIN_TEXT_CHARS = 20
 _PDF_OCR_RENDER_DPI = 200
 _PDF_OCR_MIN_IMAGE_COVERAGE = 0.35
+_PDF_VISION_RENDER_DPI = 144
+_PDF_VISION_MAX_DIMENSION = 1600
 _PDF_HEADER_FOOTER_EDGE_RATIO = 0.08
 _PDF_REPEATED_EDGE_MIN_PAGES = 3
 _PDF_MULTI_COLUMN_MIN_WORDS = 40
@@ -778,6 +780,48 @@ def _extract_text_from_pdf(doc_bytes: bytes) -> str:
     return ("\n\n---\n\n" if len(parts) > 1 else "\n\n").join(parts)
 
 
+def _render_pdf_page_image_bytes(page, *, dpi: int = _PDF_VISION_RENDER_DPI, max_dimension: int = _PDF_VISION_MAX_DIMENSION) -> tuple[bytes, str]:
+    try:
+        from PIL import Image
+    except ImportError as exc:  # pragma: no cover - Pillow is an indirect runtime dependency here
+        raise ValueError("PDF page rendering requires Pillow.") from exc
+
+    try:
+        page_image = page.to_image(
+            resolution=dpi,
+            antialias=True,
+            force_mediabox=True,
+        )
+        pil_image = page_image.original.convert("RGB")
+    except Exception as exc:
+        raise ValueError(f"Could not render PDF page as an image: {exc}") from exc
+
+    if max_dimension > 0:
+        pil_image.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
+
+    image_buffer = io.BytesIO()
+    pil_image.save(image_buffer, format="JPEG", quality=82, optimize=True)
+    return image_buffer.getvalue(), "image/jpeg"
+
+
+def render_pdf_pages_for_vision(doc_bytes: bytes, *, max_pages: int = 3) -> list[dict]:
+    page_limit = max(1, int(max_pages or 1))
+    rendered_pages: list[dict] = []
+
+    with pdfplumber.open(io.BytesIO(doc_bytes)) as pdf:
+        for page_number, page in enumerate(pdf.pages[:page_limit], start=1):
+            image_bytes, mime_type = _render_pdf_page_image_bytes(page)
+            rendered_pages.append(
+                {
+                    "page_number": page_number,
+                    "image_bytes": image_bytes,
+                    "mime_type": mime_type,
+                }
+            )
+
+    return rendered_pages
+
+
 def _extract_text_plain(doc_bytes: bytes) -> str:
     return doc_bytes.decode("utf-8-sig", errors="replace").strip()
 
@@ -827,6 +871,30 @@ def build_canvas_markdown(filename: str, text: str) -> str:
     if os.path.splitext(name)[-1].lower() == ".md":
         return text
     return f"# {name}\n\n{text}"
+
+
+def build_visual_canvas_markdown(filename: str, page_count: int) -> str:
+    name = os.path.basename(filename or "document")
+    normalized_page_count = max(1, int(page_count or 1))
+    lines = [
+        f"# {name}",
+        "",
+        "> This is a visual, read-only canvas preview backed by rendered page images.",
+        "> Use page navigation to inspect each page in the Canvas panel.",
+        "",
+    ]
+    for page_number in range(1, normalized_page_count + 1):
+        lines.extend(
+            [
+                f"## Page {page_number}",
+                "",
+                f"[Visual page {page_number} preview is available in the Canvas panel.]",
+                "",
+            ]
+        )
+        if page_number < normalized_page_count:
+            lines.extend(["---", ""])
+    return "\n".join(lines).strip()
 
 
 def build_document_context_block(filename: str, text: str) -> tuple[str, bool]:

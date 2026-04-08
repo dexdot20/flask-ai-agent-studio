@@ -122,7 +122,9 @@ from doc_service import (
     extract_document_text,
     infer_canvas_format,
     infer_canvas_language,
+    render_pdf_pages_for_vision,
     read_uploaded_document,
+    build_visual_canvas_markdown,
 )
 from messages import (
     SUMMARY_LABEL,
@@ -136,6 +138,7 @@ from messages import (
 )
 from image_service import analyze_uploaded_image
 from model_registry import (
+    can_model_process_images,
     DEEPSEEK_PROVIDER,
     OPENROUTER_PROVIDER,
     DEFAULT_CHAT_MODEL,
@@ -1219,15 +1222,32 @@ def _trim_rag_context_to_token_budget(retrieved_context: dict | None, max_tokens
     if not matches:
         return None
 
+    ranked_matches = []
+    for index, match in enumerate(matches):
+        single_candidate = {
+            "query": retrieved_context.get("query"),
+            "count": 1,
+            "matches": [match],
+        }
+        ranked_matches.append(
+            (
+                float(match.get("similarity") or 0.0),
+                estimate_text_tokens(format_knowledge_base_auto_context(single_candidate)),
+                index,
+                match,
+            )
+        )
+
+    ranked_matches.sort(key=lambda item: (-item[0], item[1], item[2]))
     trimmed_matches = []
-    for match in matches:
+    for _similarity, _token_cost, _index, match in ranked_matches:
         candidate = {
             "query": retrieved_context.get("query"),
             "count": len(trimmed_matches) + 1,
             "matches": [*trimmed_matches, match],
         }
         if estimate_text_tokens(format_knowledge_base_auto_context(candidate)) > max_tokens:
-            break
+            continue
         trimmed_matches.append(match)
     if not trimmed_matches:
         return None
@@ -1755,7 +1775,7 @@ def _build_budgeted_prompt_messages(
     canvas_prompt_max_tokens: int | None = None,
     workspace_root: str | None = None,
     model_id: str | None = None,
-) -> tuple[list[dict], dict, str | None]:
+) -> tuple[list[dict], list[dict], dict, str | None]:
     ordered_messages = [message for message in canonical_messages if isinstance(message, dict)]
     tool_trace_context = _build_tool_trace_context(ordered_messages)
     user_profile_context = build_user_profile_system_context(max_tokens=500)
@@ -1907,6 +1927,36 @@ def _build_budgeted_prompt_messages(
         summary_count=len(selected_summaries),
     )
 
+    request_prompt_history_api = build_api_messages(
+        prompt_history,
+        canvas_documents=canvas_documents,
+        embed_visual_documents=True,
+    )
+    request_api_messages = prepend_runtime_context(
+        request_prompt_history_api,
+        assistant_behavior,
+        runtime_tool_names,
+        clarification_response=clarification_response,
+        all_clarification_rounds=all_clarification_rounds,
+        retrieved_context=rag_context,
+        user_profile_context=user_profile_context,
+        conversation_memory=conversation_memory,
+        tool_trace_context=trimmed_tool_trace,
+        tool_memory_context=trimmed_tool_memory,
+        scratchpad_sections=scratchpad_sections,
+        canvas_documents=canvas_documents,
+        canvas_active_document_id=canvas_active_document_id,
+        canvas_viewports=canvas_viewports,
+        canvas_prompt_max_lines=canvas_prompt_max_lines,
+        canvas_prompt_max_tokens=canvas_prompt_max_tokens,
+        workspace_root=workspace_root,
+        clarification_max_questions=get_clarification_max_questions(settings),
+        max_parallel_tools=max_parallel_tools,
+        current_context_injection=current_context_injection,
+        runtime_tool_names=runtime_tool_names,
+        summary_count=len(selected_summaries),
+    )
+
     stats = {
         "prompt_budget": prompt_budget,
         "base_system_tokens": base_system_tokens,
@@ -1927,7 +1977,7 @@ def _build_budgeted_prompt_messages(
         "prefix_message_count": len(selected_prefix),
         "recent_message_count": len(selected_recent),
     }
-    return api_messages, stats, current_context_injection or None
+    return api_messages, request_api_messages, stats, current_context_injection or None
 
 
 def _build_clarification_rag_query(message_content: str, clarification_response: dict | None) -> str:
@@ -2738,6 +2788,13 @@ def parse_chat_request_payload():
     if request.mimetype and request.mimetype.startswith("multipart/form-data"):
         image_files = [file for file in request.files.getlist("image") if getattr(file, "filename", "")]
         document_files = [file for file in request.files.getlist("document") if getattr(file, "filename", "")]
+        raw_document_modes = request.form.get("document_modes", "[]")
+        try:
+            document_modes = json.loads(raw_document_modes)
+        except Exception:
+            document_modes = []
+        if not isinstance(document_modes, list):
+            document_modes = []
         return {
             "messages": parse_messages_payload(request.form.get("messages", "[]")),
             "model": normalize_model_id(request.form.get("model"), default=default_model),
@@ -2747,6 +2804,7 @@ def parse_chat_request_payload():
             "youtube_url": request.form.get("youtube_url", ""),
             "images": image_files,
             "documents": document_files,
+            "document_modes": document_modes,
         }
 
     data = request.get_json(silent=True) or {}
@@ -2760,6 +2818,7 @@ def parse_chat_request_payload():
         "youtube_url": data.get("youtube_url", ""),
         "images": [],
         "documents": [],
+        "document_modes": [],
     }
 
 
@@ -2779,6 +2838,10 @@ def _strip_attachment_metadata(metadata: dict | None) -> dict:
         "file_mime_type",
         "file_text_truncated",
         "file_context_block",
+        "submission_mode",
+        "canvas_mode",
+        "visual_page_count",
+        "visual_page_image_ids",
         "video_id",
         "video_title",
         "video_url",
@@ -3001,6 +3064,7 @@ def register_chat_routes(app) -> None:
         youtube_url = str(payload.get("youtube_url") or "").strip()
         uploaded_images = payload["images"]
         uploaded_documents = payload["documents"]
+        uploaded_document_modes = payload.get("document_modes") if isinstance(payload.get("document_modes"), list) else []
 
         if not messages:
             return jsonify({"error": "No messages provided."}), 400
@@ -3070,8 +3134,66 @@ def register_chat_routes(app) -> None:
                     )
 
                 processing_stage = "document"
-                for uploaded_document in uploaded_documents:
+                for document_index, uploaded_document in enumerate(uploaded_documents):
                     doc_name, doc_mime_type, doc_bytes = read_uploaded_document(uploaded_document)
+                    mode_entry = uploaded_document_modes[document_index] if document_index < len(uploaded_document_modes) else {}
+                    requested_submission_mode = str((mode_entry or {}).get("submission_mode") or "text").strip().lower()
+                    submission_mode = "visual" if requested_submission_mode == "visual" and doc_mime_type == "application/pdf" else "text"
+
+                    if submission_mode == "visual":
+                        if not can_model_process_images(model, settings):
+                            raise ValueError("The selected model does not support visual PDF analysis. Choose a vision-capable model or send the PDF as extracted text.")
+
+                        rendered_pages = render_pdf_pages_for_vision(doc_bytes, max_pages=3)
+                        if not rendered_pages:
+                            raise ValueError("Could not render the uploaded PDF as page images.")
+
+                        created_file_asset = create_file_asset(conv_id, doc_name, doc_mime_type, doc_bytes, None)
+                        created_file_assets.append(created_file_asset)
+
+                        visual_page_image_ids = []
+                        for page in rendered_pages:
+                            page_number = int(page.get("page_number") or 0)
+                            page_filename = f"{doc_name.rsplit('.', 1)[0]}-page-{page_number}.jpg"
+                            created_page_asset = create_image_asset(
+                                conv_id,
+                                page_filename,
+                                page.get("mime_type") or "image/jpeg",
+                                page.get("image_bytes") or b"",
+                            )
+                            created_image_assets.append(created_page_asset)
+                            visual_page_image_ids.append(created_page_asset["image_id"])
+
+                        attachment = {
+                            "kind": "document",
+                            "file_id": created_file_asset["file_id"],
+                            "file_name": doc_name,
+                            "file_mime_type": doc_mime_type,
+                            "submission_mode": "visual",
+                            "canvas_mode": "preview_only",
+                            "visual_page_count": len(visual_page_image_ids),
+                            "visual_page_image_ids": visual_page_image_ids,
+                        }
+                        processed_attachments.append(attachment)
+                        processed_document_uploads.append(
+                            {
+                                "attachment": attachment,
+                                "doc_name": doc_name,
+                                "doc_mime_type": doc_mime_type,
+                                "text_truncated": False,
+                                "canvas_md": build_visual_canvas_markdown(doc_name, len(visual_page_image_ids)),
+                                "canvas_format": "markdown",
+                                "canvas_language": None,
+                                "content_mode": "visual",
+                                "canvas_mode": "preview_only",
+                                "source_file_id": created_file_asset["file_id"],
+                                "source_mime_type": doc_mime_type,
+                                "visual_page_image_ids": visual_page_image_ids,
+                                "visual_only": True,
+                            }
+                        )
+                        continue
+
                     extracted_text = extract_document_text(doc_bytes, doc_mime_type)
                     if not extracted_text.strip():
                         raise ValueError("Could not extract any text from the uploaded document.")
@@ -3083,6 +3205,8 @@ def register_chat_routes(app) -> None:
                         "file_id": created_file_asset["file_id"],
                         "file_name": doc_name,
                         "file_mime_type": doc_mime_type,
+                        "submission_mode": "text",
+                        "canvas_mode": "editable",
                         "file_text_truncated": text_truncated,
                         "file_context_block": context_block,
                     }
@@ -3096,6 +3220,11 @@ def register_chat_routes(app) -> None:
                             "canvas_md": build_canvas_markdown(doc_name, extracted_text),
                             "canvas_format": infer_canvas_format(doc_name),
                             "canvas_language": infer_canvas_language(doc_name),
+                            "content_mode": "text",
+                            "canvas_mode": "editable",
+                            "source_file_id": created_file_asset["file_id"],
+                            "source_mime_type": doc_mime_type,
+                            "visual_only": False,
                         }
                     )
 
@@ -3290,6 +3419,11 @@ def register_chat_routes(app) -> None:
                     file_id = str(attachment.get("file_id") or "").strip()
                     if file_id:
                         update_file_asset(file_id, message_id=persisted_user_message_id)
+                    visual_page_image_ids = attachment.get("visual_page_image_ids") if isinstance(attachment.get("visual_page_image_ids"), list) else []
+                    for image_id in visual_page_image_ids:
+                        normalized_image_id = str(image_id or "").strip()
+                        if normalized_image_id:
+                            update_image_asset(normalized_image_id, message_id=persisted_user_message_id)
 
             canonical_messages = get_conversation_messages(conv_id)
         elif conv_id:
@@ -3364,6 +3498,11 @@ def register_chat_routes(app) -> None:
                     upload["canvas_md"],
                     format_name=upload["canvas_format"],
                     language_name=upload["canvas_language"],
+                    content_mode=upload.get("content_mode"),
+                    canvas_mode=upload.get("canvas_mode"),
+                    source_file_id=upload.get("source_file_id"),
+                    source_mime_type=upload.get("source_mime_type"),
+                    visual_page_image_ids=upload.get("visual_page_image_ids"),
                 )
                 document_events.append(
                     {
@@ -3374,6 +3513,7 @@ def register_chat_routes(app) -> None:
                         "file_mime_type": upload["doc_mime_type"],
                         "text_truncated": upload["text_truncated"],
                         "canvas_document": canvas_doc,
+                        "visual_only": upload.get("visual_only") is True,
                         "open_canvas": False,
                     }
                 )
@@ -3382,7 +3522,7 @@ def register_chat_routes(app) -> None:
             initial_canvas_viewports = get_canvas_viewport_payloads(pre_created_canvas_state)
         all_clarification_rounds = _collect_answered_clarification_rounds(canonical_messages)
         conversation_memory = get_conversation_memory(conv_id) if conv_id and CONVERSATION_MEMORY_ENABLED else []
-        api_messages, prompt_budget_stats, current_context_injection = _build_budgeted_prompt_messages(
+        api_messages, request_api_messages, prompt_budget_stats, current_context_injection = _build_budgeted_prompt_messages(
             canonical_messages,
             settings,
             active_tool_names,
@@ -3416,7 +3556,7 @@ def register_chat_routes(app) -> None:
             usage_data = None
             stored_tool_results = []
             stored_sub_agent_traces = []
-            canvas_documents = []
+            canvas_documents = extract_canvas_documents({"canvas_documents": initial_canvas_documents})
             active_document_id = initial_canvas_active_document_id
             canvas_viewports = latest_canvas_state.get("viewports") if isinstance(latest_canvas_state.get("viewports"), dict) else {}
             canvas_cleared = False
@@ -3435,7 +3575,7 @@ def register_chat_routes(app) -> None:
             )
             prompt_tool_names = [name for name in runtime_tool_names if name not in WEB_TOOL_NAMES]
             agent_stream = run_agent_stream(
-                api_messages,
+                request_api_messages,
                 model,
                 max_steps,
                 active_tool_names,

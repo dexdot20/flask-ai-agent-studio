@@ -565,6 +565,7 @@ let activeAssistantStreamingBubble = null;
 let activeAssistantStreamingHasVisibleAnswer = false;
 let selectedImageFiles = [];
 let selectedDocumentFiles = [];
+let selectedDocumentSubmissionModes = new Map();
 let selectedYouTubeUrl = "";
 let pendingDocumentCanvasOpen = null;
 let editingMessageId = null;
@@ -1133,6 +1134,51 @@ function isDocumentFile(file) {
   return ext ? DOCUMENT_EXTENSIONS.has(ext[0]) : false;
 }
 
+function isPdfDocumentFile(file) {
+  if (!file) {
+    return false;
+  }
+  if (String(file.type || "").trim().toLowerCase() === "application/pdf") {
+    return true;
+  }
+  return /\.pdf$/i.test(String(file.name || "").trim());
+}
+
+function getDocumentSubmissionMode(file) {
+  if (!isPdfDocumentFile(file)) {
+    return "text";
+  }
+  const fileKey = getAttachmentFileKey(file);
+  return selectedDocumentSubmissionModes.get(fileKey) === "visual" ? "visual" : "text";
+}
+
+function setDocumentSubmissionMode(file, mode) {
+  if (!file) {
+    return;
+  }
+  const fileKey = getAttachmentFileKey(file);
+  if (!fileKey) {
+    return;
+  }
+  selectedDocumentSubmissionModes.set(fileKey, mode === "visual" ? "visual" : "text");
+}
+
+function syncSelectedDocumentSubmissionModes() {
+  const nextModes = new Map();
+  selectedDocumentFiles.forEach((file) => {
+    const fileKey = getAttachmentFileKey(file);
+    if (!fileKey) {
+      return;
+    }
+    if (!isPdfDocumentFile(file)) {
+      nextModes.set(fileKey, "text");
+      return;
+    }
+    nextModes.set(fileKey, selectedDocumentSubmissionModes.get(fileKey) === "visual" ? "visual" : "text");
+  });
+  selectedDocumentSubmissionModes = nextModes;
+}
+
 function getAttachmentFileKey(file) {
   return [file?.name || "", file?.size || 0, file?.type || "", file?.lastModified || 0].join("::");
 }
@@ -1384,7 +1430,12 @@ function mergeAttachmentMetadata(metadata, attachment) {
 function buildPendingAttachmentMetadata(imageFiles, documentFiles, youtubeUrl = "") {
   const attachments = [
     ...(imageFiles || []).map((file) => ({ kind: "image", image_name: file.name })),
-    ...(documentFiles || []).map((file) => ({ kind: "document", file_name: file.name })),
+    ...(documentFiles || []).map((file) => ({
+      kind: "document",
+      file_name: file.name,
+      submission_mode: getDocumentSubmissionMode(file),
+      canvas_mode: getDocumentSubmissionMode(file) === "visual" ? "preview_only" : "editable",
+    })),
     ...(youtubeUrl ? [{ kind: "video", video_url: youtubeUrl, video_title: "YouTube video" }] : []),
   ];
   return attachments.length
@@ -1467,6 +1518,11 @@ function normalizeCanvasDocument(document) {
   const normalizedFormat = format === "code" ? "code" : "markdown";
   const content = String(document.content || "").replace(/\r\n?/g, "\n");
   const rawPageCount = Number.parseInt(String(document.page_count ?? "0"), 10);
+  const contentMode = String(document.content_mode || "text").trim().toLowerCase();
+  const canvasMode = String(document.canvas_mode || (contentMode === "visual" ? "preview_only" : "editable")).trim().toLowerCase();
+  const visualPageImageIds = Array.isArray(document.visual_page_image_ids)
+    ? document.visual_page_image_ids.map((value) => String(value || "").trim()).filter(Boolean)
+    : [];
   return {
     id: String(document.id || "").trim(),
     title: String(document.title || "Canvas").trim() || "Canvas",
@@ -1479,7 +1535,39 @@ function normalizeCanvasDocument(document) {
     line_count: Number.isInteger(Number(document.line_count)) ? Number(document.line_count) : content.split("\n").length,
     page_count: Number.isFinite(rawPageCount) && rawPageCount > 0 ? rawPageCount : 0,
     source_message_id: Number.isInteger(Number(document.source_message_id)) ? Number(document.source_message_id) : null,
+    content_mode: contentMode === "visual" || contentMode === "hybrid" ? contentMode : "text",
+    canvas_mode: canvasMode === "preview_only" ? "preview_only" : "editable",
+    source_file_id: String(document.source_file_id || "").trim(),
+    source_mime_type: String(document.source_mime_type || "").trim().toLowerCase(),
+    visual_page_image_ids: visualPageImageIds,
   };
+}
+
+function isVisualCanvasDocument(document) {
+  return String(document?.content_mode || "text").trim().toLowerCase() === "visual";
+}
+
+function isCanvasDocumentEditable(document) {
+  return String(document?.canvas_mode || "editable").trim().toLowerCase() !== "preview_only";
+}
+
+function getVisualCanvasPageImageId(document, pageNumber) {
+  if (!isVisualCanvasDocument(document)) {
+    return "";
+  }
+  const normalizedPage = clampCanvasPageNumber(document, pageNumber || 1);
+  if (normalizedPage < 1) {
+    return "";
+  }
+  return String(document.visual_page_image_ids?.[normalizedPage - 1] || "").trim();
+}
+
+function getVisualCanvasPageImageUrl(document, pageNumber) {
+  const imageId = getVisualCanvasPageImageId(document, pageNumber);
+  if (!imageId || !currentConvId) {
+    return "";
+  }
+  return `/api/conversations/${encodeURIComponent(String(currentConvId))}/images/${encodeURIComponent(imageId)}`;
 }
 
 function isCanvasPageAwareDocument(document) {
@@ -2480,6 +2568,32 @@ function renderCanvasDocumentBody(document) {
   if (document.format === "code") {
     return sanitizeHtml(`<div class="canvas-code-document">${renderHighlightedCodeBlock(document.content, document.language || null)}</div>`);
   }
+  if (isVisualCanvasDocument(document)) {
+    const currentPage = getCanvasCurrentPage(document) || setCanvasCurrentPage(document, 1) || 1;
+    const imageUrl = getVisualCanvasPageImageUrl(document, currentPage);
+    const showPageNav = Number(document.page_count) > 1;
+    return (
+      `<div class="canvas-document-shell">` +
+        (showPageNav
+          ? `<div class="canvas-page-nav" data-canvas-page-nav>` +
+              `<button type="button" class="canvas-page-nav__button" data-canvas-page-action="prev" aria-label="Previous page">&larr;</button>` +
+              `<div class="canvas-page-nav__status" data-canvas-page-label>Page ${currentPage} / ${document.page_count}</div>` +
+              `<button type="button" class="canvas-page-nav__button" data-canvas-page-action="next" aria-label="Next page">&rarr;</button>` +
+            `</div>`
+          : "") +
+        `<div class="canvas-page-content">` +
+          `<article class="canvas-page-sheet canvas-page-sheet--visual" data-canvas-page-sheet data-canvas-page-number="${currentPage}">` +
+            `<div class="canvas-visual-page">` +
+              `<div class="canvas-visual-page__caption">Read-only visual preview${showPageNav ? ` · Page ${currentPage}` : ""}</div>` +
+              (imageUrl
+                ? `<img class="canvas-visual-page__image" src="${escHtml(imageUrl)}" alt="${escHtml(`${document.title} page ${currentPage}`)}" loading="lazy">`
+                : `<div class="canvas-visual-page__empty">Visual page preview is unavailable.</div>`) +
+            `</div>` +
+          `</article>` +
+        `</div>` +
+      `</div>`
+    );
+  }
   if (!isCanvasPageAwareDocument(document)) {
     return renderMarkdown(document.content);
   }
@@ -2574,6 +2688,11 @@ function renderCanvasDiffPreview(activeDocument) {
 
 function setCanvasEditing(enabled) {
   const activeDocument = getActiveCanvasDocument();
+  if (enabled && activeDocument && !isCanvasDocumentEditable(activeDocument)) {
+    setCanvasStatus("Visual canvas previews are read-only.", "muted");
+    renderCanvasPanel();
+    return;
+  }
   isCanvasEditing = Boolean(enabled && activeDocument);
   editingCanvasDocumentId = isCanvasEditing ? activeDocument.id : null;
   if (isCanvasEditing && canvasEditorEl) {
@@ -2673,6 +2792,18 @@ function clearPendingCanvasUploadPreview() {
   streamingCanvasPreviews.delete(PENDING_CANVAS_UPLOAD_PREVIEW_KEY);
 }
 
+function scheduleCanvasAutoRefreshAfterUpload(delay = 350) {
+  if (!currentConvId) {
+    return;
+  }
+  window.setTimeout(() => {
+    if (!currentConvId || isStreaming || isFixing) {
+      return;
+    }
+    void refreshConversationFromServer();
+  }, delay);
+}
+
 async function createCanvasDocumentFromData({ title, content, format, language = null, statusMessage = "Creating canvas file..." }) {
   if (!currentConvId) {
     setCanvasStatus("Conversation is not available yet.", "warning");
@@ -2717,6 +2848,7 @@ async function createCanvasDocumentFromData({ title, content, format, language =
     editingCanvasDocumentId = activeCanvasDocumentId;
     renderConversationHistory();
     renderCanvasPanel();
+    scheduleCanvasAutoRefreshAfterUpload();
     setCanvasStatus("Canvas file created.", "success");
     globalThis.requestAnimationFrame(() => {
       if (!canvasEditorEl) {
@@ -3321,7 +3453,8 @@ function updateCanvasActiveDocumentDisplay(renderState) {
   const pageLabel = Number(activeDocument.page_count) > 1 ? ` · ${activeDocument.page_count} pages` : "";
   const roleLabel = activeDocument.role ? ` · ${activeDocument.role}` : "";
   const languageLabel = activeDocument.language ? ` · ${activeDocument.language}` : "";
-  canvasSubtitle.textContent = `${modeLabel} · ${visibleDocuments.length}/${documents.length} files · ${detailLabel} · ${activeDocument.line_count} lines${pageLabel}${roleLabel}${languageLabel}`;
+  const visualLabel = isVisualCanvasDocument(activeDocument) ? " · visual preview" : "";
+  canvasSubtitle.textContent = `${modeLabel} · ${visibleDocuments.length}/${documents.length} files · ${detailLabel} · ${activeDocument.line_count} lines${pageLabel}${roleLabel}${languageLabel}${visualLabel}`;
   renderCanvasMetaBar(renderState);
   const activeToolNames = Array.isArray(appSettings.active_tools) ? new Set(appSettings.active_tools) : new Set();
   const canScrollCanvas = activeToolNames.has("scroll_canvas_document");
@@ -3334,6 +3467,11 @@ function updateCanvasActiveDocumentDisplay(renderState) {
       CANVAS_EDIT_PREVIEW_TOOLS.has(previewTool)
         ? "Live Canvas edit preview. The preview updates as tool arguments stream in and is replaced by the committed document when the tool finishes."
         : "Live Canvas preview. The preview updates as the assistant streams content and is replaced by the committed document when the tool finishes.",
+      "muted"
+    );
+  } else if (isVisualCanvasDocument(activeDocument)) {
+    setCanvasHint(
+      "Visual canvas preview detected. This document is read-only and backed by page images, so line-based canvas edits do not apply.",
       "muted"
     );
   } else if (Number.isFinite(activeDocument.line_count) && activeDocument.line_count > promptLineLimit) {
@@ -3374,7 +3512,7 @@ function updateCanvasActiveDocumentDisplay(renderState) {
   }
   if (canvasEditBtn) {
     canvasEditBtn.hidden = isCanvasEditing;
-    canvasEditBtn.disabled = isStreamingPreviewActive;
+    canvasEditBtn.disabled = isStreamingPreviewActive || !isCanvasDocumentEditable(activeDocument);
   }
   if (canvasSaveBtn) {
     canvasSaveBtn.hidden = !isCanvasEditing;
@@ -3406,7 +3544,7 @@ function updateCanvasActiveDocumentDisplay(renderState) {
   const matchCount = !isCanvasEditing && !isStreamingPreviewActive ? applyCanvasSearchHighlight(searchTerm) : 0;
   updateCanvasSearchFeedback(renderState, matchCount);
   if (canvasCopyBtn) {
-    canvasCopyBtn.disabled = !String(activeDocument.content || "").length;
+    canvasCopyBtn.disabled = isVisualCanvasDocument(activeDocument) || !String(activeDocument.content || "").length;
     canvasCopyBtn.hidden = !isCanvasPanelOpen;
   }
   if (canvasDeleteBtn) {
@@ -3486,7 +3624,12 @@ function closeCanvasConfirmModal(action = "cancel", executeHandler = true) {
     return;
   }
 
-  pendingAction.onCancel?.();
+  if (action === "cancel") {
+    pendingAction.onCancel?.();
+    return;
+  }
+
+  pendingAction.onDismiss?.();
 }
 
 function openCanvasConfirmModal(options = {}) {
@@ -3506,6 +3649,11 @@ function openCanvasConfirmModal(options = {}) {
   pendingCanvasConfirmAction = {
     onConfirm: typeof options.onConfirm === "function" ? options.onConfirm : null,
     onCancel: typeof options.onCancel === "function" ? options.onCancel : null,
+    onDismiss: typeof options.onDismiss === "function"
+      ? options.onDismiss
+      : typeof options.onCancel === "function"
+        ? options.onCancel
+        : null,
   };
   canvasConfirmTitle.textContent = String(options.title || "Open document in Canvas?").trim() || "Open document in Canvas?";
   canvasConfirmMessage.textContent = String(options.message || "Your uploaded document is ready in Canvas.").trim() || "Your uploaded document is ready in Canvas.";
@@ -3531,6 +3679,40 @@ function confirmCanvasOpenForDocument(pendingRequest, documentCount, callbacks =
     message: `${requestLabel} ${fileCount === 1 ? "is" : "are"} ready in Canvas. ${documentLabel.charAt(0).toUpperCase()}${documentLabel.slice(1)} ${documentCount === 1 ? "is" : "are"} available now.`,
     onConfirm: callbacks.onConfirm,
     onCancel: callbacks.onCancel,
+  });
+}
+
+function promptPdfSubmissionMode(files) {
+  const pdfFiles = (files || []).filter((file) => isPdfDocumentFile(file));
+  if (!pdfFiles.length) {
+    return Promise.resolve(true);
+  }
+
+  const requestLabel = pdfFiles.length === 1
+    ? `How should ${String(pdfFiles[0]?.name || "this PDF").trim() || "this PDF"} be sent?`
+    : `How should these ${pdfFiles.length} PDFs be sent?`;
+  const message = pdfFiles.length === 1
+    ? "Choose visual mode for page-image analysis with vision-capable models, or text mode to extract text and open it in Canvas."
+    : "Choose one mode for this PDF batch. Visual mode sends the first 3 pages as images. Text mode extracts text and keeps Canvas editing available.";
+
+  return new Promise((resolve) => {
+    openCanvasConfirmModal({
+      title: requestLabel,
+      message,
+      confirmLabel: "Send visually",
+      cancelLabel: "Send as text",
+      onConfirm: () => {
+        pdfFiles.forEach((file) => setDocumentSubmissionMode(file, "visual"));
+        renderAttachmentPreview();
+        resolve(true);
+      },
+      onCancel: () => {
+        pdfFiles.forEach((file) => setDocumentSubmissionMode(file, "text"));
+        renderAttachmentPreview();
+        resolve(true);
+      },
+      onDismiss: () => resolve(false),
+    });
   });
 }
 
@@ -4184,6 +4366,22 @@ async function downloadConversation(format) {
   }
 }
 
+function getSuggestedDownloadFilename(response, fallbackFilename) {
+  const contentDisposition = response.headers.get("content-disposition") || "";
+  const utf8Match = contentDisposition.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+  const plainMatch = contentDisposition.match(/filename\s*=\s*"([^"]+)"/i) || contentDisposition.match(/filename\s*=\s*([^;]+)/i);
+  const rawFilename = (utf8Match && utf8Match[1]) || (plainMatch && plainMatch[1]) || "";
+  if (!rawFilename) {
+    return fallbackFilename;
+  }
+
+  try {
+    return decodeURIComponent(rawFilename);
+  } catch (_) {
+    return rawFilename;
+  }
+}
+
 async function downloadCanvasDocument(format) {
   const canvasDocument = getActiveCanvasDocument();
   if (!canvasDocument || !currentConvId) {
@@ -4243,7 +4441,7 @@ async function deleteCanvasDocuments({ documentId = null, clearAll = false, conf
   }
 
   cancelPendingConversationRefreshes();
-  setCanvasStatus(clearAll ? "Deleting all canvas documents..." : "Deleting canvas document...", "muted");
+      anchor.download = getSuggestedDownloadFilename(response, `${currentConvTitle || "conversation"}.${format}`);
   try {
     const params = new URLSearchParams();
     if (targetDocumentId) {
@@ -4261,7 +4459,7 @@ async function deleteCanvasDocuments({ documentId = null, clearAll = false, conf
     if (!response.ok) {
       throw new Error(payload.error || "Canvas delete failed.");
     }
-
+      anchor.download = getSuggestedDownloadFilename(response, `${canvasDocument.title}.${format}`);
     history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
     streamingCanvasDocuments = [];
     pendingCanvasDiff = null;
@@ -7514,10 +7712,10 @@ if (mobileToolsOverlay) {
   mobileToolsOverlay.addEventListener("click", closeMobileTools);
 }
 if (canvasConfirmOverlay) {
-  canvasConfirmOverlay.addEventListener("click", () => closeCanvasConfirmModal("cancel"));
+  canvasConfirmOverlay.addEventListener("click", () => closeCanvasConfirmModal("dismiss"));
 }
 if (canvasConfirmCloseBtn) {
-  canvasConfirmCloseBtn.addEventListener("click", () => closeCanvasConfirmModal("cancel"));
+  canvasConfirmCloseBtn.addEventListener("click", () => closeCanvasConfirmModal("dismiss"));
 }
 if (canvasConfirmLaterBtn) {
   canvasConfirmLaterBtn.addEventListener("click", () => closeCanvasConfirmModal("cancel"));
@@ -7635,7 +7833,7 @@ window.addEventListener("keydown", (event) => {
   }
   if (event.key === "Escape") {
     if (isCanvasConfirmOpen()) {
-      closeCanvasConfirmModal("cancel");
+      closeCanvasConfirmModal("dismiss");
       return;
     }
     if (isCanvasOpen()) {
@@ -8524,6 +8722,7 @@ function handleSelectedFiles(files, options = {}) {
 
   selectedImageFiles = dedupeFiles(nextImages);
   selectedDocumentFiles = dedupeFiles(nextDocuments);
+  syncSelectedDocumentSubmissionModes();
   renderAttachmentPreview();
 }
 
@@ -8751,6 +8950,7 @@ function clearSelectedImage() {
 
 function clearSelectedDocument() {
   selectedDocumentFiles = [];
+  selectedDocumentSubmissionModes = new Map();
   docInputEl.value = "";
   renderAttachmentPreview();
 }
@@ -8760,15 +8960,18 @@ function removeSelectedAttachment(kind, fileKey) {
     selectedImageFiles = selectedImageFiles.filter((file) => getAttachmentFileKey(file) !== fileKey);
   } else if (kind === "document") {
     selectedDocumentFiles = selectedDocumentFiles.filter((file) => getAttachmentFileKey(file) !== fileKey);
+    selectedDocumentSubmissionModes.delete(String(fileKey || ""));
   } else if (kind === "video") {
     selectedYouTubeUrl = "";
   }
+  syncSelectedDocumentSubmissionModes();
   renderAttachmentPreview();
 }
 
 function clearAllAttachments() {
   selectedImageFiles = [];
   selectedDocumentFiles = [];
+  selectedDocumentSubmissionModes = new Map();
   selectedYouTubeUrl = "";
   imageInputEl.value = "";
   docInputEl.value = "";
@@ -8809,11 +9012,12 @@ function renderAttachmentPreview() {
     const fileKey = kind === "video" ? String(url || "") : getAttachmentFileKey(file);
     const icon = kind === "image" ? "🖼️" : kind === "video" ? "▶️" : "📄";
     const preferredImageAnalysis = describePreferredImageAnalysisMethod();
+    const documentSubmissionMode = kind === "document" ? getDocumentSubmissionMode(file) : null;
     const description = kind === "image"
       ? `${preferredImageAnalysis} · ${formatFileSize(file.size)}`
       : kind === "video"
         ? "YouTube transcript will be generated locally"
-        : `${((file.name || "").split(".").pop() || "FILE").toUpperCase()} document · ${formatFileSize(file.size)}`;
+        : `${((file.name || "").split(".").pop() || "FILE").toUpperCase()} document · ${documentSubmissionMode === "visual" ? "visual analysis" : "text extraction"} · ${formatFileSize(file.size)}`;
     const name = kind === "video" ? String(url || "YouTube video") : file.name;
     const removeLabel = kind === "image" ? "Remove image" : kind === "video" ? "Remove video" : "Remove document";
     return (
@@ -8849,7 +9053,10 @@ function appendAttachmentBadge(group, metadata) {
     if (attachment.kind === "document") {
       const fileId = attachment.file_id ? String(attachment.file_id).trim() : "";
       const fileName = String(attachment.file_name || "Document").trim() || "Document";
-      const label = fileId ? `${fileName} · ${fileId}` : fileName;
+      const submissionMode = String(attachment.submission_mode || "text").trim().toLowerCase();
+      const modeLabel = submissionMode === "visual" ? "visual" : "text";
+      const baseLabel = fileId ? `${fileName} · ${fileId}` : fileName;
+      const label = `${baseLabel} · ${modeLabel}`;
       badge.innerHTML =
         `<span class="message-attachment__icon">📄</span>` +
         `<span class="message-attachment__name">${escHtml(label)}</span>` +
@@ -10111,6 +10318,13 @@ async function sendMessage(options = {}) {
     renderConversationHistory({ preserveScroll: true });
   }
 
+  if (pendingDocuments.length) {
+    const modeSelectionAccepted = await promptPdfSubmissionMode(pendingDocuments);
+    if (!modeSelectionAccepted) {
+      return;
+    }
+  }
+
   setPendingDocumentCanvasOpen(pendingDocuments);
 
   if (pendingImages.length && !Boolean(featureFlags.image_uploads_enabled)) {
@@ -10286,6 +10500,12 @@ async function sendMessage(options = {}) {
       }
       pendingImages.forEach((file) => formData.append("image", file));
       pendingDocuments.forEach((file) => formData.append("document", file));
+      formData.append("document_modes", JSON.stringify(
+        pendingDocuments.map((file) => ({
+          file_name: file.name,
+          submission_mode: getDocumentSubmissionMode(file),
+        }))
+      ));
       if (pendingYouTubeUrl) {
         formData.append("youtube_url", pendingYouTubeUrl);
       }
@@ -10373,7 +10593,11 @@ async function sendMessage(options = {}) {
           appendAttachmentBadge(userGroup, lastMessage.metadata);
         }
 
-        const pendingCanvasRequest = consumePendingDocumentCanvasOpen();
+        if (event.visual_only) {
+          setCanvasStatus(`${String(event.file_name || "PDF").trim() || "PDF"} attached in visual mode. Canvas editing is unavailable for this upload.`, "muted");
+        }
+
+        const pendingCanvasRequest = event.canvas_document ? consumePendingDocumentCanvasOpen() : null;
         if (event.canvas_document && pendingCanvasRequest && !isCanvasOpen()) {
           const documentCount = Number(pendingCanvasRequest.fileCount || 1);
           const requestLabel = Number(pendingCanvasRequest.fileCount || 1) > 1

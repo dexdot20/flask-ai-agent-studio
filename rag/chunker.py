@@ -6,8 +6,10 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Iterable
 
-DEFAULT_CHUNK_SIZE = 1800
-DEFAULT_CHUNK_OVERLAP = 250
+from config import RAG_CHUNK_OVERLAP, RAG_CHUNK_SIZE
+
+DEFAULT_CHUNK_SIZE = RAG_CHUNK_SIZE
+DEFAULT_CHUNK_OVERLAP = RAG_CHUNK_OVERLAP
 MAX_METADATA_VALUE_LENGTH = 500
 _INVISIBLE_TEXT_RE = re.compile(r"[\u00ad\u200b-\u200f\u2028\u2029\ufeff]")
 _PAGE_MARKER_RE = re.compile(r"^##\s+Page\s+(\d+)\s*$", re.IGNORECASE)

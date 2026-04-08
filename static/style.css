@@ -4114,6 +4114,41 @@ kbd {
   box-shadow: 0 22px 48px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.65);
 }
 
+.canvas-page-sheet--visual {
+  padding: 24px;
+}
+
+.canvas-visual-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.canvas-visual-page__caption {
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #5a6476;
+}
+
+.canvas-visual-page__image {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 14px;
+  border: 1px solid rgba(23, 32, 51, 0.12);
+  background: #fff;
+}
+
+.canvas-visual-page__empty {
+  padding: 24px;
+  border-radius: 14px;
+  border: 1px dashed rgba(23, 32, 51, 0.2);
+  background: rgba(238, 242, 248, 0.9);
+  color: #5a6476;
+  text-align: center;
+}
+
 .canvas-page-sheet h1,
 .canvas-page-sheet h2,
 .canvas-page-sheet h3,

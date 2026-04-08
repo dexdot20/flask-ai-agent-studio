@@ -17,6 +17,7 @@ from flask import current_app, has_app_context
 from config import (
     RAG_DISABLED_FEATURE_ERROR,
     RAG_ENABLED,
+    RAG_MAX_CHUNKS_PER_SOURCE,
     RAG_QUERY_EXPANSION_ENABLED,
     RAG_QUERY_EXPANSION_MAX_VARIANTS,
     RAG_SEARCH_DEFAULT_TOP_K,
@@ -692,6 +693,26 @@ def _dedupe_rag_hits(hits: list[dict]) -> list[dict]:
     return [deduped[key] for key in ordered_keys]
 
 
+def _apply_source_diversity_limit(matches: list[dict]) -> list[dict]:
+    per_source_limit = max(1, int(RAG_MAX_CHUNKS_PER_SOURCE))
+    if per_source_limit <= 0:
+        return matches
+
+    limited_matches: list[dict] = []
+    source_counts: dict[str, int] = {}
+    for match in matches:
+        source_key = str(match.get("source_key") or match.get("source_name") or "").strip()
+        if not source_key:
+            limited_matches.append(match)
+            continue
+        source_count = source_counts.get(source_key, 0)
+        if source_count >= per_source_limit:
+            continue
+        source_counts[source_key] = source_count + 1
+        limited_matches.append(match)
+    return limited_matches
+
+
 def _query_rag_hits(
     query: str,
     top_k: int,
@@ -701,6 +722,8 @@ def _query_rag_hits(
     expand_query: bool = True,
 ) -> list[dict]:
     collected_hits: list[dict] = []
+    requested_top_k = max(1, int(top_k))
+    candidate_top_k = max(requested_top_k, requested_top_k * max(2, int(RAG_MAX_CHUNKS_PER_SOURCE)))
     normalized_query = re.sub(r"\s+", " ", str(query or "").strip())
     variants = _expand_query_variants(normalized_query) if expand_query else ([normalized_query] if normalized_query else [])
     source_type_hint = _resolve_source_type_hint(category, allowed_source_types)
@@ -708,7 +731,7 @@ def _query_rag_hits(
         collected_hits.extend(
             rag_query_chunks(
                 variant,
-                top_k=top_k,
+                top_k=candidate_top_k,
                 category=category,
                 source_type_hint=source_type_hint,
             )
@@ -811,7 +834,7 @@ def _normalize_rag_hits(
             }
         )
     matches.sort(key=lambda item: float(item.get("similarity") or 0.0), reverse=True)
-    return matches
+    return _apply_source_diversity_limit(matches)
 
 
 def search_knowledge_base_tool(

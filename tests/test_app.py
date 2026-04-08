@@ -106,6 +106,7 @@ from db import (
     normalize_active_tool_names,
     parse_message_tool_calls,
     parse_message_metadata,
+    read_image_asset_bytes,
     save_app_settings,
     serialize_message_metadata,
     upsert_user_profile_entry,
@@ -121,6 +122,7 @@ from doc_service import (
     extract_document_text,
     infer_canvas_format,
     infer_canvas_language,
+    render_pdf_pages_for_vision,
 )
 from image_service import analyze_uploaded_image
 from messages import (
@@ -163,6 +165,7 @@ from routes.chat import (
     _schedule_rag_conversation_sync,
     _select_recent_prompt_window,
     _select_summary_source_messages_by_token_budget,
+    _trim_rag_context_to_token_budget,
     build_summary_prompt_messages,
     maybe_create_conversation_summary,
 )
@@ -3618,6 +3621,84 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual([match["source_name"] for match in result["matches"]], ["Conversation archive", "Other"])
         self.assertTrue(result["matches"][0]["archived_conversation"])
         self.assertEqual(result["matches"][0]["archived_message_count"], 12)
+
+    def test_build_rag_auto_context_limits_chunks_per_source(self):
+        fake_hits = [
+            {
+                "id": "same-1",
+                "text": "same source chunk 1",
+                "metadata": {"source_key": "same", "source_name": "Same Source", "source_type": "uploaded_document", "category": "uploaded_document", "chunk_index": 0, "auto_inject_enabled": True},
+                "similarity": 0.99,
+            },
+            {
+                "id": "same-2",
+                "text": "same source chunk 2",
+                "metadata": {"source_key": "same", "source_name": "Same Source", "source_type": "uploaded_document", "category": "uploaded_document", "chunk_index": 1, "auto_inject_enabled": True},
+                "similarity": 0.98,
+            },
+            {
+                "id": "same-3",
+                "text": "same source chunk 3",
+                "metadata": {"source_key": "same", "source_name": "Same Source", "source_type": "uploaded_document", "category": "uploaded_document", "chunk_index": 2, "auto_inject_enabled": True},
+                "similarity": 0.97,
+            },
+            {
+                "id": "other-1",
+                "text": "other source chunk",
+                "metadata": {"source_key": "other", "source_name": "Other Source", "source_type": "uploaded_document", "category": "uploaded_document", "chunk_index": 0, "auto_inject_enabled": True},
+                "similarity": 0.96,
+            },
+        ]
+
+        with patch("rag_service.ensure_supported_rag_sources"), patch("rag_service.rag_query_chunks", return_value=fake_hits), patch(
+            "rag_service.RAG_MAX_CHUNKS_PER_SOURCE",
+            2,
+        ):
+            result = build_rag_auto_context("memory", True, threshold=0.1, top_k=4)
+
+        self.assertIsNotNone(result)
+        self.assertEqual([match["source_name"] for match in result["matches"]], ["Same Source", "Same Source", "Other Source"])
+
+    def test_build_rag_auto_context_overfetches_candidates_for_source_diversity(self):
+        with patch("rag_service.ensure_supported_rag_sources"), patch("rag_service.rag_query_chunks", return_value=[] ) as mocked_query, patch(
+            "rag_service.RAG_MAX_CHUNKS_PER_SOURCE",
+            2,
+        ):
+            build_rag_auto_context("memory", True, threshold=0.1, top_k=3)
+
+        self.assertGreaterEqual(mocked_query.call_count, 1)
+        self.assertEqual(mocked_query.call_args.kwargs["top_k"], 6)
+
+    def test_trim_rag_context_skips_oversized_high_score_match_and_keeps_smaller_relevant_matches(self):
+        retrieved_context = {
+            "query": "memory",
+            "matches": [
+                {"source_name": "Large", "text": "large", "similarity": 0.99},
+                {"source_name": "Small A", "text": "small-a", "similarity": 0.95},
+                {"source_name": "Small B", "text": "small-b", "similarity": 0.94},
+            ],
+        }
+
+        def fake_format(context):
+            return "|".join(match.get("source_name") or "" for match in context.get("matches") or [])
+
+        token_map = {
+            "Large": 150,
+            "Small A": 40,
+            "Small B": 45,
+            "Small A|Small B": 85,
+            "Large|Small A": 190,
+            "Large|Small B": 195,
+        }
+
+        with patch("routes.chat.format_knowledge_base_auto_context", side_effect=fake_format), patch(
+            "routes.chat.estimate_text_tokens",
+            side_effect=lambda text: token_map.get(text, 999),
+        ):
+            trimmed = _trim_rag_context_to_token_budget(retrieved_context, max_tokens=100)
+
+        self.assertIsNotNone(trimmed)
+        self.assertEqual([match["source_name"] for match in trimmed["matches"]], ["Small A", "Small B"])
 
     def test_rag_search_route_uses_saved_source_type_settings(self):
         settings = get_app_settings()
@@ -8829,6 +8910,154 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIsNotNone(canvas_event)
         self.assertFalse(canvas_event.get("auto_open"))
 
+    def test_render_pdf_pages_for_vision_limits_output_to_first_pages(self):
+        fake_pdf = SimpleNamespace(pages=[object(), object(), object(), object()])
+
+        class _FakePdfContext:
+            def __enter__(self_inner):
+                return fake_pdf
+
+            def __exit__(self_inner, exc_type, exc, tb):
+                return False
+
+        rendered_payloads = [
+            (b"page-1", "image/jpeg"),
+            (b"page-2", "image/jpeg"),
+            (b"page-3", "image/jpeg"),
+            (b"page-4", "image/jpeg"),
+        ]
+
+        with patch("doc_service.pdfplumber.open", return_value=_FakePdfContext()), patch(
+            "doc_service._render_pdf_page_image_bytes",
+            side_effect=rendered_payloads,
+        ) as render_page:
+            pages = render_pdf_pages_for_vision(b"%PDF-1.4", max_pages=3)
+
+        self.assertEqual(len(pages), 3)
+        self.assertEqual([page["page_number"] for page in pages], [1, 2, 3])
+        self.assertEqual([page["image_bytes"] for page in pages], [b"page-1", b"page-2", b"page-3"])
+        self.assertEqual([page["mime_type"] for page in pages], ["image/jpeg", "image/jpeg", "image/jpeg"])
+        self.assertEqual(render_page.call_count, 3)
+
+    def test_build_api_messages_embeds_visual_pdf_pages(self):
+        normalized = [
+            {
+                "role": "user",
+                "content": "Please analyze this exam PDF.",
+                "metadata": {
+                    "attachments": [
+                        {
+                            "kind": "document",
+                            "file_name": "exam.pdf",
+                            "file_mime_type": "application/pdf",
+                            "submission_mode": "visual",
+                            "visual_page_count": 2,
+                            "visual_page_image_ids": ["img-1", "img-2"],
+                        }
+                    ]
+                },
+            }
+        ]
+
+        with patch(
+            "messages.read_image_asset_bytes",
+            side_effect=[
+                ({"mime_type": "image/jpeg"}, b"image-one"),
+                ({"mime_type": "image/jpeg"}, b"image-two"),
+            ],
+        ):
+            api_messages = build_api_messages(normalized, embed_visual_documents=True)
+
+        self.assertEqual(len(api_messages), 1)
+        self.assertIsInstance(api_messages[0]["content"], list)
+        text_blocks = [block for block in api_messages[0]["content"] if block.get("type") == "text"]
+        image_blocks = [block for block in api_messages[0]["content"] if block.get("type") == "image_url"]
+        self.assertTrue(any("exam.pdf" in str(block.get("text") or "") for block in text_blocks))
+        self.assertEqual(len(image_blocks), 2)
+        self.assertTrue(all(str(block["image_url"]["url"]).startswith("data:image/jpeg;base64,") for block in image_blocks))
+
+    def test_chat_accepts_visual_pdf_mode_and_emits_preview_only_document_event(self):
+        captured = {}
+        conversation_id = self._create_conversation()
+
+        def fake_run_agent_stream(api_messages, *args, **kwargs):
+            captured["api_messages"] = api_messages
+            return iter([
+                {"type": "answer_start"},
+                {"type": "answer_delta", "text": "Analyzed visually."},
+                {"type": "done"},
+            ])
+
+        rendered_pages = [
+            {"page_number": 1, "mime_type": "image/jpeg", "image_bytes": b"page-one"},
+            {"page_number": 2, "mime_type": "image/jpeg", "image_bytes": b"page-two"},
+        ]
+
+        with patch("routes.chat.can_model_process_images", return_value=True), patch(
+            "routes.chat.render_pdf_pages_for_vision",
+            return_value=rendered_pages,
+        ), patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream):
+            response = self.client.post(
+                "/chat",
+                data=MultiDict(
+                    [
+                        ("messages", json.dumps([{"role": "user", "content": "Analyze visually"}])),
+                        ("model", "deepseek-chat"),
+                        ("conversation_id", str(conversation_id)),
+                        ("user_content", "Analyze visually"),
+                        ("document_modes", json.dumps([{"file_name": "exam.pdf", "submission_mode": "visual"}])),
+                        ("document", (io.BytesIO(b"%PDF-1.4 fake pdf bytes"), "exam.pdf", "application/pdf")),
+                    ]
+                ),
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        events = [json.loads(line) for line in response.get_data(as_text=True).strip().splitlines()]
+        document_event = next((event for event in events if event["type"] == "document_processed"), None)
+        self.assertIsNotNone(document_event)
+        self.assertTrue(document_event.get("visual_only"))
+        self.assertIn("canvas_document", document_event)
+
+        canvas_event = next((event for event in events if event["type"] == "canvas_sync"), None)
+        self.assertIsNotNone(canvas_event)
+        self.assertEqual(len(canvas_event.get("documents") or []), 1)
+
+        conversation_response = self.client.get(f"/api/conversations/{conversation_id}")
+        self.assertEqual(conversation_response.status_code, 200)
+        messages = conversation_response.get_json()["messages"]
+        user_message = next(message for message in messages if message["role"] == "user")
+        attachments = user_message["metadata"].get("attachments") or []
+        document_attachment = next(entry for entry in attachments if entry["kind"] == "document")
+        self.assertEqual(document_attachment["submission_mode"], "visual")
+        self.assertEqual(document_attachment["canvas_mode"], "preview_only")
+        self.assertEqual(document_attachment["visual_page_count"], 2)
+        self.assertEqual(len(document_attachment["visual_page_image_ids"]), 2)
+        stored_page_bytes = [read_image_asset_bytes(image_id)[1] for image_id in document_attachment["visual_page_image_ids"]]
+        self.assertEqual(stored_page_bytes, [b"page-one", b"page-two"])
+
+        latest_canvas_state = find_latest_canvas_state(messages)
+        self.assertEqual(len(latest_canvas_state["documents"]), 1)
+        visual_document = latest_canvas_state["documents"][0]
+        self.assertEqual(visual_document["content_mode"], "visual")
+        self.assertEqual(visual_document["canvas_mode"], "preview_only")
+        self.assertEqual(visual_document["source_file_id"], document_attachment["file_id"])
+        self.assertEqual(visual_document["source_mime_type"], "application/pdf")
+        self.assertEqual(visual_document["visual_page_image_ids"], document_attachment["visual_page_image_ids"])
+        self.assertEqual(visual_document["page_count"], 2)
+
+        image_response = self.client.get(
+            f"/api/conversations/{conversation_id}/images/{document_attachment['visual_page_image_ids'][0]}"
+        )
+        self.assertEqual(image_response.status_code, 200)
+        self.assertEqual(image_response.mimetype, "image/jpeg")
+        self.assertEqual(image_response.data, b"page-one")
+
+        api_messages = captured["api_messages"]
+        user_api_message = next(message for message in api_messages if message.get("role") == "user")
+        self.assertIsInstance(user_api_message.get("content"), list)
+        self.assertEqual(len([block for block in user_api_message["content"] if block.get("type") == "image_url"]), 2)
+
     def test_canvas_export_endpoint_returns_markdown_and_pdf(self):
         conversation_id = self._create_conversation()
         metadata = serialize_message_metadata(
@@ -9853,6 +10082,86 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertNotIn("$A = {0, 1, 2}$", pdf_text)
         self.assertNotIn("```markdown", pdf_text)
         self.assertNotIn("### Canvas", pdf_text)
+
+    def test_conversation_export_endpoint_includes_attachments_and_sub_agent_traces(self):
+        conversation_id = self._create_conversation("Detailed Export")
+
+        with get_db() as conn:
+            insert_message(
+                conn,
+                conversation_id,
+                "user",
+                "Please review the attachment.",
+                metadata=serialize_message_metadata(
+                    {
+                        "attachments": [
+                            {
+                                "kind": "document",
+                                "file_id": "file-123",
+                                "file_name": "report.pdf",
+                                "file_mime_type": "application/pdf",
+                                "file_context_block": "# Report\n\nThe monthly report content.",
+                                "submission_mode": "text",
+                            }
+                        ]
+                    }
+                ),
+            )
+            insert_message(
+                conn,
+                conversation_id,
+                "assistant",
+                "I inspected the file.",
+                metadata=serialize_message_metadata(
+                    {
+                        "sub_agent_traces": [
+                            {
+                                "task": "Inspect report",
+                                "status": "done",
+                                "model": "deepseek-chat",
+                                "summary": "Reviewed the attachment and found the main points.",
+                                "fallback_note": "Continued on deepseek-chat after timeout.",
+                                "canvas_saved": True,
+                                "canvas_document_id": "canvas-report-1",
+                                "canvas_document_title": "Report Notes",
+                                "tool_trace": [
+                                    {
+                                        "tool_name": "read_file",
+                                        "step": 1,
+                                        "summary": "Read report.pdf",
+                                        "state": "done",
+                                    }
+                                ],
+                                "artifacts": [
+                                    {"kind": "tool_output", "label": "Extracted text", "value": "Monthly report summary"}
+                                ],
+                                "messages": [
+                                    {"role": "assistant", "content": "Starting review."},
+                                ],
+                            }
+                        ]
+                    }
+                ),
+            )
+
+        response = self.client.get(f"/api/conversations/{conversation_id}/export?format=md")
+        self.assertEqual(response.status_code, 200)
+
+        exported_text = response.get_data(as_text=True)
+        self.assertIn("Conversation ID:", exported_text)
+        self.assertIn("Message count: 2", exported_text)
+        self.assertIn("### Attachments", exported_text)
+        self.assertIn("report.pdf", exported_text)
+        self.assertIn("### Sub-Agent Traces", exported_text)
+        self.assertIn("Inspect report", exported_text)
+        self.assertIn("Canvas saved: Yes", exported_text)
+
+    def test_conversation_export_endpoint_rejects_invalid_format(self):
+        conversation_id = self._create_conversation("Exportable Chat")
+
+        response = self.client.get(f"/api/conversations/{conversation_id}/export?format=txt")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["error"], "format must be md, docx, or pdf.")
 
     def test_canvas_line_replace_rejects_out_of_bounds_start_line(self):
         runtime_state = create_canvas_runtime_state(
