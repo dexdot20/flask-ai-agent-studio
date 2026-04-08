@@ -39,6 +39,12 @@ const summaryDetailLevelEl = document.getElementById("summary-detail-level-selec
 const summaryTriggerEl = document.getElementById("summary-trigger-input");
 const summarySkipFirstEl = document.getElementById("summary-skip-first-input");
 const summarySkipLastEl = document.getElementById("summary-skip-last-input");
+const contextSelectionStrategyEl = document.getElementById("context-selection-strategy-select");
+const entropyProfileEl = document.getElementById("entropy-profile-select");
+const entropyRagBudgetRatioEl = document.getElementById("entropy-rag-budget-ratio-input");
+const entropyProtectCodeBlocksEl = document.getElementById("entropy-protect-code-blocks-toggle");
+const entropyProtectToolResultsEl = document.getElementById("entropy-protect-tool-results-toggle");
+const entropyReferenceBoostEl = document.getElementById("entropy-reference-boost-toggle");
 const reasoningAutoCollapseEl = document.getElementById("reasoning-auto-collapse-toggle");
 const pruningEnabledEl = document.getElementById("pruning-enabled-toggle");
 const pruningTokenThresholdEl = document.getElementById("pruning-token-threshold-input");
@@ -1629,6 +1635,12 @@ function applySettingsToForm() {
   if (summaryTriggerEl) summaryTriggerEl.value = String(appSettings.chat_summary_trigger_token_count || 80000);
   if (summarySkipFirstEl) summarySkipFirstEl.value = String(appSettings.summary_skip_first ?? 2);
   if (summarySkipLastEl) summarySkipLastEl.value = String(appSettings.summary_skip_last ?? 1);
+  if (contextSelectionStrategyEl) contextSelectionStrategyEl.value = appSettings.context_selection_strategy || "classic";
+  if (entropyProfileEl) entropyProfileEl.value = appSettings.entropy_profile || "balanced";
+  if (entropyRagBudgetRatioEl) entropyRagBudgetRatioEl.value = String(appSettings.entropy_rag_budget_ratio ?? 35);
+  if (entropyProtectCodeBlocksEl) entropyProtectCodeBlocksEl.checked = Boolean(appSettings.entropy_protect_code_blocks ?? true);
+  if (entropyProtectToolResultsEl) entropyProtectToolResultsEl.checked = Boolean(appSettings.entropy_protect_tool_results ?? true);
+  if (entropyReferenceBoostEl) entropyReferenceBoostEl.checked = Boolean(appSettings.entropy_reference_boost ?? true);
   if (reasoningAutoCollapseEl) reasoningAutoCollapseEl.checked = Boolean(appSettings.reasoning_auto_collapse);
   if (pruningEnabledEl) pruningEnabledEl.checked = Boolean(appSettings.pruning_enabled);
   if (pruningTokenThresholdEl) pruningTokenThresholdEl.value = String(appSettings.pruning_token_threshold || 80000);
@@ -1747,6 +1759,12 @@ function applyServerSettingsData(data) {
   appSettings.chat_summary_trigger_token_count = data.chat_summary_trigger_token_count || 80000;
   appSettings.summary_skip_first = data.summary_skip_first ?? 2;
   appSettings.summary_skip_last = data.summary_skip_last ?? 1;
+  appSettings.context_selection_strategy = data.context_selection_strategy || "classic";
+  appSettings.entropy_profile = data.entropy_profile || "balanced";
+  appSettings.entropy_rag_budget_ratio = data.entropy_rag_budget_ratio ?? 35;
+  appSettings.entropy_protect_code_blocks = Boolean(data.entropy_protect_code_blocks ?? true);
+  appSettings.entropy_protect_tool_results = Boolean(data.entropy_protect_tool_results ?? true);
+  appSettings.entropy_reference_boost = Boolean(data.entropy_reference_boost ?? true);
   appSettings.reasoning_auto_collapse = Boolean(data.reasoning_auto_collapse);
   appSettings.pruning_enabled = Boolean(data.pruning_enabled);
   appSettings.pruning_token_threshold = data.pruning_token_threshold || 80000;
@@ -1816,6 +1834,12 @@ async function saveSettings() {
     chat_summary_trigger_token_count: readNumericSetting(summaryTriggerEl, 80000, { allowZero: false }),
     summary_skip_first: readNumericSetting(summarySkipFirstEl, 0),
     summary_skip_last: readNumericSetting(summarySkipLastEl, 1),
+    context_selection_strategy: contextSelectionStrategyEl?.value || "classic",
+    entropy_profile: entropyProfileEl?.value || "balanced",
+    entropy_rag_budget_ratio: readNumericSetting(entropyRagBudgetRatioEl, 35),
+    entropy_protect_code_blocks: Boolean(entropyProtectCodeBlocksEl?.checked),
+    entropy_protect_tool_results: Boolean(entropyProtectToolResultsEl?.checked),
+    entropy_reference_boost: Boolean(entropyReferenceBoostEl?.checked),
     reasoning_auto_collapse: Boolean(reasoningAutoCollapseEl?.checked),
     pruning_enabled: Boolean(pruningEnabledEl?.checked),
     pruning_token_threshold: readNumericSetting(pruningTokenThresholdEl, 80000, { allowZero: false }),
@@ -2224,6 +2248,12 @@ function registerDirtyListeners() {
   summaryTriggerEl?.addEventListener("input", markDirty);
   summarySkipFirstEl?.addEventListener("input", markDirty);
   summarySkipLastEl?.addEventListener("input", markDirty);
+  contextSelectionStrategyEl?.addEventListener("change", markDirty);
+  entropyProfileEl?.addEventListener("change", markDirty);
+  entropyRagBudgetRatioEl?.addEventListener("input", markDirty);
+  entropyProtectCodeBlocksEl?.addEventListener("change", markDirty);
+  entropyProtectToolResultsEl?.addEventListener("change", markDirty);
+  entropyReferenceBoostEl?.addEventListener("change", markDirty);
   pruningEnabledEl?.addEventListener("change", markDirty);
   pruningTokenThresholdEl?.addEventListener("input", markDirty);
   pruningBatchSizeEl?.addEventListener("input", markDirty);

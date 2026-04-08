@@ -135,6 +135,8 @@ SUB_AGENT_ALLOWED_TOOL_NAMES = [
 ]
 CHAT_SUMMARY_DEFAULT_DETAIL_LEVEL = "balanced"
 CHAT_SUMMARY_DETAIL_LEVELS = {"very_concise", "concise", "balanced", "detailed", "comprehensive"}
+CONTEXT_SELECTION_ALLOWED_STRATEGIES = {"classic", "entropy", "entropy_rag_hybrid"}
+ENTROPY_PROFILE_PRESETS = {"conservative", "balanced", "aggressive"}
 CLARIFICATION_QUESTION_LIMIT_MIN = 1
 CLARIFICATION_QUESTION_LIMIT_MAX = 25
 CLARIFICATION_DEFAULT_MAX_QUESTIONS = 5
@@ -425,6 +427,12 @@ DEFAULT_SETTINGS = {
     "chat_summary_detail_level": CHAT_SUMMARY_DEFAULT_DETAIL_LEVEL,
     "summary_skip_first": "2",
     "summary_skip_last": "1",
+    "context_selection_strategy": "classic",
+    "entropy_profile": "balanced",
+    "entropy_rag_budget_ratio": "35",
+    "entropy_protect_code_blocks": "true",
+    "entropy_protect_tool_results": "true",
+    "entropy_reference_boost": "true",
     "reasoning_auto_collapse": "false",
     "pruning_enabled": "false",
     "pruning_token_threshold": str(CHAT_SUMMARY_TRIGGER_TOKEN_COUNT),

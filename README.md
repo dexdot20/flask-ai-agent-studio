@@ -1,6 +1,6 @@
 # Flask ChatBot: Multi-Provider + Tools + RAG + OCR + Vision + Canvas + Memory + Workspace
 
-This is a single-page Flask chat application built around DeepSeek plus optional OpenRouter models, multi-step tool use, local RAG, dedicated local OCR, optional local vision analysis, conversation summarization, pruning, persistent memory, conversation-scoped memory, editable canvas documents, page-aware canvas navigation, and a per-conversation workspace sandbox.
+This is a single-page Flask chat application built around DeepSeek plus optional OpenRouter models, multi-step tool use, local RAG, dedicated local OCR, optional local vision analysis, conversation summarization, pruning, user-configurable entropy-aware context selection, persistent memory, conversation-scoped memory, editable canvas documents, page-aware canvas navigation, and a per-conversation workspace sandbox.
 
 It is not a minimal prompt/response demo. The app keeps conversation history in SQLite, restores assistant metadata when a conversation is reopened, supports editing earlier user messages, streams tool progress and reasoning, can enrich a user turn with local OCR or extracted document text before the model sees it, and can compact older content with summaries and pruning.
 
@@ -35,6 +35,7 @@ It is not a minimal prompt/response demo. The app keeps conversation history in 
 - Restore assistant metadata, reasoning, tool results, and canvas state when reopening a conversation
 - Show a separate Fix action that rewrites the current draft before sending
 - Manually summarize a conversation, undo an inserted summary, and prune older visible messages
+- Switch the context-selection strategy between classic history, entropy-only, and entropy + RAG hybrid modes from Settings
 
 ### Model and agent behavior
 
@@ -77,6 +78,7 @@ It is not a minimal prompt/response demo. The app keeps conversation history in 
 - Optional auto-injection of retrieved RAG context into each turn
 - Optional auto-injection of conversation memory into each turn
 - Optional auto-injection of remembered tool results into each turn
+- Entropy-aware history selection can keep dense or later-referenced blocks while dropping low-value filler before retrieval runs
 - RAG source pools can be scoped in Settings to conversations, tool results, tool memory, and uploaded documents
 - Structured clarification tool for cases where the request is underspecified
 
@@ -113,7 +115,7 @@ Manual smoke test checklist for the Canvas UI is available in [docs/canvas-ui-sm
 10. Tool calls are validated, executed, cached, and appended to the transcript.
 11. Tool progress, reasoning deltas, answer deltas, usage, and message IDs are streamed back as NDJSON.
 12. The final assistant message is stored with metadata such as reasoning, usage, tool trace, canvas state, and stored tool results.
-13. After a turn finishes, the app may summarize older context, prune older visible messages, and sync conversations or tool results into the RAG store.
+13. After a turn finishes, the app may summarize older context, prune older visible messages, apply entropy-aware history selection, and sync conversations or tool results into the RAG store.
 
 ## Project structure
 
@@ -449,6 +451,12 @@ The Settings page persists these values in `app_settings`:
 - `chat_summary_trigger_token_count`
 - `summary_skip_first`
 - `summary_skip_last`
+- `context_selection_strategy`
+- `entropy_profile`
+- `entropy_rag_budget_ratio`
+- `entropy_protect_code_blocks`
+- `entropy_protect_tool_results`
+- `entropy_reference_boost`
 - `pruning_enabled`
 - `pruning_token_threshold`
 - `pruning_batch_size`
@@ -484,7 +492,7 @@ The delegated helper receives only explicit delegated task text, but users can c
 
 The app includes a dedicated `/settings` page.
 
-- Assistant tab: user preferences, OpenRouter model management, visible chat-model ordering, task-specific model preferences, temperature, image-processing method, tool-step budget, clarification limits, sub-agent controls, fetch clipping, canvas limits, summarization, and pruning
+- Assistant tab: user preferences, OpenRouter model management, visible chat-model ordering, task-specific model preferences, temperature, image-processing method, tool-step budget, clarification limits, sub-agent controls, fetch clipping, canvas limits, summarization, pruning, and context-selection strategy controls
 - Memory tab: conversation memory, scratchpad, tool-memory auto-injection, RAG auto-injection, RAG source pools, and user profile memory behavior
 - Tools tab: active tool permissions, including canvas and project-workspace tools
 - Knowledge tab: knowledge-base uploads, RAG maintenance, and sync controls
@@ -633,6 +641,7 @@ Canvas documents can also be exported individually with `/api/conversations/<id>
 - `pruning_batch_size` controls how many messages are compacted per pass.
 - Messages that already contain tool calls, summaries, or prior pruning markers are skipped.
 - A manual prune endpoint exists for individual messages.
+- In entropy-aware modes, the runtime prompt first keeps higher-value or later-referenced blocks, then uses the reserved RAG budget to recover dropped context when available.
 
 ### Knowledge base workflow
 

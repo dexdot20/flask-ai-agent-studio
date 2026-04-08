@@ -21,6 +21,7 @@ from config import (
     CHAT_SUMMARY_DETAIL_LEVELS,
     CHAT_SUMMARY_MODE,
     CHAT_SUMMARY_TRIGGER_TOKEN_COUNT,
+    CONTEXT_SELECTION_ALLOWED_STRATEGIES,
     CONTENT_MAX_CHARS,
     CLARIFICATION_DEFAULT_MAX_QUESTIONS,
     CLARIFICATION_QUESTION_LIMIT_MAX,
@@ -38,6 +39,7 @@ from config import (
     FETCH_SUMMARY_TOKEN_THRESHOLD,
     IMAGE_STORAGE_DIR,
     DEFAULT_MAX_PARALLEL_TOOLS,
+    ENTROPY_PROFILE_PRESETS,
     PROMPT_MAX_INPUT_TOKENS,
     PROMPT_PREFLIGHT_SUMMARY_TOKEN_COUNT,
     PROMPT_RAG_MAX_TOKENS,
@@ -2616,6 +2618,50 @@ def get_rag_auto_inject_source_types(settings: dict | None = None) -> list[str]:
 
 def get_rag_auto_inject_top_k(settings: dict | None = None) -> int:
     return int(RAG_CONTEXT_SIZE_PRESETS[get_rag_context_size(settings)])
+
+
+def get_context_selection_strategy(settings: dict | None = None) -> str:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = str(source.get("context_selection_strategy", DEFAULT_SETTINGS["context_selection_strategy"]) or "").strip().lower()
+    if raw_value in CONTEXT_SELECTION_ALLOWED_STRATEGIES:
+        return raw_value
+    return DEFAULT_SETTINGS["context_selection_strategy"]
+
+
+def get_entropy_profile(settings: dict | None = None) -> str:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = str(source.get("entropy_profile", DEFAULT_SETTINGS["entropy_profile"]) or "").strip().lower()
+    if raw_value in ENTROPY_PROFILE_PRESETS:
+        return raw_value
+    return DEFAULT_SETTINGS["entropy_profile"]
+
+
+def get_entropy_rag_budget_ratio(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get("entropy_rag_budget_ratio", DEFAULT_SETTINGS["entropy_rag_budget_ratio"])
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        value = int(DEFAULT_SETTINGS["entropy_rag_budget_ratio"])
+    return max(0, min(80, value))
+
+
+def get_entropy_protect_code_blocks_enabled(settings: dict | None = None) -> bool:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get("entropy_protect_code_blocks", DEFAULT_SETTINGS["entropy_protect_code_blocks"])
+    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def get_entropy_protect_tool_results_enabled(settings: dict | None = None) -> bool:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get("entropy_protect_tool_results", DEFAULT_SETTINGS["entropy_protect_tool_results"])
+    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def get_entropy_reference_boost_enabled(settings: dict | None = None) -> bool:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get("entropy_reference_boost", DEFAULT_SETTINGS["entropy_reference_boost"])
+    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def get_tool_memory_auto_inject_enabled(settings: dict | None = None) -> bool:

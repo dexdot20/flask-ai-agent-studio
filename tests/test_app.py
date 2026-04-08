@@ -279,6 +279,12 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["rag_auto_inject"], bool(payload["features"]["rag_enabled"]))
         self.assertEqual(payload["chat_summary_mode"], "auto")
         self.assertEqual(payload["chat_summary_trigger_token_count"], 80000)
+        self.assertEqual(payload["context_selection_strategy"], "classic")
+        self.assertEqual(payload["entropy_profile"], "balanced")
+        self.assertEqual(payload["entropy_rag_budget_ratio"], 35)
+        self.assertTrue(payload["entropy_protect_code_blocks"])
+        self.assertTrue(payload["entropy_protect_tool_results"])
+        self.assertTrue(payload["entropy_reference_boost"])
         self.assertFalse(payload["reasoning_auto_collapse"])
         self.assertFalse(payload["pruning_enabled"])
         self.assertEqual(payload["pruning_token_threshold"], 80000)
@@ -346,6 +352,12 @@ class AppRoutesTestCase(unittest.TestCase):
                 "chat_summary_mode": "aggressive",
                 "chat_summary_detail_level": "detailed",
                 "chat_summary_trigger_token_count": 9000,
+                "context_selection_strategy": "entropy_rag_hybrid",
+                "entropy_profile": "aggressive",
+                "entropy_rag_budget_ratio": 55,
+                "entropy_protect_code_blocks": True,
+                "entropy_protect_tool_results": False,
+                "entropy_reference_boost": True,
                 "reasoning_auto_collapse": True,
                 "pruning_enabled": True,
                 "pruning_token_threshold": 12000,
@@ -421,6 +433,12 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["chat_summary_mode"], "aggressive")
         self.assertEqual(payload["chat_summary_detail_level"], "detailed")
         self.assertEqual(payload["chat_summary_trigger_token_count"], 9000)
+        self.assertEqual(payload["context_selection_strategy"], "entropy_rag_hybrid")
+        self.assertEqual(payload["entropy_profile"], "aggressive")
+        self.assertEqual(payload["entropy_rag_budget_ratio"], 55)
+        self.assertTrue(payload["entropy_protect_code_blocks"])
+        self.assertFalse(payload["entropy_protect_tool_results"])
+        self.assertTrue(payload["entropy_reference_boost"])
         self.assertTrue(payload["reasoning_auto_collapse"])
         self.assertTrue(payload["pruning_enabled"])
         self.assertEqual(payload["pruning_token_threshold"], 12000)
@@ -494,6 +512,15 @@ class AppRoutesTestCase(unittest.TestCase):
         payload = response.get_json()
         self.assertEqual(payload["chat_summary_mode"], "conservative")
         self.assertEqual(payload["chat_summary_detail_level"], "comprehensive")
+
+    def test_settings_reject_invalid_context_selection_strategy(self):
+        response = self.client.patch(
+            "/api/settings",
+            json={"context_selection_strategy": "quantum"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("context_selection_strategy", response.get_json()["error"])
 
     def test_conservative_summary_mode_uses_rounded_up_threshold(self):
         self.assertEqual(
@@ -14250,6 +14277,84 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual([message["role"] for message in selected], ["user", "assistant", "user"])
         self.assertEqual(selected[1]["content"], "Resolved final answer")
         self.assertFalse(any(message.get("tool_call_id") == "call-1" for message in selected))
+
+    def test_select_recent_prompt_window_entropy_prefers_code_dense_blocks(self):
+        messages = [
+            {"role": "user", "content": "Intro request", "position": 1, "id": 1},
+            {"role": "assistant", "content": "filler " * 200, "position": 2, "id": 2},
+            {
+                "role": "assistant",
+                "content": "```python\nvalue = load_config()\nprint(value)\n```",
+                "position": 3,
+                "id": 3,
+            },
+            {"role": "user", "content": "Please continue with the config issue", "position": 4, "id": 4},
+        ]
+
+        selected = _select_recent_prompt_window(
+            messages,
+            max_tokens=120,
+            settings={
+                "context_selection_strategy": "entropy",
+                "entropy_profile": "balanced",
+                "entropy_protect_code_blocks": "true",
+                "entropy_protect_tool_results": "true",
+                "entropy_reference_boost": "false",
+            },
+        )
+
+        selected_contents = [message["content"] for message in selected]
+        self.assertIn("```python\nvalue = load_config()\nprint(value)\n```", selected_contents)
+        self.assertIn("Please continue with the config issue", selected_contents)
+        self.assertNotIn("filler " * 200, selected_contents)
+
+    def test_budgeted_prompt_messages_reserve_rag_budget_for_entropy_hybrid(self):
+        canonical_messages = normalize_chat_messages(
+            [
+                {"id": 1, "position": 1, "role": "user", "content": "Initial context"},
+                {"id": 2, "position": 2, "role": "assistant", "content": "filler " * 120},
+                {"id": 3, "position": 3, "role": "user", "content": "Need the exact API endpoint again"},
+            ]
+        )
+        settings = {
+            "user_preferences": "",
+            "scratchpad": "",
+            "context_selection_strategy": "entropy_rag_hybrid",
+            "entropy_profile": "balanced",
+            "entropy_rag_budget_ratio": "40",
+            "entropy_protect_code_blocks": "true",
+            "entropy_protect_tool_results": "true",
+            "entropy_reference_boost": "true",
+        }
+        retrieved_context = {
+            "query": "api endpoint",
+            "count": 1,
+            "matches": [{"source_name": "docs", "text": "POST /api/settings updates configuration.", "similarity": 0.92}],
+        }
+
+        with patch("routes.chat.get_prompt_max_input_tokens", return_value=6000), patch(
+            "routes.chat.get_prompt_response_token_reserve", return_value=1000
+        ), patch("routes.chat.get_prompt_recent_history_max_tokens", return_value=1200), patch(
+            "routes.chat.get_prompt_summary_max_tokens", return_value=0
+        ), patch("routes.chat.get_prompt_rag_max_tokens", return_value=800), patch(
+            "routes.chat.get_prompt_tool_trace_max_tokens", return_value=0
+        ), patch("routes.chat.get_prompt_tool_memory_max_tokens", return_value=0), patch(
+            "routes.chat.get_clarification_max_questions", return_value=5
+        ):
+            _, stats, _ = _build_budgeted_prompt_messages(
+                canonical_messages,
+                settings,
+                active_tool_names=[],
+                clarification_response=None,
+                all_clarification_rounds=None,
+                retrieved_context=retrieved_context,
+                tool_memory_context=None,
+            )
+
+        self.assertEqual(stats["context_selection_strategy"], "entropy_rag_hybrid")
+        self.assertEqual(stats["entropy_profile"], "balanced")
+        self.assertGreater(stats["rag_budget_reserve"], 0)
+        self.assertGreater(stats["rag_tokens"], 0)
 
     def test_summary_source_selection_uses_expanded_prompt_budget(self):
         canonical_messages = [

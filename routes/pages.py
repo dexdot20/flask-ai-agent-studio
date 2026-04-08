@@ -9,8 +9,10 @@ from config import (
     CHAT_SUMMARY_ALLOWED_MODES,
     CLARIFICATION_QUESTION_LIMIT_MAX,
     CLARIFICATION_QUESTION_LIMIT_MIN,
+    CONTEXT_SELECTION_ALLOWED_STRATEGIES,
     DEFAULT_WEB_CACHE_TTL_HOURS,
     DEFAULT_SETTINGS,
+    ENTROPY_PROFILE_PRESETS,
     MAX_AI_PERSONALITY_LENGTH,
     MAX_PARALLEL_TOOLS_MAX,
     MAX_PARALLEL_TOOLS_MIN,
@@ -46,6 +48,12 @@ from db import (
     get_chat_summary_detail_level,
     get_chat_summary_trigger_token_count,
     get_clarification_max_questions,
+    get_context_selection_strategy,
+    get_entropy_profile,
+    get_entropy_protect_code_blocks_enabled,
+    get_entropy_protect_tool_results_enabled,
+    get_entropy_rag_budget_ratio,
+    get_entropy_reference_boost_enabled,
     get_fetch_url_clip_aggressiveness,
     get_fetch_url_token_threshold,
     get_max_parallel_tools,
@@ -375,6 +383,12 @@ def build_settings_payload() -> dict:
         "chat_summary_trigger_token_count": get_chat_summary_trigger_token_count(raw),
         "summary_skip_first": get_summary_skip_first(raw),
         "summary_skip_last": get_summary_skip_last(raw),
+        "context_selection_strategy": get_context_selection_strategy(raw),
+        "entropy_profile": get_entropy_profile(raw),
+        "entropy_rag_budget_ratio": get_entropy_rag_budget_ratio(raw),
+        "entropy_protect_code_blocks": get_entropy_protect_code_blocks_enabled(raw),
+        "entropy_protect_tool_results": get_entropy_protect_tool_results_enabled(raw),
+        "entropy_reference_boost": get_entropy_reference_boost_enabled(raw),
         "reasoning_auto_collapse": get_reasoning_auto_collapse(raw),
         "pruning_enabled": get_pruning_enabled(raw),
         "pruning_token_threshold": get_pruning_token_threshold(raw),
@@ -473,6 +487,12 @@ def register_page_routes(app) -> None:
         chat_summary_trigger_raw = data.get("chat_summary_trigger_token_count")
         summary_skip_first_raw = data.get("summary_skip_first")
         summary_skip_last_raw = data.get("summary_skip_last")
+        context_selection_strategy_raw = data.get("context_selection_strategy")
+        entropy_profile_raw = data.get("entropy_profile")
+        entropy_rag_budget_ratio_raw = data.get("entropy_rag_budget_ratio")
+        entropy_protect_code_blocks_raw = data.get("entropy_protect_code_blocks")
+        entropy_protect_tool_results_raw = data.get("entropy_protect_tool_results")
+        entropy_reference_boost_raw = data.get("entropy_reference_boost")
         reasoning_auto_collapse_raw = data.get("reasoning_auto_collapse")
         pruning_enabled_raw = data.get("pruning_enabled")
         pruning_token_threshold_raw = data.get("pruning_token_threshold")
@@ -522,6 +542,12 @@ def register_page_routes(app) -> None:
             and chat_summary_trigger_raw is None
             and summary_skip_first_raw is None
             and summary_skip_last_raw is None
+            and context_selection_strategy_raw is None
+            and entropy_profile_raw is None
+            and entropy_rag_budget_ratio_raw is None
+            and entropy_protect_code_blocks_raw is None
+            and entropy_protect_tool_results_raw is None
+            and entropy_reference_boost_raw is None
             and reasoning_auto_collapse_raw is None
             and pruning_enabled_raw is None
             and pruning_token_threshold_raw is None
@@ -833,6 +859,51 @@ def register_page_routes(app) -> None:
             if not (0 <= summary_skip_last <= 20):
                 return jsonify({"error": "summary_skip_last must be between 0 and 20."}), 400
             settings["summary_skip_last"] = str(summary_skip_last)
+
+        if context_selection_strategy_raw is not None:
+            normalized_context_selection_strategy = str(context_selection_strategy_raw or "").strip().lower()
+            if normalized_context_selection_strategy not in CONTEXT_SELECTION_ALLOWED_STRATEGIES:
+                return jsonify({"error": "context_selection_strategy must be one of classic, entropy, or entropy_rag_hybrid."}), 400
+            settings["context_selection_strategy"] = normalized_context_selection_strategy
+
+        if entropy_profile_raw is not None:
+            normalized_entropy_profile = str(entropy_profile_raw or "").strip().lower()
+            if normalized_entropy_profile not in ENTROPY_PROFILE_PRESETS:
+                return jsonify({"error": "entropy_profile must be one of conservative, balanced, or aggressive."}), 400
+            settings["entropy_profile"] = normalized_entropy_profile
+
+        if entropy_rag_budget_ratio_raw is not None:
+            try:
+                entropy_rag_budget_ratio = int(entropy_rag_budget_ratio_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "entropy_rag_budget_ratio must be an integer."}), 400
+            if not (0 <= entropy_rag_budget_ratio <= 80):
+                return jsonify({"error": "entropy_rag_budget_ratio must be between 0 and 80."}), 400
+            settings["entropy_rag_budget_ratio"] = str(entropy_rag_budget_ratio)
+
+        if entropy_protect_code_blocks_raw is not None:
+            if isinstance(entropy_protect_code_blocks_raw, bool):
+                settings["entropy_protect_code_blocks"] = "true" if entropy_protect_code_blocks_raw else "false"
+            else:
+                settings["entropy_protect_code_blocks"] = (
+                    "true" if str(entropy_protect_code_blocks_raw).strip().lower() in {"1", "true", "yes", "on"} else "false"
+                )
+
+        if entropy_protect_tool_results_raw is not None:
+            if isinstance(entropy_protect_tool_results_raw, bool):
+                settings["entropy_protect_tool_results"] = "true" if entropy_protect_tool_results_raw else "false"
+            else:
+                settings["entropy_protect_tool_results"] = (
+                    "true" if str(entropy_protect_tool_results_raw).strip().lower() in {"1", "true", "yes", "on"} else "false"
+                )
+
+        if entropy_reference_boost_raw is not None:
+            if isinstance(entropy_reference_boost_raw, bool):
+                settings["entropy_reference_boost"] = "true" if entropy_reference_boost_raw else "false"
+            else:
+                settings["entropy_reference_boost"] = (
+                    "true" if str(entropy_reference_boost_raw).strip().lower() in {"1", "true", "yes", "on"} else "false"
+                )
 
         if reasoning_auto_collapse_raw is not None:
             if isinstance(reasoning_auto_collapse_raw, bool):

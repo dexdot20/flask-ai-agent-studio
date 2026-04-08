@@ -409,6 +409,49 @@
                     <p class="settings-copy">These messages are excluded from automatic summarization so the assistant keeps your opening context and latest turn intact.</p>
                   </div>
                 </div>
+                <div class="settings-page-grid settings-page-grid--two settings-page-grid--compact" style="margin-top: 1rem;">
+                  <div class="settings-form-cluster">
+                    <label class="settings-label" for="context-selection-strategy-select">Context selection strategy</label>
+                    <select id="context-selection-strategy-select">
+                      <option value="classic">Classic history window</option>
+                      <option value="entropy">Entropy only</option>
+                      <option value="entropy_rag_hybrid">Entropy + RAG hybrid</option>
+                    </select>
+                    <p class="settings-copy">Classic keeps the current recency-first prompt window. Entropy scores older blocks by information density. Hybrid also reserves prompt budget so RAG can restore dropped context.</p>
+                  </div>
+                  <div class="settings-form-cluster">
+                    <label class="settings-label" for="entropy-profile-select">Entropy profile</label>
+                    <select id="entropy-profile-select">
+                      <option value="conservative">Conservative</option>
+                      <option value="balanced">Balanced</option>
+                      <option value="aggressive">Aggressive</option>
+                    </select>
+                    <p class="settings-copy">Conservative keeps more conversational continuity. Aggressive trims harder and favors dense technical context over filler.</p>
+                  </div>
+                  <div class="settings-form-cluster">
+                    <label class="settings-label" for="entropy-rag-budget-ratio-input">Hybrid RAG reserve (0-80%)</label>
+                    <input type="number" class="settings-number" id="entropy-rag-budget-ratio-input" min="0" max="80" value="35" />
+                    <p class="settings-copy">Only used in Entropy + RAG hybrid mode. Higher values reserve more prompt budget for retrieved context instead of raw history.</p>
+                  </div>
+                  <div class="settings-form-cluster settings-form-cluster--split">
+                    <div class="settings-label">Entropy protection rules</div>
+                    <div class="settings-inline-grid">
+                      <label class="tool-toggle" for="entropy-protect-code-blocks-toggle">
+                        <input type="checkbox" id="entropy-protect-code-blocks-toggle" />
+                        <span>Protect code-heavy blocks</span>
+                      </label>
+                      <label class="tool-toggle" for="entropy-protect-tool-results-toggle">
+                        <input type="checkbox" id="entropy-protect-tool-results-toggle" />
+                        <span>Protect tool results</span>
+                      </label>
+                      <label class="tool-toggle" for="entropy-reference-boost-toggle">
+                        <input type="checkbox" id="entropy-reference-boost-toggle" />
+                        <span>Boost later-referenced context</span>
+                      </label>
+                    </div>
+                    <p class="settings-copy">These rules bias entropy scoring so structured data, tool traces, and context reused later in the thread survive trimming more reliably.</p>
+                  </div>
+                </div>
               </div>
 
               <div class="settings-page-section-card">
