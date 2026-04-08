@@ -3204,14 +3204,6 @@ function buildCanvasRenderState(documents = getCanvasRenderableDocuments()) {
 }
 
 function scheduleCanvasPreviewRender() {
-  if (isCanvasOpen()) {
-    if (pendingCanvasPreviewTimer) {
-      globalThis.clearTimeout(pendingCanvasPreviewTimer);
-      pendingCanvasPreviewTimer = 0;
-    }
-    renderCanvasPreviewFrame();
-    return;
-  }
   if (pendingCanvasPreviewTimer) {
     return;
   }
