@@ -6201,6 +6201,35 @@ class AppRoutesTestCase(unittest.TestCase):
             ["create_canvas_document", "search_canvas_document", "preview_canvas_changes", "set_canvas_viewport", "rewrite_canvas_document", "replace_canvas_lines"],
         )
 
+    def test_resolve_runtime_tool_names_hides_text_canvas_tools_for_visual_only_documents(self):
+        runtime_names = resolve_runtime_tool_names(
+            [
+                "create_canvas_document",
+                "expand_canvas_document",
+                "search_canvas_document",
+                "set_canvas_viewport",
+                "update_canvas_metadata",
+                "focus_canvas_page",
+                "delete_canvas_document",
+            ],
+            canvas_documents=[
+                {
+                    "id": "canvas-visual",
+                    "title": "scan.pdf",
+                    "format": "markdown",
+                    "content": "# scan.pdf",
+                    "content_mode": "visual",
+                    "canvas_mode": "preview_only",
+                    "page_count": 3,
+                }
+            ],
+        )
+
+        self.assertEqual(
+            runtime_names,
+            ["create_canvas_document", "set_canvas_viewport", "update_canvas_metadata", "focus_canvas_page", "delete_canvas_document"],
+        )
+
     def test_extract_message_usage_maps_legacy_system_prompt_breakdown(self):
         usage = extract_message_usage(
             {

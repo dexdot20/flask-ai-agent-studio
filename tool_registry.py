@@ -12,6 +12,7 @@ from config import (
     SCRATCHPAD_SECTION_METADATA,
     SCRATCHPAD_SECTION_ORDER,
 )
+from canvas_service import get_canvas_document_capabilities
 
 CANVAS_DOCUMENT_TOOL_NAMES = {
     "expand_canvas_document",
@@ -32,6 +33,21 @@ CANVAS_DOCUMENT_TOOL_NAMES = {
     "delete_canvas_lines",
     "delete_canvas_document",
     "clear_canvas",
+}
+
+CANVAS_TEXT_ADDRESSABLE_TOOL_NAMES = {
+    "expand_canvas_document",
+    "batch_read_canvas_documents",
+    "scroll_canvas_document",
+    "search_canvas_document",
+    "validate_canvas_document",
+    "rewrite_canvas_document",
+    "preview_canvas_changes",
+    "batch_canvas_edits",
+    "transform_canvas_lines",
+    "replace_canvas_lines",
+    "insert_canvas_lines",
+    "delete_canvas_lines",
 }
 
 WORKSPACE_TOOL_NAMES = {
@@ -1972,6 +1988,7 @@ def resolve_runtime_tool_names(
 
     Only hard precondition gates apply:
     - Canvas document editing tools require an existing canvas document.
+    - Text-addressable canvas tools are hidden when every canvas document is visual-only.
     - Workspace file tools require a configured workspace_root.
     Everything else (web search, canvas creation, etc.) is always included.
     """
@@ -1980,9 +1997,16 @@ def resolve_runtime_tool_names(
         return []
 
     has_canvas_documents = bool(canvas_documents)
+    has_text_addressable_canvas_documents = any(
+        get_canvas_document_capabilities(document)["line_addressable"]
+        for document in (canvas_documents or [])
+        if isinstance(document, dict)
+    )
     runtime_names: list[str] = []
     for name in names:
         if name in CANVAS_DOCUMENT_TOOL_NAMES and not has_canvas_documents:
+            continue
+        if name in CANVAS_TEXT_ADDRESSABLE_TOOL_NAMES and not has_text_addressable_canvas_documents:
             continue
         if name in WORKSPACE_TOOL_NAMES and not workspace_root:
             continue
