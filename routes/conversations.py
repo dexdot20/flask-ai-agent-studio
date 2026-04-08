@@ -59,7 +59,7 @@ from db import (
     soft_delete_messages,
     update_conversation_memory_entry,
 )
-from doc_service import extract_document_text, read_uploaded_document
+from doc_service import build_canvas_markdown, extract_document_text, infer_canvas_format, infer_canvas_language, read_uploaded_document
 from model_registry import (
     DEEPSEEK_PROVIDER,
     apply_model_target_request_options,
@@ -663,14 +663,38 @@ def register_conversation_routes(app) -> None:
 
     @app.route("/api/conversations/<int:conv_id>/canvas", methods=["POST"])
     def create_canvas(conv_id):
-        data = request.get_json(silent=True) or {}
+        uploaded_file = None
+        if request.mimetype and request.mimetype.startswith("multipart/form-data"):
+            data = request.form or {}
+            uploaded_file = request.files.get("file")
+        else:
+            data = request.get_json(silent=True) or {}
+
         title = str(data.get("title") or "Canvas").strip() or "Canvas"
         content = str(data.get("content") or "")
-        format_name = str(data.get("format") or "markdown").strip() or "markdown"
+        format_name = str(data.get("format") or "").strip() or ""
         language = str(data.get("language") or "").strip() or None
         summary = str(data.get("summary") or "").strip() or None
         source_assistant_message_id = _parse_optional_int(data.get("source_assistant_message_id"))
         source_sub_agent_trace_index = _parse_optional_int(data.get("source_sub_agent_trace_index"))
+
+        if uploaded_file and getattr(uploaded_file, "filename", ""):
+            try:
+                filename, mime_type, doc_bytes = read_uploaded_document(uploaded_file)
+                extracted_text = extract_document_text(doc_bytes, mime_type)
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 400
+            title = os.path.basename(str(data.get("title") or filename).strip()) or filename
+            resolved_format = format_name or infer_canvas_format(title)
+            resolved_language = language if language is not None else infer_canvas_language(title)
+            if resolved_format == "markdown" and mime_type == "application/pdf":
+                content = extracted_text
+            else:
+                content = build_canvas_markdown(title, extracted_text) if resolved_format == "markdown" else extracted_text
+            format_name = resolved_format
+            language = resolved_language
+        else:
+            format_name = format_name or "markdown"
 
         conversation, messages = _load_conversation_payload(conv_id)
         if not conversation:

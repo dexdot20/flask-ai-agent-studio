@@ -9278,6 +9278,33 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(latest_canvas[0]["title"], "notes.md")
         self.assertEqual(latest_canvas[0]["content"], "")
 
+    def test_canvas_post_endpoint_accepts_pdf_uploads_via_multipart(self):
+        conversation_id = self._create_conversation()
+
+        with patch("routes.conversations.extract_document_text", return_value="Question 1\nA) One\nB) Two"):
+            response = self.client.post(
+                f"/api/conversations/{conversation_id}/canvas",
+                data={
+                    "file": (io.BytesIO(b"%PDF-1.4 fake pdf bytes"), "exam.pdf"),
+                },
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.get_json()
+        self.assertEqual(payload["document"]["title"], "exam.pdf")
+        self.assertEqual(payload["document"]["format"], "markdown")
+        self.assertIsNone(payload["document"].get("language"))
+        self.assertEqual(payload["document"]["content"], "Question 1\nA) One\nB) Two")
+
+        conversation_response = self.client.get(f"/api/conversations/{conversation_id}")
+        self.assertEqual(conversation_response.status_code, 200)
+        messages = conversation_response.get_json()["messages"]
+        latest_canvas = find_latest_canvas_documents(messages)
+        self.assertEqual(len(latest_canvas), 1)
+        self.assertEqual(latest_canvas[0]["title"], "exam.pdf")
+        self.assertEqual(latest_canvas[0]["content"], "Question 1\nA) One\nB) Two")
+
     def test_document_canvas_inference_for_code_files(self):
         self.assertEqual(infer_canvas_format("main.py"), "code")
         self.assertEqual(infer_canvas_language("main.py"), "python")
@@ -9475,6 +9502,145 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("Body 3", result)
         self.assertNotIn("Company Confidential", result)
         self.assertNotIn("Internal Use Only", result)
+
+    def test_extract_text_from_pdf_prefers_cleaner_linear_text_over_fragmented_layout(self):
+        class FakeCrop:
+            def extract_text(self, **kwargs):
+                return ""
+
+        class FakePage:
+            width = 600
+            height = 800
+            images = []
+
+            def find_tables(self, **kwargs):
+                return []
+
+            def outside_bbox(self, bbox):
+                return self
+
+            def crop(self, bbox):
+                return FakeCrop()
+
+            def extract_words(self, **kwargs):
+                return []
+
+            def extract_text(self, **kwargs):
+                if kwargs.get("layout"):
+                    return "M\nksızın\nAÇIKLAMA\nDİKKATİ"
+                return "Maksızın AÇIKLAMA DİKKATİ"
+
+        class FakePDF:
+            def __init__(self):
+                self.pages = [FakePage()]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        with patch("doc_service.pdfplumber.open", return_value=FakePDF()):
+            result = _extract_text_from_pdf(b"%PDF-FAKE")
+
+        self.assertIn("Maksızın AÇIKLAMA DİKKATİ", result)
+        self.assertNotIn("M\nksızın", result)
+
+    def test_extract_text_from_pdf_prunes_edge_page_noise(self):
+        class FakeCrop:
+            def extract_text(self, **kwargs):
+                return ""
+
+        class FakePage:
+            width = 600
+            height = 800
+            images = []
+
+            def find_tables(self, **kwargs):
+                return []
+
+            def outside_bbox(self, bbox):
+                return self
+
+            def crop(self, bbox):
+                return FakeCrop()
+
+            def extract_words(self, **kwargs):
+                return []
+
+            def extract_text(self, **kwargs):
+                return "- 12 -\n••••\n1. Soru metni burada başlar\nA) Bir\nB) İki\n3"
+
+        class FakePDF:
+            def __init__(self):
+                self.pages = [FakePage()]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        with patch("doc_service.pdfplumber.open", return_value=FakePDF()):
+            result = _extract_text_from_pdf(b"%PDF-FAKE")
+
+        self.assertIn("1. Soru metni burada başlar", result)
+        self.assertIn("A) Bir", result)
+        self.assertIn("B) İki", result)
+        self.assertNotIn("- 12 -", result)
+        self.assertNotIn("••••", result)
+        self.assertNotIn("\n3\n", f"\n{result}\n")
+
+    def test_extract_text_from_pdf_prefers_ocr_for_image_heavy_noisy_pages(self):
+        from PIL import Image
+
+        class FakeCrop:
+            def extract_text(self, **kwargs):
+                return ""
+
+        class FakePage:
+            width = 600
+            height = 800
+
+            def __init__(self):
+                self.images = [{"x0": 0, "top": 0, "x1": 600, "bottom": 800}]
+
+            def find_tables(self, **kwargs):
+                return []
+
+            def outside_bbox(self, bbox):
+                return self
+
+            def crop(self, bbox):
+                return FakeCrop()
+
+            def extract_words(self, **kwargs):
+                return []
+
+            def extract_text(self, **kwargs):
+                if kwargs.get("layout"):
+                    return "- 8 -\nA B C D E\nM\netin"
+                return "- 8 -\nA B C D E\nM\netin"
+
+            def to_image(self, **kwargs):
+                return SimpleNamespace(original=Image.new("RGB", (40, 40), "white"))
+
+        class FakePDF:
+            def __init__(self):
+                self.pages = [FakePage()]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        with patch("doc_service.pdfplumber.open", return_value=FakePDF()):
+            with patch("ocr_service.extract_image_text", return_value="Metin sorusu temiz olarak okundu.") as ocr_mock:
+                result = _extract_text_from_pdf(b"%PDF-FAKE")
+
+        self.assertEqual(result, "Metin sorusu temiz olarak okundu.")
+        ocr_mock.assert_called_once()
 
     def test_extract_document_text_raises_clear_error_for_pdf_parser_failures(self):
         with patch("doc_service.pdfplumber.open", side_effect=RuntimeError("broken PDF parser")):

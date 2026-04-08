@@ -4,6 +4,7 @@ import csv
 import io
 import os
 import re
+import unicodedata
 
 import pdfplumber
 from docx import Document
@@ -133,6 +134,7 @@ _PDF_TEXT_TABLE_SETTINGS: dict = {
 
 _PDF_OCR_MIN_TEXT_CHARS = 20
 _PDF_OCR_RENDER_DPI = 200
+_PDF_OCR_MIN_IMAGE_COVERAGE = 0.35
 _PDF_HEADER_FOOTER_EDGE_RATIO = 0.08
 _PDF_REPEATED_EDGE_MIN_PAGES = 3
 _PDF_MULTI_COLUMN_MIN_WORDS = 40
@@ -203,6 +205,178 @@ def _extract_text_from_pdf_ocr(page) -> str:
         return extract_image_text(image_buffer.getvalue(), "image/png").strip()
     except Exception:
         return ""
+
+
+def _score_pdf_text_quality(text: str) -> float:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return float("-inf")
+
+    lines = [line.strip() for line in normalized.splitlines() if line.strip()]
+    if not lines:
+        return float("-inf")
+
+    avg_line_length = sum(len(line) for line in lines) / len(lines)
+    very_short_lines = sum(1 for line in lines if len(line) <= 3)
+    single_letter_lines = sum(1 for line in lines if len(line) == 1 and line.isalpha())
+    fragmented_word_lines = sum(1 for line in lines if re.fullmatch(r"[a-zçğıöşü]{2,6}", line, flags=re.IGNORECASE))
+    balanced_lines = sum(1 for line in lines if 12 <= len(line) <= 140)
+    punctuation_lines = sum(1 for line in lines if re.search(r"[.!?:;)]", line))
+    question_lines = sum(1 for line in lines if re.match(r"^\d{1,3}[.)-]?\s+", line))
+    option_lines = sum(1 for line in lines if re.match(r"^[A-E][.)]\s+\S", line))
+    noise_lines = sum(1 for index, line in enumerate(lines) if _is_probably_pdf_noise_line(line, index, len(lines)))
+
+    return (
+        len(normalized)
+        + (avg_line_length * 6)
+        + (balanced_lines * 24)
+        + (punctuation_lines * 10)
+        + (question_lines * 16)
+        + (option_lines * 10)
+        - (very_short_lines * 18)
+        - (single_letter_lines * 90)
+        - (fragmented_word_lines * 20)
+        - (noise_lines * 60)
+    )
+
+
+def _choose_best_pdf_text_candidate(*candidates: str) -> str:
+    best_text = ""
+    best_score = float("-inf")
+    for candidate in candidates:
+        text = _clean_pdf_page_text(candidate)
+        if not text:
+            continue
+        score = _score_pdf_text_quality(text)
+        if score > best_score:
+            best_text = text
+            best_score = score
+    return best_text
+
+
+def _normalize_pdf_page_text(text: str) -> str:
+    normalized = unicodedata.normalize("NFKC", str(text or ""))
+    normalized = normalized.replace("\u00ad", "")
+    normalized = normalized.replace("\xa0", " ")
+    normalized = normalized.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", normalized)
+    normalized = re.sub(r"[ \t]+", " ", normalized)
+    return normalized.strip()
+
+
+def _is_probably_pdf_noise_line(line: str, index: int, total_lines: int) -> bool:
+    stripped = re.sub(r"\s+", " ", str(line or "")).strip()
+    if not stripped:
+        return False
+
+    near_edge = index < 2 or index >= max(0, total_lines - 2)
+    if re.fullmatch(r"[-_=|~•·*.◦○●□■▪▫]{3,}", stripped):
+        return True
+    if re.fullmatch(r"(?i)(?:page|sayfa)\s*\d{1,3}(?:\s*/\s*\d{1,3})?", stripped):
+        return True
+    if re.fullmatch(r"[-–—]\s*\d{1,3}\s*[-–—]", stripped):
+        return True
+    if near_edge and re.fullmatch(r"\d{1,3}", stripped):
+        return True
+    if near_edge and re.fullmatch(r"[ivxlcdm]{1,6}", stripped, flags=re.IGNORECASE):
+        return True
+    if re.fullmatch(r"(?:[A-E]\s+){3,}[A-E]", stripped):
+        return True
+    if len(stripped) <= 18:
+        symbol_count = sum(1 for char in stripped if not char.isalnum() and not char.isspace())
+        if symbol_count >= max(4, int(len(stripped) * 0.6)):
+            return True
+    return False
+
+
+def _should_concat_pdf_word_fragments(previous_line: str, next_line: str) -> bool:
+    prev = previous_line.strip()
+    nxt = next_line.strip()
+    if not prev or not nxt:
+        return False
+    if prev.endswith("-") and re.match(r"^[A-Za-zÇĞİÖŞÜçğıöşü]", nxt):
+        return True
+    return bool(
+        re.fullmatch(r"[A-Za-zÇĞİÖŞÜçğıöşü]{1,4}", prev)
+        and re.match(r"^[a-zçğıöşü]", nxt)
+    )
+
+
+def _should_merge_pdf_lines(previous_line: str, next_line: str) -> bool:
+    prev = previous_line.strip()
+    nxt = next_line.strip()
+    if not prev or not nxt:
+        return False
+    if prev.startswith("|") or nxt.startswith("|"):
+        return False
+    if re.match(r"^(?:[-*•]|\d{1,3}[.)]|[A-E][.)])\s+", nxt):
+        return False
+    if prev.endswith((".", "!", "?", ":", ";", ")", "]")):
+        return False
+    if _should_concat_pdf_word_fragments(prev, nxt):
+        return True
+    return bool(re.match(r"^[a-zçğıöşü(]", nxt) and len(prev) >= 2)
+
+
+def _merge_pdf_lines(previous_line: str, next_line: str) -> str:
+    prev = previous_line.rstrip()
+    nxt = next_line.lstrip()
+    if prev.endswith("-"):
+        return f"{prev[:-1]}{nxt}"
+    if _should_concat_pdf_word_fragments(prev, nxt):
+        return f"{prev}{nxt}"
+    return f"{prev} {nxt}"
+
+
+def _clean_pdf_page_text(text: str) -> str:
+    normalized = _normalize_pdf_page_text(text)
+    if not normalized:
+        return ""
+
+    raw_lines = [re.sub(r"\s+", " ", line).strip() for line in normalized.splitlines()]
+    filtered_lines = [
+        line
+        for index, line in enumerate(raw_lines)
+        if line and not _is_probably_pdf_noise_line(line, index, len(raw_lines))
+    ]
+    if not filtered_lines:
+        return ""
+
+    merged_lines: list[str] = []
+    for line in filtered_lines:
+        if merged_lines and _should_merge_pdf_lines(merged_lines[-1], line):
+            merged_lines[-1] = _merge_pdf_lines(merged_lines[-1], line)
+        else:
+            merged_lines.append(line)
+
+    cleaned = "\n".join(merged_lines)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def _estimate_pdf_page_image_coverage(page) -> float:
+    page_width = float(getattr(page, "width", 0) or 0)
+    page_height = float(getattr(page, "height", 0) or 0)
+    if page_width <= 0 or page_height <= 0:
+        return 0.0
+    images = list(getattr(page, "images", None) or [])
+    if not images:
+        return 0.0
+
+    total_area = page_width * page_height
+    covered_area = 0.0
+    for image in images:
+        try:
+            x0 = float(image.get("x0", 0) or 0)
+            x1 = float(image.get("x1", 0) or 0)
+            top = float(image.get("top", 0) or 0)
+            bottom = float(image.get("bottom", 0) or 0)
+        except Exception:
+            continue
+        covered_area += max(0.0, x1 - x0) * max(0.0, bottom - top)
+    if covered_area <= 0:
+        return 0.0
+    return min(1.0, covered_area / total_area)
 
 
 def _normalize_pdf_line(text: str) -> str:
@@ -560,30 +734,38 @@ def _extract_text_from_pdf(doc_bytes: bytes) -> str:
                     else:
                         parts.append(page_content)
                     continue
-            should_try_ocr = not table_bboxes and bool(getattr(page, "images", None))
-            # When the page has no detected tables, use layout=True to preserve
-            # spatial column ordering instead of the default linear read order.
-            text_kwargs: dict = {} if table_bboxes else {"layout": True}
-            text = column_ordered_text if not table_bboxes else ""
-            if not text:
-                text = (remaining.extract_text(**text_kwargs) or "").strip()
+            has_page_images = bool(getattr(page, "images", None))
+            image_coverage = _estimate_pdf_page_image_coverage(page)
+            should_compare_ocr = not table_bboxes and has_page_images and image_coverage >= _PDF_OCR_MIN_IMAGE_COVERAGE
+            layout_text = ""
+            linear_text = ""
+            if table_bboxes:
+                linear_text = (remaining.extract_text() or "").strip()
+            else:
+                layout_text = (remaining.extract_text(layout=True) or "").strip()
+                linear_text = (remaining.extract_text() or "").strip()
+            text = _choose_best_pdf_text_candidate(column_ordered_text, layout_text, linear_text)
+            ocr_text = ""
+            if should_compare_ocr:
+                ocr_text = _extract_text_from_pdf_ocr(page)
+                text = _choose_best_pdf_text_candidate(text, ocr_text)
             if text:
-                if not table_bboxes:
+                if text == _clean_pdf_page_text(layout_text) and not table_bboxes:
                     # Collapse runs of 3+ spaces produced by layout=True into 2
                     # spaces so the output stays readable without being noisy.
                     text = re.sub(r"[ \t]{3,}", "  ", text)
                 text = _filter_repeating_page_edge_lines(text, repeated_edge_lines)
                 page_parts.insert(0, text)
-                if should_try_ocr and len(text) < _PDF_OCR_MIN_TEXT_CHARS:
+                if has_page_images and len(text) < _PDF_OCR_MIN_TEXT_CHARS:
                     # Very short text on an image-heavy page usually means the
                     # visible content is a scan or rasterized table.
-                    ocr_text = _extract_text_from_pdf_ocr(page)
+                    ocr_text = _clean_pdf_page_text(ocr_text or _extract_text_from_pdf_ocr(page))
                     if ocr_text:
                         page_parts = [_filter_repeating_page_edge_lines(ocr_text, repeated_edge_lines)]
-            elif should_try_ocr:
+            elif has_page_images:
                 # Image-only or nearly empty pages are often scans; render the
                 # page and run OCR as a fallback instead of dropping them.
-                ocr_text = _extract_text_from_pdf_ocr(page)
+                ocr_text = _clean_pdf_page_text(ocr_text or _extract_text_from_pdf_ocr(page))
                 if ocr_text:
                     page_parts.append(_filter_repeating_page_edge_lines(ocr_text, repeated_edge_lines))
             if not page_parts:

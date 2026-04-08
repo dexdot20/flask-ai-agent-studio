@@ -57,10 +57,17 @@ textarea:focus-visible {
 }
 
 /* ── Scrollbar ──────────────────────────────────────────── */
-::-webkit-scrollbar       { width: 5px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #2a2a38; border-radius: 99px; }
-::-webkit-scrollbar-thumb:hover { background: #3a3a4e; }
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2a2a38 transparent;
+}
+
+@supports selector(::-webkit-scrollbar) {
+  ::-webkit-scrollbar       { width: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #2a2a38; border-radius: 99px; }
+  ::-webkit-scrollbar-thumb:hover { background: #3a3a4e; }
+}
 
 /* ── Header ─────────────────────────────────────────────── */
 header {
@@ -4089,10 +4096,56 @@ kbd {
 
 .canvas-page-content {
   min-width: 0;
+  display: flex;
+  justify-content: center;
 }
 
 .canvas-page-heading {
   scroll-margin-top: 72px;
+}
+
+.canvas-page-sheet {
+  width: min(100%, 820px);
+  padding: 40px 46px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.985), rgba(246, 244, 238, 0.98));
+  color: #1a1f2b;
+  box-shadow: 0 22px 48px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.65);
+}
+
+.canvas-page-sheet h1,
+.canvas-page-sheet h2,
+.canvas-page-sheet h3,
+.canvas-page-sheet h4,
+.canvas-page-sheet h5,
+.canvas-page-sheet h6 {
+  color: #161b25;
+}
+
+.canvas-page-sheet p,
+.canvas-page-sheet li,
+.canvas-page-sheet blockquote,
+.canvas-page-sheet td,
+.canvas-page-sheet th,
+.canvas-page-sheet strong,
+.canvas-page-sheet em {
+  color: #283142;
+}
+
+.canvas-page-sheet code {
+  background: rgba(26, 31, 43, 0.08);
+  color: #172033;
+}
+
+.canvas-page-sheet pre {
+  background: #eef2f8;
+  border-color: rgba(23, 32, 51, 0.12);
+}
+
+.canvas-page-sheet table,
+.canvas-page-sheet hr {
+  border-color: rgba(23, 32, 51, 0.12);
 }
 
 @media (max-width: 980px) {
@@ -4260,6 +4313,12 @@ kbd {
     height: 34px;
   }
 
+  .canvas-page-sheet {
+    width: 100%;
+    padding: 24px 20px;
+    border-radius: 16px;
+  }
+
   .canvas-panel-header {
     padding: 16px 16px 12px;
   }
@@ -4270,7 +4329,6 @@ kbd {
     text-overflow: clip;
     display: -webkit-box;
     -webkit-line-clamp: 2;
-    line-clamp: 2;
     -webkit-box-orient: vertical;
   }
 

@@ -1422,6 +1422,7 @@ const CLARIFICATION_DRAFT_STORAGE_PREFIX = "chatbot.clarificationDraft";
 const CANVAS_STREAMING_PREVIEW_TOOLS = new Set(["create_canvas_document", "rewrite_canvas_document", "batch_canvas_edits", "transform_canvas_lines", "replace_canvas_lines", "insert_canvas_lines", "delete_canvas_lines"]);
 const CANVAS_EDIT_PREVIEW_TOOLS = new Set(["batch_canvas_edits", "transform_canvas_lines", "replace_canvas_lines", "insert_canvas_lines", "delete_canvas_lines"]);
 const CANVAS_PAGE_HEADING_TEXT_RE = /^Page\s+(\d+)$/i;
+const PENDING_CANVAS_UPLOAD_PREVIEW_KEY = "pending-canvas-upload";
 
 function isCanvasStreamingPreviewTool(toolName) {
   return CANVAS_STREAMING_PREVIEW_TOOLS.has(String(toolName || "").trim());
@@ -1528,6 +1529,31 @@ function getCanvasPageHeadingNodes() {
   return Array.from(canvasDocumentEl.querySelectorAll("[data-canvas-page-number]"));
 }
 
+function extractCanvasPageSectionsFromContent(content) {
+  const normalizedContent = String(content || "").replace(/\r\n?/g, "\n");
+  const matches = Array.from(normalizedContent.matchAll(/^##\s+Page\s+(\d+)\s*$/gm));
+  if (!matches.length) {
+    return [];
+  }
+  return matches.map((match, index) => {
+    const pageNumber = Number.parseInt(match[1], 10);
+    const start = match.index ?? 0;
+    const end = index + 1 < matches.length ? (matches[index + 1].index ?? normalizedContent.length) : normalizedContent.length;
+    return {
+      pageNumber,
+      content: normalizedContent.slice(start, end).trim(),
+    };
+  }).filter((section) => Number.isFinite(section.pageNumber) && section.pageNumber > 0 && section.content);
+}
+
+function getCanvasPageSection(document, pageNumber) {
+  const sections = extractCanvasPageSectionsFromContent(document?.content || "");
+  if (!sections.length) {
+    return null;
+  }
+  return sections.find((section) => section.pageNumber === clampCanvasPageNumber(document, pageNumber)) || sections[0];
+}
+
 function updateCanvasPageNavigationUi(document) {
   if (!canvasDocumentEl || !isCanvasPageAwareDocument(document)) {
     return;
@@ -1583,6 +1609,13 @@ function scrollCanvasToPage(document, pageNumber, behavior = "smooth") {
     return;
   }
   const normalizedPage = setCanvasCurrentPage(document, pageNumber);
+  const pageSection = getCanvasPageSection(document, normalizedPage);
+  if (pageSection) {
+    canvasDocumentEl.innerHTML = renderCanvasDocumentBody(document);
+    bindCanvasPageNavigation(document);
+    canvasDocumentEl.scrollTo({ top: 0, behavior: behavior === "auto" ? "auto" : "smooth" });
+    return;
+  }
   const target = canvasDocumentEl.querySelector(`#${getCanvasPageAnchorId(document.id, normalizedPage)}`);
   if (target) {
     target.scrollIntoView({ behavior, block: "start" });
@@ -1596,6 +1629,18 @@ function bindCanvasPageNavigation(document) {
   }
   canvasDocumentEl.onscroll = null;
   if (!isCanvasPageAwareDocument(document)) {
+    return;
+  }
+
+  const pageSection = getCanvasPageSection(document, getCanvasCurrentPage(document) || 1);
+  if (pageSection) {
+    canvasDocumentEl.querySelector('[data-canvas-page-action="prev"]')?.addEventListener("click", () => {
+      scrollCanvasToPage(document, getCanvasCurrentPage(document) - 1, "auto");
+    });
+    canvasDocumentEl.querySelector('[data-canvas-page-action="next"]')?.addEventListener("click", () => {
+      scrollCanvasToPage(document, getCanvasCurrentPage(document) + 1, "auto");
+    });
+    updateCanvasPageNavigationUi(document);
     return;
   }
 
@@ -2306,8 +2351,11 @@ function appendCanvasMathFragment(fragment, mathText, displayMode) {
     wrapper.innerHTML = globalThis.katex.renderToString(mathText, {
       displayMode,
       throwOnError: false,
-      strict: "warn",
+      strict(errorCode) {
+        return errorCode === "unicodeTextInMathMode" ? "ignore" : "warn";
+      },
       trust: false,
+      output: "html",
     });
   } catch (_) {
     fragment.appendChild(document.createTextNode(displayMode ? `$$${mathText}$$` : `$${mathText}$`));
@@ -2432,11 +2480,12 @@ function renderCanvasDocumentBody(document) {
   if (document.format === "code") {
     return sanitizeHtml(`<div class="canvas-code-document">${renderHighlightedCodeBlock(document.content, document.language || null)}</div>`);
   }
-  const markdownHtml = renderMarkdown(document.content);
   if (!isCanvasPageAwareDocument(document)) {
-    return markdownHtml;
+    return renderMarkdown(document.content);
   }
   const currentPage = getCanvasCurrentPage(document) || setCanvasCurrentPage(document, 1);
+  const currentSection = getCanvasPageSection(document, currentPage);
+  const markdownHtml = renderMarkdown(currentSection?.content || document.content);
   return (
     `<div class="canvas-document-shell">` +
       `<div class="canvas-page-nav" data-canvas-page-nav>` +
@@ -2444,7 +2493,7 @@ function renderCanvasDocumentBody(document) {
         `<div class="canvas-page-nav__status" data-canvas-page-label>Page ${currentPage} / ${document.page_count}</div>` +
         `<button type="button" class="canvas-page-nav__button" data-canvas-page-action="next" aria-label="Next page">&rarr;</button>` +
       `</div>` +
-      `<div class="canvas-page-content">${markdownHtml}</div>` +
+      `<div class="canvas-page-content"><article class="canvas-page-sheet" data-canvas-page-sheet data-canvas-page-number="${currentPage}">${markdownHtml}</article></div>` +
     `</div>`
   );
 }
@@ -2590,11 +2639,47 @@ function inferCanvasUploadLanguage(fileName) {
   return CANVAS_UPLOAD_LANGUAGE_MAP[getCanvasUploadExtension(fileName)] || null;
 }
 
+function showPendingCanvasUploadPreview(fileName) {
+  const nextTitle = String(fileName || "Uploaded file").trim() || "Uploaded file";
+  const nextFormat = inferCanvasUploadFormat(nextTitle);
+  const nextLanguage = inferCanvasUploadLanguage(nextTitle) || "";
+  const preview = buildStreamingCanvasPreviewDocument("create_canvas_document", PENDING_CANVAS_UPLOAD_PREVIEW_KEY, {
+    title: nextTitle,
+    format: nextFormat,
+    language: nextLanguage,
+  });
+  if (!preview) {
+    return;
+  }
+  preview.content = nextFormat === "code"
+    ? "// Upload is being processed..."
+    : getCanvasUploadExtension(nextTitle) === ".pdf"
+      ? `## Processing ${nextTitle}\n\nPreparing pages for Canvas...`
+      : `# ${nextTitle}\n\nUploading file...`;
+  preview.line_count = preview.content.split("\n").length;
+  preview.page_count = 0;
+  preview.isStreamingPreview = true;
+  streamingCanvasPreviews.set(PENDING_CANVAS_UPLOAD_PREVIEW_KEY, preview);
+  activeCanvasDocumentId = preview.id;
+  isCanvasEditing = false;
+  editingCanvasDocumentId = null;
+  renderCanvasPanel();
+}
+
+function clearPendingCanvasUploadPreview() {
+  if (!streamingCanvasPreviews.has(PENDING_CANVAS_UPLOAD_PREVIEW_KEY)) {
+    return;
+  }
+  streamingCanvasPreviews.delete(PENDING_CANVAS_UPLOAD_PREVIEW_KEY);
+}
+
 async function createCanvasDocumentFromData({ title, content, format, language = null, statusMessage = "Creating canvas file..." }) {
   if (!currentConvId) {
     setCanvasStatus("Conversation is not available yet.", "warning");
     return;
   }
+
+  cancelPendingConversationRefreshes();
 
   if (canvasNewBtn) {
     canvasNewBtn.disabled = true;
@@ -2623,6 +2708,7 @@ async function createCanvasDocumentFromData({ title, content, format, language =
       throw new Error(payload.error || "Canvas create failed.");
     }
 
+    clearPendingCanvasUploadPreview();
     history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
     streamingCanvasDocuments = [];
     pendingCanvasDiff = null;
@@ -2641,6 +2727,7 @@ async function createCanvasDocumentFromData({ title, content, format, language =
       canvasEditorEl.setSelectionRange(cursorPosition, cursorPosition);
     });
   } catch (error) {
+    clearPendingCanvasUploadPreview();
     setCanvasStatus(error.message || "Canvas create failed.", "danger");
     renderCanvasPanel();
   }
@@ -2663,21 +2750,60 @@ async function createCanvasDocumentFromPrompt() {
 
 async function createCanvasDocumentFromFile(file) {
   const nextTitle = String(file?.name || "").trim() || "Uploaded file";
-  let nextContent = "";
-  try {
-    nextContent = await file.text();
-  } catch (error) {
-    setCanvasStatus(error.message || "Failed to read uploaded file.", "danger");
+
+  if (!currentConvId) {
+    setCanvasStatus("Conversation is not available yet.", "warning");
     return;
   }
 
-  await createCanvasDocumentFromData({
-    title: nextTitle,
-    content: nextContent,
-    format: inferCanvasUploadFormat(nextTitle),
-    language: inferCanvasUploadLanguage(nextTitle),
-    statusMessage: `Uploading ${nextTitle}...`,
-  });
+  if (canvasNewBtn) {
+    canvasNewBtn.disabled = true;
+  }
+  if (canvasUploadBtn) {
+    canvasUploadBtn.disabled = true;
+  }
+
+  cancelPendingConversationRefreshes();
+  showPendingCanvasUploadPreview(nextTitle);
+  setCanvasStatus(`Uploading ${nextTitle}...`, "muted");
+
+  try {
+    const formData = new FormData();
+    formData.append("file", file, nextTitle);
+    formData.append("title", nextTitle);
+
+    const response = await fetch(`/api/conversations/${currentConvId}/canvas`, {
+      method: "POST",
+      body: formData,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.error || "Canvas upload failed.");
+    }
+
+    clearPendingCanvasUploadPreview();
+    history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
+    streamingCanvasDocuments = [];
+    pendingCanvasDiff = null;
+    activeCanvasDocumentId = String(payload.active_document_id || payload.document?.id || "").trim() || null;
+    isCanvasEditing = true;
+    editingCanvasDocumentId = activeCanvasDocumentId;
+    renderConversationHistory();
+    renderCanvasPanel();
+    setCanvasStatus("Canvas file created.", "success");
+    globalThis.requestAnimationFrame(() => {
+      if (!canvasEditorEl) {
+        return;
+      }
+      canvasEditorEl.focus();
+      const cursorPosition = canvasEditorEl.value.length;
+      canvasEditorEl.setSelectionRange(cursorPosition, cursorPosition);
+    });
+  } catch (error) {
+    clearPendingCanvasUploadPreview();
+    setCanvasStatus(error.message || "Canvas upload failed.", "danger");
+    renderCanvasPanel();
+  }
 }
 
 function openCanvasUploadPicker() {
@@ -4088,7 +4214,7 @@ async function downloadCanvasDocument(format) {
   }
 }
 
-async function deleteCanvasDocuments({ documentId = null, clearAll = false } = {}) {
+async function deleteCanvasDocuments({ documentId = null, clearAll = false, confirmed = false } = {}) {
   if (!currentConvId) {
     setCanvasStatus("Canvas is not available yet.", "warning");
     return;
@@ -4101,13 +4227,22 @@ async function deleteCanvasDocuments({ documentId = null, clearAll = false } = {
     return;
   }
 
-  const confirmationMessage = clearAll
-    ? "Delete all canvas documents?"
-    : `Delete ${activeDocument?.title || "this canvas document"}?`;
-  if (!globalThis.confirm(confirmationMessage)) {
+  if (!confirmed) {
+    openCanvasConfirmModal({
+      title: "Are you sure?",
+      message: clearAll
+        ? "This will permanently remove every file from Canvas."
+        : `This will permanently remove ${activeDocument?.title || "this canvas document"} from Canvas.`,
+      confirmLabel: clearAll ? "Clear all" : "Delete",
+      cancelLabel: "Cancel",
+      onConfirm: () => {
+        void deleteCanvasDocuments({ documentId: targetDocumentId, clearAll, confirmed: true });
+      },
+    });
     return;
   }
 
+  cancelPendingConversationRefreshes();
   setCanvasStatus(clearAll ? "Deleting all canvas documents..." : "Deleting canvas document...", "muted");
   try {
     const params = new URLSearchParams();
@@ -4159,6 +4294,7 @@ async function saveCanvasEdits() {
 
   const nextContent = canvasEditorEl.value.replace(/\r\n?/g, "\n");
   const nextFormat = canvasFormatSelect?.value === "code" ? "code" : "markdown";
+  cancelPendingConversationRefreshes();
   setCanvasStatus("Saving canvas edits...", "muted");
 
   try {
@@ -6335,6 +6471,12 @@ function scheduleConversationRefreshAfterStream() {
     }, delay);
     pendingConversationRefreshTimers.add(timerId);
   });
+}
+
+function cancelPendingConversationRefreshes() {
+  conversationRefreshGeneration += 1;
+  pendingConversationRefreshTimers.forEach((timerId) => window.clearTimeout(timerId));
+  pendingConversationRefreshTimers.clear();
 }
 
 function rebuildTokenStatsFromHistory() {
