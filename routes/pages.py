@@ -92,6 +92,7 @@ from model_registry import (
     get_all_models,
     get_chat_capable_models,
     get_default_chat_model_id,
+    get_image_helper_model_id,
     get_model_record,
     get_operation_model_fallback_preferences,
     get_operation_model_preferences,
@@ -358,6 +359,7 @@ def build_settings_payload() -> dict:
         "operation_model_preferences": get_operation_model_preferences(raw),
         "operation_model_fallback_preferences": get_operation_model_fallback_preferences(raw),
         "image_processing_method": normalize_image_processing_method(raw.get("image_processing_method")),
+        "image_helper_model": get_image_helper_model_id(raw),
         "active_tools": configured_active_tools,
         "proxy_enabled_operations": get_proxy_enabled_operations(raw),
         "rag_auto_inject": get_rag_auto_inject_enabled(raw),
@@ -474,6 +476,7 @@ def register_page_routes(app) -> None:
         operation_model_preferences_raw = data.get("operation_model_preferences")
         operation_model_fallback_preferences_raw = data.get("operation_model_fallback_preferences")
         image_processing_method_raw = data.get("image_processing_method")
+        image_helper_model_raw = data.get("image_helper_model")
         active_tools_raw = data.get("active_tools")
         proxy_enabled_operations_raw = data.get("proxy_enabled_operations")
         rag_auto_inject = data.get("rag_auto_inject")
@@ -749,8 +752,18 @@ def register_page_routes(app) -> None:
         if image_processing_method_raw is not None:
             normalized_image_processing_method = normalize_image_processing_method(image_processing_method_raw)
             if normalized_image_processing_method != str(image_processing_method_raw or "").strip().lower():
-                return jsonify({"error": "image_processing_method must be one of auto, llm, local_ocr, local_vl, or local_both."}), 400
+                return jsonify({"error": "image_processing_method must be one of auto, llm_helper, llm_direct, or local_ocr."}), 400
             settings["image_processing_method"] = normalized_image_processing_method
+
+        if image_helper_model_raw is not None:
+            candidate = canonicalize_model_id(image_helper_model_raw)
+            if candidate:
+                record = get_model_record(candidate, settings)
+                if record is None:
+                    return jsonify({"error": "image_helper_model must reference a known model."}), 400
+                if not record.get("supports_vision"):
+                    return jsonify({"error": "image_helper_model must support image input."}), 400
+            settings["image_helper_model"] = candidate
 
         if active_tools_raw is not None:
             if not isinstance(active_tools_raw, list):

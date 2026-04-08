@@ -76,6 +76,7 @@ const fixTextModelPreferenceEl = document.getElementById("fix-text-model-prefere
 const titleModelPreferenceEl = document.getElementById("title-model-preference-select");
 const uploadMetadataModelPreferenceEl = document.getElementById("upload-metadata-model-preference-select");
 const subAgentModelPreferenceEl = document.getElementById("sub-agent-model-preference-select");
+const imageHelperModelEl = document.getElementById("image-helper-model-select");
 const summaryModelFallbackListEl = document.getElementById("summary-model-fallback-list");
 const fetchSummarizeModelFallbackListEl = document.getElementById("fetch-summarize-model-fallback-list");
 const pruneModelFallbackListEl = document.getElementById("prune-model-fallback-list");
@@ -1119,6 +1120,32 @@ function populateOperationModelSelect(selectEl, selectedValue, emptyLabel = "Use
   }
 }
 
+function populateVisionModelSelect(selectEl, selectedValue, emptyLabel = "Use default chat model when needed") {
+  if (!selectEl) {
+    return;
+  }
+  const options = getDraftAvailableModels().filter((model) => Boolean(model?.supports_vision));
+  const fragment = document.createDocumentFragment();
+
+  const defaultOption = document.createElement("option");
+  defaultOption.value = "";
+  defaultOption.textContent = emptyLabel;
+  fragment.append(defaultOption);
+
+  options.forEach((model) => {
+    const option = document.createElement("option");
+    option.value = model.id;
+    option.textContent = `${model.name || model.id} (${getModelProviderLabel(model)})`;
+    fragment.append(option);
+  });
+
+  selectEl.replaceChildren(fragment);
+  selectEl.value = selectedValue || "";
+  if (selectEl.value !== (selectedValue || "")) {
+    selectEl.value = "";
+  }
+}
+
 function renderOperationModelSelects(preferences = null) {
   const currentSelections = preferences && typeof preferences === "object"
     ? {
@@ -1138,6 +1165,7 @@ function renderOperationModelSelects(preferences = null) {
   populateOperationModelSelect(titleModelPreferenceEl, currentSelections.generate_title);
   populateOperationModelSelect(uploadMetadataModelPreferenceEl, currentSelections.upload_metadata);
   populateOperationModelSelect(subAgentModelPreferenceEl, currentSelections.sub_agent);
+  populateVisionModelSelect(imageHelperModelEl, appSettings.image_helper_model || "", "Use default chat model when needed");
 }
 
 function renderModelManagementPanels({ preferVisibleId = "", operationPreferences = null } = {}) {
@@ -1665,6 +1693,9 @@ function applySettingsToForm() {
   if (imageProcessingMethodEl) {
     imageProcessingMethodEl.value = appSettings.image_processing_method || "auto";
   }
+  if (imageHelperModelEl) {
+    imageHelperModelEl.value = appSettings.image_helper_model || "";
+  }
   draftCustomModels = Array.isArray(appSettings.custom_models)
     ? appSettings.custom_models.map((model) => normalizeDraftCustomModel(model))
     : [];
@@ -1754,6 +1785,7 @@ function applyServerSettingsData(data) {
     ? data.operation_model_fallback_preferences
     : {};
   appSettings.image_processing_method = data.image_processing_method || "auto";
+  appSettings.image_helper_model = data.image_helper_model || "";
   appSettings.chat_summary_mode = data.chat_summary_mode || "auto";
   appSettings.chat_summary_detail_level = data.chat_summary_detail_level || "balanced";
   appSettings.chat_summary_trigger_token_count = data.chat_summary_trigger_token_count || 80000;
@@ -1855,6 +1887,7 @@ async function saveSettings() {
     operation_model_preferences: getOperationModelPreferencesDraft(),
     operation_model_fallback_preferences: getOperationModelFallbackPreferencesDraft(),
     image_processing_method: imageProcessingMethodEl?.value || "auto",
+    image_helper_model: imageHelperModelEl?.value || "",
     active_tools: getSelectedTools(),
     sub_agent_allowed_tool_names: getSelectedSubAgentTools(),
     proxy_enabled_operations: getSelectedProxyOperations(),
@@ -2270,6 +2303,7 @@ function registerDirtyListeners() {
   titleModelPreferenceEl?.addEventListener("change", markDirty);
   uploadMetadataModelPreferenceEl?.addEventListener("change", markDirty);
   subAgentModelPreferenceEl?.addEventListener("change", markDirty);
+  imageHelperModelEl?.addEventListener("change", markDirty);
   imageProcessingMethodEl?.addEventListener("change", markDirty);
   ragSensitivityEl?.addEventListener("change", () => {
     updateRagSensitivityHint();

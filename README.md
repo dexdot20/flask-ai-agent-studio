@@ -1,6 +1,6 @@
-# Flask ChatBot: Multi-Provider + Tools + RAG + OCR + Vision + Canvas + Memory + Workspace
+# Flask ChatBot: Multi-Provider + Tools + RAG + OCR + Multimodal + Canvas + Memory + Workspace
 
-This is a single-page Flask chat application built around DeepSeek plus optional OpenRouter models, multi-step tool use, local RAG, dedicated local OCR, optional local vision analysis, conversation summarization, pruning, user-configurable entropy-aware context selection, persistent memory, conversation-scoped memory, editable canvas documents, page-aware canvas navigation, and a per-conversation workspace sandbox.
+This is a single-page Flask chat application built around DeepSeek plus optional OpenRouter models, multi-step tool use, local RAG, dedicated local OCR, configurable image analysis modes, conversation summarization, pruning, user-configurable entropy-aware context selection, persistent memory, conversation-scoped memory, editable canvas documents, page-aware canvas navigation, and a per-conversation workspace sandbox.
 
 It is not a minimal prompt/response demo. The app keeps conversation history in SQLite, restores assistant metadata when a conversation is reopened, supports editing earlier user messages, streams tool progress and reasoning, can enrich a user turn with local OCR or extracted document text before the model sees it, and can compact older content with summaries and pruning.
 
@@ -54,7 +54,7 @@ It is not a minimal prompt/response demo. The app keeps conversation history in 
 
 ### Attachments
 
-- Image uploads can use the active chat model for LLM-based vision when that model supports images, or use the configured local OCR, local Qwen2.5-VL, or combined local pipeline depending on the selected image-processing method
+- Image uploads can use a helper vision-capable LLM, go directly to the active multimodal chat model, or use the configured local OCR depending on the selected image-processing method
 - Document uploads are extracted locally and injected into the conversation context
 - Supported image formats:
   - PNG
@@ -105,8 +105,8 @@ Manual smoke test checklist for the Canvas UI is available in [docs/canvas-ui-sm
 
 1. The browser sends JSON or multipart form data to `/chat`.
 2. The backend loads persisted settings from SQLite.
-3. If an image is attached, the configured image-processing method chooses among active-model LLM vision, local OCR, local Qwen2.5-VL, or a local combined pipeline.
-4. If the preferred image method is unavailable, `auto` and `llm` fall back to the nearest supported method, while explicit `local_ocr` and `local_vl` modes stay strict.
+3. If an image is attached, the configured image-processing method chooses among helper-LLM image description, direct multimodal model input, or local OCR.
+4. If the preferred image method is unavailable, `auto`, `llm_helper`, and `llm_direct` fall back to the nearest supported method, while explicit `local_ocr` stays strict.
 5. If a document is attached, its text is extracted and added to the turn context.
 6. If RAG auto-injection is enabled, the user message is searched against the knowledge base.
 7. If tool-memory auto-injection is enabled, the same query searches remembered web results.
@@ -128,7 +128,8 @@ Manual smoke test checklist for the Canvas UI is available in [docs/canvas-ui-sm
 ├── conversation_export.py  # Conversation and canvas export utilities
 ├── db.py                   # SQLite schema, settings, assets, cache, metadata helpers
 ├── doc_service.py          # Document upload and text extraction
-├── image_service.py        # OCR + vision orchestration for uploaded images
+├── image_service.py        # OCR + helper/direct multimodal orchestration for uploaded images
+├── image_utils.py          # Shared image parsing, normalization, and optimization helpers
 ├── model_registry.py       # Built-in and custom model catalog, OpenRouter model normalization
 ├── messages.py             # Runtime prompt construction and API message preparation
 ├── ocr_service.py          # Dedicated OCR provider loading and text extraction
@@ -138,7 +139,6 @@ Manual smoke test checklist for the Canvas UI is available in [docs/canvas-ui-sm
 ├── rag_service.py          # RAG sync/search orchestration and tool-memory storage
 ├── token_utils.py          # Token counting and prompt-source estimation
 ├── tool_registry.py        # Tool definitions and schemas exposed to the model
-├── vision.py               # Local Qwen2.5-VL visual analysis and image follow-up pipeline
 ├── web_tools.py            # Web search, news search, safe URL fetch, proxy rotation, and fetch summarization
 ├── routes/
 │   ├── chat.py             # /chat, /api/fix-text, title generation, summarization, pruning helpers
@@ -195,7 +195,6 @@ Optional stacks:
 ```bash
 pip install -r requirements-rag.txt
 pip install -r requirements-ocr-easy.txt
-pip install -r requirements-vl.txt
 pip install -r requirements-youtube-transcript.txt
 ```
 
@@ -214,7 +213,7 @@ Development:
 pip install -r requirements-dev.txt
 ```
 
-`requirements.txt` is the shared app baseline. RAG, OCR, and VL stacks live in separate requirement files so manual installs can stay targeted.
+`requirements.txt` is the shared app baseline. RAG, OCR, and YouTube transcript stacks live in separate requirement files so manual installs can stay targeted.
 
 For local YouTube transcript extraction, install `requirements-youtube-transcript.txt`, make sure `ffmpeg` is available on your machine, and enable the feature in `.env`:
 
@@ -227,14 +226,12 @@ YOUTUBE_TRANSCRIPT_COMPUTE_TYPE=int8
 
 ### 3) Hardware and runtime requirements
 
-RAG can now fall back to CPU-only embedding, while local vision remains CUDA-only in this codebase and OCR can run without the Qwen vision model.
+RAG can now fall back to CPU-only embedding, and OCR can run without any local vision model.
 
 - RAG embeddings work on CPU or CUDA; set `BGE_M3_DEVICE=cpu` for a CPU-only path, leave it on auto to use CUDA when available, and explicit CUDA requests fall back to CPU with a warning if the CUDA stack is unavailable.
 - Local OCR can run in OCR-only mode with EasyOCR or PaddleOCR.
-- Local Qwen2.5-VL vision inference requires CUDA and a local model directory.
-- There is no CPU fallback in the current codebase for local Qwen vision.
 - PaddleOCR GPU installs can require a CUDA-specific PaddlePaddle wheel; `install.sh` attempts a best-effort install and falls back to CPU PaddlePaddle when needed.
-- The installer stores the downloaded BGE-M3 cache in `models/rag/bge-m3` and the local Qwen2.5-VL cache in `models/vl/Qwen2.5-VL-3B-Instruct`.
+- The installer stores the downloaded BGE-M3 cache in `models/rag/bge-m3`.
 - If you do not have the required GPU stack, disable the features explicitly in `.env` instead of leaving them enabled.
 
 Example overrides for a lighter setup:
@@ -244,7 +241,6 @@ RAG_ENABLED=false
 BGE_M3_DEVICE=cpu
 OCR_ENABLED=true
 OCR_PROVIDER=easyocr
-VISION_ENABLED=false
 ```
 
 ### 4) Create `.env`
@@ -284,7 +280,7 @@ Then open:
 http://127.0.0.1:5000
 ```
 
-Running `python app.py` also triggers optional preload hooks for the OCR engine, the local vision model, and the embedder. Importing `create_app()` alone does not run those preload hooks.
+Running `python app.py` also triggers optional preload hooks for the OCR engine and the embedder. Importing `create_app()` alone does not run those preload hooks.
 
 ## Configuration
 
@@ -358,23 +354,15 @@ At least one provider key is required.
 
 Note: `rag_context_size` and `rag_sensitivity` are the runtime settings used during retrieval. The corresponding env vars above only seed the default presets stored in SQLite.
 
-### OCR and vision
+### OCR and image uploads
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `OCR_ENABLED` | `same as VISION_ENABLED` | Enables dedicated OCR for uploaded images |
+| `OCR_ENABLED` | `true` | Enables dedicated OCR for uploaded images |
 | `OCR_PROVIDER` | `paddleocr` | OCR backend: `paddleocr` or `easyocr` |
 | `OCR_PRELOAD` | `true` | Preload the OCR engine on startup |
-| `VISION_ENABLED` | `true` | Enables Qwen visual analysis and image follow-up |
-| `QWEN_VL_MODEL_PATH` | empty | Required local Qwen2.5-VL model directory |
-| `QWEN_VL_ATTENTION` | empty | Optional Transformers attention implementation |
-| `QWEN_VL_LOAD_IN_4BIT` | `true` | Use 4-bit loading when supported |
-| `QWEN_VL_TORCH_DTYPE` | `float16` | `float16`, `bfloat16`, or `float32` |
-| `QWEN_VL_MAX_NEW_TOKENS` | `768` | Generation limit for visual analysis and image follow-up |
-| `QWEN_VL_MIN_PIXELS` | `256 * 28 * 28` | Processor min-pixels setting |
-| `QWEN_VL_MAX_PIXELS` | `896 * 28 * 28` | Processor max-pixels setting |
-| `QWEN_VL_MAX_IMAGE_SIDE` | `1280` | Resize limit before local inference |
-| `QWEN_VL_PRELOAD` | `true` | Preload the vision model on startup |
+
+Remote helper/direct image modes rely on at least one configured provider key plus a vision-capable model selected in Settings. No local vision model download is required anymore.
 
 ### Fetch, summarization, and prompt budgets
 
@@ -556,11 +544,10 @@ If you attach an image:
 1. The frontend validates file type and size.
 2. The backend revalidates and reads the upload.
 3. The image is optimized locally.
-4. The configured OCR provider extracts readable text when OCR is enabled.
-5. If vision is enabled, Qwen2.5-VL adds non-text visual context, and the local combined image pipeline can merge OCR and vision outputs when both are active.
-6. That context is injected into the user message before the main model call.
+4. Depending on the selected mode, the app either runs local OCR, asks the configured helper model for an image description, or attaches the image directly to the multimodal main-model request.
+5. OCR and helper-model outputs are injected into the user message as text context; direct multimodal mode keeps the image as an actual visual input block.
 
-The backend also stores the analysis so follow-up questions about the same image can use the `image_explain` tool when vision is enabled. In OCR-only mode, image uploads still work but `image_explain` is not exposed.
+The backend also stores the analysis so follow-up questions about the same image can use the `image_explain` tool when helper or direct multimodal processing is available. In OCR-only mode, image uploads still work but `image_explain` is not exposed.
 
 ### Document upload workflow
 
@@ -1128,7 +1115,7 @@ RAG data is stored in a persistent Chroma collection under `CHROMA_DB_PATH`.
 - Chroma persistence defaults to `chroma_db/`
 - agent logs default to `logs/agent-trace.log`
 - optional proxies are loaded from `proxies.txt`
-- downloaded model caches default to `models/rag/bge-m3` and `models/vl/Qwen2.5-VL-3B-Instruct`
+- downloaded model caches default to `models/rag/bge-m3`
 - uploaded images are stored in `data/images/`
 - uploaded documents are stored in `data/documents/`
 - project workspace files default to `data/workspaces/`
@@ -1186,16 +1173,15 @@ A sample `.pre-commit-config.yaml` is not included in the repository.
 - repeated web and fetch calls benefit from caching
 - knowledge-base ingestion is limited to synced conversations, tool outputs, remembered web results, and explicit uploads through Settings
 - the app stores conversation content locally; plan backups accordingly
-- local vision requires a local model download and enough hardware to run it
 - scratchpad admin editing is disabled by default; enable it only if you trust the UI users
 - pruning rewrites message content in place and stores the original text in message metadata
 - when `LOGIN_PIN` is set, the app requires a PIN before any page or API route is accessible
 
 ## Troubleshooting
 
-**RAG or vision fails with CUDA errors**
+**RAG or OCR fails with CUDA errors**
 
-Set `RAG_ENABLED=false` and/or `VISION_ENABLED=false` in `.env` to disable GPU-dependent features. Otherwise, make sure you have a compatible NVIDIA GPU, CUDA toolkit, and a PyTorch build with CUDA support.
+Set `RAG_ENABLED=false` to disable GPU-hungry embedding work, or switch OCR to a CPU-capable setup. Otherwise, make sure you have a compatible NVIDIA GPU, CUDA toolkit, and a PyTorch build with CUDA support.
 
 **Proxy rotation not working**
 
@@ -1223,7 +1209,7 @@ Canvas documents are attached to the current conversation. Make sure you are in 
 
 **Image uploads are rejected**
 
-Image uploads require an existing saved conversation and a supported image type. They also need OCR or vision enabled locally, or an image-capable OpenRouter model.
+Image uploads require an existing saved conversation and a supported image type. They also need local OCR enabled or a configured vision-capable provider/model path through the helper or direct multimodal settings.
 
 **Document uploads fail**
 
@@ -1239,9 +1225,9 @@ Delete `chatbot.db` and restart the app. The schema will be recreated automatica
 
 Delete the `chroma_db` directory or the path configured in `CHROMA_DB_PATH`, then restart.
 
-**Why is the vision model not loading?**
+**Why are helper/direct image modes not working?**
 
-Make sure `QWEN_VL_MODEL_PATH` points to a local directory that contains the Qwen2.5-VL model files. Vision also requires CUDA in this codebase.
+Make sure at least one provider API key is configured and that the selected main model or helper model supports vision. Direct mode needs a multimodal main model, while helper mode needs a vision-capable helper model in Settings.
 
 **Why is OCR not starting?**
 

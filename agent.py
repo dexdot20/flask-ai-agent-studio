@@ -110,6 +110,7 @@ from db import (
     replace_scratchpad,
 )
 from messages import build_current_time_context
+from image_service import answer_image_question
 from model_registry import (
     DEEPSEEK_PROVIDER,
     OPENROUTER_PROVIDER,
@@ -125,7 +126,6 @@ from model_registry import (
 from rag_service import get_exact_tool_memory_match, search_knowledge_base_tool, search_tool_memory, upsert_tool_memory_result
 from tool_registry import TOOL_SPEC_BY_NAME, get_openai_tool_specs
 from token_utils import estimate_text_tokens
-from vision import answer_image_question
 from web_tools import (
     fetch_url_tool,
     grep_fetched_content_tool,
@@ -4496,7 +4496,6 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
 
 
 def _run_image_explain(tool_args: dict, runtime_state: dict):
-    del runtime_state
     image_id = str(tool_args.get("image_id") or "").strip()
     conversation_id = tool_args.get("conversation_id")
     question = str(tool_args.get("question") or "").strip()
@@ -4522,6 +4521,8 @@ def _run_image_explain(tool_args: dict, runtime_state: dict):
         asset.get("mime_type", ""),
         question,
         initial_analysis=asset.get("initial_analysis"),
+        settings=get_app_settings(),
+        model_id=str(((runtime_state.get("agent_context") or {}).get("model") or "")).strip(),
     )
     return {
         "status": "ok",

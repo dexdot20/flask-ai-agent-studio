@@ -37,7 +37,6 @@ from config import (
     RAG_SOURCE_TOOL_RESULT,
     YOUTUBE_TRANSCRIPTS_DISABLED_FEATURE_ERROR,
     YOUTUBE_TRANSCRIPTS_ENABLED,
-    VISION_ENABLED,
 )
 from db import (
     build_effective_user_preferences,
@@ -136,7 +135,8 @@ from messages import (
     normalize_chat_messages,
     prepend_runtime_context,
 )
-from image_service import analyze_uploaded_image
+from image_service import analyze_uploaded_image, can_answer_image_questions
+from image_utils import read_uploaded_image
 from model_registry import (
     can_model_process_images,
     DEEPSEEK_PROVIDER,
@@ -161,7 +161,6 @@ from video_transcript_service import (
     read_youtube_video_reference,
     transcribe_youtube_video,
 )
-from vision import preload_local_vision_engine, read_uploaded_image
 from prune_service import is_prunable_message, prune_conversation_batch
 
 
@@ -3342,7 +3341,7 @@ def register_chat_routes(app) -> None:
                     return jsonify({"error": f"Document processing failed: {exc}"}), 502
                 if processing_stage == "video":
                     return jsonify({"error": f"YouTube transcript processing failed: {exc}"}), 502
-                return jsonify({"error": f"Local image processing failed: {exc}"}), 502
+                return jsonify({"error": f"Image processing failed: {exc}"}), 502
 
             latest_user_message["metadata"] = _merge_attachment_metadata(
                 latest_user_message.get("metadata"),
@@ -3352,7 +3351,7 @@ def register_chat_routes(app) -> None:
         max_steps = max(1, min(50, int(settings.get("max_steps", 5))))
         temperature = get_model_temperature(settings)
         active_tool_names = get_active_tool_names(settings)
-        if not VISION_ENABLED:
+        if not can_answer_image_questions(settings, fallback_model_id=model):
             active_tool_names = [name for name in active_tool_names if name != "image_explain"]
         fetch_url_clip_aggressiveness = get_fetch_url_clip_aggressiveness(settings)
         fetch_url_token_threshold = get_fetch_url_token_threshold(settings)
@@ -4314,13 +4313,7 @@ def register_chat_routes(app) -> None:
 
 def preload_dependencies(app) -> None:
     settings = get_app_settings()
-    processing_method = normalize_image_processing_method(settings.get("image_processing_method"))
-    should_preload_ocr = OCR_ENABLED and processing_method in {"auto", "local_ocr", "local_both"}
-    should_preload_vision = VISION_ENABLED and processing_method in {"auto", "local_vl", "local_both"}
-
-    if should_preload_ocr:
+    if OCR_ENABLED and normalize_image_processing_method(settings.get("image_processing_method")) in {"auto", "llm_helper", "llm_direct", "local_ocr"}:
         preload_ocr_engine(app)
-    if should_preload_vision:
-        preload_local_vision_engine(app)
     if RAG_ENABLED:
         preload_embedder()

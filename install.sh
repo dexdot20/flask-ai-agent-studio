@@ -12,8 +12,6 @@ PROXIES_FILE="${ROOT_DIR}/proxies.txt"
 MODEL_DIR="${ROOT_DIR}/models"
 RAG_MODEL_DIR="${MODEL_DIR}/rag/bge-m3"
 RAG_MODEL_REPO="BAAI/bge-m3"
-VISION_MODEL_DIR="${MODEL_DIR}/vl/Qwen2.5-VL-3B-Instruct"
-VISION_MODEL_REPO="Qwen/Qwen2.5-VL-3B-Instruct"
 PYTHON_BIN=""
 
 info() {
@@ -70,10 +68,6 @@ install_requirements() {
     else
       install_requirements_file "${ROOT_DIR}/requirements-ocr-easy.txt"
     fi
-  fi
-
-  if [[ "${VISION_ENABLED_VALUE}" == "true" ]]; then
-    install_requirements_file "${ROOT_DIR}/requirements-vl.txt"
   fi
 
   if [[ "${YOUTUBE_TRANSCRIPTS_VALUE}" == "true" ]]; then
@@ -314,15 +308,10 @@ RAG_ENABLED_VALUE="false"
 OCR_ENABLED_VALUE="false"
 OCR_PROVIDER_VALUE="paddleocr"
 OCR_PRELOAD="false"
-VISION_ENABLED_VALUE="false"
 BGE_MODEL_PATH="BAAI/bge-m3"
 BGE_BATCH_SIZE="8"
 BGE_DEVICE="cpu"
 BGE_PRELOAD="false"
-QWEN_MODEL_PATH=""
-QWEN_PRELOAD="false"
-QWEN_LOAD_IN_4BIT="false"
-QWEN_DTYPE="float16"
 YOUTUBE_TRANSCRIPTS_VALUE="false"
 
 case "${PROFILE}" in
@@ -346,16 +335,9 @@ esac
 case "${IMAGE_STACK}" in
   "None")
     OCR_ENABLED_VALUE="false"
-    VISION_ENABLED_VALUE="false"
     ;;
   "OCR only")
     OCR_ENABLED_VALUE="true"
-    VISION_ENABLED_VALUE="false"
-    OCR_PRELOAD="true"
-    ;;
-  "OCR + VL")
-    OCR_ENABLED_VALUE="true"
-    VISION_ENABLED_VALUE="true"
     OCR_PRELOAD="true"
     ;;
   *)
@@ -392,27 +374,11 @@ if [[ "${ACCELERATOR}" == "CUDA" ]]; then
   if [[ "${RAG_ENABLED_VALUE}" == "true" ]]; then
     BGE_MODEL_PATH="${RAG_MODEL_DIR}"
   fi
-  if [[ "${VISION_ENABLED_VALUE}" == "true" ]]; then
-    QWEN_PRELOAD="true"
-    QWEN_LOAD_IN_4BIT="true"
-    QWEN_DTYPE="float16"
-    QWEN_MODEL_PATH="${VISION_MODEL_DIR}"
-  fi
 else
   BGE_DEVICE="cpu"
   BGE_PRELOAD="false"
   RAG_ENABLED_VALUE="false"
-  VISION_ENABLED_VALUE="false"
   BGE_MODEL_PATH="BAAI/bge-m3"
-  QWEN_MODEL_PATH=""
-  QWEN_PRELOAD="false"
-  QWEN_LOAD_IN_4BIT="false"
-fi
-
-if [[ "${VISION_ENABLED_VALUE}" == "false" ]]; then
-  QWEN_MODEL_PATH=""
-  QWEN_PRELOAD="false"
-  QWEN_LOAD_IN_4BIT="false"
 fi
 
 if [[ "${OCR_ENABLED_VALUE}" == "false" ]]; then
@@ -432,24 +398,16 @@ write_env "${ENV_FILE}" \
   "OCR_PROVIDER=${OCR_PROVIDER_VALUE}" \
   "OCR_PRELOAD=${OCR_PRELOAD}" \
   "YOUTUBE_TRANSCRIPTS_ENABLED=${YOUTUBE_TRANSCRIPTS_VALUE}" \
-  "VISION_ENABLED=${VISION_ENABLED_VALUE}" \
   "BGE_M3_MODEL_PATH=${BGE_MODEL_PATH}" \
   "BGE_M3_DEVICE=${BGE_DEVICE}" \
   "BGE_M3_BATCH_SIZE=${BGE_BATCH_SIZE}" \
-  "BGE_M3_PRELOAD=${BGE_PRELOAD}" \
-  "QWEN_VL_MODEL_PATH=${QWEN_MODEL_PATH}" \
-  "QWEN_VL_LOAD_IN_4BIT=${QWEN_LOAD_IN_4BIT}" \
-  "QWEN_VL_TORCH_DTYPE=${QWEN_DTYPE}" \
-  "QWEN_VL_PRELOAD=${QWEN_PRELOAD}"
+  "BGE_M3_PRELOAD=${BGE_PRELOAD}"
 
 ensure_proxies
 ensure_venv
 install_requirements
 if [[ "${RAG_ENABLED_VALUE}" == "true" ]]; then
   download_model_snapshot "${RAG_MODEL_REPO}" "${RAG_MODEL_DIR}" "BGE-M3 embedding model"
-fi
-if [[ "${VISION_ENABLED_VALUE}" == "true" ]]; then
-  download_model_snapshot "${VISION_MODEL_REPO}" "${VISION_MODEL_DIR}" "Qwen2.5-VL vision model"
 fi
 if [[ "${OCR_ENABLED_VALUE}" == "true" ]]; then
   preload_ocr_assets
@@ -470,12 +428,8 @@ if [[ "${OCR_ENABLED_VALUE}" == "true" ]]; then
   printf '  OCR_PROVIDER: %s\n' "${OCR_PROVIDER_VALUE}"
 fi
 printf '  YOUTUBE_TRANSCRIPTS_ENABLED: %s\n' "${YOUTUBE_TRANSCRIPTS_VALUE}"
-printf '  VISION_ENABLED: %s\n' "${VISION_ENABLED_VALUE}"
 printf '  model cache: %s\n' "${MODEL_DIR}"
 printf '  .env: %s\n' "${ENV_FILE}"
-if [[ -n "${QWEN_MODEL_PATH}" ]]; then
-  printf '  QWEN_VL_MODEL_PATH: %s\n' "${QWEN_MODEL_PATH}"
-fi
 printf '  virtualenv: %s\n' "${VENV_DIR}"
 
 info "Next step: activate the virtual environment and run the app"

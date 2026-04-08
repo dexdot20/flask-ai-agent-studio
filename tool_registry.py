@@ -597,7 +597,7 @@ TOOL_SPECS = [
             "required": ["image_id", "conversation_id", "question"],
         },
         "prompt": {
-            "purpose": "Asks the vision model a new question about a stored image from this conversation.",
+            "purpose": "Asks the configured helper image model a new question about a stored image from this conversation.",
             "inputs": {
                 "image_id": "stored image id",
                 "conversation_id": "current conversation id",
@@ -605,7 +605,7 @@ TOOL_SPECS = [
             },
             "guidance": (
                 "Use this when the user asks about a previously uploaded image instead of relying only on the cached summary. "
-                "Always send the question in English. The tool response will be in English. "
+                "Always send the question in English. The tool response will be in English and uses the helper image model configured in Settings. "
                 "If the referenced image is ambiguous, ask the user to clarify which image they mean before calling the tool."
             ),
         },

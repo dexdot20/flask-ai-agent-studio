@@ -151,17 +151,19 @@
                     <span class="settings-section-kicker">Image analysis</span>
                     <h3>Preferred processing method</h3>
                   </div>
-                  <p>Choose whether uploaded images should use the active LLM when available, local OCR, local visual analysis, or a combined local pipeline.</p>
+                  <p>Choose whether uploaded images should be described by a helper model, sent directly to the active multimodal model, or reduced to local OCR text.</p>
                 </div>
                 <label class="settings-label" for="image-processing-method-select">Image processing method</label>
                 <select id="image-processing-method-select">
                   <option value="auto">Auto</option>
-                  <option value="llm">LLM via active chat model</option>
+                  <option value="llm_helper">Helper LLM description</option>
+                  <option value="llm_direct">Direct multimodal model input</option>
                   <option value="local_ocr">Local OCR only</option>
-                  <option value="local_vl">Local vision model only</option>
-                  <option value="local_both">Local OCR + local vision</option>
                 </select>
-                <p class="settings-copy">OCR-only and vision-only choices stay strict. Auto, active-model, and combined local modes can still fall back to the closest supported method.</p>
+                <p class="settings-copy">Auto prefers helper descriptions first, then direct multimodal input when available, and finally falls back to OCR. OCR stays strict.</p>
+                <label class="settings-label" for="image-helper-model-select">Helper image model</label>
+                <select id="image-helper-model-select"></select>
+                <p class="settings-copy">Used only for Helper LLM description mode and stored image follow-up questions. Leave empty to fall back to the default chat model when it supports images.</p>
               </div>
             </div>
           </div>

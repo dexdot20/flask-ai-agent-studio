@@ -87,7 +87,7 @@ from rag_service import (
     sync_conversations_to_rag,
 )
 from routes.request_utils import is_valid_model_id, normalize_model_id
-from vision import extract_json_object, extract_text_from_response_content
+from image_utils import extract_json_object, extract_text_from_response_content
 
 client = get_provider_client(DEEPSEEK_PROVIDER)
 

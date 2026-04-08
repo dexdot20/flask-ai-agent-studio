@@ -64,6 +64,7 @@ from config import (
     MAX_PARALLEL_TOOLS_MAX,
     MAX_PARALLEL_TOOLS_MIN,
     SUB_AGENT_ALLOWED_TOOL_NAMES,
+    IMAGE_UPLOADS_ENABLED,
     SUB_AGENT_DEFAULT_RETRY_ATTEMPTS,
     SUB_AGENT_DEFAULT_MAX_STEPS,
     SUB_AGENT_DEFAULT_MAX_PARALLEL_TOOLS,
@@ -77,7 +78,6 @@ from config import (
     SUB_AGENT_RETRY_DELAY_MIN_SECONDS,
     SUB_AGENT_TIMEOUT_MAX_SECONDS,
     SUB_AGENT_TIMEOUT_MIN_SECONDS,
-    VISION_ENABLED,
     WEB_CACHE_TTL_HOURS_MAX,
     WEB_CACHE_TTL_HOURS_MIN,
 )
@@ -2823,7 +2823,7 @@ def get_active_tool_names(settings: dict | None = None) -> list[str]:
     names = normalize_active_tool_names(source.get("active_tools"))
     if not RAG_ENABLED:
         names = [name for name in names if name != "search_knowledge_base"]
-    if not VISION_ENABLED:
+    if not IMAGE_UPLOADS_ENABLED:
         names = [name for name in names if name != "image_explain"]
     if not CONVERSATION_MEMORY_ENABLED:
         names = [
@@ -2840,7 +2840,7 @@ def get_active_tool_names(settings: dict | None = None) -> list[str]:
         names = normalize_active_tool_names(DEFAULT_SETTINGS["active_tools"])
         if not RAG_ENABLED:
             names = [name for name in names if name != "search_knowledge_base"]
-        if not VISION_ENABLED:
+        if not IMAGE_UPLOADS_ENABLED:
             names = [name for name in names if name != "image_explain"]
         if not CONVERSATION_MEMORY_ENABLED:
             names = [

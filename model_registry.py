@@ -32,7 +32,7 @@ OPENROUTER_MODEL_VARIANT_PART_SEPARATOR = ";"
 OPENROUTER_MODEL_VARIANT_KEY_VALUE_SEPARATOR = "="
 DEFAULT_CHAT_MODEL = "deepseek-chat"
 DEFAULT_IMAGE_PROCESSING_METHOD = "auto"
-IMAGE_PROCESSING_METHODS = {"auto", "llm", "local_ocr", "local_vl", "local_both"}
+IMAGE_PROCESSING_METHODS = {"auto", "llm_helper", "llm_direct", "local_ocr"}
 MODEL_OPERATION_KEYS = (
     "summarize",
     "fetch_summarize",
@@ -880,9 +880,26 @@ def get_operation_model_candidates(
 
 def normalize_image_processing_method(value: Any) -> str:
     method = str(value or DEFAULT_IMAGE_PROCESSING_METHOD).strip().lower()
+    if method == "llm":
+        return "llm_helper"
+    if method in {"local_vl", "local_both"}:
+        return "local_ocr"
     if method in IMAGE_PROCESSING_METHODS:
         return method
     return DEFAULT_IMAGE_PROCESSING_METHOD
+
+
+def get_image_helper_model_id(settings: dict | None = None) -> str:
+    source = settings if settings is not None else {}
+    candidate = canonicalize_model_id(source.get("image_helper_model"))
+    if candidate and get_model_record(candidate, settings):
+        return candidate
+
+    default_chat_model = get_default_chat_model_id(settings)
+    if default_chat_model and can_model_process_images(default_chat_model, settings):
+        return default_chat_model
+
+    return ""
 
 
 def can_model_use_tools(model_id: str, settings: dict | None = None) -> bool:

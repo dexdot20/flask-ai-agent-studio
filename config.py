@@ -69,12 +69,6 @@ LOGIN_LOCKOUT_SECONDS = max(1, _parse_int_env("LOGIN_LOCKOUT_SECONDS", 300))
 LOGIN_REMEMBER_SESSION_DAYS = max(1, _parse_int_env("LOGIN_REMEMBER_SESSION_DAYS", 3650))
 
 
-def _get_torch_dtype_name() -> str:
-    raw_value = (os.getenv("QWEN_VL_TORCH_DTYPE") or "float16").strip().lower()
-    allowed = {"float16", "bfloat16", "float32"}
-    return raw_value if raw_value in allowed else "float16"
-
-
 IMAGE_MAX_BYTES = 10 * 1024 * 1024
 IMAGE_ALLOWED_MIME_TYPES = {
     "image/png",
@@ -98,22 +92,12 @@ YOUTUBE_TRANSCRIPT_MODEL_SIZE = (os.getenv("YOUTUBE_TRANSCRIPT_MODEL_SIZE") or "
 YOUTUBE_TRANSCRIPT_DEVICE = (os.getenv("YOUTUBE_TRANSCRIPT_DEVICE") or "auto").strip() or "auto"
 YOUTUBE_TRANSCRIPT_COMPUTE_TYPE = (os.getenv("YOUTUBE_TRANSCRIPT_COMPUTE_TYPE") or "int8").strip() or "int8"
 YOUTUBE_TRANSCRIPT_DEFAULT_LANGUAGE = (os.getenv("YOUTUBE_TRANSCRIPT_DEFAULT_LANGUAGE") or "").strip()
-VISION_ENABLED = _parse_bool_env("VISION_ENABLED", True)
-OCR_ENABLED = _parse_bool_env("OCR_ENABLED", VISION_ENABLED)
+OCR_ENABLED = _parse_bool_env("OCR_ENABLED", True)
 CONVERSATION_MEMORY_ENABLED = _parse_bool_env("CONVERSATION_MEMORY_ENABLED", True)
 OCR_PROVIDER = (os.getenv("OCR_PROVIDER") or "paddleocr").strip().lower() or "paddleocr"
 OCR_SUPPORTED_PROVIDERS = {"paddleocr", "easyocr"}
 OCR_PRELOAD_ON_STARTUP = _parse_bool_env("OCR_PRELOAD", True)
-IMAGE_UPLOADS_ENABLED = OCR_ENABLED or VISION_ENABLED or bool(OPENROUTER_API_KEY)
-VISION_MODEL_PATH = (os.getenv("QWEN_VL_MODEL_PATH") or "").strip()
-VISION_ATTENTION_IMPL = (os.getenv("QWEN_VL_ATTENTION") or "").strip() or None
-VISION_MAX_NEW_TOKENS = max(128, min(4096, _parse_int_env("QWEN_VL_MAX_NEW_TOKENS", 768)))
-VISION_MIN_PIXELS = max(28 * 28, _parse_int_env("QWEN_VL_MIN_PIXELS", 256 * 28 * 28))
-VISION_MAX_PIXELS = max(VISION_MIN_PIXELS, _parse_int_env("QWEN_VL_MAX_PIXELS", 896 * 28 * 28))
-VISION_MAX_IMAGE_SIDE = max(560, _parse_int_env("QWEN_VL_MAX_IMAGE_SIDE", 1280))
-VISION_LOAD_IN_4BIT = _parse_bool_env("QWEN_VL_LOAD_IN_4BIT", True)
-VISION_TORCH_DTYPE_NAME = _get_torch_dtype_name()
-VISION_PRELOAD_ON_STARTUP = _parse_bool_env("QWEN_VL_PRELOAD", True)
+IMAGE_UPLOADS_ENABLED = OCR_ENABLED or bool(OPENROUTER_API_KEY) or bool(DEEPSEEK_API_KEY)
 
 SUB_AGENT_TIMEOUT_MIN_SECONDS = 5
 SUB_AGENT_TIMEOUT_MAX_SECONDS = 900
@@ -345,9 +329,8 @@ RAG_DISABLED_INGEST_ERROR = (
 )
 RAG_DISABLED_FEATURE_ERROR = "RAG is disabled in configuration. Set RAG_ENABLED=true to use it."
 OCR_DISABLED_FEATURE_ERROR = "OCR is disabled in configuration. Set OCR_ENABLED=true to use OCR."
-VISION_DISABLED_FEATURE_ERROR = "Vision is disabled in configuration. Set VISION_ENABLED=true to use visual image analysis."
 IMAGE_UPLOADS_DISABLED_FEATURE_ERROR = (
-    "Image uploads are disabled in configuration. Set OCR_ENABLED=true or VISION_ENABLED=true to use image uploads."
+    "Image uploads are disabled in configuration. Configure OCR_ENABLED=true or a remote model provider to use image uploads."
 )
 
 
@@ -401,6 +384,7 @@ DEFAULT_SETTINGS = {
     "operation_model_preferences": json.dumps(DEFAULT_OPERATION_MODEL_PREFERENCES, ensure_ascii=False),
     "operation_model_fallback_preferences": json.dumps(DEFAULT_OPERATION_MODEL_FALLBACK_PREFERENCES, ensure_ascii=False),
     "image_processing_method": DEFAULT_IMAGE_PROCESSING_METHOD,
+    "image_helper_model": "",
     "active_tools": json.dumps(DEFAULT_ACTIVE_TOOL_NAMES, ensure_ascii=False),
     "proxy_enabled_operations": json.dumps(DEFAULT_PROXY_ENABLED_OPERATIONS, ensure_ascii=False),
     "rag_auto_inject": "true",
@@ -456,10 +440,9 @@ def get_feature_flags() -> dict:
         "conversation_memory_enabled": CONVERSATION_MEMORY_ENABLED,
         "image_uploads_enabled": IMAGE_UPLOADS_ENABLED,
         "youtube_transcripts_enabled": YOUTUBE_TRANSCRIPTS_ENABLED,
-        "vision_enabled": VISION_ENABLED,
         "deepseek_api_configured": bool(DEEPSEEK_API_KEY),
         "openrouter_api_configured": bool(OPENROUTER_API_KEY),
-        "remote_image_provider_configured": bool(OPENROUTER_API_KEY),
+        "remote_image_provider_configured": bool(OPENROUTER_API_KEY or DEEPSEEK_API_KEY),
         "scratchpad_admin_editing": SCRATCHPAD_ADMIN_EDITING_ENABLED,
         "login_pin_enabled": bool(LOGIN_PIN),
     }

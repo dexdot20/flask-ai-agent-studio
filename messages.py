@@ -538,6 +538,7 @@ def build_user_message_for_model(
     video_context_blocks = []
     vision_attachments = []
     visual_document_notices = []
+    direct_image_notices = []
     for attachment in attachments:
         if attachment.get("kind") == "document":
             if str(attachment.get("submission_mode") or "").strip().lower() == "visual":
@@ -562,15 +563,22 @@ def build_user_message_for_model(
 
         image_id = str(attachment.get("image_id") or "").strip()
         image_name = str(attachment.get("image_name") or "").strip()
+        analysis_method = str(attachment.get("analysis_method") or "").strip().lower()
         ocr_text = str(attachment.get("ocr_text") or "").strip()
         vision_summary = str(attachment.get("vision_summary") or "").strip()
         assistant_guidance = str(attachment.get("assistant_guidance") or "").strip()
         key_points = attachment.get("key_points") if isinstance(attachment.get("key_points"), list) else []
+        if analysis_method == "llm_direct":
+            direct_label = image_name or (f"image_id={image_id}" if image_id else "uploaded image")
+            direct_notice = f"Uploaded image for direct multimodal analysis: {direct_label}. The original image is attached below."
+            if direct_notice not in direct_image_notices:
+                direct_image_notices.append(direct_notice)
+            continue
         has_vision = image_id or image_name or ocr_text or vision_summary or assistant_guidance or key_points
         if has_vision:
             vision_attachments.append(attachment)
 
-    if not file_context_blocks and not video_context_blocks and not vision_attachments and not visual_document_notices:
+    if not file_context_blocks and not video_context_blocks and not vision_attachments and not visual_document_notices and not direct_image_notices:
         return content
 
     parts = []
@@ -580,6 +588,7 @@ def build_user_message_for_model(
     parts.extend(file_context_blocks)
     parts.extend(video_context_blocks)
     parts.extend(visual_document_notices)
+    parts.extend(direct_image_notices)
 
     for index, attachment in enumerate(vision_attachments, start=1):
         image_id = str(attachment.get("image_id") or "").strip()
@@ -589,7 +598,7 @@ def build_user_message_for_model(
         assistant_guidance = str(attachment.get("assistant_guidance") or "").strip()
         key_points = attachment.get("key_points") if isinstance(attachment.get("key_points"), list) else []
 
-        heading = "[Local image analysis]"
+        heading = "[Image attachment context]"
         if len(vision_attachments) > 1:
             heading = f"{heading} Attachment {index}"
         vision_parts = [heading]
@@ -637,6 +646,29 @@ def _build_visual_document_api_blocks(metadata: dict | None) -> list[dict]:
     return blocks
 
 
+def _build_direct_image_api_blocks(metadata: dict | None) -> list[dict]:
+    attachments = extract_message_attachments(metadata)
+    blocks: list[dict] = []
+    for attachment in attachments:
+        if attachment.get("kind") != "image":
+            continue
+        if str(attachment.get("analysis_method") or "").strip().lower() != "llm_direct":
+            continue
+        image_id = str(attachment.get("image_id") or "").strip()
+        asset, image_bytes = read_image_asset_bytes(image_id)
+        if not asset or not image_bytes:
+            continue
+        mime_type = str(asset.get("mime_type") or "image/jpeg").strip() or "image/jpeg"
+        image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+        blocks.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime_type};base64,{image_b64}"},
+            }
+        )
+    return blocks
+
+
 def build_user_message_for_api(
     content: str,
     metadata: dict | None = None,
@@ -644,11 +676,14 @@ def build_user_message_for_api(
     canvas_documents: list[dict] | None = None,
 ) -> str | list[dict]:
     text_content = build_user_message_for_model(content, metadata, canvas_documents=canvas_documents)
-    visual_blocks = _build_visual_document_api_blocks(metadata)
+    visual_blocks = [
+        *_build_direct_image_api_blocks(metadata),
+        *_build_visual_document_api_blocks(metadata),
+    ]
     if not visual_blocks:
         return text_content
 
-    prompt_text = str(text_content or "").strip() or "Analyze the attached PDF pages carefully."
+    prompt_text = str(text_content or "").strip() or "Analyze the attached visual inputs carefully."
     return [
         {"type": "text", "text": prompt_text},
         *visual_blocks,

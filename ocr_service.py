@@ -13,7 +13,7 @@ from config import (
     OCR_PROVIDER,
     OCR_SUPPORTED_PROVIDERS,
 )
-from vision import optimize_image_for_processing
+from image_utils import optimize_image_for_processing
 
 _ocr_engine = None
 _ocr_engine_lock = threading.Lock()

@@ -172,7 +172,7 @@ from routes.chat import (
 from routes.pages import build_tool_permission_options, build_tool_permission_sections
 from token_utils import estimate_text_tokens
 from tool_registry import TOOL_SPEC_BY_NAME, get_enabled_tool_specs, get_openai_tool_specs, resolve_runtime_tool_names
-from vision import normalize_image_analysis
+from image_utils import normalize_image_analysis
 from web_tools import (
     _extract_html,
     fetch_url_tool,
@@ -336,15 +336,14 @@ class AppRoutesTestCase(unittest.TestCase):
             ["conversation", "tool_result", "tool_memory", "uploaded_document"] if payload["features"]["rag_enabled"] else [],
         )
         self.assertFalse(payload["tool_memory_auto_inject"])
+        self.assertEqual(payload["image_helper_model"], "")
         self.assertIn("features", payload)
         self.assertIn("rag_enabled", payload["features"])
         self.assertIn("ocr_enabled", payload["features"])
         self.assertIn("image_uploads_enabled", payload["features"])
-        self.assertIn("vision_enabled", payload["features"])
         self.assertIsInstance(payload["features"]["rag_enabled"], bool)
         self.assertIsInstance(payload["features"]["ocr_enabled"], bool)
         self.assertIsInstance(payload["features"]["image_uploads_enabled"], bool)
-        self.assertIsInstance(payload["features"]["vision_enabled"], bool)
 
         response = self.client.patch(
             "/api/settings",
@@ -413,7 +412,8 @@ class AppRoutesTestCase(unittest.TestCase):
                     "upload_metadata": ["deepseek-reasoner"],
                     "sub_agent": ["deepseek-chat", "deepseek-reasoner"],
                 },
-                "image_processing_method": "llm",
+                "image_processing_method": "llm_helper",
+                "image_helper_model": "openrouter:anthropic/claude-sonnet-4.5",
                 "active_tools": ["fetch_url", "search_web"],
                 "proxy_enabled_operations": ["openrouter", "fetch_url"],
                 "rag_auto_inject": False,
@@ -483,7 +483,8 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["operation_model_fallback_preferences"]["summarize"], ["deepseek-reasoner", "deepseek-chat"])
         self.assertEqual(payload["operation_model_fallback_preferences"]["fetch_summarize"], ["deepseek-reasoner"])
         self.assertEqual(payload["operation_model_fallback_preferences"]["sub_agent"], ["deepseek-chat", "deepseek-reasoner"])
-        self.assertEqual(payload["image_processing_method"], "llm")
+        self.assertEqual(payload["image_processing_method"], "llm_helper")
+        self.assertEqual(payload["image_helper_model"], "openrouter:anthropic/claude-sonnet-4.5")
         self.assertTrue(
             any(
                 model["id"] == "openrouter:anthropic/claude-sonnet-4.5@@r=enabled:high;p=deepinfra/turbo;v=1;s=1"
@@ -1271,9 +1272,9 @@ class AppRoutesTestCase(unittest.TestCase):
     def test_analyze_uploaded_image_preserves_provider_failures(self):
         with patch("image_service.IMAGE_UPLOADS_ENABLED", True), patch(
             "image_service._resolve_processing_plan",
-            return_value=["llm"],
+            return_value=["llm_helper"],
         ), patch(
-            "image_service._run_llm_image_analysis",
+            "image_service._run_helper_llm_image_analysis",
             side_effect=Exception("provider down"),
         ):
             with self.assertRaises(Exception) as raised:
@@ -1281,55 +1282,55 @@ class AppRoutesTestCase(unittest.TestCase):
                     b"fake image bytes",
                     "image/png",
                     model_id="openrouter:anthropic/claude-sonnet-4.5",
-                    processing_method="llm",
+                    processing_method="llm_helper",
                 )
 
         self.assertEqual(type(raised.exception), Exception)
         self.assertEqual(str(raised.exception), "provider down")
 
-    def test_analyze_uploaded_image_passes_ocr_hint_into_local_vision(self):
+    def test_analyze_uploaded_image_direct_mode_returns_passthrough_metadata(self):
         with patch("image_service.IMAGE_UPLOADS_ENABLED", True), patch(
-            "image_service._resolve_processing_plan",
-            return_value=["local_both"],
-        ), patch("image_service.OCR_ENABLED", True), patch("image_service.VISION_ENABLED", True), patch(
-            "image_service._run_local_ocr_analysis",
-            return_value={
-                "ocr_text": "Gram Altın\nAlış 4.210,11\nSatış 4.210,75",
-                "analysis_method": "local_ocr",
-            },
-        ), patch(
-            "image_service._run_local_vision_analysis",
-            return_value={
-                "vision_summary": "A gold trading interface is visible.",
-                "assistant_guidance": "Use the visible prices and selected product.",
-                "key_points": ["Buy and sell prices are shown."],
-                "analysis_method": "local_vl",
-            },
-        ) as mocked_local_vl:
+            "image_service.can_model_process_images",
+            return_value=True,
+        ):
             analysis = analyze_uploaded_image(
                 b"fake image bytes",
                 "image/png",
-                user_text="What are the prices?",
-                processing_method="local_both",
+                model_id="openrouter:test-vision",
+                processing_method="llm_direct",
             )
 
-        mocked_local_vl.assert_called_once_with(
-            b"fake image bytes",
-            "image/png",
-            user_text="What are the prices?",
-            ocr_hint="Gram Altın\nAlış 4.210,11\nSatış 4.210,75",
-        )
-        self.assertEqual(analysis["analysis_method"], "local_both")
-        self.assertEqual(analysis["ocr_text"], "Gram Altın\nAlış 4.210,11\nSatış 4.210,75")
+        self.assertEqual(analysis["analysis_method"], "llm_direct")
+        self.assertIn("attached directly", analysis["assistant_guidance"])
 
-    def test_analyze_uploaded_image_local_ocr_does_not_fall_back_to_local_vision(self):
+    def test_analyze_uploaded_image_helper_mode_falls_back_to_direct_mode(self):
+        with patch("image_service.IMAGE_UPLOADS_ENABLED", True), patch(
+            "image_service.can_answer_image_questions",
+            return_value=False,
+        ), patch(
+            "image_service.can_model_process_images",
+            return_value=True,
+        ):
+            analysis = analyze_uploaded_image(
+                b"fake image bytes",
+                "image/png",
+                model_id="openrouter:test-vision",
+                processing_method="llm_helper",
+            )
+
+        self.assertEqual(analysis["analysis_method"], "llm_direct")
+
+    def test_analyze_uploaded_image_local_ocr_does_not_fall_back_to_remote_modes(self):
         with patch("image_service.IMAGE_UPLOADS_ENABLED", True), patch(
             "image_service._run_local_ocr_analysis",
             side_effect=RuntimeError("OCR stack unavailable"),
         ), patch(
-            "image_service._run_local_vision_analysis",
-            return_value={"vision_summary": "Should not run."},
-        ) as mocked_local_vl:
+            "image_service._prepare_direct_multimodal_analysis",
+            return_value={"analysis_method": "llm_direct"},
+        ) as mocked_direct, patch(
+            "image_service._run_helper_llm_image_analysis",
+            return_value={"analysis_method": "llm_helper"},
+        ) as mocked_helper:
             with self.assertRaises(RuntimeError) as raised:
                 analyze_uploaded_image(
                     b"fake image bytes",
@@ -1338,30 +1339,13 @@ class AppRoutesTestCase(unittest.TestCase):
                 )
 
         self.assertEqual(str(raised.exception), "OCR stack unavailable")
-        mocked_local_vl.assert_not_called()
-
-    def test_analyze_uploaded_image_local_vl_does_not_fall_back_to_local_ocr(self):
-        with patch("image_service.IMAGE_UPLOADS_ENABLED", True), patch(
-            "image_service._run_local_vision_analysis",
-            side_effect=RuntimeError("Vision stack unavailable"),
-        ), patch(
-            "image_service._run_local_ocr_analysis",
-            return_value={"ocr_text": "Should not run."},
-        ) as mocked_local_ocr:
-            with self.assertRaises(RuntimeError) as raised:
-                analyze_uploaded_image(
-                    b"fake image bytes",
-                    "image/png",
-                    processing_method="local_vl",
-                )
-
-        self.assertEqual(str(raised.exception), "Vision stack unavailable")
-        mocked_local_ocr.assert_not_called()
+        mocked_direct.assert_not_called()
+        mocked_helper.assert_not_called()
 
     def test_normalize_image_analysis_preserves_explicit_guidance_and_method(self):
         analysis = normalize_image_analysis(
             {
-                "analysis_method": "local_both",
+                "analysis_method": "llm_helper",
                 "ocr_text": "Toplam 42",
                 "vision_summary": "A checkout screen with totals is visible.",
                 "assistant_guidance": "Use the totals and selected shipping option.",
@@ -1369,7 +1353,7 @@ class AppRoutesTestCase(unittest.TestCase):
             }
         )
 
-        self.assertEqual(analysis["analysis_method"], "local_both")
+        self.assertEqual(analysis["analysis_method"], "llm_helper")
         self.assertEqual(analysis["assistant_guidance"], "Use the totals and selected shipping option.")
 
     def test_settings_patch_rejects_invalid_rag_presets(self):
@@ -3053,10 +3037,10 @@ class AppRoutesTestCase(unittest.TestCase):
 
     def test_disabled_features_reflect_in_settings_and_routes(self):
         with patch("config.RAG_ENABLED", False), patch("config.OCR_ENABLED", False), patch(
-            "config.VISION_ENABLED", False
-        ), patch("config.IMAGE_UPLOADS_ENABLED", False), patch("db.RAG_ENABLED", False), patch(
-            "db.VISION_ENABLED", False
-        ), patch("routes.pages.RAG_ENABLED", False), patch("routes.conversations.RAG_ENABLED", False):
+            "config.IMAGE_UPLOADS_ENABLED", False
+        ), patch("db.RAG_ENABLED", False), patch("db.IMAGE_UPLOADS_ENABLED", False), patch(
+            "routes.pages.RAG_ENABLED", False
+        ), patch("routes.conversations.RAG_ENABLED", False):
             response = self.client.get("/api/settings")
             self.assertEqual(response.status_code, 200)
             payload = response.get_json()
@@ -3064,7 +3048,6 @@ class AppRoutesTestCase(unittest.TestCase):
             self.assertFalse(payload["features"]["rag_enabled"])
             self.assertFalse(payload["features"]["ocr_enabled"])
             self.assertFalse(payload["features"]["image_uploads_enabled"])
-            self.assertFalse(payload["features"]["vision_enabled"])
 
             response = self.client.patch(
                 "/api/settings",
@@ -3080,9 +3063,7 @@ class AppRoutesTestCase(unittest.TestCase):
             response = self.client.delete(f"/api/conversations/{conversation_id}")
             self.assertEqual(response.status_code, 204)
 
-        with patch("routes.chat.OCR_ENABLED", False), patch("routes.chat.VISION_ENABLED", False), patch(
-            "routes.chat.IMAGE_UPLOADS_ENABLED", False
-        ):
+        with patch("routes.chat.IMAGE_UPLOADS_ENABLED", False):
             response = self.client.post(
                 "/chat",
                 data={
@@ -3106,7 +3087,7 @@ class AppRoutesTestCase(unittest.TestCase):
             ]
         )
 
-        with patch("db.IMAGE_STORAGE_DIR", self.image_storage_dir), patch("routes.chat.VISION_ENABLED", False), patch(
+        with patch("db.IMAGE_STORAGE_DIR", self.image_storage_dir), patch(
             "routes.chat.analyze_uploaded_image",
             return_value={
                 "ocr_text": "invoice total 42",
@@ -4673,8 +4654,8 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn('data-settings-tab="context"', html)
         self.assertIn('data-settings-tab="tools"', html)
         self.assertIn('data-settings-tab="knowledge"', html)
-        self.assertIn("This is separate from generic RAG retrieval", html)
-        self.assertIn("skips the Tool memory pool here to avoid duplicate prompt injection", html)
+        self.assertIn("Manual knowledge", html)
+        self.assertIn("Upload document", html)
         self.assertIn('src="/static/settings.js?v=', html)
         self.assertIn('id="kb-sync-btn"', html)
         self.assertIn("Proxy scope", html)
@@ -4794,8 +4775,8 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertIn("Stored image reference: image_id=img_123, file=screen-a.png", content)
         self.assertIn("Stored image reference: image_id=img_456, file=screen-b.png", content)
-        self.assertIn("[Local image analysis] Attachment 1", content)
-        self.assertIn("[Local image analysis] Attachment 2", content)
+        self.assertIn("[Image attachment context] Attachment 1", content)
+        self.assertIn("[Image attachment context] Attachment 2", content)
         self.assertIn("[Uploaded document: notes.txt]", content)
         self.assertIn("Visual summary: A dashboard is visible.", content)
         self.assertIn("Visual summary: A settings page is visible.", content)
@@ -5408,31 +5389,21 @@ class AppRoutesTestCase(unittest.TestCase):
         ):
             ocr_service.preload_ocr_engine(SimpleNamespace(debug=False))
 
-    def test_preload_dependencies_skips_vision_for_local_ocr_setting(self):
+    def test_preload_dependencies_preloads_ocr_for_local_ocr_setting(self):
         with patch("routes.chat.get_app_settings", return_value={"image_processing_method": "local_ocr"}), patch(
             "routes.chat.OCR_ENABLED", True
-        ), patch("routes.chat.VISION_ENABLED", True), patch(
-            "routes.chat.RAG_ENABLED", False
-        ), patch("routes.chat.preload_ocr_engine") as mocked_preload_ocr, patch(
-            "routes.chat.preload_local_vision_engine"
-        ) as mocked_preload_vision:
+        ), patch("routes.chat.RAG_ENABLED", False), patch("routes.chat.preload_ocr_engine") as mocked_preload_ocr:
             preload_dependencies(SimpleNamespace(debug=False))
 
         mocked_preload_ocr.assert_called_once()
-        mocked_preload_vision.assert_not_called()
 
-    def test_preload_dependencies_skips_ocr_for_local_vision_setting(self):
-        with patch("routes.chat.get_app_settings", return_value={"image_processing_method": "local_vl"}), patch(
+    def test_preload_dependencies_preloads_ocr_for_llm_direct_setting(self):
+        with patch("routes.chat.get_app_settings", return_value={"image_processing_method": "llm_direct"}), patch(
             "routes.chat.OCR_ENABLED", True
-        ), patch("routes.chat.VISION_ENABLED", True), patch(
-            "routes.chat.RAG_ENABLED", False
-        ), patch("routes.chat.preload_ocr_engine") as mocked_preload_ocr, patch(
-            "routes.chat.preload_local_vision_engine"
-        ) as mocked_preload_vision:
+        ), patch("routes.chat.RAG_ENABLED", False), patch("routes.chat.preload_ocr_engine") as mocked_preload_ocr:
             preload_dependencies(SimpleNamespace(debug=False))
 
-        mocked_preload_ocr.assert_not_called()
-        mocked_preload_vision.assert_called_once()
+        mocked_preload_ocr.assert_called_once()
 
     def test_resolve_device_uses_cpu_without_importing_torch(self):
         from rag import embedder
@@ -5848,7 +5819,7 @@ class AppRoutesTestCase(unittest.TestCase):
         with patch("db.IMAGE_STORAGE_DIR", self.image_storage_dir), patch(
             "routes.chat.analyze_uploaded_image",
             return_value={
-                "analysis_method": "local_both",
+                "analysis_method": "llm_helper",
                 "ocr_text": "hello",
                 "vision_summary": "A login screen is shown.",
                 "assistant_guidance": "Use the labels and values when answering.",
@@ -5878,14 +5849,14 @@ class AppRoutesTestCase(unittest.TestCase):
         metadata = user_messages[0]["metadata"]
         self.assertIn("image_id", metadata)
         self.assertEqual(metadata["image_name"], "screen.png")
-        self.assertEqual(metadata["analysis_method"], "local_both")
+        self.assertEqual(metadata["analysis_method"], "llm_helper")
         self.assertEqual(metadata["vision_summary"], "A login screen is shown.")
 
         asset = get_image_asset(metadata["image_id"], conversation_id=conversation_id)
         self.assertIsNotNone(asset)
         self.assertEqual(asset["filename"], "screen.png")
         self.assertEqual(asset["message_id"], user_messages[0]["id"])
-        self.assertEqual(asset["initial_analysis"]["analysis_method"], "local_both")
+        self.assertEqual(asset["initial_analysis"]["analysis_method"], "llm_helper")
         self.assertTrue(Path(asset["storage_path"]).is_file())
 
     def test_chat_mixed_multi_attachment_upload_persists_assets_and_canvas_documents(self):
