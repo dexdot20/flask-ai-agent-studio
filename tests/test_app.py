@@ -4238,6 +4238,54 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertNotIn("ask_clarifying_question", mocked_stream.call_args.args[3])
 
+    def test_chat_keeps_clarification_tool_when_response_turn_also_has_new_user_request(self):
+        conversation_id = self._create_conversation()
+        save_app_settings(
+            {
+                "user_preferences": "",
+                "scratchpad": "",
+                "max_steps": "2",
+                "active_tools": json.dumps(["ask_clarifying_question"], ensure_ascii=False),
+                "rag_auto_inject": "false",
+            }
+        )
+
+        fake_events = iter(
+            [
+                {"type": "answer_start"},
+                {"type": "answer_delta", "text": "Done."},
+                {"type": "tool_capture", "tool_results": []},
+                {"type": "done"},
+            ]
+        )
+
+        with patch("routes.chat.run_agent_stream", return_value=fake_events) as mocked_stream:
+            response = self.client.post(
+                "/chat",
+                json={
+                    "conversation_id": conversation_id,
+                    "model": "deepseek-chat",
+                    "user_content": "Q: Budget?\nA: 200-300 TL\n\nİlk olarak bana sorular sor.",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Q: Budget?\nA: 200-300 TL\n\nİlk olarak bana sorular sor.",
+                            "metadata": {
+                                "clarification_response": {
+                                    "assistant_message_id": 12,
+                                    "answers": {
+                                        "budget": {"display": "200-300 TL"},
+                                    },
+                                }
+                            },
+                        }
+                    ],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("ask_clarifying_question", mocked_stream.call_args.args[3])
+
     def test_index_uses_external_app_script(self):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
@@ -4457,6 +4505,24 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(
             content,
             "[Clarification answers provided - see the Clarification Response section for the full Q/A.]",
+        )
+
+    def test_build_user_message_for_model_preserves_freeform_request_beside_clarification_answers(self):
+        content = build_user_message_for_model(
+            "Q: Budget?\nA: 200-300 TL\n\nİlk olarak bana sorular sor.",
+            {
+                "clarification_response": {
+                    "assistant_message_id": 12,
+                    "answers": {
+                        "budget": {"display": "200-300 TL"},
+                    },
+                }
+            },
+        )
+
+        self.assertEqual(
+            content,
+            "İlk olarak bana sorular sor.\n\n[Clarification answers provided - see the Clarification Response section for the full Q/A.]",
         )
 
     def test_image_explain_tool_spec_requires_image_and_conversation_ids(self):
@@ -4738,6 +4804,36 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(clarification["questions"][0]["options"][0]["label"], "1.000+ TL")
         self.assertEqual(clarification["questions"][0]["options"][1]["label"], "2.000+ TL")
         self.assertEqual(clarification["questions"][0]["options"][2]["label"], "3.000+ TL")
+
+    def test_execute_clarification_tool_preserves_grade_level_option_labels(self):
+        result, summary = _execute_tool(
+            "ask_clarifying_question",
+            {
+                "questions": [
+                    {
+                        "id": "kpss_start_time",
+                        "label": "KPSS hazırlığına ne zaman başlamayı planlıyorsun?",
+                        "input_type": "single_select",
+                        "options": [
+                            {"label": "5. sınıftan itibaren yavaş yavaş", "value": "5. sınıftan itibaren yavaş yavaş"},
+                            {"label": "sınıfın başında", "value": "sınıfın başında"},
+                            {"label": "Henüz düşünmedim", "value": "Henüz düşünmedim"},
+                        ],
+                    }
+                ]
+            },
+        )
+
+        clarification = result["clarification"]
+        self.assertEqual(summary, "Awaiting user clarification")
+        self.assertEqual(
+            clarification["questions"][0]["options"][0]["label"],
+            "5. sınıftan itibaren yavaş yavaş",
+        )
+        self.assertEqual(
+            clarification["questions"][0]["options"][0]["value"],
+            "5. sınıftan itibaren yavaş yavaş",
+        )
 
     def test_clarification_prompt_guidance_avoids_inline_qa_format(self):
         message = build_runtime_system_message(

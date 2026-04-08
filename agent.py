@@ -928,7 +928,6 @@ def _sanitize_clarification_text(text: str, limit: int | None = None) -> str:
     cleaned = re.sub(r"\s*[\"']?\s*\|>\s*$", "", cleaned)
     cleaned = cleaned.replace("```", " ").replace("`", " ")
     cleaned = re.sub(r"^\s*[*\-•–]+\s*", "", cleaned)
-    cleaned = re.sub(r"^\s*\d+[\.)](?=\s)", "", cleaned)
     cleaned = re.sub(r"^\s*(?:Q|A|Question|Answer)\s*[:：]\s*", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"^\s*<\|\s*[\"']?\s*", "", cleaned)
     cleaned = re.sub(r"\s*[\"']?\s*\|>\s*$", "", cleaned)

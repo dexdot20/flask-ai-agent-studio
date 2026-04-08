@@ -7398,20 +7398,8 @@ function markSubAgentCanvasPromptShown(conversationId, assistantMessageId, trace
 
 function findPersistedAssistantEntryForSubAgentPrompt(preferredAssistantId = null) {
   const normalizedPreferredId = Number(preferredAssistantId || 0);
-  if (isPersistedMessageId(normalizedPreferredId)) {
-    for (let index = history.length - 1; index >= 0; index -= 1) {
-      const entry = history[index];
-      if (!entry || entry.role !== "assistant") {
-        continue;
-      }
-      if (Number(entry.id || 0) !== normalizedPreferredId) {
-        continue;
-      }
-      if (getLatestUnsavedCompletedSubAgentTrace(entry.metadata)) {
-        return entry;
-      }
-      break;
-    }
+  if (!isPersistedMessageId(normalizedPreferredId)) {
+    return null;
   }
 
   for (let index = history.length - 1; index >= 0; index -= 1) {
@@ -7419,9 +7407,10 @@ function findPersistedAssistantEntryForSubAgentPrompt(preferredAssistantId = nul
     if (!entry || entry.role !== "assistant") {
       continue;
     }
-    if (getLatestUnsavedCompletedSubAgentTrace(entry.metadata)) {
-      return entry;
+    if (Number(entry.id || 0) !== normalizedPreferredId) {
+      continue;
     }
+    return getLatestUnsavedCompletedSubAgentTrace(entry.metadata) ? entry : null;
   }
 
   return null;

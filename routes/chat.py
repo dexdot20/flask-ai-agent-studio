@@ -117,6 +117,7 @@ from messages import (
     build_api_messages,
     build_runtime_context_injection,
     build_user_message_for_model,
+    extract_freeform_clarification_user_content,
     format_knowledge_base_auto_context,
     normalize_chat_messages,
     prepend_runtime_context,
@@ -2524,9 +2525,11 @@ def register_chat_routes(app) -> None:
             clarification_response = extract_clarification_response(latest_user_message.get("metadata"))
             clarification_answers = clarification_response.get("answers") if isinstance(clarification_response, dict) else {}
             if isinstance(clarification_answers, dict) and clarification_answers:
-                active_tool_names = [
-                    name for name in active_tool_names if name != "ask_clarifying_question"
-                ]
+                freeform_clarification_content = extract_freeform_clarification_user_content(latest_user_message["content"])
+                if not freeform_clarification_content:
+                    active_tool_names = [
+                        name for name in active_tool_names if name != "ask_clarifying_question"
+                    ]
             rag_query_text = _build_clarification_rag_query(
                 latest_user_message["content"],
                 clarification_response,

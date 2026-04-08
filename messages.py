@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime
 
 from canvas_service import build_canvas_project_manifest, extract_canvas_documents, scale_canvas_char_limit
@@ -56,6 +57,17 @@ PARALLEL_SAFE_READ_ONLY_TOOL_NAMES = (
     "search_canvas_document",
     "preview_canvas_changes",
 )
+
+_CLARIFICATION_QA_LINE_RE = re.compile(r"^\s*(?:Q|A)\s*:\s*.*$", re.IGNORECASE)
+
+
+def extract_freeform_clarification_user_content(content: str) -> str:
+    lines: list[str] = []
+    for raw_line in str(content or "").splitlines():
+        if _CLARIFICATION_QA_LINE_RE.match(raw_line.strip()):
+            continue
+        lines.append(raw_line.rstrip())
+    return "\n".join(lines).strip()
 CANVAS_MUTATING_TOOL_NAMES = {
     "create_canvas_document",
     "rewrite_canvas_document",
@@ -490,7 +502,9 @@ def build_user_message_for_model(
     clarification_response = extract_clarification_response(metadata)
     clarification_answers = clarification_response.get("answers") if isinstance(clarification_response, dict) else {}
     if isinstance(clarification_answers, dict) and clarification_answers:
-        content = "[Clarification answers provided - see the Clarification Response section for the full Q/A.]"
+        freeform_content = extract_freeform_clarification_user_content(content)
+        clarification_placeholder = "[Clarification answers provided - see the Clarification Response section for the full Q/A.]"
+        content = f"{freeform_content}\n\n{clarification_placeholder}".strip() if freeform_content else clarification_placeholder
 
     attachments = extract_message_attachments(metadata)
     canvas_document_lookup = _build_canvas_document_lookup(canvas_documents)
