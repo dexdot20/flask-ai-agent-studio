@@ -4105,6 +4105,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(messages[2]["role"], "system")
         content = messages[2]["content"]
         self.assertIn("## Conversation Summaries", content)
+        self.assertIn("already included in the prompt as assistant summary messages", content)
         self.assertIn("## Current Date and Time", content)
         self.assertLess(content.index("## Conversation Summaries"), content.index("## Current Date and Time"))
         self.assertNotIn("id", messages[2])
@@ -10733,7 +10734,30 @@ class AppRoutesTestCase(unittest.TestCase):
         api_messages = build_api_messages(normalized)
 
         self.assertEqual(api_messages[0]["role"], "assistant")
-        self.assertIn("Conversation summary", api_messages[0]["content"])
+        self.assertTrue(api_messages[0]["content"].startswith("Conversation summary:"))
+        self.assertNotIn("generated from deleted messages", api_messages[0]["content"])
+        self.assertIn("The user asked for a short answer.", api_messages[0]["content"])
+
+    def test_build_api_messages_maps_hierarchical_summary_to_clean_assistant_context(self):
+        normalized = normalize_chat_messages(
+            [
+                {
+                    "role": "summary",
+                    "content": f"{SUMMARY_LABEL}\n\nMerged summary details.",
+                    "metadata": parse_message_metadata(
+                        serialize_message_metadata(
+                            {"is_summary": True, "summary_source": "summary_history", "summary_level": 2}
+                        )
+                    ),
+                },
+            ]
+        )
+
+        api_messages = build_api_messages(normalized)
+
+        self.assertEqual(api_messages[0]["role"], "assistant")
+        self.assertTrue(api_messages[0]["content"].startswith("Conversation summary of earlier summaries:"))
+        self.assertIn("Merged summary details.", api_messages[0]["content"])
 
     def test_build_api_messages_injects_persisted_context_before_user_message(self):
         normalized = normalize_chat_messages(

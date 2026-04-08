@@ -30,6 +30,7 @@ from db import (
 from tool_registry import resolve_runtime_tool_names
 
 SUMMARY_LABEL = "Conversation summary (generated from deleted messages):"
+MODEL_SUMMARY_LABEL = "Conversation summary:"
 CANVAS_PROMPT_MAX_CHARS = 20_000
 CANVAS_PROMPT_MAX_LINES = 250
 CANVAS_PROMPT_MAX_TOKENS = 2_000
@@ -68,6 +69,22 @@ def extract_freeform_clarification_user_content(content: str) -> str:
             continue
         lines.append(raw_line.rstrip())
     return "\n".join(lines).strip()
+
+
+def _format_summary_message_for_model(content: str, metadata: dict | None = None) -> str:
+    normalized_content = str(content or "").strip()
+    if normalized_content.lower().startswith(SUMMARY_LABEL.lower()):
+        normalized_content = normalized_content[len(SUMMARY_LABEL):].strip()
+
+    summary_prefix = MODEL_SUMMARY_LABEL
+    summary_level = int(metadata.get("summary_level") or 0) if isinstance(metadata, dict) else 0
+    summary_source = str(metadata.get("summary_source") or "").strip().lower() if isinstance(metadata, dict) else ""
+    if summary_source == "summary_history" or summary_level > 1:
+        summary_prefix = "Conversation summary of earlier summaries:"
+
+    if normalized_content:
+        return f"{summary_prefix}\n\n{normalized_content}"
+    return summary_prefix
 CANVAS_MUTATING_TOOL_NAMES = {
     "create_canvas_document",
     "rewrite_canvas_document",
@@ -749,8 +766,7 @@ def build_api_messages(messages: list[dict], *, canvas_documents: list[dict] | N
             content = build_user_message_for_model(content, metadata, canvas_documents=canvas_documents)
         elif role == "summary":
             role = "assistant"
-            if not content.strip().lower().startswith(SUMMARY_LABEL.lower()):
-                content = f"{SUMMARY_LABEL}\n\n{content.strip()}" if content.strip() else SUMMARY_LABEL
+            content = _format_summary_message_for_model(content, metadata)
         elif role == "assistant":
             tool_calls = parse_message_tool_calls(message.get("tool_calls"))
             if tool_calls and not content.strip():
@@ -1359,7 +1375,10 @@ def _build_runtime_volatile_parts(
 
     if summary_count:
         volatile_parts.append(
-            f"## Conversation Summaries\nCount: {summary_count}\n*Guidance: Summary-role messages compress earlier deleted conversation turns and should be treated as authoritative context.*"
+            "## Conversation Summaries\n"
+            f"Count: {summary_count}\n"
+            "*Guidance: The full summary text is already included in the prompt as assistant summary messages below. "
+            "Treat those summary messages as authoritative compressed history for earlier deleted turns.*"
         )
 
     normalized_tool_trace_context = str(tool_trace_context or "").strip()
