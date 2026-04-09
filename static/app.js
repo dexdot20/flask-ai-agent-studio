@@ -610,6 +610,28 @@ let lastConversationSignature = "";
 let lastConversationMemorySignature = "";
 let userScrolledUp = false;
 let pendingCanvasConfirmAction = null;
+let pendingCanvasMutation = "";
+
+const CANVAS_EMPTY_STATES = Object.freeze({
+  no_documents: Object.freeze({
+    title: "No canvas document yet",
+    message: "Create a blank file with New file, upload an existing text file, or ask the assistant to draft something substantial and keep refining it with line-based edits.",
+  }),
+  no_matches: Object.freeze({
+    title: "No files match the current filters",
+    message: "Adjust the search term, role, or path filter to bring files back into view.",
+  }),
+});
+
+const CANVAS_MUTATION_LABELS = Object.freeze({
+  create: "file creation",
+  upload: "file upload",
+  delete: "file deletion",
+  clear: "canvas clearing",
+  rename: "rename",
+  save: "save",
+});
+
 function renderConversationMemoryTypeOptions() {
   if (!memoryNewTypeEl) {
     return;
@@ -2898,11 +2920,18 @@ function renderCanvasDiffPreview(activeDocument) {
 }
 
 function setCanvasEditing(enabled) {
+  if (enabled && guardCanvasMutation("edit the active file")) {
+    return;
+  }
   const activeDocument = getActiveCanvasDocument();
   if (enabled && activeDocument && !isCanvasDocumentEditable(activeDocument)) {
     setCanvasStatus("Visual canvas previews are read-only.", "muted");
     renderCanvasPanel();
     return;
+  }
+  if (enabled) {
+    closeCanvasOverflowMenu();
+    setCanvasMobileTreeOpen(false);
   }
   isCanvasEditing = Boolean(enabled && activeDocument);
   editingCanvasDocumentId = isCanvasEditing ? activeDocument.id : null;
@@ -2910,6 +2939,34 @@ function setCanvasEditing(enabled) {
     canvasEditorEl.value = activeDocument.content || "";
   }
   renderCanvasPanel();
+}
+
+function cancelCanvasEditing({ statusMessage = "", tone = "muted" } = {}) {
+  if (guardCanvasMutation("leave edit mode")) {
+    return;
+  }
+  if (!isCanvasEditing && !editingCanvasDocumentId) {
+    return;
+  }
+  clearCanvasEditingPreviewRender();
+  isCanvasEditing = false;
+  editingCanvasDocumentId = null;
+  renderCanvasPanel();
+  if (statusMessage) {
+    setCanvasStatus(statusMessage, tone);
+  }
+}
+
+function clearCanvasSearchInput({ statusMessage = "", tone = "muted" } = {}) {
+  if (!canvasSearchInput?.value) {
+    return false;
+  }
+  canvasSearchInput.value = "";
+  renderCanvasPanel();
+  if (statusMessage) {
+    setCanvasSearchStatus(statusMessage, tone);
+  }
+  return true;
 }
 
 const CANVAS_UPLOAD_MARKDOWN_EXTENSIONS = new Set([".md", ".markdown", ".mdx", ".txt", ".rst", ".adoc", ".org"]);
@@ -3020,6 +3077,9 @@ async function createCanvasDocumentFromData({ title, content, format, language =
     setCanvasStatus("Conversation is not available yet.", "warning");
     return;
   }
+  if (guardCanvasMutation("create another file")) {
+    return;
+  }
 
   cancelPendingConversationRefreshes();
 
@@ -3030,6 +3090,7 @@ async function createCanvasDocumentFromData({ title, content, format, language =
     canvasUploadBtn.disabled = true;
   }
 
+  setCanvasMutationState("create");
   setCanvasStatus(statusMessage, "muted");
 
   try {
@@ -3051,6 +3112,7 @@ async function createCanvasDocumentFromData({ title, content, format, language =
     }
 
     clearPendingCanvasUploadPreview();
+    setCanvasMutationState("", { rerender: false });
     history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
     streamingCanvasDocuments = [];
     pendingCanvasDiff = null;
@@ -3071,19 +3133,23 @@ async function createCanvasDocumentFromData({ title, content, format, language =
     });
   } catch (error) {
     clearPendingCanvasUploadPreview();
+    setCanvasMutationState("", { rerender: false });
     setCanvasStatus(error.message || "Canvas create failed.", "danger");
     renderCanvasPanel();
   }
 }
 
 async function createCanvasDocumentFromPrompt() {
+  if (guardCanvasMutation("create another file")) {
+    return;
+  }
   const nextTitle = String(globalThis.prompt("New canvas file name", "Untitled") || "").trim();
   if (!nextTitle) {
     setCanvasStatus("Canvas file creation cancelled.", "muted");
     return;
   }
 
-  const nextFormat = canvasFormatSelect?.value === "code" ? "code" : "markdown";
+  const nextFormat = getCanvasFormatControlValue();
   await createCanvasDocumentFromData({
     title: nextTitle,
     content: "",
@@ -3098,6 +3164,9 @@ async function createCanvasDocumentFromFile(file) {
     setCanvasStatus("Conversation is not available yet.", "warning");
     return;
   }
+  if (guardCanvasMutation("upload another file")) {
+    return;
+  }
 
   if (canvasNewBtn) {
     canvasNewBtn.disabled = true;
@@ -3107,6 +3176,7 @@ async function createCanvasDocumentFromFile(file) {
   }
 
   cancelPendingConversationRefreshes();
+  setCanvasMutationState("upload");
   showPendingCanvasUploadPreview(nextTitle);
   setCanvasStatus(`Uploading ${nextTitle}...`, "muted");
 
@@ -3125,6 +3195,7 @@ async function createCanvasDocumentFromFile(file) {
     }
 
     clearPendingCanvasUploadPreview();
+    setCanvasMutationState("", { rerender: false });
     history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
     streamingCanvasDocuments = [];
     pendingCanvasDiff = null;
@@ -3144,12 +3215,16 @@ async function createCanvasDocumentFromFile(file) {
     });
   } catch (error) {
     clearPendingCanvasUploadPreview();
+    setCanvasMutationState("", { rerender: false });
     setCanvasStatus(error.message || "Canvas upload failed.", "danger");
     renderCanvasPanel();
   }
 }
 
 function openCanvasUploadPicker() {
+  if (guardCanvasMutation("upload a file")) {
+    return;
+  }
   if (!canvasUploadInput) {
     setCanvasStatus("File upload is not available.", "warning");
     return;
@@ -3222,14 +3297,7 @@ function getCanvasDocumentCollection(entries = history) {
 
 function resetStreamingCanvasPreview() {
   streamingCanvasPreviews.clear();
-  if (pendingCanvasPreviewTimer) {
-    if (typeof globalThis.cancelAnimationFrame === "function") {
-      globalThis.cancelAnimationFrame(pendingCanvasPreviewTimer);
-    } else {
-      globalThis.clearTimeout(pendingCanvasPreviewTimer);
-    }
-    pendingCanvasPreviewTimer = 0;
-  }
+  clearCanvasRenderJob("preview");
 }
 
 function queueStreamingCanvasPreviewDelta(previewDocument, delta, replaceContent = false) {
@@ -3489,18 +3557,9 @@ function buildCanvasRenderState(documents = getCanvasRenderableDocuments()) {
 }
 
 function scheduleCanvasPreviewRender() {
-  if (pendingCanvasPreviewTimer) {
-    return;
-  }
-  const flushPreviewFrame = () => {
-    pendingCanvasPreviewTimer = 0;
+  scheduleCanvasRenderJob("preview", () => {
     renderCanvasPreviewFrame();
-  };
-  if (typeof globalThis.requestAnimationFrame === "function") {
-    pendingCanvasPreviewTimer = globalThis.requestAnimationFrame(flushPreviewFrame);
-    return;
-  }
-  pendingCanvasPreviewTimer = globalThis.setTimeout(flushPreviewFrame, CANVAS_PREVIEW_RENDER_INTERVAL_MS);
+  });
 }
 
 function getActiveCanvasDocument(entries = history) {
@@ -3627,16 +3686,261 @@ function setCanvasHint(message, tone = "muted") {
   canvasHint.dataset.tone = tone;
 }
 
-function clearCanvasEditingPreviewRender() {
-  if (!pendingCanvasEditorPreviewTimer) {
+function getCanvasFormatControlValue() {
+  return canvasFormatSelect?.value === "code" ? "code" : "markdown";
+}
+
+function isCanvasMutationPending() {
+  return Boolean(pendingCanvasMutation);
+}
+
+function getCanvasPendingMutationLabel() {
+  return CANVAS_MUTATION_LABELS[pendingCanvasMutation] || "canvas update";
+}
+
+function guardCanvasMutation(actionLabel = "continue") {
+  if (!isCanvasMutationPending()) {
+    return false;
+  }
+  const normalizedActionLabel = String(actionLabel || "").trim();
+  const actionSuffix = normalizedActionLabel ? ` before you ${normalizedActionLabel}` : "";
+  setCanvasStatus(`Please wait for the current ${getCanvasPendingMutationLabel()} to finish${actionSuffix}.`, "muted");
+  return true;
+}
+
+function setCanvasMutationState(nextMutation = "", { rerender = true } = {}) {
+  const normalizedMutation = String(nextMutation || "").trim();
+  if (pendingCanvasMutation === normalizedMutation) {
+    return;
+  }
+  pendingCanvasMutation = normalizedMutation;
+  if (canvasPanel) {
+    canvasPanel.setAttribute("aria-busy", normalizedMutation ? "true" : "false");
+    if (normalizedMutation) {
+      canvasPanel.dataset.canvasMutation = normalizedMutation;
+    } else {
+      delete canvasPanel.dataset.canvasMutation;
+    }
+  }
+  if (rerender && isCanvasOpen()) {
+    renderCanvasPanel();
+  }
+}
+
+function setCanvasButtonState(button, { disabled, hidden } = {}) {
+  if (!button) {
+    return;
+  }
+  if (typeof disabled === "boolean") {
+    button.disabled = disabled;
+  }
+  if (typeof hidden === "boolean") {
+    button.hidden = hidden;
+  }
+}
+
+function setCanvasEmptyState(stateKey = "no_documents") {
+  if (!canvasEmptyState) {
+    return;
+  }
+
+  const state = CANVAS_EMPTY_STATES[stateKey] || CANVAS_EMPTY_STATES.no_documents;
+  canvasEmptyState.hidden = false;
+  canvasEmptyState.innerHTML = `<h3>${state.title}</h3><p>${state.message}</p>`;
+}
+
+function syncCanvasFormControls({
+  formatDisabled = false,
+  formatValue = null,
+  searchDisabled = false,
+  roleDisabled = false,
+  pathDisabled = false,
+} = {}) {
+  const isBusy = isCanvasMutationPending();
+  if (canvasFormatSelect) {
+    canvasFormatSelect.disabled = formatDisabled || isBusy;
+    if (formatValue !== null) {
+      canvasFormatSelect.value = formatValue === "code" ? "code" : "markdown";
+    }
+  }
+  if (canvasSearchInput) {
+    canvasSearchInput.disabled = searchDisabled || isBusy;
+  }
+  if (canvasRoleFilter) {
+    canvasRoleFilter.disabled = roleDisabled || isBusy;
+  }
+  if (canvasPathFilter) {
+    canvasPathFilter.disabled = pathDisabled || isBusy;
+  }
+}
+
+function syncCanvasActionButtons({
+  hasDocuments = false,
+  hasActiveDocument = false,
+  isEditing = false,
+  isStreamingPreviewActive = false,
+  isPanelOpen = false,
+  canEditDocument = false,
+  canCopyDocument = false,
+} = {}) {
+  const isBusy = isCanvasMutationPending();
+  setCanvasButtonState(canvasEditBtn, {
+    hidden: isEditing,
+    disabled: !hasActiveDocument || isStreamingPreviewActive || !canEditDocument || isBusy,
+  });
+  setCanvasButtonState(canvasNewBtn, {
+    hidden: false,
+    disabled: isStreamingPreviewActive || isBusy,
+  });
+  setCanvasButtonState(canvasUploadBtn, {
+    hidden: false,
+    disabled: isStreamingPreviewActive || isBusy,
+  });
+  setCanvasButtonState(canvasSaveBtn, {
+    hidden: !isEditing,
+    disabled: !isEditing || isStreamingPreviewActive || !hasActiveDocument || isBusy,
+  });
+  setCanvasButtonState(canvasCancelBtn, {
+    hidden: !isEditing,
+    disabled: !isEditing || isStreamingPreviewActive || isBusy,
+  });
+  setCanvasButtonState(canvasCopyBtn, {
+    hidden: !isPanelOpen || !hasActiveDocument,
+    disabled: !hasActiveDocument || isEditing || !canCopyDocument || isBusy,
+  });
+  setCanvasButtonState(canvasDeleteBtn, {
+    disabled: !hasActiveDocument || isStreamingPreviewActive || isBusy,
+  });
+  setCanvasButtonState(canvasRenameBtn, {
+    disabled: !hasActiveDocument || isEditing || isStreamingPreviewActive || isBusy,
+  });
+  setCanvasButtonState(canvasClearBtn, {
+    disabled: !hasDocuments || isStreamingPreviewActive || isBusy,
+  });
+  setCanvasButtonState(canvasDownloadHtmlBtn, {
+    disabled: !hasActiveDocument || isStreamingPreviewActive || isBusy,
+  });
+  setCanvasButtonState(canvasDownloadMdBtn, {
+    disabled: !hasActiveDocument || isStreamingPreviewActive || isBusy,
+  });
+  setCanvasButtonState(canvasDownloadPdfBtn, {
+    disabled: !hasActiveDocument || isStreamingPreviewActive || isBusy,
+  });
+}
+
+function resetCanvasContentDisplay({ clearEditorValue = true, clearTabs = true } = {}) {
+  clearCanvasEditingPreviewRender();
+  isCanvasEditing = false;
+  editingCanvasDocumentId = null;
+  canvasWorkspaceMain?.classList.remove("canvas-workspace-main--editing");
+
+  if (canvasEditorEl) {
+    canvasEditorEl.classList.remove("canvas-editor--editing");
+    canvasEditorEl.hidden = true;
+    if (clearEditorValue) {
+      canvasEditorEl.value = "";
+    }
+  }
+
+  if (canvasDocumentEl) {
+    canvasDocumentEl.hidden = true;
+    canvasDocumentEl.classList.remove("canvas-document--editing-preview");
+    canvasDocumentEl.innerHTML = "";
+  }
+
+  if (canvasDiffEl) {
+    canvasDiffEl.hidden = true;
+    canvasDiffEl.innerHTML = "";
+  }
+
+  if (clearTabs && canvasDocumentTabsEl) {
+    canvasDocumentTabsEl.hidden = true;
+    canvasDocumentTabsEl.innerHTML = "";
+  }
+}
+
+function renderCanvasUnavailableState({
+  subtitle,
+  emptyStateKey,
+  documents = [],
+  isStreamingPreviewActive = false,
+  enableFilters = false,
+  clearSearchStatus = false,
+} = {}) {
+  resetCanvasMetaBar();
+  if (canvasSubtitle) {
+    canvasSubtitle.textContent = subtitle;
+  }
+  setCanvasHint("");
+  if (clearSearchStatus) {
+    setCanvasSearchStatus("");
+  }
+  setCanvasEmptyState(emptyStateKey);
+  resetCanvasContentDisplay();
+  syncCanvasFormControls({
+    formatDisabled: isStreamingPreviewActive,
+    formatValue: getCanvasFormatControlValue(),
+    searchDisabled: !enableFilters,
+    roleDisabled: !enableFilters,
+    pathDisabled: !enableFilters,
+  });
+  syncCanvasActionButtons({
+    hasDocuments: documents.length > 0,
+    hasActiveDocument: false,
+    isEditing: false,
+    isStreamingPreviewActive,
+    isPanelOpen: isCanvasOpen(),
+    canEditDocument: false,
+    canCopyDocument: false,
+  });
+  closeCanvasOverflowMenu();
+}
+
+function clearCanvasRenderJob(jobType) {
+  const timer = jobType === "editing-preview" ? pendingCanvasEditorPreviewTimer : pendingCanvasPreviewTimer;
+  if (!timer) {
     return;
   }
   if (typeof globalThis.cancelAnimationFrame === "function") {
-    globalThis.cancelAnimationFrame(pendingCanvasEditorPreviewTimer);
+    globalThis.cancelAnimationFrame(timer);
   } else {
-    globalThis.clearTimeout(pendingCanvasEditorPreviewTimer);
+    globalThis.clearTimeout(timer);
   }
-  pendingCanvasEditorPreviewTimer = 0;
+  if (jobType === "editing-preview") {
+    pendingCanvasEditorPreviewTimer = 0;
+    return;
+  }
+  pendingCanvasPreviewTimer = 0;
+}
+
+function scheduleCanvasRenderJob(jobType, callback) {
+  const isEditingPreviewJob = jobType === "editing-preview";
+  if (isEditingPreviewJob ? pendingCanvasEditorPreviewTimer : pendingCanvasPreviewTimer) {
+    return;
+  }
+
+  const flushRenderJob = () => {
+    if (isEditingPreviewJob) {
+      pendingCanvasEditorPreviewTimer = 0;
+    } else {
+      pendingCanvasPreviewTimer = 0;
+    }
+    callback();
+  };
+
+  const timer = typeof globalThis.requestAnimationFrame === "function"
+    ? globalThis.requestAnimationFrame(flushRenderJob)
+    : globalThis.setTimeout(flushRenderJob, CANVAS_PREVIEW_RENDER_INTERVAL_MS);
+
+  if (isEditingPreviewJob) {
+    pendingCanvasEditorPreviewTimer = timer;
+    return;
+  }
+  pendingCanvasPreviewTimer = timer;
+}
+
+function clearCanvasEditingPreviewRender() {
+  clearCanvasRenderJob("editing-preview");
 }
 
 function getCanvasEditingPreviewDocument(activeDocument = getActiveCanvasDocument()) {
@@ -3644,7 +3948,7 @@ function getCanvasEditingPreviewDocument(activeDocument = getActiveCanvasDocumen
     return activeDocument;
   }
 
-  const previewFormat = canvasFormatSelect?.value === "code" ? "code" : "markdown";
+  const previewFormat = getCanvasFormatControlValue();
   return normalizeCanvasDocument({
     ...activeDocument,
     format: previewFormat,
@@ -3656,12 +3960,8 @@ function scheduleCanvasEditingPreviewRender() {
   if (!isCanvasEditing) {
     return;
   }
-  if (pendingCanvasEditorPreviewTimer) {
-    return;
-  }
 
-  const flushEditingPreviewFrame = () => {
-    pendingCanvasEditorPreviewTimer = 0;
+  scheduleCanvasRenderJob("editing-preview", () => {
     if (!isCanvasEditing) {
       return;
     }
@@ -3671,12 +3971,7 @@ function scheduleCanvasEditingPreviewRender() {
       return;
     }
     updateCanvasActiveDocumentDisplay(renderState);
-  };
-  if (typeof globalThis.requestAnimationFrame === "function") {
-    pendingCanvasEditorPreviewTimer = globalThis.requestAnimationFrame(flushEditingPreviewFrame);
-    return;
-  }
-  pendingCanvasEditorPreviewTimer = globalThis.setTimeout(flushEditingPreviewFrame, CANVAS_PREVIEW_RENDER_INTERVAL_MS);
+  });
 }
 
 function setPendingDocumentCanvasOpen(files) {
@@ -3836,32 +4131,13 @@ function updateCanvasActiveDocumentDisplay(renderState) {
     setCanvasHint("");
   }
   canvasEmptyState.hidden = true;
-  canvasEmptyState.innerHTML = "<h3>No canvas document yet</h3><p>Ask the assistant to draft something substantial, then continue refining it with line-based edits.</p>";
-  if (canvasFormatSelect) {
-    canvasFormatSelect.disabled = !isCanvasEditing || isStreamingPreviewActive;
-    canvasFormatSelect.value = displayDocument.format || "markdown";
-  }
-  if (canvasSearchInput) {
-    canvasSearchInput.disabled = isCanvasEditing || isStreamingPreviewActive;
-  }
-  if (canvasRoleFilter) {
-    canvasRoleFilter.disabled = isCanvasEditing || isStreamingPreviewActive;
-  }
-  if (canvasPathFilter) {
-    canvasPathFilter.disabled = isCanvasEditing || isStreamingPreviewActive;
-  }
-  if (canvasEditBtn) {
-    canvasEditBtn.hidden = isCanvasEditing;
-    canvasEditBtn.disabled = isStreamingPreviewActive || !isCanvasDocumentEditable(displayDocument);
-  }
-  if (canvasSaveBtn) {
-    canvasSaveBtn.hidden = !isCanvasEditing;
-    canvasSaveBtn.disabled = isStreamingPreviewActive;
-  }
-  if (canvasCancelBtn) {
-    canvasCancelBtn.hidden = !isCanvasEditing;
-    canvasCancelBtn.disabled = isStreamingPreviewActive;
-  }
+  syncCanvasFormControls({
+    formatDisabled: !isCanvasEditing || isStreamingPreviewActive,
+    formatValue: displayDocument.format || "markdown",
+    searchDisabled: isCanvasEditing || isStreamingPreviewActive,
+    roleDisabled: isCanvasEditing || isStreamingPreviewActive,
+    pathDisabled: isCanvasEditing || isStreamingPreviewActive,
+  });
 
   if (isCanvasEditing && canvasEditorEl) {
     if (editingCanvasDocumentId !== activeDocument.id) {
@@ -3898,29 +4174,16 @@ function updateCanvasActiveDocumentDisplay(renderState) {
   renderCanvasDiffPreview(activeDocument);
   const matchCount = !isCanvasEditing && !isStreamingPreviewActive ? applyCanvasSearchHighlight(searchTerm) : 0;
   updateCanvasSearchFeedback(renderState, matchCount);
-  if (canvasCopyBtn) {
-    const copySourceText = isCanvasEditing && canvasEditorEl ? canvasEditorEl.value : displayDocument.content;
-    canvasCopyBtn.disabled = isCanvasEditing || isVisualCanvasDocument(displayDocument) || !String(copySourceText || "").length;
-    canvasCopyBtn.hidden = !isCanvasPanelOpen;
-  }
-  if (canvasDeleteBtn) {
-    canvasDeleteBtn.disabled = isStreamingPreviewActive;
-  }
-  if (canvasRenameBtn) {
-    canvasRenameBtn.disabled = isStreamingPreviewActive || isCanvasEditing || !activeDocument;
-  }
-  if (canvasClearBtn) {
-    canvasClearBtn.disabled = isStreamingPreviewActive || documents.length === 0;
-  }
-  if (canvasDownloadHtmlBtn) {
-    canvasDownloadHtmlBtn.disabled = isStreamingPreviewActive;
-  }
-  if (canvasDownloadMdBtn) {
-    canvasDownloadMdBtn.disabled = isStreamingPreviewActive;
-  }
-  if (canvasDownloadPdfBtn) {
-    canvasDownloadPdfBtn.disabled = isStreamingPreviewActive;
-  }
+  const copySourceText = isCanvasEditing && canvasEditorEl ? canvasEditorEl.value : displayDocument.content;
+  syncCanvasActionButtons({
+    hasDocuments: documents.length > 0,
+    hasActiveDocument: Boolean(activeDocument),
+    isEditing: isCanvasEditing,
+    isStreamingPreviewActive,
+    isPanelOpen: isCanvasPanelOpen,
+    canEditDocument: isCanvasDocumentEditable(displayDocument),
+    canCopyDocument: !isVisualCanvasDocument(displayDocument) && Boolean(String(copySourceText || "").length),
+  });
   closeCanvasOverflowMenu();
 }
 
@@ -4243,178 +4506,32 @@ function renderCanvasPanel() {
 
   renderCanvasTree(renderDocuments, activeDocument);
   if (!renderDocuments.length) {
-    clearCanvasEditingPreviewRender();
-    isCanvasEditing = false;
-    editingCanvasDocumentId = null;
-    canvasWorkspaceMain?.classList.remove("canvas-workspace-main--editing");
-    resetCanvasMetaBar();
-    canvasSubtitle.textContent = "No canvas document yet.";
-    setCanvasHint("");
-    canvasEmptyState.hidden = false;
-    canvasEmptyState.innerHTML = "<h3>No canvas document yet</h3><p>Create a blank file with New file, upload an existing text file, or ask the assistant to draft something substantial and keep refining it with line-based edits.</p>";
-    if (canvasEditorEl) {
-      canvasEditorEl.classList.remove("canvas-editor--editing");
-      canvasEditorEl.hidden = true;
-      canvasEditorEl.value = "";
-    }
-    canvasDocumentEl.hidden = true;
-    canvasDocumentEl.classList.remove("canvas-document--editing-preview");
-    canvasDocumentEl.innerHTML = "";
-    if (canvasDiffEl) {
-      canvasDiffEl.hidden = true;
-      canvasDiffEl.innerHTML = "";
-    }
-    if (canvasDocumentTabsEl) {
-      canvasDocumentTabsEl.hidden = true;
-      canvasDocumentTabsEl.innerHTML = "";
-    }
-    if (canvasEditBtn) {
-      canvasEditBtn.disabled = true;
-      canvasEditBtn.hidden = false;
-    }
-    if (canvasNewBtn) {
-      canvasNewBtn.disabled = isStreamingPreviewActive;
-      canvasNewBtn.hidden = false;
-    }
-    if (canvasUploadBtn) {
-      canvasUploadBtn.disabled = isStreamingPreviewActive;
-      canvasUploadBtn.hidden = false;
-    }
-    if (canvasSaveBtn) {
-      canvasSaveBtn.disabled = true;
-      canvasSaveBtn.hidden = true;
-    }
-    if (canvasCancelBtn) {
-      canvasCancelBtn.disabled = true;
-      canvasCancelBtn.hidden = true;
-    }
-    if (canvasCopyBtn) {
-      canvasCopyBtn.disabled = true;
-      canvasCopyBtn.hidden = true;
-    }
-    if (canvasFormatSelect) {
-      canvasFormatSelect.disabled = isStreamingPreviewActive;
-    }
-    if (canvasDeleteBtn) {
-      canvasDeleteBtn.disabled = true;
-    }
-    if (canvasClearBtn) {
-      canvasClearBtn.disabled = true;
-    }
-    if (canvasDownloadHtmlBtn) {
-      canvasDownloadHtmlBtn.disabled = true;
-    }
-    if (canvasDownloadMdBtn) {
-      canvasDownloadMdBtn.disabled = true;
-    }
-    if (canvasDownloadPdfBtn) {
-      canvasDownloadPdfBtn.disabled = true;
-    }
-    if (canvasSearchInput) {
-      canvasSearchInput.disabled = true;
-    }
-    if (canvasFormatSelect) {
-      canvasFormatSelect.disabled = isStreamingPreviewActive;
-      canvasFormatSelect.value = canvasFormatSelect.value === "code" ? "code" : "markdown";
-    }
-    if (canvasRoleFilter) {
-      canvasRoleFilter.disabled = true;
-    }
-    if (canvasPathFilter) {
-      canvasPathFilter.disabled = true;
-    }
-    setCanvasSearchStatus("");
+    renderCanvasUnavailableState({
+      subtitle: "No canvas document yet.",
+      emptyStateKey: "no_documents",
+      documents: renderDocuments,
+      isStreamingPreviewActive,
+      enableFilters: false,
+      clearSearchStatus: true,
+    });
     return;
   }
 
   if (!activeDocument) {
-    clearCanvasEditingPreviewRender();
-    isCanvasEditing = false;
-    editingCanvasDocumentId = null;
-    canvasWorkspaceMain?.classList.remove("canvas-workspace-main--editing");
-    resetCanvasMetaBar();
-    canvasSubtitle.textContent = `Project mode · ${renderDocuments.length} files · no matches`;
-    setCanvasHint("");
-    canvasEmptyState.hidden = false;
-    canvasEmptyState.innerHTML = "<h3>No files match the current filters</h3><p>Adjust the search term, role, or path filter to bring files back into view.</p>";
-    if (canvasEditorEl) {
-      canvasEditorEl.classList.remove("canvas-editor--editing");
-      canvasEditorEl.hidden = true;
-      canvasEditorEl.value = "";
-    }
-    canvasDocumentEl.hidden = true;
-    canvasDocumentEl.classList.remove("canvas-document--editing-preview");
-    canvasDocumentEl.innerHTML = "";
-    if (canvasDiffEl) {
-      canvasDiffEl.hidden = true;
-      canvasDiffEl.innerHTML = "";
-    }
-    if (canvasEditBtn) {
-      canvasEditBtn.disabled = true;
-      canvasEditBtn.hidden = false;
-    }
-    if (canvasNewBtn) {
-      canvasNewBtn.disabled = isStreamingPreviewActive;
-      canvasNewBtn.hidden = false;
-    }
-    if (canvasUploadBtn) {
-      canvasUploadBtn.disabled = isStreamingPreviewActive;
-      canvasUploadBtn.hidden = false;
-    }
-    if (canvasSaveBtn) {
-      canvasSaveBtn.disabled = true;
-      canvasSaveBtn.hidden = true;
-    }
-    if (canvasCancelBtn) {
-      canvasCancelBtn.disabled = true;
-      canvasCancelBtn.hidden = true;
-    }
-    if (canvasCopyBtn) {
-      canvasCopyBtn.disabled = true;
-      canvasCopyBtn.hidden = true;
-    }
-    if (canvasFormatSelect) {
-      canvasFormatSelect.disabled = isStreamingPreviewActive;
-    }
-    if (canvasDeleteBtn) {
-      canvasDeleteBtn.disabled = true;
-    }
-    if (canvasClearBtn) {
-      canvasClearBtn.disabled = renderDocuments.length === 0;
-    }
-    if (canvasDownloadHtmlBtn) {
-      canvasDownloadHtmlBtn.disabled = true;
-    }
-    if (canvasDownloadMdBtn) {
-      canvasDownloadMdBtn.disabled = true;
-    }
-    if (canvasDownloadPdfBtn) {
-      canvasDownloadPdfBtn.disabled = true;
-    }
-    if (canvasRoleFilter) {
-      canvasRoleFilter.disabled = false;
-    }
-    if (canvasPathFilter) {
-      canvasPathFilter.disabled = false;
-    }
+    const modeLabel = getCanvasMode(renderDocuments) === "project" ? "Project mode" : "Document mode";
+    renderCanvasUnavailableState({
+      subtitle: `${modeLabel} · ${renderDocuments.length} file${renderDocuments.length === 1 ? "" : "s"} · no matches`,
+      emptyStateKey: "no_matches",
+      documents: renderDocuments,
+      isStreamingPreviewActive,
+      enableFilters: true,
+    });
     updateCanvasSearchFeedback(renderState, 0);
     return;
   }
 
   updateCanvasActiveDocumentDisplay(renderState);
   renderCanvasDocumentTabs(visibleDocuments);
-  if (canvasEditBtn) {
-    canvasEditBtn.disabled = isStreamingPreviewActive;
-    canvasEditBtn.hidden = isCanvasEditing;
-  }
-  if (canvasNewBtn) {
-    canvasNewBtn.disabled = isStreamingPreviewActive;
-    canvasNewBtn.hidden = false;
-  }
-  if (canvasUploadBtn) {
-    canvasUploadBtn.disabled = isStreamingPreviewActive;
-    canvasUploadBtn.hidden = false;
-  }
 }
 
 function openCanvas(triggerEl = null, options = {}) {
@@ -4468,25 +4585,101 @@ function isCanvasOverflowMenuOpen() {
   return Boolean(canvasOverflowMenu && !canvasOverflowMenu.hidden);
 }
 
-function closeCanvasOverflowMenu() {
+function getCanvasOverflowMenuItems() {
+  if (!canvasOverflowMenu) {
+    return [];
+  }
+  return Array.from(canvasOverflowMenu.querySelectorAll('[role="menuitem"]')).filter((item) => {
+    if (!(item instanceof HTMLElement) || item.hidden || item.getAttribute("aria-hidden") === "true") {
+      return false;
+    }
+    if ("disabled" in item && item.disabled) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function focusCanvasOverflowMenuItem(target = "first") {
+  const items = getCanvasOverflowMenuItems();
+  if (!items.length) {
+    return;
+  }
+  if (target === "last") {
+    items[items.length - 1].focus();
+    return;
+  }
+  items[0].focus();
+}
+
+function closeCanvasOverflowMenu({ restoreFocus = false } = {}) {
   if (!canvasOverflowMenu || !canvasMoreBtn) {
     return;
   }
   canvasOverflowMenu.hidden = true;
   canvasOverflowMenu.classList.remove("open");
   canvasMoreBtn.setAttribute("aria-expanded", "false");
+  if (restoreFocus) {
+    canvasMoreBtn.focus();
+  }
 }
 
-function openCanvasOverflowMenu() {
+function openCanvasOverflowMenu({ focusTarget = null } = {}) {
   if (!canvasOverflowMenu || !canvasMoreBtn) {
     return;
   }
   canvasOverflowMenu.hidden = false;
   canvasOverflowMenu.classList.add("open");
   canvasMoreBtn.setAttribute("aria-expanded", "true");
+  if (focusTarget) {
+    globalThis.requestAnimationFrame(() => {
+      focusCanvasOverflowMenuItem(focusTarget);
+    });
+  }
 }
 
-function toggleCanvasOverflowMenu() {
+function moveCanvasOverflowMenuFocus(step = 1) {
+  const items = getCanvasOverflowMenuItems();
+  if (!items.length) {
+    return;
+  }
+  const currentIndex = items.indexOf(document.activeElement);
+  const baseIndex = currentIndex >= 0 ? currentIndex : (step < 0 ? 0 : -1);
+  const nextIndex = (baseIndex + step + items.length) % items.length;
+  items[nextIndex].focus();
+}
+
+function handleCanvasOverflowMenuKeydown(event) {
+  if (!isCanvasOverflowMenuOpen()) {
+    return;
+  }
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeCanvasOverflowMenu({ restoreFocus: true });
+    return;
+  }
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    moveCanvasOverflowMenuFocus(1);
+    return;
+  }
+  if (event.key === "ArrowUp") {
+    event.preventDefault();
+    moveCanvasOverflowMenuFocus(-1);
+    return;
+  }
+  if (event.key === "Home") {
+    event.preventDefault();
+    focusCanvasOverflowMenuItem("first");
+    return;
+  }
+  if (event.key === "End") {
+    event.preventDefault();
+    focusCanvasOverflowMenuItem("last");
+  }
+}
+
+function toggleCanvasOverflowMenu(options = {}) {
   if (isCanvasOverflowMenuOpen()) {
     closeCanvasOverflowMenu();
     return;
@@ -4494,7 +4687,7 @@ function toggleCanvasOverflowMenu() {
   if (isCanvasMobileTreeOpen) {
     setCanvasMobileTreeOpen(false);
   }
-  openCanvasOverflowMenu();
+  openCanvasOverflowMenu(options);
 }
 
 function openExportPanel(triggerEl = null) {
@@ -4816,6 +5009,9 @@ async function deleteCanvasDocuments({ documentId = null, clearAll = false, conf
     setCanvasStatus("No canvas document is available to delete.", "warning");
     return;
   }
+  if (guardCanvasMutation(clearAll ? "clear Canvas" : "delete the active file")) {
+    return;
+  }
 
   if (!confirmed) {
     openCanvasConfirmModal({
@@ -4833,6 +5029,7 @@ async function deleteCanvasDocuments({ documentId = null, clearAll = false, conf
   }
 
   cancelPendingConversationRefreshes();
+  setCanvasMutationState(clearAll ? "clear" : "delete");
   try {
     const params = new URLSearchParams();
     if (targetDocumentId) {
@@ -4850,6 +5047,7 @@ async function deleteCanvasDocuments({ documentId = null, clearAll = false, conf
     if (!response.ok) {
       throw new Error(payload.error || "Canvas delete failed.");
     }
+    setCanvasMutationState("", { rerender: false });
     history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
     streamingCanvasDocuments = [];
     pendingCanvasDiff = null;
@@ -4869,6 +5067,8 @@ async function deleteCanvasDocuments({ documentId = null, clearAll = false, conf
 
     setCanvasStatus("Canvas document deleted.", "success");
   } catch (error) {
+    setCanvasMutationState("", { rerender: false });
+    renderCanvasPanel();
     setCanvasStatus(error.message || "Canvas delete failed.", "danger");
   }
 }
@@ -4879,12 +5079,16 @@ async function renameCanvasDocument() {
     setCanvasStatus("No canvas document to rename.", "warning");
     return;
   }
+  if (guardCanvasMutation("rename the active file")) {
+    return;
+  }
   const currentTitle = String(activeDocument.path || activeDocument.title || "").trim() || "Untitled";
   const nextTitle = String(globalThis.prompt("Rename document", currentTitle) || "").trim();
   if (!nextTitle || nextTitle === currentTitle) {
     return;
   }
   setCanvasStatus("Renaming...", "muted");
+  setCanvasMutationState("rename");
   try {
     const response = await fetch(`/api/conversations/${currentConvId}/canvas`, {
       method: "PATCH",
@@ -4895,12 +5099,15 @@ async function renameCanvasDocument() {
     if (!response.ok) {
       throw new Error(payload.error || "Rename failed.");
     }
+    setCanvasMutationState("", { rerender: false });
     history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
     activeCanvasDocumentId = String(payload.active_document_id || activeDocument.id || "").trim() || activeCanvasDocumentId;
     renderConversationHistory({ preserveScroll: true });
     renderCanvasPanel();
     setCanvasStatus(`Renamed to "${nextTitle}".`, "success");
   } catch (error) {
+    setCanvasMutationState("", { rerender: false });
+    renderCanvasPanel();
     setCanvasStatus(error.message || "Rename failed.", "danger");
   }
 }
@@ -4911,10 +5118,14 @@ async function saveCanvasEdits() {
     setCanvasStatus("Canvas document is not available yet.", "warning");
     return;
   }
+  if (guardCanvasMutation("save the active file again")) {
+    return;
+  }
 
   const nextContent = canvasEditorEl.value.replace(/\r\n?/g, "\n");
-  const nextFormat = canvasFormatSelect?.value === "code" ? "code" : "markdown";
+  const nextFormat = getCanvasFormatControlValue();
   cancelPendingConversationRefreshes();
+  setCanvasMutationState("save");
   setCanvasStatus("Saving canvas edits...", "muted");
 
   try {
@@ -4935,6 +5146,7 @@ async function saveCanvasEdits() {
       throw new Error(payload.error || "Canvas save failed.");
     }
 
+    setCanvasMutationState("", { rerender: false });
     history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
     streamingCanvasDocuments = [];
     pendingCanvasDiff = null;
@@ -4945,6 +5157,8 @@ async function saveCanvasEdits() {
     renderCanvasPanel();
     setCanvasStatus("Canvas saved.", "success");
   } catch (error) {
+    setCanvasMutationState("", { rerender: false });
+    renderCanvasPanel();
     setCanvasStatus(error.message || "Canvas save failed.", "danger");
   }
 }
@@ -8127,11 +8341,7 @@ if (canvasSaveBtn) {
 }
 if (canvasCancelBtn) {
   canvasCancelBtn.addEventListener("click", () => {
-    clearCanvasEditingPreviewRender();
-    isCanvasEditing = false;
-    editingCanvasDocumentId = null;
-    renderCanvasPanel();
-    setCanvasStatus("Canvas edit cancelled.", "muted");
+    cancelCanvasEditing({ statusMessage: "Canvas edit cancelled.", tone: "muted" });
   });
 }
 if (mobileCanvasBtn) {
@@ -8266,6 +8476,25 @@ if (canvasMoreBtn) {
     event.stopPropagation();
     toggleCanvasOverflowMenu();
   });
+  canvasMoreBtn.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      openCanvasOverflowMenu({ focusTarget: "first" });
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      openCanvasOverflowMenu({ focusTarget: "last" });
+      return;
+    }
+    if (event.key === "Escape" && isCanvasOverflowMenuOpen()) {
+      event.preventDefault();
+      closeCanvasOverflowMenu({ restoreFocus: true });
+    }
+  });
+}
+if (canvasOverflowMenu) {
+  canvasOverflowMenu.addEventListener("keydown", handleCanvasOverflowMenuKeydown);
 }
 if (canvasTreeToggleBtn) {
   canvasTreeToggleBtn.addEventListener("click", () => {
@@ -8452,8 +8681,7 @@ window.addEventListener("keydown", (event) => {
     return;
   }
   if (event.key === "Escape" && isCanvasOverflowMenuOpen()) {
-    closeCanvasOverflowMenu();
-    canvasMoreBtn?.focus();
+    closeCanvasOverflowMenu({ restoreFocus: true });
     return;
   }
   if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "c") {
@@ -8476,14 +8704,9 @@ window.addEventListener("keydown", (event) => {
         return;
       }
       if (isCanvasEditing) {
-        isCanvasEditing = false;
-        editingCanvasDocumentId = null;
-        renderCanvasPanel();
-        setCanvasStatus("Canvas edit cancelled.", "muted");
-      } else if (canvasSearchInput?.value) {
-        canvasSearchInput.value = "";
-        renderCanvasPanel();
-        setCanvasSearchStatus("Canvas search cleared.", "muted");
+        cancelCanvasEditing({ statusMessage: "Canvas edit cancelled.", tone: "muted" });
+      } else if (clearCanvasSearchInput({ statusMessage: "Canvas search cleared.", tone: "muted" })) {
+        return;
       } else {
         closeCanvas();
       }
