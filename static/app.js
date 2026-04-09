@@ -5005,7 +5005,9 @@ async function downloadCanvasDocument(format) {
 
   setCanvasStatus(`Preparing ${format.toUpperCase()} download…`, "muted");
   try {
-    const response = await fetch(`/api/conversations/${currentConvId}/canvas/export?format=${encodeURIComponent(format)}&document_id=${encodeURIComponent(canvasDocument.id)}`);
+    const response = await fetch(`/api/conversations/${currentConvId}/canvas/export?format=${encodeURIComponent(format)}&document_id=${encodeURIComponent(canvasDocument.id)}`, {
+      cache: "no-store",
+    });
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
       throw new Error(payload.error || "Canvas export failed.");

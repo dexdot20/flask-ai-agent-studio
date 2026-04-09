@@ -10568,6 +10568,9 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(markdown_response.status_code, 200)
         self.assertEqual(markdown_response.mimetype, "text/markdown")
         self.assertIn("attachment; filename=\"Draft-Export.md\"", markdown_response.headers["Content-Disposition"])
+        self.assertEqual(markdown_response.headers.get("Cache-Control"), "no-store, max-age=0")
+        self.assertEqual(markdown_response.headers.get("Pragma"), "no-cache")
+        self.assertEqual(markdown_response.headers.get("Expires"), "0")
         self.assertIn("# Export", markdown_response.get_data(as_text=True))
 
         pdf_response = self.client.get(
@@ -10575,6 +10578,9 @@ class AppRoutesTestCase(unittest.TestCase):
         )
         self.assertEqual(pdf_response.status_code, 200)
         self.assertEqual(pdf_response.mimetype, "application/pdf")
+        self.assertEqual(pdf_response.headers.get("Cache-Control"), "no-store, max-age=0")
+        self.assertEqual(pdf_response.headers.get("Pragma"), "no-cache")
+        self.assertEqual(pdf_response.headers.get("Expires"), "0")
         self.assertTrue(pdf_response.data.startswith(b"%PDF"))
 
         with pdfplumber.open(io.BytesIO(pdf_response.data)) as pdf:
@@ -10591,6 +10597,9 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(html_response.status_code, 200)
         self.assertEqual(html_response.mimetype, "text/html")
         self.assertIn("attachment; filename=\"Draft-Export.html\"", html_response.headers["Content-Disposition"])
+        self.assertEqual(html_response.headers.get("Cache-Control"), "no-store, max-age=0")
+        self.assertEqual(html_response.headers.get("Pragma"), "no-cache")
+        self.assertEqual(html_response.headers.get("Expires"), "0")
         self.assertIn("<ul>", html_response.get_data(as_text=True))
 
     def test_canvas_export_endpoint_renders_code_format(self):

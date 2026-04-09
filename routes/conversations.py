@@ -754,6 +754,9 @@ def register_conversation_routes(app) -> None:
             content_type=mime_type,
             headers={
                 "Content-Disposition": f'attachment; filename="{filename}"',
+                "Cache-Control": "no-store, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
             },
         )
 
