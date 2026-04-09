@@ -159,6 +159,7 @@ const summaryPreviewList = document.getElementById("summary-preview-list");
 const summaryHistoryList = document.getElementById("summary-history-list");
 const mobileSummaryBtn = document.getElementById("mobile-summary-btn");
 const conversationExportMdBtn = document.getElementById("conversation-export-md-btn");
+const conversationExportJsonBtn = document.getElementById("conversation-export-json-btn");
 const conversationExportDocxBtn = document.getElementById("conversation-export-docx-btn");
 const conversationExportPdfBtn = document.getElementById("conversation-export-pdf-btn");
 
@@ -8407,6 +8408,9 @@ if (exportOverlay) {
 }
 if (conversationExportMdBtn) {
   conversationExportMdBtn.addEventListener("click", () => downloadConversation("md"));
+}
+if (conversationExportJsonBtn) {
+  conversationExportJsonBtn.addEventListener("click", () => downloadConversation("json"));
 }
 if (conversationExportDocxBtn) {
   conversationExportDocxBtn.addEventListener("click", () => downloadConversation("docx"));

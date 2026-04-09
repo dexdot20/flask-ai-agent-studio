@@ -2515,6 +2515,75 @@ def _extract_chat_completion_text(response) -> str:
     return str(content or "").strip()
 
 
+def _snapshot_model_invocation_value(value):
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _snapshot_model_invocation_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_snapshot_model_invocation_value(item) for item in value]
+    return str(value)
+
+
+def _build_model_invocation_usage_summary(
+    provider_usage: dict,
+    *,
+    estimated_input_tokens: int | None = None,
+    estimated_breakdown: dict | None = None,
+    tool_schema_tokens: int | None = None,
+) -> dict:
+    received = bool(provider_usage.get("received"))
+    summary = {
+        "prompt_tokens": provider_usage.get("prompt_tokens") if received else None,
+        "prompt_cache_hit_tokens": provider_usage.get("prompt_cache_hit_tokens") if received else 0,
+        "prompt_cache_miss_tokens": provider_usage.get("prompt_cache_miss_tokens") if received else 0,
+        "prompt_cache_write_tokens": provider_usage.get("prompt_cache_write_tokens") if received else 0,
+        "completion_tokens": provider_usage.get("completion_tokens") if received else None,
+        "total_tokens": provider_usage.get("total_tokens") if received else None,
+        "missing_provider_usage": not received,
+    }
+    if estimated_input_tokens is not None:
+        summary["estimated_input_tokens"] = max(0, int(estimated_input_tokens or 0))
+    if isinstance(estimated_breakdown, dict):
+        summary["input_breakdown"] = {
+            str(key): max(0, int(value or 0)) for key, value in estimated_breakdown.items()
+        }
+    if tool_schema_tokens is not None:
+        summary["tool_schema_tokens"] = max(0, int(tool_schema_tokens or 0))
+    return summary
+
+
+def _append_model_invocation_log(
+    invocation_log_sink: list[dict] | None,
+    *,
+    agent_context: dict | None,
+    step: int,
+    call_type: str,
+    retry_reason: str | None,
+    model_target: dict,
+    request_payload,
+    response_summary,
+) -> None:
+    if not isinstance(invocation_log_sink, list):
+        return
+    context = agent_context if isinstance(agent_context, dict) else {}
+    record = model_target.get("record") if isinstance(model_target, dict) else {}
+    invocation_log_sink.append(
+        {
+            "source_message_id": _coerce_int_range(context.get("source_message_id"), 0, 0, 2_147_483_647),
+            "step": max(0, int(step or 0)),
+            "call_type": str(call_type or "agent_step").strip() or "agent_step",
+            "is_retry": bool(retry_reason),
+            "retry_reason": str(retry_reason or "").strip() or None,
+            "sub_agent_depth": _coerce_int_range(context.get("sub_agent_depth"), 0, 0, 8),
+            "provider": str((record or {}).get("provider") or "").strip(),
+            "api_model": str(model_target.get("api_model") or "").strip(),
+            "request_payload": _snapshot_model_invocation_value(request_payload),
+            "response_summary": _snapshot_model_invocation_value(response_summary),
+        }
+    )
+
+
 def _build_fetch_summary_source_text(result: dict) -> str:
     parts: list[str] = []
     title = _clean_tool_text(result.get("title") or "", limit=200)
@@ -2543,7 +2612,14 @@ def _build_fetch_summary_source_text(result: dict) -> str:
     return "\n\n".join(parts).strip()
 
 
-def _summarize_fetched_page_result(result: dict, focus: str, parent_model: str = "") -> tuple[dict, str]:
+def _summarize_fetched_page_result(
+    result: dict,
+    focus: str,
+    parent_model: str = "",
+    *,
+    agent_context: dict | None = None,
+    invocation_log_sink: list[dict] | None = None,
+) -> tuple[dict, str]:
     settings = get_app_settings()
     summarizer_model = get_operation_model("fetch_summarize", settings, fallback_model_id=parent_model)
     target = resolve_model_target(summarizer_model, settings)
@@ -2579,10 +2655,61 @@ def _summarize_fetched_page_result(result: dict, focus: str, parent_model: str =
         },
         target,
     )
-    response = target["client"].chat.completions.create(**request_kwargs)
+    try:
+        response = target["client"].chat.completions.create(**request_kwargs)
+    except Exception as exc:
+        _append_model_invocation_log(
+            invocation_log_sink,
+            agent_context=agent_context,
+            step=_coerce_int_range((agent_context or {}).get("current_step"), 0, 0, 1_000),
+            call_type="fetch_summarize",
+            retry_reason=None,
+            model_target=target,
+            request_payload=request_kwargs,
+            response_summary={
+                "status": "error",
+                "error": str(exc),
+                "usage": {"missing_provider_usage": True},
+            },
+        )
+        raise
     summary_text = _clean_tool_text(_extract_chat_completion_text(response), limit=RAG_TOOL_RESULT_MAX_TEXT_CHARS)
     if not summary_text:
         raise ValueError("Fetch summarizer returned empty content.")
+
+    response_usage = _extract_usage_metrics(getattr(response, "usage", None))
+    _append_model_invocation_log(
+        invocation_log_sink,
+        agent_context=agent_context,
+        step=_coerce_int_range((agent_context or {}).get("current_step"), 0, 0, 1_000),
+        call_type="fetch_summarize",
+        retry_reason=None,
+        model_target=target,
+        request_payload=request_kwargs,
+        response_summary={
+            "status": "ok",
+            "usage": {
+                "prompt_tokens": response_usage["prompt_tokens"] or None,
+                "prompt_cache_hit_tokens": response_usage["prompt_cache_hit_tokens"],
+                "prompt_cache_miss_tokens": response_usage["prompt_cache_miss_tokens"],
+                "prompt_cache_write_tokens": response_usage["prompt_cache_write_tokens"],
+                "completion_tokens": response_usage["completion_tokens"] or None,
+                "total_tokens": response_usage["total_tokens"] or None,
+                "missing_provider_usage": not any(
+                    value > 0
+                    for value in (
+                        response_usage["prompt_tokens"],
+                        response_usage["prompt_cache_hit_tokens"],
+                        response_usage["prompt_cache_miss_tokens"],
+                        response_usage["prompt_cache_write_tokens"],
+                        response_usage["completion_tokens"],
+                        response_usage["total_tokens"],
+                    )
+                ),
+            },
+            "content_text": summary_text,
+        },
+    )
 
     summarized_result = {
         "url": str(result.get("url") or "").strip(),
@@ -4627,7 +4754,12 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
                     canvas_expand_max_lines=((runtime_state.get("canvas_limits") or {}).get("expand_max_lines") if isinstance(runtime_state.get("canvas_limits"), dict) else None),
                     canvas_scroll_window_lines=((runtime_state.get("canvas_limits") or {}).get("scroll_window_lines") if isinstance(runtime_state.get("canvas_limits"), dict) else None),
                     workspace_runtime_state=runtime_state.get("workspace"),
-                    agent_context={"sub_agent_depth": sub_agent_depth + 1},
+                    agent_context={
+                        "sub_agent_depth": sub_agent_depth + 1,
+                        "conversation_id": agent_context.get("conversation_id"),
+                        "source_message_id": agent_context.get("source_message_id"),
+                    },
+                    invocation_log_sink=(runtime_state.get("invocation_log_sink") if isinstance(runtime_state.get("invocation_log_sink"), list) else None),
                 )
                 try:
                     for event in child_events:
@@ -5007,7 +5139,14 @@ def _run_fetch_url_summarized(tool_args: dict, runtime_state: dict):
 
     agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
     parent_model = str(agent_context.get("model") or "").strip()
-    return _summarize_fetched_page_result(result, focus, parent_model=parent_model)
+    invocation_log_sink = runtime_state.get("invocation_log_sink") if isinstance(runtime_state.get("invocation_log_sink"), list) else None
+    return _summarize_fetched_page_result(
+        result,
+        focus,
+        parent_model=parent_model,
+        agent_context=agent_context,
+        invocation_log_sink=invocation_log_sink,
+    )
 
 
 def _run_grep_fetched_content(tool_args: dict, runtime_state: dict):
@@ -6494,6 +6633,7 @@ def run_agent_stream(
     canvas_scroll_window_lines: int | None = None,
     workspace_runtime_state: dict | None = None,
     agent_context: dict | None = None,
+    invocation_log_sink: list[dict] | None = None,
 ):
     messages = list(api_messages)
     step = 0
@@ -6557,6 +6697,7 @@ def run_agent_stream(
             "max_tokens": int(canvas_prompt_max_tokens or 0),
         },
         "workspace": workspace_runtime_state if isinstance(workspace_runtime_state, dict) else create_workspace_runtime_state(),
+        "invocation_log_sink": invocation_log_sink if isinstance(invocation_log_sink, list) else None,
     }
     runtime_state["agent_context"] = {
         "model": str(model or "").strip(),
@@ -6909,9 +7050,29 @@ def run_agent_stream(
             model_target.get("record") if isinstance(model_target, dict) else None,
             model_settings,
         )
+
+        def append_turn_invocation(response_summary, *, request_payload=None):
+            _append_model_invocation_log(
+                runtime_state.get("invocation_log_sink"),
+                agent_context=runtime_state.get("agent_context"),
+                step=step,
+                call_type=call_type,
+                retry_reason=retry_reason,
+                model_target=model_target,
+                request_payload=request_payload if request_payload is not None else request_kwargs,
+                response_summary=response_summary,
+            )
+
         try:
             response = model_target["client"].chat.completions.create(**request_kwargs)
         except Exception as exc:
+            append_turn_invocation(
+                {
+                    "status": "error",
+                    "error": str(exc),
+                    "usage": {"missing_provider_usage": True},
+                }
+            )
             if not _is_openrouter_unsupported_tool_choice_error(exc, request_kwargs, model_target):
                 raise
             fallback_request_kwargs = _build_openrouter_tool_choice_fallback_request(request_kwargs)
@@ -6929,7 +7090,17 @@ def run_agent_stream(
                 model_target.get("record") if isinstance(model_target, dict) else None,
                 model_settings,
             )
-            response = model_target["client"].chat.completions.create(**request_kwargs)
+            try:
+                response = model_target["client"].chat.completions.create(**request_kwargs)
+            except Exception as fallback_exc:
+                append_turn_invocation(
+                    {
+                        "status": "error",
+                        "error": str(fallback_exc),
+                        "usage": {"missing_provider_usage": True},
+                    }
+                )
+                raise
 
         def finalize_call_usage() -> tuple[dict[str, int], int, int]:
             nonlocal provider_usage
@@ -7012,7 +7183,7 @@ def run_agent_stream(
         try:
             if getattr(response, "choices", None):
                 provider_usage = add_usage(getattr(response, "usage", None))
-                finalize_call_usage()
+                estimated_breakdown, estimated_input_tokens, tool_schema_tokens = finalize_call_usage()
                 message = response.choices[0].message
                 reasoning_text, content_text = _extract_reasoning_and_content(message)
                 turn_reasoning_details = _merge_reasoning_details([], _read_api_field(message, "reasoning_details", []))
@@ -7029,6 +7200,22 @@ def run_agent_stream(
                     reasoning_excerpt=reasoning_text,
                     content_excerpt=content_text,
                     tool_calls=tool_calls or [],
+                )
+                append_turn_invocation(
+                    {
+                        "status": "ok",
+                        "usage": _build_model_invocation_usage_summary(
+                            provider_usage,
+                            estimated_input_tokens=estimated_input_tokens,
+                            estimated_breakdown=estimated_breakdown,
+                            tool_schema_tokens=tool_schema_tokens,
+                        ),
+                        "reasoning_text": reasoning_text,
+                        "reasoning_details": turn_reasoning_details,
+                        "content_text": content_text,
+                        "tool_calls": tool_calls or [],
+                        "tool_call_error": str(tool_call_error or "").strip() or None,
+                    }
                 )
                 for event in emit_turn_reasoning(reasoning_text):
                     yield event
@@ -7153,7 +7340,7 @@ def run_agent_stream(
                 tool_calls,
                 tool_call_error,
             )
-            finalize_call_usage()
+            estimated_breakdown, estimated_input_tokens, tool_schema_tokens = finalize_call_usage()
             if buffered_content_deltas and not buffer_answer and not tool_calls and not tool_call_error:
                 for pending_delta in buffered_content_deltas:
                     for event in emit_turn_answer(pending_delta):
@@ -7167,6 +7354,23 @@ def run_agent_stream(
                 content_excerpt=final_content,
                 tool_calls=tool_calls or [],
                 stream_error=stream_error,
+            )
+            append_turn_invocation(
+                {
+                    "status": "stream_error" if stream_error else "ok",
+                    "usage": _build_model_invocation_usage_summary(
+                        provider_usage,
+                        estimated_input_tokens=estimated_input_tokens,
+                        estimated_breakdown=estimated_breakdown,
+                        tool_schema_tokens=tool_schema_tokens,
+                    ),
+                    "reasoning_text": final_reasoning,
+                    "reasoning_details": turn_reasoning_details,
+                    "content_text": final_content,
+                    "tool_calls": tool_calls or [],
+                    "tool_call_error": str(tool_call_error or "").strip() or None,
+                    "stream_error": stream_error,
+                }
             )
             return {
                 "reasoning_text": final_reasoning,

@@ -1569,7 +1569,8 @@ TOOL_SPECS = [
                 "Do not default to this when only part of the file needs to change; use replace_canvas_lines, insert_canvas_lines, or delete_canvas_lines for targeted edits. "
                 "If you do not know the document_id, use document_path from the workspace summary or manifest. "
                 "In project mode prefer document_path when possible. "
-                "If the user needs an additional file, create a separate canvas document instead of rewriting the current one into a different file."
+                "If the user needs an additional file, create a separate canvas document instead of rewriting the current one into a different file. "
+                "When the user's request results in content that naturally replaces the active canvas document, call this tool proactively as part of delivering the response — do not ask the user whether they want it saved."
             ),
         },
     },

@@ -286,7 +286,7 @@
   <div class="export-panel-header">
     <div>
       <span id="export-panel-title">Export chat</span>
-      <p id="export-subtitle" class="export-panel-subtitle">Select a format for the current conversation.</p>
+      <p id="export-subtitle" class="export-panel-subtitle">Select a format for the current conversation, including raw JSON snapshots for newly captured model calls.</p>
     </div>
     <button id="export-close" title="Close" type="button">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
@@ -296,6 +296,7 @@
   </div>
   <div class="export-panel-actions">
     <button class="btn-ghost" id="conversation-export-md-btn" type="button">Download .md</button>
+    <button class="btn-ghost" id="conversation-export-json-btn" type="button">Download raw .json</button>
     <button class="btn-ghost" id="conversation-export-docx-btn" type="button">Download .docx</button>
     <button class="btn-primary" id="conversation-export-pdf-btn" type="button">Download .pdf</button>
   </div>

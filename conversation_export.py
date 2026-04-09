@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from io import BytesIO
+import json
 from markdown_rendering import append_markdown_docx, append_markdown_pdf_story
 
 from docx import Document
@@ -334,6 +335,70 @@ def _iter_message_sections(messages: list[dict]) -> list[dict]:
             }
         )
     return sections
+
+
+def _build_raw_export_transcript(messages: list[dict]) -> list[dict]:
+    transcript = []
+    for message in messages or []:
+        if not isinstance(message, dict):
+            continue
+        metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+        transcript.append(
+            {
+                "id": message.get("id"),
+                "position": message.get("position"),
+                "role": _safe_text(message.get("role")),
+                "content": str(message.get("content") or ""),
+                "tool_call_id": _safe_text(message.get("tool_call_id")) or None,
+                "tool_calls": message.get("tool_calls") if isinstance(message.get("tool_calls"), list) else [],
+                "has_reasoning": bool(str(metadata.get("reasoning_content") or "").strip()),
+                "usage": message.get("usage") if isinstance(message.get("usage"), dict) else None,
+            }
+        )
+    return transcript
+
+
+def _build_raw_export_capture_status(messages: list[dict], invocations: list[dict]) -> dict:
+    if invocations:
+        status = "available"
+    elif any(str((message or {}).get("role") or "").strip() == "assistant" for message in messages or []):
+        status = "unavailable_for_legacy_conversation"
+    else:
+        status = "no_completed_assistant_turns"
+    return {
+        "status": status,
+        "invocation_count": len(invocations or []),
+        "future_only_exact_snapshots": True,
+    }
+
+
+def build_conversation_json_download(conversation: dict, messages: list[dict], invocations: list[dict]) -> bytes:
+    payload = {
+        "export_type": "conversation_raw_model_invocations",
+        "schema_version": 1,
+        "exported_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+        "conversation": {
+            "id": conversation.get("id"),
+            "title": _safe_text(conversation.get("title"), fallback="Conversation Export"),
+            "model": _safe_text(conversation.get("model")) or None,
+            "created_at": _safe_text(conversation.get("created_at")) or None,
+            "updated_at": _safe_text(conversation.get("updated_at")) or None,
+            "message_count": len(messages or []),
+        },
+        "capture_status": _build_raw_export_capture_status(messages, invocations),
+        "capture_scope": [
+            "main agent model calls",
+            "sub-agent model calls",
+            "fetch_url_summarized helper-model calls",
+        ],
+        "limitations": [
+            "Exact snapshots are only available for turns captured after raw invocation logging was enabled.",
+            "Legacy conversations may contain transcript history without exact provider request snapshots.",
+        ],
+        "transcript": _build_raw_export_transcript(messages),
+        "invocations": invocations or [],
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
 
 
 def build_conversation_markdown_download(conversation: dict, messages: list[dict]) -> bytes:

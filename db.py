@@ -238,6 +238,26 @@ def init_db() -> None:
                 FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
                 FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE SET NULL
             );
+            CREATE TABLE IF NOT EXISTS model_invocations (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id      INTEGER NOT NULL,
+                assistant_message_id INTEGER,
+                source_message_id    INTEGER,
+                step                 INTEGER NOT NULL DEFAULT 0,
+                call_index           INTEGER NOT NULL DEFAULT 0,
+                call_type            TEXT NOT NULL DEFAULT 'agent_step',
+                is_retry             INTEGER NOT NULL DEFAULT 0,
+                retry_reason         TEXT,
+                sub_agent_depth      INTEGER NOT NULL DEFAULT 0,
+                provider             TEXT NOT NULL,
+                api_model            TEXT NOT NULL,
+                request_payload      TEXT NOT NULL,
+                response_summary     TEXT,
+                created_at           TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                FOREIGN KEY (assistant_message_id) REFERENCES messages(id) ON DELETE SET NULL,
+                FOREIGN KEY (source_message_id) REFERENCES messages(id) ON DELETE SET NULL
+            );
             CREATE TABLE IF NOT EXISTS image_assets (
                 image_id         TEXT PRIMARY KEY,
                 conversation_id  INTEGER NOT NULL,
@@ -315,6 +335,12 @@ def init_db() -> None:
             ON video_assets(conversation_id, created_at, video_id);
             CREATE INDEX IF NOT EXISTS idx_conversation_memory_conversation_created
             ON conversation_memory(conversation_id, created_at, id);
+            CREATE INDEX IF NOT EXISTS idx_model_invocations_conversation_created
+            ON model_invocations(conversation_id, created_at, id);
+            CREATE INDEX IF NOT EXISTS idx_model_invocations_assistant_message
+            ON model_invocations(assistant_message_id, id);
+            CREATE INDEX IF NOT EXISTS idx_model_invocations_source_message
+            ON model_invocations(source_message_id, id);
             CREATE INDEX IF NOT EXISTS idx_personas_updated_at
             ON personas(updated_at, id);
             """
@@ -2637,6 +2663,110 @@ def message_row_to_dict(row, *, include_private_metadata: bool = False) -> dict:
         "usage": usage,
         "deleted_at": row["deleted_at"] if "deleted_at" in row_keys else None,
     }
+
+
+def _serialize_json_value(value) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except TypeError:
+        return json.dumps(str(value), ensure_ascii=False)
+
+
+def _parse_json_value(raw_value, fallback):
+    if raw_value in (None, ""):
+        return fallback
+    if isinstance(raw_value, (dict, list)):
+        return raw_value
+    try:
+        return json.loads(raw_value)
+    except Exception:
+        return fallback
+
+
+def _model_invocation_row_to_dict(row) -> dict:
+    return {
+        "id": int(row["id"]),
+        "conversation_id": int(row["conversation_id"]),
+        "assistant_message_id": _coerce_positive_int(row["assistant_message_id"]),
+        "source_message_id": _coerce_positive_int(row["source_message_id"]),
+        "step": int(row["step"] or 0),
+        "call_index": int(row["call_index"] or 0),
+        "call_type": str(row["call_type"] or "").strip(),
+        "is_retry": bool(row["is_retry"]),
+        "retry_reason": str(row["retry_reason"] or "").strip() or None,
+        "sub_agent_depth": int(row["sub_agent_depth"] or 0),
+        "provider": str(row["provider"] or "").strip(),
+        "api_model": str(row["api_model"] or "").strip(),
+        "request": _parse_json_value(row["request_payload"], {}),
+        "response_summary": _parse_json_value(row["response_summary"], {}),
+        "created_at": str(row["created_at"] or "").strip() or None,
+    }
+
+
+def insert_model_invocation(
+    conn: sqlite3.Connection,
+    conversation_id: int,
+    *,
+    provider: str,
+    api_model: str,
+    request_payload,
+    response_summary=None,
+    assistant_message_id: int | None = None,
+    source_message_id: int | None = None,
+    step: int | None = None,
+    call_index: int | None = None,
+    call_type: str = "agent_step",
+    is_retry: bool = False,
+    retry_reason: str | None = None,
+    sub_agent_depth: int = 0,
+) -> int:
+    cursor = conn.execute(
+        """INSERT INTO model_invocations (
+               conversation_id,
+               assistant_message_id,
+               source_message_id,
+               step,
+               call_index,
+               call_type,
+               is_retry,
+               retry_reason,
+               sub_agent_depth,
+               provider,
+               api_model,
+               request_payload,
+               response_summary
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            int(conversation_id),
+            _coerce_positive_int(assistant_message_id),
+            _coerce_positive_int(source_message_id),
+            max(0, int(step or 0)),
+            max(0, int(call_index or 0)),
+            str(call_type or "agent_step").strip() or "agent_step",
+            1 if is_retry else 0,
+            str(retry_reason or "").strip() or None,
+            max(0, int(sub_agent_depth or 0)),
+            str(provider or "").strip(),
+            str(api_model or "").strip(),
+            _serialize_json_value(request_payload),
+            _serialize_json_value(response_summary if response_summary is not None else {}),
+        ),
+    )
+    return int(cursor.lastrowid)
+
+
+def list_conversation_model_invocations(conversation_id: int) -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT id, conversation_id, assistant_message_id, source_message_id, step, call_index,
+                      call_type, is_retry, retry_reason, sub_agent_depth, provider, api_model,
+                      request_payload, response_summary, created_at
+               FROM model_invocations
+               WHERE conversation_id = ?
+               ORDER BY id ASC""",
+            (int(conversation_id),),
+        ).fetchall()
+    return [_model_invocation_row_to_dict(row) for row in rows]
 
 
 def get_app_settings() -> dict:

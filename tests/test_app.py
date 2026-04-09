@@ -109,6 +109,7 @@ from db import (
     get_video_asset,
     get_user_profile_entries,
     insert_message,
+    insert_model_invocation,
     insert_conversation_memory_entry,
     normalize_active_tool_names,
     parse_message_tool_calls,
@@ -6848,6 +6849,17 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn('body: JSON.stringify({ reasoning_by_message_id: reasoningByMessageId })', script_text)
         self.assertIn('method: "POST"', script_text)
 
+    def test_raw_json_conversation_export_button_is_wired_from_frontend(self):
+        template_path = Path(__file__).resolve().parent.parent / "templates" / "index.html"
+        template_text = template_path.read_text(encoding="utf-8")
+        self.assertIn('id="conversation-export-json-btn"', template_text)
+        self.assertIn("Download raw .json", template_text)
+
+        script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
+        script_text = script_path.read_text(encoding="utf-8")
+        self.assertIn('const conversationExportJsonBtn = document.getElementById("conversation-export-json-btn");', script_text)
+        self.assertIn('conversationExportJsonBtn.addEventListener("click", () => downloadConversation("json"));', script_text)
+
     def test_reasoning_css_includes_markdown_styles(self):
         style_path = Path(__file__).resolve().parent.parent / "static" / "style.css"
         style_text = style_path.read_text(encoding="utf-8")
@@ -9222,6 +9234,77 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertNotIn("reasoning_content", assistant_message["metadata"])
         self.assertEqual(assistant_message["metadata"]["tool_trace"][0]["tool_name"], "search_web")
 
+    def test_chat_stream_persists_exact_model_invocations_for_raw_export(self):
+        conversation_id = self._create_conversation()
+        save_app_settings(
+            {
+                "user_preferences": "",
+                "max_steps": "1",
+                "temperature": "0.3",
+                "active_tools": "[]",
+                "rag_auto_inject": "false",
+            }
+        )
+
+        responses = [
+            iter(
+                [
+                    self._stream_chunk(reasoning="Thinking. "),
+                    self._stream_chunk(content="Final answer."),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=3, total_tokens=5)),
+                ]
+            ),
+        ]
+
+        with patch("agent.client.chat.completions.create", side_effect=responses):
+            response = self.client.post(
+                "/chat",
+                json={
+                    "conversation_id": conversation_id,
+                    "model": "deepseek-chat",
+                    "user_content": "Test",
+                    "messages": [{"role": "user", "content": "Test"}],
+                },
+            )
+            response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+
+        with get_db() as conn:
+            assistant_row = conn.execute(
+                "SELECT id FROM messages WHERE conversation_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1",
+                (conversation_id,),
+            ).fetchone()
+            invocation_rows = conn.execute(
+                """SELECT assistant_message_id, source_message_id, call_type, provider, api_model,
+                          request_payload, response_summary
+                   FROM model_invocations
+                   WHERE conversation_id = ?
+                   ORDER BY id""",
+                (conversation_id,),
+            ).fetchall()
+
+        self.assertIsNotNone(assistant_row)
+        self.assertEqual(len(invocation_rows), 1)
+        self.assertEqual(invocation_rows[0]["assistant_message_id"], assistant_row["id"])
+        self.assertEqual(invocation_rows[0]["call_type"], "agent_step")
+        self.assertEqual(invocation_rows[0]["provider"], "deepseek")
+        self.assertEqual(invocation_rows[0]["api_model"], "deepseek-chat")
+
+        request_payload = json.loads(invocation_rows[0]["request_payload"])
+        response_summary = json.loads(invocation_rows[0]["response_summary"])
+        self.assertIn(
+            {"role": "user", "content": "Test"},
+            [
+                {"role": message.get("role"), "content": message.get("content")}
+                for message in request_payload["messages"]
+                if isinstance(message, dict)
+            ],
+        )
+        self.assertTrue(request_payload["stream"])
+        self.assertEqual(response_summary["content_text"], "Final answer.")
+        self.assertEqual(response_summary["usage"]["prompt_tokens"], 2)
+
     def test_failed_tool_summary_detection_marks_fetch_failures(self):
         self.assertTrue(_is_failed_tool_summary("Fetch failed: HTTP 403"))
         self.assertTrue(_is_failed_tool_summary("failed: timeout while reading response"))
@@ -11507,6 +11590,99 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertNotIn("```markdown", pdf_text)
         self.assertNotIn("### Canvas", pdf_text)
 
+    def test_conversation_export_endpoint_returns_raw_json_with_model_invocations(self):
+        conversation_id = self._create_conversation("Raw Export Chat")
+
+        with get_db() as conn:
+            user_message_id = insert_message(conn, conversation_id, "user", "Hello")
+            assistant_message_id = insert_message(
+                conn,
+                conversation_id,
+                "assistant",
+                "Here is the answer.",
+                metadata=serialize_message_metadata(
+                    {
+                        "reasoning_content": "Reasoned through the request.",
+                    },
+                    include_private_fields=True,
+                ),
+            )
+            insert_model_invocation(
+                conn,
+                conversation_id,
+                assistant_message_id=assistant_message_id,
+                source_message_id=user_message_id,
+                step=1,
+                call_index=1,
+                call_type="agent_step",
+                provider="deepseek",
+                api_model="deepseek-chat",
+                request_payload={
+                    "model": "deepseek-chat",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "stream": True,
+                },
+                response_summary={
+                    "status": "ok",
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7},
+                    "reasoning_text": "Reasoned through the request.",
+                    "content_text": "Let me think.",
+                },
+            )
+            insert_model_invocation(
+                conn,
+                conversation_id,
+                assistant_message_id=assistant_message_id,
+                source_message_id=user_message_id,
+                step=1,
+                call_index=2,
+                call_type="final_answer",
+                provider="deepseek",
+                api_model="deepseek-chat",
+                request_payload={
+                    "model": "deepseek-chat",
+                    "messages": [
+                        {"role": "user", "content": "Hello"},
+                        {"role": "assistant", "content": "Let me think."},
+                    ],
+                    "stream": True,
+                },
+                response_summary={
+                    "status": "ok",
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 6, "total_tokens": 11},
+                    "content_text": "Here is the answer.",
+                },
+            )
+
+        response = self.client.get(f"/api/conversations/{conversation_id}/export?format=json")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "application/json")
+        self.assertIn("attachment; filename=\"Raw-Export-Chat.json\"", response.headers["Content-Disposition"])
+
+        payload = json.loads(response.get_data(as_text=True))
+        self.assertEqual(payload["export_type"], "conversation_raw_model_invocations")
+        self.assertEqual(payload["capture_status"]["status"], "available")
+        self.assertEqual(payload["capture_status"]["invocation_count"], 2)
+        self.assertEqual(payload["invocations"][0]["request"]["messages"][0]["content"], "Hello")
+        self.assertEqual(payload["invocations"][1]["call_type"], "final_answer")
+        self.assertTrue(payload["transcript"][1]["has_reasoning"])
+
+    def test_conversation_export_endpoint_marks_legacy_json_export_when_no_exact_snapshots(self):
+        conversation_id = self._create_conversation("Legacy Raw Export")
+
+        with get_db() as conn:
+            insert_message(conn, conversation_id, "user", "Hello")
+            insert_message(conn, conversation_id, "assistant", "Legacy answer")
+
+        response = self.client.get(f"/api/conversations/{conversation_id}/export?format=json")
+
+        self.assertEqual(response.status_code, 200)
+        payload = json.loads(response.get_data(as_text=True))
+        self.assertEqual(payload["capture_status"]["status"], "unavailable_for_legacy_conversation")
+        self.assertEqual(payload["invocations"], [])
+        self.assertIn("Exact snapshots are only available", payload["limitations"][0])
+
     def test_conversation_export_endpoint_includes_attachments_and_sub_agent_traces(self):
         conversation_id = self._create_conversation("Detailed Export")
 
@@ -12683,6 +12859,40 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(tool_history_event["messages"][0]["role"], "assistant")
         self.assertEqual(tool_history_event["messages"][1]["role"], "tool")
 
+    def test_run_agent_stream_records_exact_invocation_snapshots(self):
+        responses = [
+            iter(
+                [
+                    self._stream_chunk(reasoning="Thinking. "),
+                    self._stream_chunk(content="Final answer."),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=3, total_tokens=5)),
+                ]
+            ),
+        ]
+        invocation_log = []
+
+        with patch("agent.client.chat.completions.create", side_effect=responses):
+            events = list(
+                run_agent_stream(
+                    [{"role": "user", "content": "Test"}],
+                    "deepseek-chat",
+                    1,
+                    [],
+                    invocation_log_sink=invocation_log,
+                )
+            )
+
+        self.assertIn({"type": "answer_delta", "text": "Final answer."}, events)
+        self.assertEqual(len(invocation_log), 1)
+        self.assertEqual(invocation_log[0]["call_type"], "agent_step")
+        self.assertEqual(invocation_log[0]["provider"], "deepseek")
+        self.assertEqual(invocation_log[0]["api_model"], "deepseek-chat")
+        self.assertEqual(invocation_log[0]["request_payload"]["messages"][0]["content"], "Test")
+        self.assertTrue(invocation_log[0]["request_payload"]["stream"])
+        self.assertEqual(invocation_log[0]["response_summary"]["status"], "ok")
+        self.assertEqual(invocation_log[0]["response_summary"]["content_text"], "Final answer.")
+        self.assertEqual(invocation_log[0]["response_summary"]["usage"]["prompt_tokens"], 2)
+
     def test_run_agent_stream_marks_unknown_pricing_as_unavailable(self):
         responses = [
             iter(
@@ -13722,7 +13932,9 @@ class AppRoutesTestCase(unittest.TestCase):
         context = _build_tool_trace_context(canonical_messages)
 
         self.assertIn("search_web", context)
-        self.assertNotIn("ask_clarifying_question", context)
+        # clarification is replaced by a single controlled sentinel, not the original trace data
+        self.assertIn("ask_clarifying_question [answered]", context)
+        self.assertNotIn("asked 3 questions", context)
 
     def test_build_api_messages_uses_null_content_for_tool_only_assistant_turns(self):
         api_messages = build_api_messages(

@@ -23,6 +23,7 @@ from canvas_service import (
 )
 from conversation_export import (
     build_conversation_docx_download,
+    build_conversation_json_download,
     build_conversation_markdown_download,
     build_conversation_pdf_download,
 )
@@ -55,6 +56,7 @@ from db import (
     insert_conversation_memory_entry,
     get_conversation_memory,
     get_conversation_memory_entry,
+    list_conversation_model_invocations,
     message_row_to_dict,
     normalize_rag_source_types,
     parse_message_metadata,
@@ -688,6 +690,14 @@ def register_conversation_routes(app) -> None:
                 payload = build_conversation_markdown_download(payload_conversation, messages)
                 mime_type = "text/markdown; charset=utf-8"
                 filename = f"{base_name}.md"
+            elif format_name == "json":
+                payload = build_conversation_json_download(
+                    payload_conversation,
+                    messages,
+                    list_conversation_model_invocations(conv_id),
+                )
+                mime_type = "application/json; charset=utf-8"
+                filename = f"{base_name}.json"
             elif format_name == "docx":
                 payload = build_conversation_docx_download(payload_conversation, messages)
                 mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -697,7 +707,7 @@ def register_conversation_routes(app) -> None:
                 mime_type = "application/pdf"
                 filename = f"{base_name}.pdf"
             else:
-                return jsonify({"error": "format must be md, docx, or pdf."}), 400
+                return jsonify({"error": "format must be md, json, docx, or pdf."}), 400
         except Exception:
             app.logger.exception("Failed to export conversation %s as %s", conv_id, format_name)
             return jsonify({"error": "Conversation export failed."}), 500

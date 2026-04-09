@@ -106,6 +106,7 @@ from db import (
     get_tool_memory_auto_inject_enabled,
     get_unsummarized_visible_messages,
     insert_message,
+    insert_model_invocation,
     parse_message_metadata,
     restore_soft_deleted_messages,
     sanitize_edited_user_message_metadata,
@@ -1055,12 +1056,20 @@ def _score_summary_message_priority(message: dict, focus_terms: set[str]) -> flo
 
 def _build_tool_trace_context(canonical_messages: list[dict], max_entries: int = SUMMARY_TOOL_TRACE_LIMIT) -> str | None:
     trace_entries: list[dict] = []
+    _clarification_sentinel_added = False
     for message in reversed(canonical_messages):
         if not isinstance(message, dict):
             continue
         metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else None
         for entry in reversed(extract_message_tool_trace(metadata)):
             if str(entry.get("tool_name") or "").strip() == "ask_clarifying_question":
+                if not _clarification_sentinel_added:
+                    trace_entries.append({
+                        "tool_name": "ask_clarifying_question",
+                        "state": "answered",
+                        "preview": "All clarification answers provided by the user",
+                    })
+                    _clarification_sentinel_added = True
                 continue
             trace_entries.append(entry)
             if len(trace_entries) >= max_entries:
@@ -4327,6 +4336,8 @@ def register_chat_routes(app) -> None:
             summary_future = None
             stream_aborted = False
             last_persisted_response_length = 0
+            captured_model_invocations: list[dict] = []
+            model_invocations_persisted = False
             runtime_tool_names = resolve_runtime_tool_names(
                 active_tool_names,
                 canvas_documents=initial_canvas_documents,
@@ -4355,6 +4366,7 @@ def register_chat_routes(app) -> None:
                     "conversation_id": conv_id,
                     "source_message_id": persisted_user_message_id,
                 },
+                invocation_log_sink=captured_model_invocations,
             )
 
             def persist_assistant_snapshot() -> None:
@@ -4375,6 +4387,32 @@ def register_chat_routes(app) -> None:
                     pending_clarification=pending_clarification,
                 )
                 last_persisted_response_length = len(full_response)
+
+            def persist_model_invocations(assistant_message_id: int | None) -> None:
+                nonlocal model_invocations_persisted
+                if model_invocations_persisted or not conv_id or not captured_model_invocations:
+                    return
+                with get_db() as conn:
+                    for call_index, entry in enumerate(captured_model_invocations, start=1):
+                        if not isinstance(entry, dict):
+                            continue
+                        insert_model_invocation(
+                            conn,
+                            conv_id,
+                            assistant_message_id=assistant_message_id,
+                            source_message_id=entry.get("source_message_id") or persisted_user_message_id,
+                            step=entry.get("step"),
+                            call_index=call_index,
+                            call_type=str(entry.get("call_type") or "agent_step").strip() or "agent_step",
+                            is_retry=entry.get("is_retry") is True,
+                            retry_reason=str(entry.get("retry_reason") or "").strip() or None,
+                            sub_agent_depth=entry.get("sub_agent_depth") or 0,
+                            provider=str(entry.get("provider") or "").strip(),
+                            api_model=str(entry.get("api_model") or "").strip(),
+                            request_payload=entry.get("request_payload") if entry.get("request_payload") is not None else {},
+                            response_summary=(entry.get("response_summary") if entry.get("response_summary") is not None else {}),
+                        )
+                model_invocations_persisted = True
 
             def upsert_streaming_sub_agent_trace(entry: dict) -> dict | None:
                 nonlocal stored_sub_agent_traces
@@ -4639,7 +4677,7 @@ def register_chat_routes(app) -> None:
             finally:
                 if stream_aborted and not isinstance(edit_replay_snapshot, dict):
                     with app_obj.app_context():
-                        _persist_streaming_assistant_message(
+                        aborted_assistant_message_id = _persist_streaming_assistant_message(
                             conv_id,
                             persisted_assistant_message_id,
                             content=full_response,
@@ -4654,6 +4692,7 @@ def register_chat_routes(app) -> None:
                             tool_trace_entries=tool_trace_entries,
                             pending_clarification=pending_clarification,
                         )
+                        persist_model_invocations(aborted_assistant_message_id)
                 try:
                     agent_stream.close()
                 except Exception:
@@ -4682,6 +4721,7 @@ def register_chat_routes(app) -> None:
                     tool_trace_entries=tool_trace_entries,
                     pending_clarification=pending_clarification,
                 )
+                persist_model_invocations(persisted_assistant_message_id)
 
                 if persisted_user_message_id is not None or persisted_assistant_message_id is not None:
                     yield json.dumps(

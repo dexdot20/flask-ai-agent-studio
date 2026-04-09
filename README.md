@@ -668,11 +668,14 @@ PDFs can also be submitted in visual mode. In that path, the backend renders onl
 
 ### Exporting conversations
 
-You can export a conversation in three formats:
+You can export a conversation in four formats:
 
 - Markdown: `/api/conversations/<id>/export?format=md`
+- Raw JSON: `/api/conversations/<id>/export?format=json`
 - DOCX: `/api/conversations/<id>/export?format=docx`
 - PDF: `/api/conversations/<id>/export?format=pdf`
+
+The raw JSON export includes chronological exact model-invocation snapshots for turns captured after this feature was enabled. Older conversations may still export transcript history without exact provider request bodies.
 
 Canvas documents can also be exported individually with `/api/conversations/<id>/canvas/export` in Markdown, HTML, or PDF.
 

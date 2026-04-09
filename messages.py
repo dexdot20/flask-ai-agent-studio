@@ -12,6 +12,7 @@ from canvas_service import (
     get_canvas_document_capabilities,
     get_canvas_document_canvas_mode,
     get_canvas_document_content_mode,
+    is_canvas_document_editable,
     scale_canvas_char_limit,
 )
 from config import (
@@ -525,7 +526,9 @@ def _build_clarification_response_payload(
             "do not reinterpret them as retrieved knowledge-base content, "
             "and do not ask the same questions again unless the user changes the requirements or explicitly asks to revisit them. "
             "Do not re-list, re-display, or re-render the clarification questions in your response text — in any format. "
-            "Proceed directly to the task solution using these answers."
+            "Proceed directly to the task solution using these answers. "
+            "Do NOT call ask_clarifying_question again — all required information has been collected in the clarification round above. "
+            "Calling it again in this turn would be an error."
         ),
         "formatted_answers": "\n".join(rendered_rounds).strip(),
     }
@@ -1780,6 +1783,14 @@ def _build_runtime_volatile_parts(
         if canvas_payload["mode"] == "project":
             volatile_parts.append(
                 "- In project mode, prefer the explicit document_path shown in the prompt for targeting, even when you do not know the document_id yet."
+            )
+        if (
+            get_canvas_document_capabilities(active_document)["line_addressable"]
+            and is_canvas_document_editable(active_document)
+            and "rewrite_canvas_document" in set(active_tool_names or [])
+        ):
+            volatile_parts.append(
+                "- Auto-update rule: If your response generates content that directly replaces or substantially transforms this document, call rewrite_canvas_document immediately — do not ask the user for permission to save."
             )
         if int(active_document.get("page_count") or 0) > 1:
             volatile_parts.append(
