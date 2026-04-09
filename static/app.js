@@ -4270,6 +4270,9 @@ function toggleCanvasOverflowMenu() {
     closeCanvasOverflowMenu();
     return;
   }
+  if (isCanvasMobileTreeOpen) {
+    setCanvasMobileTreeOpen(false);
+  }
   openCanvasOverflowMenu();
 }
 
@@ -7856,6 +7859,7 @@ if (canvasMoreBtn) {
 }
 if (canvasTreeToggleBtn) {
   canvasTreeToggleBtn.addEventListener("click", () => {
+    closeCanvasOverflowMenu();
     setCanvasMobileTreeOpen(!isCanvasMobileTreeOpen);
   });
 }
@@ -7979,6 +7983,7 @@ window.addEventListener("resize", () => {
     closeMobileTools();
   }
   setCanvasMobileTreeOpen(false);
+  closeCanvasOverflowMenu();
   applyCanvasPanelWidth(readCanvasWidthPreference(), false);
   syncCanvasToggleButton();
 }, { passive: true });
@@ -8031,6 +8036,10 @@ window.addEventListener("keydown", (event) => {
       return;
     }
     if (isCanvasOpen()) {
+      if (isCanvasMobileTreeOpen) {
+        setCanvasMobileTreeOpen(false);
+        return;
+      }
       if (isCanvasEditing) {
         isCanvasEditing = false;
         editingCanvasDocumentId = null;
@@ -8074,14 +8083,19 @@ window.addEventListener("keydown", (event) => {
 });
 
 document.addEventListener("click", (event) => {
-  if (!isCanvasOverflowMenuOpen()) {
-    return;
+  const target = event.target;
+  if (isCanvasOverflowMenuOpen()) {
+    const clickedInsideMenu = target instanceof Node && (canvasOverflowMenu?.contains(target) || canvasMoreBtn?.contains(target));
+    if (!clickedInsideMenu) {
+      closeCanvasOverflowMenu();
+    }
   }
 
-  const target = event.target;
-  const clickedInsideMenu = target instanceof Node && (canvasOverflowMenu?.contains(target) || canvasMoreBtn?.contains(target));
-  if (!clickedInsideMenu) {
-    closeCanvasOverflowMenu();
+  if (isCanvasMobileTreeOpen && isMobileViewport()) {
+    const clickedInsideTree = target instanceof Node && (canvasTreePanel?.contains(target) || canvasTreeToggleBtn?.contains(target));
+    if (!clickedInsideTree) {
+      setCanvasMobileTreeOpen(false);
+    }
   }
 });
 

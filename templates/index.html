@@ -452,15 +452,15 @@
   <div class="canvas-panel-actions">
     <div id="canvas-actions-edit" class="canvas-action-group" role="group" aria-label="Canvas editing actions">
       <span class="canvas-action-group__label">Edit</span>
-      <button class="btn-ghost" id="canvas-edit-btn" type="button">Edit</button>
-      <button class="btn-ghost" id="canvas-new-btn" type="button">New file</button>
-      <button class="btn-ghost" id="canvas-upload-btn" type="button">Upload file</button>
-      <button class="btn-primary" id="canvas-save-btn" type="button" hidden>Save</button>
-      <button class="btn-ghost" id="canvas-cancel-btn" type="button" hidden>Cancel</button>
-      <button class="btn-ghost" id="canvas-copy-btn" type="button" hidden>Copy</button>
+      <button class="btn-ghost canvas-action-button" id="canvas-edit-btn" type="button" data-icon="✎" title="Edit current document" aria-label="Edit current document">Edit</button>
+      <button class="btn-ghost canvas-action-button" id="canvas-new-btn" type="button" data-icon="+" title="Create new file" aria-label="Create new file">New file</button>
+      <button class="btn-ghost canvas-action-button" id="canvas-upload-btn" type="button" data-icon="↑" title="Upload file into Canvas" aria-label="Upload file into Canvas">Upload file</button>
+      <button class="btn-primary canvas-action-button" id="canvas-save-btn" type="button" data-icon="✓" title="Save changes" aria-label="Save changes" hidden>Save</button>
+      <button class="btn-ghost canvas-action-button" id="canvas-cancel-btn" type="button" data-icon="×" title="Cancel editing" aria-label="Cancel editing" hidden>Cancel</button>
+      <button class="btn-ghost canvas-action-button" id="canvas-copy-btn" type="button" data-icon="⧉" title="Copy current document" aria-label="Copy current document" hidden>Copy</button>
     </div>
     <div class="canvas-actions-overflow">
-      <button class="btn-ghost canvas-actions-overflow__toggle" id="canvas-more-btn" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="canvas-overflow-menu">
+      <button class="btn-ghost canvas-actions-overflow__toggle" id="canvas-more-btn" type="button" data-icon="⋯" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false" aria-controls="canvas-overflow-menu">
         More
       </button>
       <div id="canvas-overflow-menu" class="canvas-overflow-menu" role="menu" aria-label="Canvas more actions" hidden>
