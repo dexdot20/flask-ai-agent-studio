@@ -1337,11 +1337,24 @@ def build_tool_call_contract(
     if not normalized_tool_names:
         return None
     rules = [
-        "Call a tool only when it is strictly required to fulfill the user's request. If you can answer definitively from the current context, do not call a tool.",
+        "Call a tool only when it is strictly required to fulfill the user's request. If you can answer definitively from the current context and the task does not require current, external, or source-specific verification, do not call a tool.",
         "Use only the tools listed in the Active Tools section for this turn. Do not invent unavailable tools.",
         "If you do need a tool, call it via native function calling. Never write tool JSON or schema representations in your regular text response.",
         "Unnecessary tool calls waste compute and context. Do not use tools for trivial checks, repetition, or mere curiosity.",
     ]
+
+    web_research_tool_names = {
+        "search_web",
+        "search_news_ddgs",
+        "search_news_google",
+        "fetch_url",
+        "fetch_url_summarized",
+        "grep_fetched_content",
+    }
+    if any(name in normalized_tool_names for name in web_research_tool_names):
+        rules.append(
+            "Use web-research tools only when the task genuinely needs current facts, external verification, or exact source text. If the answer is already available from the current context, do not search or fetch anything."
+        )
 
     batching_sections = []
     parallel_safe_in_use = [name for name in normalized_tool_names if name in PARALLEL_SAFE_READ_ONLY_TOOL_NAMES]

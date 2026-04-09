@@ -3441,6 +3441,14 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertLess(content.index("## Tool Calling"), content.index("## Tool Memory"))
         self.assertLess(content.index("## Tool Calling"), content.index("## Knowledge Base"))
 
+    def test_runtime_system_message_discourages_unnecessary_web_search(self):
+        message = build_runtime_system_message(active_tool_names=["search_web", "fetch_url"])
+
+        content = message["content"]
+        self.assertIn("If you can answer definitively from the current context and the task does not require current, external, or source-specific verification, do not call a tool.", content)
+        self.assertIn("Use web-research tools only when the task genuinely needs current facts, external verification, or exact source text.", content)
+        self.assertIn("If the answer is already available from the current context, do not search or fetch anything.", content)
+
     def test_runtime_system_message_uses_canonical_role_heading_without_excess_blank_lines(self):
         message = build_runtime_system_message(
             user_preferences="Keep answers short.",
@@ -4623,6 +4631,7 @@ class AppRoutesTestCase(unittest.TestCase):
 
     def test_tool_specs_include_guidance_for_workspace_and_news_tools(self):
         for tool_name in [
+            "search_web",
             "search_news_ddgs",
             "search_news_google",
             "read_file",
@@ -4632,6 +4641,10 @@ class AppRoutesTestCase(unittest.TestCase):
             prompt = TOOL_SPEC_BY_NAME[tool_name]["prompt"]
             self.assertTrue(str(prompt.get("guidance") or "").strip())
 
+        self.assertIn("current information, external verification", TOOL_SPEC_BY_NAME["search_web"]["description"])
+        self.assertIn("If the answer is already available from the current context", TOOL_SPEC_BY_NAME["search_web"]["prompt"]["guidance"])
+        self.assertIn("current news coverage", TOOL_SPEC_BY_NAME["search_news_ddgs"]["description"])
+        self.assertIn("current news verification", TOOL_SPEC_BY_NAME["search_news_google"]["description"])
         self.assertEqual(TOOL_SPEC_BY_NAME["read_scratchpad"]["parameters"]["required"], [])
 
     def test_memory_tool_specs_separate_scratchpad_and_conversation_memory(self):

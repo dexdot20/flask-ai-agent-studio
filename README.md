@@ -802,12 +802,16 @@ Search past web tool results stored from previous conversations.
 
 DuckDuckGo text search.
 
+- Use this only when you need current information or external verification that is not already answerable from the current conversation.
+
 - Arguments:
   - `queries` (array, required, 1-5 strings) - list of search queries to run
 
 #### `fetch_url`
 
 Fetch and read the content of a specific web page. HTML pages are cleaned into an AI-friendly Markdown view, noisy layout chrome is stripped when possible, and large pages are clipped automatically; a page outline is included when clipping occurs.
+
+- Use this only when you actually need the page's exact content or source wording.
 
 - Arguments:
   - `url` (string, required) - full HTTP or HTTPS URL
@@ -837,6 +841,8 @@ Search for a keyword, phrase, or regex pattern inside the content of a previousl
 
 DuckDuckGo News search.
 
+- Use this only when the request needs current news coverage, broad discovery, or external verification.
+
 - Arguments:
   - `queries` (array, required, 1-5 strings)
   - `lang` (string, optional) - `tr` or `en`
@@ -845,6 +851,8 @@ DuckDuckGo News search.
 #### `search_news_google`
 
 Google News RSS search.
+
+- Use this only when Google News coverage is specifically needed for current news verification.
 
 - Arguments:
   - `queries` (array, required, 1-5 strings)

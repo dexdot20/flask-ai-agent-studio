@@ -564,6 +564,7 @@ TOOL_SPECS = [
             },
             "guidance": (
                 "Use this when the investigation genuinely benefits from a separate bounded pass and would otherwise require several tool steps or repeated context stitching in the parent agent. "
+                "If the request can already be answered from the current conversation or stable knowledge, do not delegate it to web research. "
                 "Do not let the token cost warning block delegation when the task is complex; the sub-agent exists for exactly those multi-tool cases. "
                 "Give the helper a concrete task, expected deliverable, and any important constraints. "
                 "Remember that the helper only receives fixed web-research tools: search_web, search_news_ddgs, search_news_google, fetch_url, fetch_url_summarized, and grep_fetched_content. "
@@ -699,7 +700,7 @@ TOOL_SPECS = [
     {
         "name": "search_web",
         "description": (
-            "Search the web using DuckDuckGo. Use this to find current information, facts, prices, news, or any topic requiring up-to-date data. "
+            "Search the web using DuckDuckGo. Use this only when you need current information, external verification, or facts that are not already answerable from the current conversation. "
             "Provide one or more search queries."
         ),
         "parameters": {
@@ -718,14 +719,17 @@ TOOL_SPECS = [
         "prompt": {
             "purpose": "Runs a general web search and returns recent results.",
             "inputs": {"queries": "1-5 search queries"},
-            "guidance": "Never pass more than 5 queries in a single call. If you need more search terms, split them across multiple search_web calls.",
+            "guidance": (
+                "Never pass more than 5 queries in a single call. If you need more search terms, split them across multiple search_web calls. "
+                "If the answer is already available from the current context or does not require external verification, do not search."
+            ),
         },
     },
     {
         "name": "fetch_url",
         "description": (
             "Fetch and read the content of a specific web page. Returns cleaned text, metadata, and a page outline. "
-            "Use after search_web to read the full content of a relevant page. "
+            "Use after search_web when you actually need the page's exact content or source wording. "
             "For very large pages the content may be clipped to fit the token budget; "
             "when that happens the result includes an outline of the page sections plus preserved leading, middle, and trailing excerpts when space allows. "
             "If you need to find a specific term or passage in a clipped page, use grep_fetched_content after this tool."
@@ -747,6 +751,7 @@ TOOL_SPECS = [
                 "Large pages are automatically clipped to stay within the token budget. "
                 "When content is clipped the result shows a Page Outline of the section headings. "
                 "The tool also tries to preserve a middle excerpt so important details are not biased toward only the start or end of the page. "
+                "Do not fetch a page unless you actually need its exact content or source wording. "
                 "Do not repeat the same URL in the same turn. "
                 "To locate specific text in a clipped page use grep_fetched_content. "
                 "To recall content from a previously fetched URL across turns use search_tool_memory."
@@ -844,7 +849,7 @@ TOOL_SPECS = [
         "name": "search_news_ddgs",
         "description": (
             "Search recent news articles using DuckDuckGo News. Returns title, link, publication time and source for each article. "
-            "Use this for general news, trending topics, exploratory discovery, or when a broad news index is appropriate. "
+            "Use this only when the request needs current news coverage, external verification, or broad news discovery. "
             "Optionally filter by time range and language. If you need the full article text, follow up with fetch_url on the returned links."
         ),
         "parameters": {
@@ -874,9 +879,10 @@ TOOL_SPECS = [
             "purpose": "Searches news headlines/links/dates/sources with DuckDuckGo News.",
             "inputs": {"queries": "1-5 news queries", "lang": "tr|en", "when": "d|w|m|y"},
             "guidance": (
-                "Use this for broad recent-news discovery when you need headlines, sources, and timestamps before reading full articles. "
+                "Use this for broad recent-news discovery when you actually need headlines, sources, and timestamps before reading full articles. "
                 "Prefer this over search_news_google for generic international topics or the first pass on a topic. "
-                "Never pass more than 5 queries in one call. If you need article details, follow up with fetch_url on the most relevant links instead of widening the same news query repeatedly."
+                "Never pass more than 5 queries in one call. If you need article details, follow up with fetch_url on the most relevant links instead of widening the same news query repeatedly. "
+                "If the answer is already known or does not require current news verification, do not search."
             ),
         },
     },
@@ -884,7 +890,7 @@ TOOL_SPECS = [
         "name": "search_news_google",
         "description": (
             "Search Google News via RSS feed. Returns title, link, publication time and source for each article. "
-            "Use this when Google News coverage is preferred, especially for Turkish financial news, local outlets, or when DuckDuckGo News yields weak coverage. "
+            "Use this only when the request needs current news coverage or current news verification and Google News coverage is specifically preferred, especially for Turkish financial news, local outlets, or when DuckDuckGo News yields weak coverage. "
             "Optionally filter by time range and language. If you need the full article text, follow up with fetch_url on the returned links."
         ),
         "parameters": {
@@ -914,7 +920,7 @@ TOOL_SPECS = [
             "purpose": "Searches news headlines/links/dates/sources with Google News RSS.",
             "inputs": {"queries": "1-5 news queries", "lang": "tr|en", "when": "d|w|m|y"},
             "guidance": (
-                "Use this when Google News coverage is likely stronger than DuckDuckGo News for the topic or locale, especially Turkish or local-source coverage. "
+                "Use this when Google News coverage is likely stronger than DuckDuckGo News for the topic or locale and the request genuinely needs current news verification. "
                 "Never pass more than 5 queries in one call. After scanning the feed, fetch only the few links that are actually needed."
             ),
         },

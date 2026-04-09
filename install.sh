@@ -267,7 +267,7 @@ info "Select accelerator"
 ACCELERATOR="$(prompt_choice "Choose an accelerator:" "CUDA" "CPU")"
 info "Selected accelerator: ${ACCELERATOR}"
 
-IMAGE_STACK="$(prompt_choice "Choose an image processing stack:" "None" "OCR only" "OCR + VL")"
+IMAGE_STACK="$(prompt_choice "Choose an image processing stack:" "None" "OCR only")"
 info "Selected image processing stack: ${IMAGE_STACK}"
 
 if [[ "${ACCELERATOR}" == "CUDA" ]] && ! cuda_available; then
@@ -278,17 +278,6 @@ if [[ "${ACCELERATOR}" == "CUDA" ]] && ! cuda_available; then
   else
     die "CUDA setup is required for the selected mode."
   fi
-fi
-
-if [[ "${ACCELERATOR}" == "CPU" ]] && [[ "${IMAGE_STACK}" == "OCR + VL" ]]; then
-  warn "OCR + VL requires CUDA for the local Qwen vision model."
-  answer="$(prompt_yes_no "Fallback to OCR only?" "y")"
-  if [[ "${answer}" == "yes" ]]; then
-    IMAGE_STACK="OCR only"
-  else
-    IMAGE_STACK="None"
-  fi
-  info "Adjusted image processing stack: ${IMAGE_STACK}"
 fi
 
 DEEPSEEK_API_KEY="$(prompt_text "Enter your DeepSeek API key (leave blank to skip):")"
@@ -416,7 +405,7 @@ fi
 info "Installation summary"
 printf '  profile: %s\n' "${PROFILE}"
 printf '  accelerator: %s\n' "${ACCELERATOR}"
-printf '  image stack: %s\n' "${IMAGE_STACK}"
+printf '  image processing stack: %s\n' "${IMAGE_STACK}"
 printf '  DeepSeek API configured: %s\n' "$( [[ -n "${DEEPSEEK_API_KEY}" ]] && printf yes || printf no )"
 printf '  OpenRouter API configured: %s\n' "$( [[ -n "${OPENROUTER_API_KEY}" ]] && printf yes || printf no )"
 printf '  workspace root: %s\n' "${ROOT_DIR}/data/workspaces"
