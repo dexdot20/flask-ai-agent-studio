@@ -67,7 +67,7 @@ PARALLEL_SAFE_READ_ONLY_TOOL_NAMES = (
     "preview_canvas_changes",
 )
 
-_CLARIFICATION_QA_LINE_RE = re.compile(r"^\s*(?:Q|A)\s*:\s*.*$", re.IGNORECASE)
+_CLARIFICATION_QA_LINE_RE = re.compile(r"^\s*(?:(?:Q|A)\s*:\s*.*|-\s*.+?\s*→\s*.+)$", re.IGNORECASE)
 
 
 def extract_freeform_clarification_user_content(content: str) -> str:
@@ -129,16 +129,24 @@ def _build_clarification_response_message_content(
     *,
     clarification_questions: list[dict] | None = None,
 ) -> str:
+    """Build the user-message content that the model sees for a clarification answer.
+
+    When structured answers are available, always generate a clean answer-centric
+    format from the structured data — regardless of what the frontend sent as raw
+    content — so the model never sees Q:/A: prefixes that resemble new questions.
+    Any freeform text the user typed alongside the UI answers is preserved at the top.
+    """
     normalized_content = str(content or "").strip()
     response = clarification_response if isinstance(clarification_response, dict) else {}
     answers = response.get("answers") if isinstance(response.get("answers"), dict) else {}
     if not answers:
         return normalized_content
-    if normalized_content:
-        return normalized_content
+
+    # Preserve freeform text the user typed alongside the structured answers.
+    freeform_content = extract_freeform_clarification_user_content(normalized_content)
 
     normalized_questions = clarification_questions if isinstance(clarification_questions, list) else []
-    question_lookup = {}
+    question_lookup: dict[str, str] = {}
     ordered_question_ids: list[str] = []
     for question in normalized_questions:
         if not isinstance(question, dict):
@@ -158,8 +166,8 @@ def _build_clarification_response_message_content(
         display = str(answer.get("display") or "").strip()
         if not display:
             continue
-        lines.append(f"Q: {question_lookup.get(question_id) or question_id}")
-        lines.append(f"A: {display}")
+        label = question_lookup.get(question_id) or question_id
+        lines.append(f"- {label} → {display}")
         emitted_question_ids.add(question_id)
 
     for question_id, answer in answers.items():
@@ -171,10 +179,13 @@ def _build_clarification_response_message_content(
         display = str(answer.get("display") or "").strip()
         if not display:
             continue
-        lines.append(f"Q: {question_lookup.get(normalized_question_id) or normalized_question_id}")
-        lines.append(f"A: {display}")
+        label = question_lookup.get(normalized_question_id) or normalized_question_id
+        lines.append(f"- {label} → {display}")
 
-    return "\n".join(lines).strip()
+    answer_block = "\n".join(lines).strip()
+    if freeform_content and answer_block:
+        return f"{freeform_content}\n\n{answer_block}"
+    return answer_block or freeform_content
 
 
 def _format_summary_message_for_model(content: str, metadata: dict | None = None) -> str:
@@ -324,9 +335,11 @@ def _build_clarification_policy_payload(active_tool_names: list[str], clarificat
         "guidance": (
             "If a good answer depends on missing requirements, ask for clarification instead of guessing. "
             "If the user explicitly asks you to ask questions first, you MUST emit an actual ask_clarifying_question tool call — "
-            "outlining questions in your reasoning/thinking without emitting the call is not sufficient. "
+            "outlining questions in your reasoning/thinking without emitting the call is not sufficient, "
+            "and conversation memory entries or prior chat mentions do NOT satisfy this requirement. "
             "After you ask clarifying questions, wait for the user's reply before continuing. "
-            "If the Clarification Response section is already present for this turn, that reply has already arrived; continue the task instead of calling ask_clarifying_question again."
+            "If the Clarification Response section is already present for this turn, that reply has already arrived; continue the task instead of calling ask_clarifying_question again. "
+            "Conversation memory entries and ordinary prior messages are NOT Clarification Responses — they do not release you from asking questions the user has explicitly requested."
         ),
     }
 
@@ -491,27 +504,28 @@ def _build_clarification_response_payload(
             if not isinstance(answer, dict):
                 continue
             question_text = str(question.get("text") or question_id or "Answer").strip()
-            rendered_rounds.append(f"Q: {question_text}")
-            rendered_rounds.append(f"A: {str(answer.get('display') or '').strip()}")
+            rendered_rounds.append(f"- {question_text} → {str(answer.get('display') or '').strip()}")
             consumed_answer_ids.add(question_id)
 
         for answer_id, answer in answers.items():
             if answer_id in consumed_answer_ids or not isinstance(answer, dict):
                 continue
             fallback_question = str(answer_id or "Answer").strip().replace("_", " ")
-            rendered_rounds.append(f"Q: {fallback_question}")
-            rendered_rounds.append(f"A: {str(answer.get('display') or '').strip()}")
+            rendered_rounds.append(f"- {fallback_question} → {str(answer.get('display') or '').strip()}")
 
         if multiple_rounds and round_index < len(rounds):
             rendered_rounds.append("")
 
     return {
         "guidance": (
-            "The user message in a clarification turn is a direct response to your earlier clarifying questions and answers the active clarification request for this turn. "
+            "CRITICAL: The latest user message is NOT a new question or request — it is the user's direct response to your earlier clarification questions. "
             "The clarification answers below capture the answered rounds for this conversation. "
-            "Use those answers directly to continue the task, do not question whether the user already answered, do not reinterpret them as retrieved knowledge-base content, "
+            "Accept these answers at face value and proceed immediately to the task. "
+            "Do not verify them against conversation memory, do not save them to conversation memory, "
+            "do not reinterpret them as retrieved knowledge-base content, "
             "and do not ask the same questions again unless the user changes the requirements or explicitly asks to revisit them. "
-            "These answers are authoritative for the current turn. If they cover your pending questions, continue the task and do not call ask_clarifying_question again in this turn."
+            "Do not re-list, re-display, or re-render the clarification questions in your response text — in any format. "
+            "Proceed directly to the task solution using these answers."
         ),
         "formatted_answers": "\n".join(rendered_rounds).strip(),
     }

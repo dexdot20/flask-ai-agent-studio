@@ -29,6 +29,7 @@ from agent import (
     FINAL_ANSWER_ERROR_TEXT,
     FINAL_ANSWER_MISSING_TEXT,
     _canvas_mutation_skipped_structurally,
+    _conversation_has_clarification_tool_call,
     _conversation_has_prior_canvas_mutations,
     _response_mentions_canvas,
     _apply_tool_output_budget,
@@ -4299,7 +4300,7 @@ class AppRoutesTestCase(unittest.TestCase):
 
         content = message["content"]
         self.assertIn("## Clarification Response", content)
-        self.assertIn("direct response to your earlier clarifying questions", content)
+        self.assertIn("direct response to your earlier clarification questions", content)
         self.assertIn("## Knowledge Base", content)
         self.assertLess(content.index("## Clarification Response"), content.index("## Knowledge Base"))
 
@@ -4342,13 +4343,11 @@ class AppRoutesTestCase(unittest.TestCase):
         content = message["content"]
         self.assertIn("## Clarification Response", content)
         self.assertIn("The clarification answers below capture the answered rounds", content)
-        self.assertIn("These answers are authoritative for the current turn", content)
+        self.assertIn("Accept these answers at face value", content)
         self.assertIn("Round 1", content)
-        self.assertIn("Q: Reklam butceniz ne kadar?", content)
-        self.assertIn("A: Gunluk 200-300 TL", content)
+        self.assertIn("- Reklam butceniz ne kadar? \u2192 Gunluk 200-300 TL", content)
         self.assertIn("Round 2", content)
-        self.assertIn("Q: Urunun fiyat araligi nedir?", content)
-        self.assertIn("A: 199 TL - 3990 TL", content)
+        self.assertIn("- Urunun fiyat araligi nedir? \u2192 199 TL - 3990 TL", content)
 
     def test_runtime_system_message_hides_canvas_edit_tools_without_canvas_document(self):
         message = build_runtime_system_message(
@@ -5514,7 +5513,7 @@ class AppRoutesTestCase(unittest.TestCase):
             },
         )
 
-        self.assertEqual(content, "Q: Budget?\nA: 200-300 TL\nQ: Goal?\nA: Sales")
+        self.assertEqual(content, "- budget \u2192 200-300 TL\n- goal \u2192 Sales")
 
     def test_build_user_message_for_model_reconstructs_clarification_transcript_when_content_is_empty(self):
         content = build_user_message_for_model(
@@ -5536,7 +5535,7 @@ class AppRoutesTestCase(unittest.TestCase):
             ],
         )
 
-        self.assertEqual(content, "Q: Budget?\nA: 200-300 TL")
+        self.assertEqual(content, "- Budget? \u2192 200-300 TL")
 
     def test_build_user_message_for_model_preserves_freeform_request_beside_clarification_answers(self):
         content = build_user_message_for_model(
@@ -5551,7 +5550,7 @@ class AppRoutesTestCase(unittest.TestCase):
             },
         )
 
-        self.assertEqual(content, "Q: Budget?\nA: 200-300 TL\n\nİlk olarak bana sorular sor.")
+        self.assertEqual(content, "İlk olarak bana sorular sor.\n\n- budget \u2192 200-300 TL")
 
     def test_image_explain_tool_spec_requires_image_and_conversation_ids(self):
         spec = TOOL_SPEC_BY_NAME["image_explain"]
@@ -9297,7 +9296,13 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("Which scope?", rows[1]["content"])
         self.assertEqual(assistant_metadata["pending_clarification"]["questions"][0]["id"], "scope")
 
-    def test_chat_passes_clarification_history_as_transcript_without_runtime_injection(self):
+    def test_chat_passes_clarification_history_as_transcript_with_runtime_injection(self):
+        """Clarification answers must be injected into the runtime context (Clarification Response section).
+
+        Regression test: previously clarification_response was always passed as None to
+        _build_budgeted_prompt_messages, so the Clarification Response section was never
+        injected. This caused the model to ignore the answers and re-ask the questions.
+        """
         conversation_id = self._create_conversation()
         pending_questions = [
             {
@@ -9366,10 +9371,20 @@ class AppRoutesTestCase(unittest.TestCase):
         user_messages = [message for message in request_api_messages if message["role"] == "user"]
         system_messages = [message for message in request_api_messages if message["role"] == "system"]
 
+        # The clarification questions are still visible in the assistant's rendered message
         self.assertTrue(any("Please answer this question:" in (message.get("content") or "") for message in assistant_messages))
         self.assertTrue(any("1. Budget?" in (message.get("content") or "") for message in assistant_messages))
-        self.assertEqual(user_messages[-1]["content"], "Q: Budget?\nA: 200-300 TL")
-        self.assertFalse(any("## Clarification Response" in (message.get("content") or "") for message in system_messages))
+        self.assertEqual(user_messages[-1]["content"], "- Budget? \u2192 200-300 TL")
+        # The Clarification Response section MUST be injected so the model sees the answers
+        self.assertTrue(
+            any("## Clarification Response" in (message.get("content") or "") for message in system_messages),
+            "Clarification Response section must be injected when answers are provided — model needs this to proceed with the task",
+        )
+        # The answers must appear in the injected system context
+        self.assertTrue(
+            any("200-300 TL" in (message.get("content") or "") for message in system_messages),
+            "Clarification answers must be visible in the system context injection",
+        )
 
     def test_chat_stream_persists_tool_history_rows(self):
         conversation_id = self._create_conversation()
@@ -13459,7 +13474,7 @@ class AppRoutesTestCase(unittest.TestCase):
                 },
                 {
                     "role": "user",
-                    "content": "Q: Budget?\nA: 200-300 TL",
+                    "content": "- Budget? \u2192 200-300 TL",
                 },
             ],
         )
@@ -13622,7 +13637,7 @@ class AppRoutesTestCase(unittest.TestCase):
                 },
                 {
                     "role": "user",
-                    "content": "Q: Budget?\nA: 200-300 TL",
+                    "content": "- Budget? \u2192 200-300 TL",
                 },
                 {
                     "role": "assistant",
@@ -13630,7 +13645,7 @@ class AppRoutesTestCase(unittest.TestCase):
                 },
                 {
                     "role": "user",
-                    "content": "Q: Price?\nA: 199 TL",
+                    "content": "- Price? \u2192 199 TL",
                 },
             ],
         )
@@ -19385,6 +19400,187 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertTrue(_response_mentions_canvas("I updated the canvas."))
         self.assertFalse(_response_mentions_canvas("No changes here."))
         self.assertFalse(_response_mentions_canvas(""))
+
+
+class TestConversationHasClarificationToolCall(unittest.TestCase):
+    """Tests for the fixed _conversation_has_clarification_tool_call.
+
+    The function must only return True when ask_clarifying_question is called
+    AFTER the latest user message (i.e., in the current turn), NOT for
+    historical calls from previous turns.
+    """
+
+    def _make_clarification_assistant_message(self):
+        return {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "function": {
+                        "name": "ask_clarifying_question",
+                        "arguments": '{"questions":[{"id":"q1","label":"test","input_type":"text"}]}',
+                    }
+                }
+            ],
+        }
+
+    def test_returns_true_when_clarification_called_after_latest_user(self):
+        # Current turn: tool was called after latest user message → True
+        messages = [
+            {"role": "user", "content": "Önce soru sor"},
+            self._make_clarification_assistant_message(),
+        ]
+        self.assertTrue(_conversation_has_clarification_tool_call(messages))
+
+    def test_returns_false_when_clarification_only_in_historical_turn(self):
+        # Historical turn has the call; current turn (after latest user) does not → False
+        messages = [
+            {"role": "user", "content": "İlaçlarımı anlat"},
+            self._make_clarification_assistant_message(),
+            {"role": "user", "content": "Atomoxetine kullanıyorum"},  # answered
+            {"role": "assistant", "content": "Anladım, DEHB tedavi planı..."},
+            # New turn — different question, no clarification tool call this time
+            {"role": "user", "content": "Peki modafinil nasıl çalışır?"},
+            {"role": "assistant", "content": "Modafinil bir uyarıcıdır..."},
+        ]
+        self.assertFalse(_conversation_has_clarification_tool_call(messages))
+
+    def test_returns_false_when_no_messages(self):
+        self.assertFalse(_conversation_has_clarification_tool_call([]))
+
+    def test_returns_false_when_no_user_message(self):
+        # No user message at all
+        messages = [{"role": "assistant", "content": "Merhaba"}]
+        self.assertFalse(_conversation_has_clarification_tool_call(messages))
+
+    def test_returns_false_when_no_tool_calls_this_turn(self):
+        # Previous clarification call exists but nothing after latest user
+        messages = [
+            {"role": "user", "content": "Soru sor"},
+            self._make_clarification_assistant_message(),
+            {"role": "user", "content": "Cevap verdim"},
+            # No assistant message after this user message yet
+        ]
+        self.assertFalse(_conversation_has_clarification_tool_call(messages))
+
+    def test_returns_false_when_other_tool_called_this_turn(self):
+        # Different tool called after latest user — not ask_clarifying_question → False
+        messages = [
+            {"role": "user", "content": "Canvas'ı güncelle"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"function": {"name": "replace_canvas_lines", "arguments": "{}"}}],
+            },
+        ]
+        self.assertFalse(_conversation_has_clarification_tool_call(messages))
+
+    def test_multiple_historical_turns_all_blocked_before(self):
+        # Three prior clarification rounds, none in the current turn → False
+        messages = []
+        for _ in range(3):
+            messages.append({"role": "user", "content": "Yeni soru"})
+            messages.append(self._make_clarification_assistant_message())
+            messages.append({"role": "user", "content": "Cevap"})
+            messages.append({"role": "assistant", "content": "Devam edelim"})
+        # Current turn: model answers directly
+        messages.append({"role": "user", "content": "Başka bir şey sor lütfen"})
+        messages.append({"role": "assistant", "content": "Belki başka bir şey sorardım ama biliyorum..."})
+        self.assertFalse(_conversation_has_clarification_tool_call(messages))
+
+    def test_historical_and_current_both_have_call(self):
+        # Historical call + current turn also has a call → True
+        messages = [
+            {"role": "user", "content": "Soru sor"},
+            self._make_clarification_assistant_message(),
+            {"role": "user", "content": "Cevap verdim"},
+            {"role": "assistant", "content": "Devam ediyorum"},
+            {"role": "user", "content": "Ayrıca şunu da sor"},
+            self._make_clarification_assistant_message(),  # current turn has call
+        ]
+        self.assertTrue(_conversation_has_clarification_tool_call(messages))
+
+
+class TestClarificationResponseInjection(unittest.TestCase):
+    """Regression tests for the bug where clarification_response was never passed
+    to _build_budgeted_prompt_messages, causing the Clarification Response section
+    to never appear in the model's prompt even when the user had answered all questions.
+
+    Root cause: routes/chat.py called _build_budgeted_prompt_messages with
+    clarification_response=None, all_clarification_rounds=None unconditionally.
+    Fix: pass the actual clarification_response and collected rounds.
+    """
+
+    def _make_clarification_response(self):
+        return {
+            "assistant_message_id": "42",
+            "questions": [
+                {"id": "wallet_type", "text": "Hangi Bitcoin cüzdan yazılımını kullanıyorsunuz?"},
+                {"id": "installation_method", "text": "Cüzdan nasıl kuruldu?"},
+            ],
+            "answers": {
+                "wallet_type": {"display": "Diğer / Bilmiyorum"},
+                "installation_method": {"display": "Bilmiyorum"},
+            },
+        }
+
+    def test_build_runtime_context_injection_injects_clarification_response(self):
+        """When clarification_response is provided, Clarification Response section appears."""
+        clarification_response = self._make_clarification_response()
+        injection = build_runtime_context_injection(
+            active_tool_names=["ask_clarifying_question"],
+            clarification_response=clarification_response,
+            all_clarification_rounds=None,
+        )
+        self.assertIn("Clarification Response", injection)
+        self.assertIn("Diğer / Bilmiyorum", injection)
+        self.assertIn("Bilmiyorum", injection)
+
+    def test_build_runtime_context_injection_no_clarification_when_none(self):
+        """When clarification_response is None, no Clarification Response section."""
+        injection = build_runtime_context_injection(
+            active_tool_names=["ask_clarifying_question"],
+            clarification_response=None,
+            all_clarification_rounds=None,
+        )
+        self.assertNotIn("Clarification Response", injection)
+
+    def test_build_runtime_context_injection_no_clarification_when_no_answers(self):
+        """When clarification_response has no answers dict, no section is injected."""
+        empty_response = {"assistant_message_id": "42", "questions": [], "answers": {}}
+        injection = build_runtime_context_injection(
+            active_tool_names=["ask_clarifying_question"],
+            clarification_response=empty_response,
+            all_clarification_rounds=None,
+        )
+        self.assertNotIn("Clarification Response", injection)
+
+    def test_clarification_response_guidance_prohibits_re_rendering_questions(self):
+        """Guidance text must explicitly prohibit re-displaying the questions in text."""
+        clarification_response = self._make_clarification_response()
+        injection = build_runtime_context_injection(
+            active_tool_names=["ask_clarifying_question"],
+            clarification_response=clarification_response,
+            all_clarification_rounds=None,
+        )
+        # The guidance should explicitly forbid re-listing the questions
+        self.assertIn("re-list", injection.lower().replace("-", " ") + " " + injection.lower())
+
+    def test_clarification_response_shows_all_rounds_when_provided(self):
+        """When all_clarification_rounds is provided, all rounds appear in the injection."""
+        first_round = {
+            "questions": [{"id": "scope", "text": "Hangi modül?"}],
+            "answers": {"scope": {"display": "Backend modülü"}},
+        }
+        current_round = self._make_clarification_response()
+        injection = build_runtime_context_injection(
+            active_tool_names=["ask_clarifying_question"],
+            clarification_response=current_round,
+            all_clarification_rounds=[first_round, current_round],
+        )
+        self.assertIn("Clarification Response", injection)
+        self.assertIn("Backend modülü", injection)
+        self.assertIn("Diğer / Bilmiyorum", injection)
 
 
 if __name__ == "__main__":

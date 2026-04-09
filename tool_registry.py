@@ -390,7 +390,9 @@ TOOL_SPECS = [
                     "When choosing between scratchpad and conversation memory, default to conversation memory unless the fact is durable, general, and likely useful across future chats. "
                     "Prefer concise micro-summaries over raw outputs. Save incrementally after important clarifications, tool results, decisions, and constraints instead of waiting for a later summary. "
                     "Multiple compact entries are better than one overloaded summary. Be proactive in long or tool-heavy conversations, especially before details may be summarized, pruned, or pushed out of the visible context window. "
-                    "Reuse the same key when updating the same fact so memory stays compact."
+                    "Reuse the same key when updating the same fact so memory stays compact. "
+                    "Do NOT save raw clarification question answers here — the clarification system already persists and injects them automatically. "
+                    "Saving clarification answers to memory creates confusion in later turns."
                 ),
             },
         },

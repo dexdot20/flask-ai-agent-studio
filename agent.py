@@ -1830,23 +1830,27 @@ def _should_retry_for_skipped_canvas_mutation(
 
 
 def _conversation_has_clarification_tool_call(messages: list[dict]) -> bool:
-    """Return True if ask_clarifying_question was already called in this conversation."""
-    for message in messages:
+    """Return True if ask_clarifying_question was already called in this turn (after the latest user message).
+
+    Only checks messages that follow the latest user message so that historical
+    clarification rounds from previous turns do not block the retry logic for new turns.
+    """
+    latest_user_index = _get_latest_user_message_index(messages)
+    if latest_user_index < 0:
+        return False
+
+    for message in messages[latest_user_index + 1 :]:
         if not isinstance(message, dict):
             continue
-        tool_calls = message.get("tool_calls")
-        if not isinstance(tool_calls, list):
+        if str(message.get("role") or "").strip() != "assistant":
             continue
-        for tc in tool_calls:
-            if not isinstance(tc, dict):
+        tool_calls = parse_message_tool_calls(message.get("tool_calls"))
+        for tool_call in tool_calls:
+            if not isinstance(tool_call, dict):
                 continue
-            func = tc.get("function")
-            name = str(
-                (func.get("name") if isinstance(func, dict) else None)
-                or tc.get("name")
-                or ""
-            )
-            if name == "ask_clarifying_question":
+            function_payload = tool_call.get("function") if isinstance(tool_call.get("function"), dict) else {}
+            tool_name = str(function_payload.get("name") or tool_call.get("name") or "").strip()
+            if tool_name == "ask_clarifying_question":
                 return True
     return False
 

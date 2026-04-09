@@ -84,6 +84,7 @@ const canvasCancelBtn = document.getElementById("canvas-cancel-btn");
 const canvasCopyBtn = document.getElementById("canvas-copy-btn");
 const canvasDeleteBtn = document.getElementById("canvas-delete-btn");
 const canvasClearBtn = document.getElementById("canvas-clear-btn");
+const canvasRenameBtn = document.getElementById("canvas-rename-btn");
 const canvasDownloadHtmlBtn = document.getElementById("canvas-download-html-btn");
 const canvasDownloadMdBtn = document.getElementById("canvas-download-md-btn");
 const canvasDownloadPdfBtn = document.getElementById("canvas-download-pdf-btn");
@@ -3807,7 +3808,7 @@ function updateCanvasActiveDocumentDisplay(renderState) {
       "muted"
     );
   } else if (isCanvasEditing) {
-    setCanvasHint("Edit mode is live. The preview updates as you type; save to commit changes.", "muted");
+    setCanvasHint("Edit mode. Make changes and save to commit.", "muted");
   } else if (isVisualCanvasDocument(displayDocument)) {
     setCanvasHint(
       "Visual canvas preview detected. This document is read-only and backed by page images, so line-based canvas edits do not apply.",
@@ -3868,11 +3869,8 @@ function updateCanvasActiveDocumentDisplay(renderState) {
       canvasEditorEl.value = activeDocument.content || "";
     }
     canvasEditorEl.classList.add("canvas-editor--editing");
-    canvasDocumentEl.classList.add("canvas-document--editing-preview");
     canvasEditorEl.hidden = false;
-    canvasDocumentEl.hidden = false;
-    canvasDocumentEl.innerHTML = renderCanvasDocumentBody(displayDocument);
-    bindCanvasPageNavigation(displayDocument);
+    canvasDocumentEl.hidden = true;
   } else {
     canvasDocumentEl.classList.remove("canvas-document--editing-preview");
     canvasDocumentEl.hidden = false;
@@ -3907,6 +3905,9 @@ function updateCanvasActiveDocumentDisplay(renderState) {
   }
   if (canvasDeleteBtn) {
     canvasDeleteBtn.disabled = isStreamingPreviewActive;
+  }
+  if (canvasRenameBtn) {
+    canvasRenameBtn.disabled = isStreamingPreviewActive || isCanvasEditing || !activeDocument;
   }
   if (canvasClearBtn) {
     canvasClearBtn.disabled = isStreamingPreviewActive || documents.length === 0;
@@ -4064,6 +4065,7 @@ function promptPdfSubmissionMode(files) {
 
 function escapeRegExp(text) {
   return String(text || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 function promptDocumentCanvasAction(files) {
   const documentFiles = (files || []).filter((file) => isDocumentFile(file));
@@ -4089,7 +4091,6 @@ function promptDocumentCanvasAction(files) {
       onDismiss: () => resolve("skip"),
     });
   });
-}
 }
 
 function setCanvasAttention(enabled) {
@@ -4869,6 +4870,38 @@ async function deleteCanvasDocuments({ documentId = null, clearAll = false, conf
     setCanvasStatus("Canvas document deleted.", "success");
   } catch (error) {
     setCanvasStatus(error.message || "Canvas delete failed.", "danger");
+  }
+}
+
+async function renameCanvasDocument() {
+  const activeDocument = getActiveCanvasDocument();
+  if (!currentConvId || !activeDocument) {
+    setCanvasStatus("No canvas document to rename.", "warning");
+    return;
+  }
+  const currentTitle = String(activeDocument.path || activeDocument.title || "").trim() || "Untitled";
+  const nextTitle = String(globalThis.prompt("Rename document", currentTitle) || "").trim();
+  if (!nextTitle || nextTitle === currentTitle) {
+    return;
+  }
+  setCanvasStatus("Renaming...", "muted");
+  try {
+    const response = await fetch(`/api/conversations/${currentConvId}/canvas`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document_id: activeDocument.id, title: nextTitle }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.error || "Rename failed.");
+    }
+    history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
+    activeCanvasDocumentId = String(payload.active_document_id || activeDocument.id || "").trim() || activeCanvasDocumentId;
+    renderConversationHistory({ preserveScroll: true });
+    renderCanvasPanel();
+    setCanvasStatus(`Renamed to "${nextTitle}".`, "success");
+  } catch (error) {
+    setCanvasStatus(error.message || "Rename failed.", "danger");
   }
 }
 
@@ -6124,8 +6157,7 @@ function formatClarificationResponse(clarification, answers) {
     if (!answer || !String(answer.display || "").trim()) {
       return;
     }
-    lines.push(`Q: ${question.label}`);
-    lines.push(`A: ${String(answer.display).trim()}`);
+    lines.push(`- ${question.label} → ${String(answer.display).trim()}`);
   });
   return lines.join("\n");
 }
@@ -8199,6 +8231,12 @@ if (canvasDeleteBtn) {
     void deleteCanvasDocuments();
   });
 }
+if (canvasRenameBtn) {
+  canvasRenameBtn.addEventListener("click", () => {
+    closeCanvasOverflowMenu();
+    void renameCanvasDocument();
+  });
+}
 if (canvasClearBtn) {
   canvasClearBtn.addEventListener("click", () => {
     closeCanvasOverflowMenu();
@@ -9353,7 +9391,7 @@ function setStreaming(active) {
     userScrolledUp = false;
   }
   sendBtn.style.display = active ? "none" : "";
-  cancelBtn.style.display = active ? "" : "none";
+  cancelBtn.hidden = !active;
   fixBtn.disabled = active;
   inputEl.disabled = active;
   attachBtn.disabled = active;
@@ -10542,7 +10580,7 @@ function appendClarificationPanel(group, metadata, options = {}) {
 
     const label = document.createElement("label");
     label.className = "clarification-field__label";
-    label.textContent = `${question.required ? "* " : ""}Q: ${question.label}`;
+    label.textContent = `${question.required ? "* " : ""}${question.label}`;
     field.appendChild(label);
 
     const fieldName = `clarify_${index}`;

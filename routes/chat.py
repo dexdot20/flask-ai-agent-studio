@@ -4276,13 +4276,14 @@ def register_chat_routes(app) -> None:
                     }
                 )
         conversation_memory = get_conversation_memory(conv_id) if conv_id and CONVERSATION_MEMORY_ENABLED else []
+        clarification_rounds_for_prompt = _collect_answered_clarification_rounds(canonical_messages)
         api_messages, request_api_messages, prompt_budget_stats, current_context_injection = _build_budgeted_prompt_messages(
             canonical_messages,
             settings,
             conv_id,
             active_tool_names,
-            None,
-            None,
+            clarification_response,
+            clarification_rounds_for_prompt or None,
             retrieved_context,
             tool_memory_context,
             model_id=model,
