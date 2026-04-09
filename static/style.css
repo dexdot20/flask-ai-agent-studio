@@ -4213,9 +4213,9 @@ kbd {
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: 12px;
-  background: linear-gradient(180deg, rgba(24, 28, 39, 0.96), rgba(16, 19, 28, 0.92));
+  background: rgba(18, 21, 30, 0.94);
   backdrop-filter: blur(12px);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.26);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.2);
 }
 
 .canvas-page-nav__button {
@@ -4266,11 +4266,9 @@ kbd {
   padding: 40px 46px;
   border-radius: 18px;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  background:
-    radial-gradient(circle at top left, rgba(79, 110, 247, 0.12), transparent 28%),
-    linear-gradient(180deg, rgba(26, 30, 42, 0.98), rgba(14, 17, 26, 0.96));
+  background: rgba(18, 21, 30, 0.98);
   color: var(--text-primary);
-  box-shadow: 0 24px 58px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.24);
 }
 
 .canvas-page-sheet--visual {
@@ -4281,11 +4279,13 @@ kbd {
   padding: 24px 28px;
 }
 
-.canvas-page-sheet--streaming > :first-child {
+.canvas-page-sheet--streaming > :first-child,
+.canvas-stream-preview > :first-child {
   margin-top: 0;
 }
 
-.canvas-page-sheet--streaming > :last-child {
+.canvas-page-sheet--streaming > :last-child,
+.canvas-stream-preview > :last-child {
   margin-bottom: 0;
 }
 
@@ -4297,65 +4297,27 @@ kbd {
   padding-top: 0;
 }
 
-.canvas-stream-draft {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+.canvas-stream-preview {
   min-height: clamp(18rem, 48vh, 62vh);
 }
 
-.canvas-stream-draft__toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.03);
+.canvas-stream-preview--code {
+  display: block;
 }
 
-.canvas-stream-draft__label {
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-}
-
-.canvas-stream-draft__live {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 58px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: rgba(79, 110, 247, 0.14);
-  color: #b8c5ff;
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.canvas-document pre.canvas-stream-draft__body {
+.canvas-stream-code-block {
   margin: 0;
-  min-height: 100%;
   padding: 18px 20px;
-  border: 1px dashed rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 14px;
-  background: rgba(8, 10, 18, 0.42);
-  color: rgba(232, 232, 239, 0.94);
-  white-space: pre-wrap;
-  word-break: break-word;
-  overflow-wrap: anywhere;
-  font-family: var(--font);
-  font-size: 0.98rem;
-  line-height: 1.78;
+  background: rgba(8, 10, 18, 0.72);
+  overflow-x: auto;
 }
 
-.canvas-document pre.canvas-stream-draft__body--code {
-  background: rgba(8, 10, 18, 0.78);
+.canvas-stream-code {
+  display: block;
+  color: rgba(232, 232, 239, 0.94);
+  white-space: pre;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.9rem;
   line-height: 1.68;
