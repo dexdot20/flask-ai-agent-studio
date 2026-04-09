@@ -1082,9 +1082,7 @@ const ALLOWED_DOCUMENT_TYPES = new Set([
 ]);
 const DOCUMENT_EXTENSIONS = new Set([".docx", ".pdf", ".txt", ".csv", ".md"]);
 const VISUAL_PDF_PAGE_LIMIT = 3;
-const STREAM_TYPING_INTERVAL_MS = 24;
-const STREAM_TYPING_MIN_STEP = 3;
-const STREAM_TYPING_MAX_STEP = 48;
+const STREAM_RENDER_FALLBACK_INTERVAL_MS = 16;
 const CANVAS_PANEL_WIDTH_STORAGE_KEY = "chatbot.canvasPanelWidth";
 const MODEL_PREFERENCE_STORAGE_KEY = "chatbot.selectedModel";
 const CANVAS_PANEL_DEFAULT_WIDTH = 620;
@@ -4924,28 +4922,11 @@ function renderBubbleWithCursor(bubbleEl, text) {
   }
 
   bubbleEl.classList.add("streaming-text");
-  bubbleEl.innerHTML = renderMarkdown(text);
+  bubbleEl.innerHTML = renderStreamingMarkdown(text);
 
   const cursorEl = document.createElement("span");
   cursorEl.className = "stream-cursor";
   cursorEl.textContent = "▋";
-
-  const textWalker = document.createTreeWalker(bubbleEl, NodeFilter.SHOW_TEXT, {
-    acceptNode(node) {
-      return node.nodeValue && node.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
-    },
-  });
-
-  let lastTextNode = null;
-  while (textWalker.nextNode()) {
-    lastTextNode = textWalker.currentNode;
-  }
-
-  if (lastTextNode && lastTextNode.parentNode) {
-    lastTextNode.parentNode.insertBefore(cursorEl, lastTextNode.nextSibling);
-    return;
-  }
-
   bubbleEl.appendChild(cursorEl);
 }
 
@@ -10379,6 +10360,8 @@ function buildReasoningPanel(reasoningText, options = {}) {
     return null;
   }
 
+  const renderReasoning = options.streaming === true ? renderStreamingMarkdown : renderMarkdown;
+
   const details = document.createElement("details");
   details.className = "reasoning-panel";
   details.open = Boolean(options.forceOpen) || !shouldAutoCollapseReasoning();
@@ -10388,7 +10371,7 @@ function buildReasoningPanel(reasoningText, options = {}) {
 
   const body = document.createElement("div");
   body.className = "reasoning-body";
-  body.innerHTML = renderMarkdown(text);
+  body.innerHTML = renderReasoning(text);
 
   details.appendChild(summary);
   details.appendChild(body);
@@ -10398,6 +10381,7 @@ function buildReasoningPanel(reasoningText, options = {}) {
 function updateReasoningPanel(group, reasoningText, options = {}) {
   const text = String(reasoningText || "").trim();
   const existing = group.querySelector(".reasoning-panel");
+  const renderReasoning = options.streaming === true ? renderStreamingMarkdown : renderMarkdown;
 
   if (!text) {
     if (existing) {
@@ -10409,7 +10393,7 @@ function updateReasoningPanel(group, reasoningText, options = {}) {
   if (existing) {
     const body = existing.querySelector(".reasoning-body");
     if (body) {
-      body.innerHTML = renderMarkdown(text);
+      body.innerHTML = renderReasoning(text);
     }
     if (options.forceOpen) {
       existing.open = true;
@@ -11036,47 +11020,43 @@ async function sendMessage(options = {}) {
   const assistantTraceByKey = {};
   let latestStepInfo = { step: 1, maxSteps: null };
   let pendingAnswerRenderTimer = null;
+  let pendingReasoningRenderTimer = null;
   let visibleAnswer = "";
-
-  const getTypingStepSize = () => {
-    const remainingLength = Math.max(0, fullAnswer.length - visibleAnswer.length);
-    if (!remainingLength) {
-      return 0;
-    }
-
-    return Math.max(
-      STREAM_TYPING_MIN_STEP,
-      Math.min(STREAM_TYPING_MAX_STEP, Math.ceil(remainingLength * 0.18)),
-    );
-  };
 
   const scheduleAnswerRender = () => {
     if (pendingAnswerRenderTimer !== null) {
       return;
     }
 
-    pendingAnswerRenderTimer = window.setTimeout(() => {
+    const flushStreamingAnswerFrame = () => {
       pendingAnswerRenderTimer = null;
-      const stepSize = getTypingStepSize();
-      if (!stepSize) {
+      if (visibleAnswer === fullAnswer) {
         return;
       }
 
-      visibleAnswer = fullAnswer.slice(0, visibleAnswer.length + stepSize);
+      visibleAnswer = fullAnswer;
       renderBubbleWithCursor(asstBubble, visibleAnswer);
       if (String(visibleAnswer || "").trim()) {
         activeAssistantStreamingHasVisibleAnswer = true;
       }
       scrollToBottom();
-      if (visibleAnswer.length < fullAnswer.length) {
-        scheduleAnswerRender();
-      }
-    }, STREAM_TYPING_INTERVAL_MS);
+    };
+
+    if (typeof window.requestAnimationFrame === "function") {
+      pendingAnswerRenderTimer = window.requestAnimationFrame(flushStreamingAnswerFrame);
+      return;
+    }
+
+    pendingAnswerRenderTimer = window.setTimeout(flushStreamingAnswerFrame, STREAM_RENDER_FALLBACK_INTERVAL_MS);
   };
 
   const flushAnswerRender = () => {
     if (pendingAnswerRenderTimer !== null) {
-      window.clearTimeout(pendingAnswerRenderTimer);
+      if (typeof window.cancelAnimationFrame === "function") {
+        window.cancelAnimationFrame(pendingAnswerRenderTimer);
+      } else {
+        window.clearTimeout(pendingAnswerRenderTimer);
+      }
       pendingAnswerRenderTimer = null;
     }
 
@@ -11085,6 +11065,37 @@ async function sendMessage(options = {}) {
     if (String(visibleAnswer || "").trim()) {
       activeAssistantStreamingHasVisibleAnswer = true;
     }
+  };
+
+  const scheduleReasoningRender = () => {
+    if (pendingReasoningRenderTimer !== null) {
+      return;
+    }
+
+    const flushStreamingReasoningFrame = () => {
+      pendingReasoningRenderTimer = null;
+      updateReasoningPanel(asstGroup, rawReasoning, { forceOpen: true, streaming: true });
+      scrollToBottom();
+    };
+
+    if (typeof window.requestAnimationFrame === "function") {
+      pendingReasoningRenderTimer = window.requestAnimationFrame(flushStreamingReasoningFrame);
+      return;
+    }
+
+    pendingReasoningRenderTimer = window.setTimeout(flushStreamingReasoningFrame, STREAM_RENDER_FALLBACK_INTERVAL_MS);
+  };
+
+  const flushReasoningRender = () => {
+    if (pendingReasoningRenderTimer !== null) {
+      if (typeof window.cancelAnimationFrame === "function") {
+        window.cancelAnimationFrame(pendingReasoningRenderTimer);
+      } else {
+        window.clearTimeout(pendingReasoningRenderTimer);
+      }
+      pendingReasoningRenderTimer = null;
+    }
+    updateReasoningPanel(asstGroup, rawReasoning, { forceOpen: true, streaming: true });
   };
 
   try {
@@ -11351,12 +11362,11 @@ async function sendMessage(options = {}) {
           asstBubble.textContent = "";
         }
       } else if (event.type === "reasoning_start") {
-        updateReasoningPanel(asstGroup, rawReasoning, { forceOpen: true });
+        updateReasoningPanel(asstGroup, rawReasoning, { forceOpen: true, streaming: true });
         scrollToBottom();
       } else if (event.type === "reasoning_delta") {
         rawReasoning += event.text || "";
-        updateReasoningPanel(asstGroup, rawReasoning, { forceOpen: true });
-        scrollToBottom();
+        scheduleReasoningRender();
       } else if (event.type === "answer_sync") {
         const syncedAnswer = String(event.text || "").trim();
         if (!syncedAnswer) {
@@ -11547,6 +11557,9 @@ async function sendMessage(options = {}) {
     if (pendingAnswerRenderTimer !== null) {
       flushAnswerRender();
     }
+    if (pendingReasoningRenderTimer !== null) {
+      flushReasoningRender();
+    }
     pendingDocumentCanvasOpen = null;
     finalizeAssistantBubble(asstBubble, fullAnswer);
     const assistantEntry = {
@@ -11589,6 +11602,9 @@ async function sendMessage(options = {}) {
     sendErrorCode = String(error?.code || "").trim();
     if (pendingAnswerRenderTimer !== null) {
       flushAnswerRender();
+    }
+    if (pendingReasoningRenderTimer !== null) {
+      flushReasoningRender();
     }
     pendingDocumentCanvasOpen = null;
     clearEmptyAssistantStreamingBubble();
