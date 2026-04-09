@@ -1321,6 +1321,8 @@ def _normalize_message_attachment(entry) -> dict | None:
     canvas_mode = str(entry.get("canvas_mode") or "").strip().lower()[:40]
     visual_page_image_ids = entry.get("visual_page_image_ids") if isinstance(entry.get("visual_page_image_ids"), list) else []
     visual_page_count = entry.get("visual_page_count")
+    visual_total_page_count = entry.get("visual_total_page_count")
+    visual_page_limit = entry.get("visual_page_limit")
 
     if file_id:
         cleaned["file_id"] = file_id
@@ -1349,6 +1351,20 @@ def _normalize_message_attachment(entry) -> dict | None:
         page_count = 0
     if page_count > 0:
         cleaned["visual_page_count"] = min(page_count, len(normalized_visual_page_ids) or page_count)
+    try:
+        total_page_count = int(visual_total_page_count)
+    except (TypeError, ValueError):
+        total_page_count = 0
+    if total_page_count > 0:
+        cleaned["visual_total_page_count"] = max(total_page_count, cleaned.get("visual_page_count") or 0)
+    try:
+        normalized_page_limit = int(visual_page_limit)
+    except (TypeError, ValueError):
+        normalized_page_limit = 0
+    if normalized_page_limit > 0:
+        cleaned["visual_page_limit"] = normalized_page_limit
+    if entry.get("visual_pages_truncated") is True:
+        cleaned["visual_pages_truncated"] = True
 
     if not cleaned.get("file_id") and not cleaned.get("file_name"):
         return None

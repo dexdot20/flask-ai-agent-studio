@@ -175,6 +175,9 @@ def _build_attachment_details(attachments: list[dict]) -> str | None:
             if page_ids:
                 _append_detail_line(lines, "Visual page image IDs", _join_values([_safe_text(page_id) for page_id in page_ids[:8]]))
             _append_detail_line(lines, "Visual page count", attachment.get("visual_page_count"))
+            _append_detail_line(lines, "Visual total page count", attachment.get("visual_total_page_count"))
+            _append_detail_line(lines, "Visual page limit", attachment.get("visual_page_limit"))
+            _append_boolean_detail_line(lines, "Visual pages truncated", attachment.get("visual_pages_truncated"))
 
         blocks.append("\n".join(lines).strip())
     return "\n\n".join(blocks).strip() or None

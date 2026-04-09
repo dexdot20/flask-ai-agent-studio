@@ -1596,6 +1596,51 @@ function getVisualCanvasPageImageUrl(document, pageNumber) {
   return `/api/conversations/${encodeURIComponent(String(currentConvId))}/images/${encodeURIComponent(imageId)}`;
 }
 
+function buildVisualCanvasImageUnavailableMarkup(document, pageNumber) {
+  const normalizedPage = clampCanvasPageNumber(document, pageNumber || 1) || 1;
+  const showPageNav = Number(document?.page_count || 0) > 1;
+  return (
+    `<div class="canvas-visual-page__caption">Read-only visual preview${showPageNav ? ` · Page ${normalizedPage}` : ""}</div>` +
+    `<div class="canvas-visual-page__empty">` +
+      `<p>Visual page preview could not be loaded.</p>` +
+      `<button type="button" class="canvas-visual-page__retry" data-canvas-visual-retry>Retry preview</button>` +
+    `</div>`
+  );
+}
+
+function bindVisualCanvasPreview(document) {
+  if (!canvasDocumentEl || !isVisualCanvasDocument(document)) {
+    return;
+  }
+
+  const retryButton = canvasDocumentEl.querySelector("[data-canvas-visual-retry]");
+  if (retryButton) {
+    retryButton.addEventListener("click", () => {
+      canvasDocumentEl.innerHTML = renderCanvasDocumentBody(document);
+      bindCanvasPageNavigation(document);
+    }, { once: true });
+  }
+
+  const imageEl = canvasDocumentEl.querySelector(".canvas-visual-page__image");
+  if (!imageEl) {
+    return;
+  }
+
+  imageEl.addEventListener("error", () => {
+    const visualPageEl = imageEl.closest(".canvas-visual-page");
+    if (!visualPageEl) {
+      return;
+    }
+    const pageContainer = imageEl.closest("[data-canvas-page-number]");
+    const currentPage = clampCanvasPageNumber(
+      document,
+      Number.parseInt(String(pageContainer?.getAttribute("data-canvas-page-number") || getCanvasCurrentPage(document) || 1), 10) || 1,
+    ) || 1;
+    visualPageEl.innerHTML = buildVisualCanvasImageUnavailableMarkup(document, currentPage);
+    bindVisualCanvasPreview(document);
+  }, { once: true });
+}
+
 function isCanvasPageAwareDocument(document) {
   return Boolean(document && !shouldRenderCanvasAsCode(document) && Number(document.page_count) > 1);
 }
@@ -1742,6 +1787,7 @@ function bindCanvasPageNavigation(document) {
     return;
   }
   canvasDocumentEl.onscroll = null;
+  bindVisualCanvasPreview(document);
   if (!isCanvasPageAwareDocument(document)) {
     return;
   }

@@ -4161,12 +4161,36 @@ kbd {
 }
 
 .canvas-visual-page__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
   padding: 24px;
   border-radius: 14px;
   border: 1px dashed rgba(23, 32, 51, 0.2);
   background: rgba(238, 242, 248, 0.9);
   color: #5a6476;
   text-align: center;
+}
+
+.canvas-visual-page__empty p {
+  margin: 0;
+}
+
+.canvas-visual-page__retry {
+  appearance: none;
+  border: 1px solid rgba(23, 32, 51, 0.16);
+  background: rgba(255, 255, 255, 0.9);
+  color: #1f2937;
+  border-radius: 999px;
+  padding: 9px 14px;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.canvas-visual-page__retry:hover {
+  background: #ffffff;
 }
 
 .canvas-page-sheet h1,

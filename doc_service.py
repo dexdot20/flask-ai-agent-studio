@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 import os
 import re
 import unicodedata
@@ -59,6 +60,8 @@ _CODE_LANGUAGE_BY_EXTENSION: dict[str, str] = {
     ".yaml": "yaml",
     ".yml": "yaml",
 }
+
+LOGGER = logging.getLogger(__name__)
 
 
 def guess_document_mime_type(filename: str, declared_mime: str) -> str:
@@ -206,7 +209,8 @@ def _extract_text_from_pdf_ocr(page) -> str:
         image_buffer = io.BytesIO()
         page_image.original.save(image_buffer, format="PNG")
         return extract_image_text(image_buffer.getvalue(), "image/png").strip()
-    except Exception:
+    except Exception as exc:
+        LOGGER.warning("PDF OCR fallback failed: %s", exc)
         return ""
 
 
@@ -809,16 +813,38 @@ def render_pdf_pages_for_vision(doc_bytes: bytes, *, max_pages: int = PDF_VISION
     page_limit = max(1, int(max_pages or 1))
     rendered_pages: list[dict] = []
 
-    with pdfplumber.open(io.BytesIO(doc_bytes)) as pdf:
-        for page_number, page in enumerate(pdf.pages[:page_limit], start=1):
-            image_bytes, mime_type = _render_pdf_page_image_bytes(page)
-            rendered_pages.append(
-                {
-                    "page_number": page_number,
-                    "image_bytes": image_bytes,
-                    "mime_type": mime_type,
-                }
-            )
+    try:
+        with pdfplumber.open(io.BytesIO(doc_bytes)) as pdf:
+            total_pages = len(pdf.pages)
+            if total_pages <= 0:
+                raise ValueError("The uploaded PDF does not contain any pages.")
+
+            is_truncated = total_pages > page_limit
+            for page_number, page in enumerate(pdf.pages[:page_limit], start=1):
+                try:
+                    image_bytes, mime_type = _render_pdf_page_image_bytes(page)
+                except ValueError as exc:
+                    LOGGER.warning(
+                        "Visual PDF rendering failed on page %s/%s: %s",
+                        page_number,
+                        total_pages,
+                        exc,
+                    )
+                    raise ValueError(f"Could not render page {page_number} of the uploaded PDF.") from exc
+                rendered_pages.append(
+                    {
+                        "page_number": page_number,
+                        "image_bytes": image_bytes,
+                        "mime_type": mime_type,
+                        "total_pages": total_pages,
+                        "truncated": is_truncated,
+                    }
+                )
+    except ValueError:
+        raise
+    except Exception as exc:
+        LOGGER.warning("Could not open PDF for visual rendering: %s", exc)
+        raise ValueError(f"Could not render the uploaded PDF as page images: {exc}") from exc
 
     return rendered_pages
 
@@ -874,9 +900,10 @@ def build_canvas_markdown(filename: str, text: str) -> str:
     return f"# {name}\n\n{text}"
 
 
-def build_visual_canvas_markdown(filename: str, page_count: int) -> str:
+def build_visual_canvas_markdown(filename: str, page_count: int, *, total_pages: int | None = None) -> str:
     name = os.path.basename(filename or "document")
     normalized_page_count = max(1, int(page_count or 1))
+    normalized_total_pages = max(normalized_page_count, int(total_pages or normalized_page_count))
     lines = [
         f"# {name}",
         "",
@@ -884,6 +911,13 @@ def build_visual_canvas_markdown(filename: str, page_count: int) -> str:
         "> Use page navigation to inspect each page in the Canvas panel.",
         "",
     ]
+    if normalized_total_pages > normalized_page_count:
+        lines.extend(
+            [
+                f"> This PDF contains {normalized_total_pages} pages. Only the first {normalized_page_count} are available in visual preview.",
+                "",
+            ]
+        )
     for page_number in range(1, normalized_page_count + 1):
         lines.extend(
             [

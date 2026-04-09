@@ -119,6 +119,7 @@ from doc_service import (
     _try_extract_borderless_table,
     build_canvas_markdown,
     build_document_context_block,
+    build_visual_canvas_markdown,
     extract_document_text,
     infer_canvas_format,
     infer_canvas_language,
@@ -9246,7 +9247,32 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual([page["page_number"] for page in pages], [1, 2, 3])
         self.assertEqual([page["image_bytes"] for page in pages], [b"page-1", b"page-2", b"page-3"])
         self.assertEqual([page["mime_type"] for page in pages], ["image/jpeg", "image/jpeg", "image/jpeg"])
+        self.assertTrue(all(page["truncated"] is True for page in pages))
+        self.assertTrue(all(page["total_pages"] == 4 for page in pages))
         self.assertEqual(render_page.call_count, 3)
+
+    def test_render_pdf_pages_for_vision_reports_page_specific_render_error(self):
+        fake_pdf = SimpleNamespace(pages=[object(), object()])
+
+        class _FakePdfContext:
+            def __enter__(self_inner):
+                return fake_pdf
+
+            def __exit__(self_inner, exc_type, exc, tb):
+                return False
+
+        with patch("doc_service.pdfplumber.open", return_value=_FakePdfContext()), patch(
+            "doc_service._render_pdf_page_image_bytes",
+            side_effect=[(b"page-1", "image/jpeg"), ValueError("bad page bitmap")],
+        ):
+            with self.assertRaisesRegex(ValueError, "page 2"):
+                render_pdf_pages_for_vision(b"%PDF-1.4", max_pages=2)
+
+    def test_build_visual_canvas_markdown_reports_truncated_preview(self):
+        content = build_visual_canvas_markdown("exam.pdf", 3, total_pages=7)
+
+        self.assertIn("This PDF contains 7 pages.", content)
+        self.assertIn("Only the first 3 are available in visual preview.", content)
 
     def test_build_api_messages_embeds_visual_pdf_pages(self):
         normalized = [
@@ -9366,6 +9392,68 @@ class AppRoutesTestCase(unittest.TestCase):
         user_api_message = next(message for message in api_messages if message.get("role") == "user")
         self.assertIsInstance(user_api_message.get("content"), list)
         self.assertEqual(len([block for block in user_api_message["content"] if block.get("type") == "image_url"]), 2)
+
+    def test_chat_visual_pdf_marks_truncation_metadata_when_preview_is_limited(self):
+        conversation_id = self._create_conversation()
+
+        rendered_pages = [
+            {"page_number": 1, "mime_type": "image/jpeg", "image_bytes": b"page-one", "total_pages": 6, "truncated": True},
+            {"page_number": 2, "mime_type": "image/jpeg", "image_bytes": b"page-two", "total_pages": 6, "truncated": True},
+            {"page_number": 3, "mime_type": "image/jpeg", "image_bytes": b"page-three", "total_pages": 6, "truncated": True},
+        ]
+
+        with patch("routes.chat.can_model_process_images", return_value=True), patch(
+            "routes.chat.render_pdf_pages_for_vision",
+            return_value=rendered_pages,
+        ), patch("routes.chat.run_agent_stream", return_value=iter([{"type": "done"}])):
+            response = self.client.post(
+                "/chat",
+                data=MultiDict(
+                    [
+                        ("messages", json.dumps([{"role": "user", "content": "Analyze visually"}])),
+                        ("model", "deepseek-chat"),
+                        ("conversation_id", str(conversation_id)),
+                        ("user_content", "Analyze visually"),
+                        ("document_modes", json.dumps([{"file_name": "exam.pdf", "submission_mode": "visual"}])),
+                        ("document", (io.BytesIO(b"%PDF-1.4 fake pdf bytes"), "exam.pdf", "application/pdf")),
+                    ]
+                ),
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        events = [json.loads(line) for line in response.get_data(as_text=True).strip().splitlines()]
+        document_event = next((event for event in events if event["type"] == "document_processed"), None)
+        self.assertIsNotNone(document_event)
+        self.assertIn("Only the first 3 are available in visual preview.", document_event["canvas_document"]["content"])
+
+        conversation_response = self.client.get(f"/api/conversations/{conversation_id}")
+        self.assertEqual(conversation_response.status_code, 200)
+        messages = conversation_response.get_json()["messages"]
+        user_message = next(message for message in messages if message["role"] == "user")
+        attachments = user_message["metadata"].get("attachments") or []
+        document_attachment = next(entry for entry in attachments if entry["kind"] == "document")
+        self.assertEqual(document_attachment["visual_page_count"], 3)
+        self.assertEqual(document_attachment["visual_total_page_count"], 6)
+        self.assertTrue(document_attachment["visual_pages_truncated"])
+        self.assertEqual(document_attachment["visual_page_limit"], 3)
+
+        latest_canvas_state = find_latest_canvas_state(messages)
+        self.assertEqual(len(latest_canvas_state["documents"]), 1)
+        visual_document = latest_canvas_state["documents"][0]
+        self.assertEqual(visual_document["content_mode"], "visual")
+        self.assertEqual(visual_document["canvas_mode"], "preview_only")
+        self.assertEqual(visual_document["source_file_id"], document_attachment["file_id"])
+        self.assertEqual(visual_document["source_mime_type"], "application/pdf")
+        self.assertEqual(visual_document["visual_page_image_ids"], document_attachment["visual_page_image_ids"])
+        self.assertEqual(visual_document["page_count"], 3)
+
+        image_response = self.client.get(
+            f"/api/conversations/{conversation_id}/images/{document_attachment['visual_page_image_ids'][0]}"
+        )
+        self.assertEqual(image_response.status_code, 200)
+        self.assertEqual(image_response.mimetype, "image/jpeg")
+        self.assertEqual(image_response.data, b"page-one")
 
     def test_canvas_export_endpoint_returns_markdown_and_pdf(self):
         conversation_id = self._create_conversation()

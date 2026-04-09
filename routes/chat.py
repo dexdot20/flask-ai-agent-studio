@@ -3192,6 +3192,15 @@ def register_chat_routes(app) -> None:
                         if not rendered_pages:
                             raise ValueError("Could not render the uploaded PDF as page images.")
 
+                        rendered_page_count = len(rendered_pages)
+                        visual_total_page_count = max(
+                            rendered_page_count,
+                            int(rendered_pages[0].get("total_pages") or rendered_page_count),
+                        )
+                        visual_pages_truncated = visual_total_page_count > rendered_page_count or any(
+                            bool(page.get("truncated")) for page in rendered_pages
+                        )
+
                         created_file_asset = create_file_asset(conv_id, doc_name, doc_mime_type, doc_bytes, None)
                         created_file_assets.append(created_file_asset)
 
@@ -3216,6 +3225,9 @@ def register_chat_routes(app) -> None:
                             "submission_mode": "visual",
                             "canvas_mode": "preview_only",
                             "visual_page_count": len(visual_page_image_ids),
+                            "visual_total_page_count": visual_total_page_count,
+                            "visual_pages_truncated": visual_pages_truncated,
+                            "visual_page_limit": PDF_VISION_PAGE_LIMIT,
                             "visual_page_image_ids": visual_page_image_ids,
                         }
                         processed_attachments.append(attachment)
@@ -3225,7 +3237,11 @@ def register_chat_routes(app) -> None:
                                 "doc_name": doc_name,
                                 "doc_mime_type": doc_mime_type,
                                 "text_truncated": False,
-                                "canvas_md": build_visual_canvas_markdown(doc_name, len(visual_page_image_ids)),
+                                "canvas_md": build_visual_canvas_markdown(
+                                    doc_name,
+                                    len(visual_page_image_ids),
+                                    total_pages=visual_total_page_count,
+                                ),
                                 "canvas_format": "markdown",
                                 "canvas_language": None,
                                 "content_mode": "visual",
