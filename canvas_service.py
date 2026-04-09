@@ -19,12 +19,13 @@ except ImportError:  # pragma: no cover - optional dependency fallback
     _repair_json = None
 
 from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import Paragraph, Preformatted, SimpleDocTemplate, Spacer
+from reportlab.platypus import Paragraph, Preformatted, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from markdown_rendering import append_markdown_pdf_story
 
@@ -3166,6 +3167,70 @@ def build_html_download(document: dict) -> bytes:
     return html.encode("utf-8")
 
 
+def _count_pdf_pages(pdf_bytes: bytes) -> int | None:
+    if not pdf_bytes:
+        return None
+    try:
+        import pdfplumber
+    except Exception:
+        return None
+
+    try:
+        with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
+            return len(pdf.pages)
+    except Exception:
+        return None
+
+
+def _build_canvas_pdf_meta_text(document: dict, *, page_count: int | None = None) -> str:
+    parts = []
+    line_count = int(document.get("line_count") or 0)
+    normalized_page_count = int(page_count or document.get("page_count") or 0)
+
+    if line_count > 0:
+        parts.append(f"Lines: <b>{line_count}</b>")
+    if normalized_page_count > 0:
+        parts.append(f"Pages: <b>{normalized_page_count}</b>")
+    return " • ".join(parts)
+
+
+def _build_canvas_pdf_title_card(document: dict, width: float, title_style, meta_style, *, page_count: int | None = None):
+    rows = [[Paragraph(escape(document["title"]), title_style)]]
+    meta_text = _build_canvas_pdf_meta_text(document, page_count=page_count)
+    if meta_text:
+        rows.append([Paragraph(meta_text, meta_style)])
+
+    table = Table(rows, colWidths=[width], hAlign="LEFT")
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f6f8ff")),
+                ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#d8e1f2")),
+                ("LINEBEFORE", (0, 0), (0, -1), 4, colors.HexColor("#3157d5")),
+                ("LEFTPADDING", (0, 0), (-1, -1), 18),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 18),
+                ("TOPPADDING", (0, 0), (-1, -1), 14),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 14),
+            ]
+        )
+    )
+    return table
+
+
+def _build_canvas_pdf_page_chrome(title: str):
+    def _draw(canvas, doc):
+        canvas.saveState()
+        page_width, page_height = A4
+        canvas.setFillColor(colors.HexColor("#3157d5"))
+        canvas.rect(0, page_height - 8, page_width, 8, stroke=0, fill=1)
+        canvas.setStrokeColor(colors.HexColor("#dfe6f2"))
+        canvas.setLineWidth(0.8)
+        canvas.line(doc.leftMargin, page_height - 18, page_width - doc.rightMargin, page_height - 18)
+        canvas.restoreState()
+
+    return _draw
+
+
 def build_pdf_download(document: dict) -> bytes:
     normalized = normalize_canvas_document(document)
     if not normalized:
@@ -3226,6 +3291,15 @@ def build_pdf_download(document: dict) -> bytes:
         spaceAfter=5,
         spaceBefore=10,
     )
+    meta_style = ParagraphStyle(
+        "CanvasMeta",
+        parent=styles["BodyText"],
+        fontName=_BODY_FONT,
+        fontSize=9,
+        leading=12,
+        textColor=colors.HexColor("#5b6882"),
+        spaceAfter=0,
+    )
     code_style = ParagraphStyle(
         "CanvasCode",
         parent=styles["Code"],
@@ -3238,38 +3312,112 @@ def build_pdf_download(document: dict) -> bytes:
         borderPadding=10,
         spaceAfter=8,
     )
+    quote_style = ParagraphStyle(
+        "CanvasQuote",
+        parent=body_style,
+        fontName=_BODY_FONT,
+        fontSize=10.5,
+        leading=16,
+        leftIndent=14,
+        rightIndent=4,
+        textColor=colors.HexColor("#33405c"),
+        backColor=colors.HexColor("#f7f9fd"),
+        borderPadding=10,
+        spaceBefore=4,
+        spaceAfter=8,
+    )
+    math_style = ParagraphStyle(
+        "CanvasMath",
+        parent=body_style,
+        fontName=_MONO_FONT,
+        fontSize=10,
+        leading=14,
+        alignment=TA_CENTER,
+        textColor=colors.HexColor("#263553"),
+        backColor=colors.HexColor("#f4f7fd"),
+        borderPadding=10,
+        leftIndent=12,
+        rightIndent=12,
+        spaceBefore=4,
+        spaceAfter=8,
+    )
+    table_header_style = ParagraphStyle(
+        "CanvasTableHeader",
+        parent=body_style,
+        fontName=_BOLD_FONT,
+        fontSize=9.4,
+        leading=12,
+        textColor=_heading_color,
+        spaceAfter=0,
+        spaceBefore=0,
+    )
+    table_body_style = ParagraphStyle(
+        "CanvasTableBody",
+        parent=body_style,
+        fontName=_BODY_FONT,
+        fontSize=9.2,
+        leading=12,
+        textColor=_text_color,
+        spaceAfter=0,
+        spaceBefore=0,
+    )
 
     _left_margin = 22 * mm
     _right_margin = 22 * mm
+    _content_width = A4[0] - _left_margin - _right_margin
+    page_chrome = _build_canvas_pdf_page_chrome(normalized["title"])
 
-    story = [Paragraph(escape(normalized["title"]), title_style), Spacer(1, 8)]
-    if normalized.get("format") == "code":
-        story.append(Preformatted(_normalize_line_endings(normalized["content"]), code_style))
-        output = BytesIO()
-        doc = SimpleDocTemplate(
-            output, pagesize=A4,
-            topMargin=20 * mm, bottomMargin=20 * mm,
-            leftMargin=_left_margin, rightMargin=_right_margin,
+    def _build_story(page_count: int | None) -> list:
+        story = [
+            _build_canvas_pdf_title_card(normalized, _content_width, title_style, meta_style, page_count=page_count),
+            Spacer(1, 14),
+        ]
+        if normalized.get("format") == "code":
+            story.append(Preformatted(_normalize_line_endings(normalized["content"]), code_style))
+            return story
+
+        append_markdown_pdf_story(
+            story,
+            normalized["content"],
+            body_style=body_style,
+            heading1_style=heading1_style,
+            heading_style=heading_style,
+            subheading_style=subheading_style,
+            code_style=code_style,
+            quote_style=quote_style,
+            math_style=math_style,
+            table_header_style=table_header_style,
+            table_body_style=table_body_style,
+            mono_font_name=_MONO_FONT,
+            heading_level_offset=0,
         )
-        doc.build(story)
-        return output.getvalue()
+        return story
 
-    append_markdown_pdf_story(
-        story,
-        normalized["content"],
-        body_style=body_style,
-        heading1_style=heading1_style,
-        heading_style=heading_style,
-        subheading_style=subheading_style,
-        code_style=code_style,
-        heading_level_offset=0,
-    )
-
+    page_count = int(normalized.get("page_count") or 0) or None
     output = BytesIO()
     doc = SimpleDocTemplate(
         output, pagesize=A4,
         topMargin=20 * mm, bottomMargin=20 * mm,
         leftMargin=_left_margin, rightMargin=_right_margin,
     )
-    doc.build(story)
+
+    if page_count is None:
+        preview_output = BytesIO()
+        preview_doc = SimpleDocTemplate(
+            preview_output, pagesize=A4,
+            topMargin=20 * mm, bottomMargin=20 * mm,
+            leftMargin=_left_margin, rightMargin=_right_margin,
+        )
+        preview_doc.build(_build_story(None), onFirstPage=page_chrome, onLaterPages=page_chrome)
+        page_count = _count_pdf_pages(preview_output.getvalue()) or 1
+
+    for _ in range(2):
+        output.seek(0)
+        output.truncate(0)
+        doc.build(_build_story(page_count), onFirstPage=page_chrome, onLaterPages=page_chrome)
+        rendered_page_count = _count_pdf_pages(output.getvalue()) or page_count or 1
+        if rendered_page_count == page_count:
+            break
+        page_count = rendered_page_count
+
     return output.getvalue()

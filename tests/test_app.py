@@ -10590,6 +10590,11 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("Two", pdf_text)
         self.assertNotIn("# Export", pdf_text)
         self.assertNotIn("- One", pdf_text)
+        self.assertIn("Lines:", pdf_text)
+        self.assertIn("Pages:", pdf_text)
+        self.assertNotIn("Role:", pdf_text)
+        self.assertNotIn("Format:", pdf_text)
+        self.assertNotIn("Page 1", pdf_text)
 
         html_response = self.client.get(
             f"/api/conversations/{conversation_id}/canvas/export?format=html&document_id=canvas-export"

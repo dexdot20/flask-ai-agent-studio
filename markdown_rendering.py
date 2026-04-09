@@ -104,26 +104,115 @@ _PDF_INLINE_ITALIC_RE = re.compile(
     r"(?<!\w)\*(?!\s)(.+?)(?<!\s)\*(?!\w)|(?<!\w)_(?!\s)(.+?)(?<!\s)_(?!\w)", re.DOTALL
 )
 _PDF_INLINE_CODE_RE = re.compile(r"`([^`]+)`")
+_PDF_MATH_FRAC_RE = re.compile(r"\\frac\s*\{([^{}]+)\}\s*\{([^{}]+)\}")
+_PDF_MATH_SQRT_RE = re.compile(r"\\sqrt\s*\{([^{}]+)\}")
+_PDF_MATH_TEXT_RE = re.compile(r"\\text\s*\{([^{}]+)\}")
+
+_PDF_MATH_REPLACEMENTS = {
+    r"\\cdot": "·",
+    r"\\times": "×",
+    r"\\pm": "±",
+    r"\\mp": "∓",
+    r"\\neq": "≠",
+    r"\\leq": "≤",
+    r"\\geq": "≥",
+    r"\\approx": "≈",
+    r"\\sim": "∼",
+    r"\\infty": "∞",
+    r"\\rightarrow": "→",
+    r"\\leftarrow": "←",
+    r"\\leftrightarrow": "↔",
+    r"\\Rightarrow": "⇒",
+    r"\\Leftarrow": "⇐",
+    r"\\sum": "∑",
+    r"\\prod": "∏",
+    r"\\int": "∫",
+    r"\\partial": "∂",
+    r"\\nabla": "∇",
+    r"\\alpha": "α",
+    r"\\beta": "β",
+    r"\\gamma": "γ",
+    r"\\delta": "δ",
+    r"\\epsilon": "ε",
+    r"\\theta": "θ",
+    r"\\lambda": "λ",
+    r"\\mu": "μ",
+    r"\\pi": "π",
+    r"\\sigma": "σ",
+    r"\\phi": "φ",
+    r"\\omega": "ω",
+}
+
+_PDF_SUPERSCRIPT_MAP = str.maketrans({
+    "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹",
+    "+": "⁺", "-": "⁻", "=": "⁼", "(": "⁽", ")": "⁾", "n": "ⁿ", "i": "ⁱ",
+})
+_PDF_SUBSCRIPT_MAP = str.maketrans({
+    "0": "₀", "1": "₁", "2": "₂", "3": "₃", "4": "₄", "5": "₅", "6": "₆", "7": "₇", "8": "₈", "9": "₉",
+    "+": "₊", "-": "₋", "=": "₌", "(": "₍", ")": "₎", "a": "ₐ", "e": "ₑ", "h": "ₕ", "i": "ᵢ", "j": "ⱼ",
+    "k": "ₖ", "l": "ₗ", "m": "ₘ", "n": "ₙ", "o": "ₒ", "p": "ₚ", "r": "ᵣ", "s": "ₛ", "t": "ₜ", "u": "ᵤ",
+    "v": "ᵥ", "x": "ₓ",
+})
 
 
-def _apply_pdf_inline_formatting(text: str) -> str:
+def _format_pdf_math_script(script_kind: str, raw_value: str) -> str:
+    value = str(raw_value or "").strip()
+    if not value:
+        return ""
+    if script_kind == "sup" and re.fullmatch(r"[0-9+\-=()ni]+", value):
+        return value.translate(_PDF_SUPERSCRIPT_MAP)
+    if script_kind == "sub" and re.fullmatch(r"[0-9x]+", value):
+        return value.translate(_PDF_SUBSCRIPT_MAP)
+    prefix = "^" if script_kind == "sup" else "_"
+    if len(value) == 1:
+        return f"{prefix}{value}"
+    return f"{prefix}({value})"
+
+
+def _apply_pdf_inline_formatting(text: str, *, mono_font_name: str = "Courier") -> str:
     """Convert inline markdown formatting to ReportLab paragraph XML markup."""
     # Escape HTML entities first so bold/italic regexes only match raw markers
     value = html_escape(str(text or ""), quote=False)
     value = _PDF_INLINE_BOLD_RE.sub(lambda m: f"<b>{m.group(1) or m.group(2)}</b>", value)
     value = _PDF_INLINE_ITALIC_RE.sub(lambda m: f"<i>{m.group(1) or m.group(2)}</i>", value)
-    value = _PDF_INLINE_CODE_RE.sub(lambda m: f'<font face="Courier">{m.group(1)}</font>', value)
+    value = _PDF_INLINE_CODE_RE.sub(lambda m: f'<font face="{mono_font_name}">{m.group(1)}</font>', value)
     return value
 
 
-def _render_pdf_inline_markup(text: str) -> str:
+def _normalize_pdf_math_text(text: str) -> str:
+    value = _normalize_line_endings(str(text or "").strip())
+    if not value:
+        return ""
+
+    while True:
+        next_value = _PDF_MATH_FRAC_RE.sub(lambda m: f"({m.group(1)})/({m.group(2)})", value)
+        if next_value == value:
+            break
+        value = next_value
+
+    while True:
+        next_value = _PDF_MATH_SQRT_RE.sub(lambda m: f"√({m.group(1)})", value)
+        if next_value == value:
+            break
+        value = next_value
+
+    value = _PDF_MATH_TEXT_RE.sub(lambda m: m.group(1), value)
+    value = value.replace(r"\left", "").replace(r"\right", "")
+    for source, target in _PDF_MATH_REPLACEMENTS.items():
+        value = value.replace(source, target)
+
+    value = re.sub(r"\s+", " ", value).strip()
+    return value
+
+
+def _render_pdf_inline_markup(text: str, *, mono_font_name: str = "Courier") -> str:
     parts: list[str] = []
     for segment in _split_inline_math_segments(text):
         if str(segment.get("type") or "") == "math":
-            math_text = _escape_pdf_text(str(segment.get("text") or ""))
-            parts.append(f'<font face="Courier">{math_text}</font>')
+            math_text = _escape_pdf_text(_normalize_pdf_math_text(str(segment.get("text") or "")))
+            parts.append(f'<font face="{mono_font_name}">{math_text}</font>')
         else:
-            parts.append(_apply_pdf_inline_formatting(str(segment.get("text") or "")))
+            parts.append(_apply_pdf_inline_formatting(str(segment.get("text") or ""), mono_font_name=mono_font_name))
     return "".join(parts)
 
 
@@ -195,7 +284,15 @@ def _iter_markdown_blocks(text: str, *, preserve_inline_formatting: bool = False
         )
         paragraph_lines = []
         if paragraph_text:
-            blocks.append({"type": "paragraph", "text": paragraph_text})
+            segments = _split_inline_math_segments(paragraph_text)
+            if (
+                len(segments) == 1
+                and str(segments[0].get("type") or "") == "math"
+                and bool(segments[0].get("display"))
+            ):
+                blocks.append({"type": "display_math", "text": str(segments[0].get("text") or "")})
+            else:
+                blocks.append({"type": "paragraph", "text": paragraph_text})
 
     def flush_list() -> None:
         nonlocal list_items, list_kind
@@ -314,7 +411,7 @@ def _iter_markdown_blocks(text: str, *, preserve_inline_formatting: bool = False
             flush_table()
             quote_text = _clean_markdown_inline(quote_match.group(1), preserve_formatting=preserve_inline_formatting)
             if quote_text:
-                blocks.append({"type": "paragraph", "text": quote_text})
+                blocks.append({"type": "quote", "text": quote_text})
             continue
 
         flush_table()
@@ -342,13 +439,23 @@ def append_markdown_pdf_story(
     heading_style,
     subheading_style,
     code_style,
+    quote_style=None,
+    math_style=None,
+    table_header_style=None,
+    table_body_style=None,
+    mono_font_name: str = "Courier",
     heading_level_offset: int = 0,
     empty_text: str = "(empty)",
 ) -> None:
-    blocks = _iter_markdown_blocks(markdown_text)
+    blocks = _iter_markdown_blocks(markdown_text, preserve_inline_formatting=True)
     if not blocks:
         story.append(Paragraph(_escape_pdf_text(empty_text), body_style))
         return
+
+    quote_style = quote_style or body_style
+    math_style = math_style or body_style
+    table_header_style = table_header_style or body_style
+    table_body_style = table_body_style or body_style
 
     offset = max(0, int(heading_level_offset or 0))
     for block in blocks:
@@ -356,17 +463,25 @@ def append_markdown_pdf_story(
         if block_type == "heading":
             level = min(6, max(1, int(block.get("level") or 1) + offset))
             style = heading1_style if level <= 1 else heading_style if level == 2 else subheading_style
-            story.append(Paragraph(_render_pdf_inline_markup(str(block.get("text") or "Untitled")), style))
+            story.append(Paragraph(_render_pdf_inline_markup(str(block.get("text") or "Untitled"), mono_font_name=mono_font_name), style))
         elif block_type == "paragraph":
             paragraph_text = str(block.get("text") or "").strip()
             if paragraph_text:
-                story.append(Paragraph(_render_pdf_inline_markup(paragraph_text), body_style))
+                story.append(Paragraph(_render_pdf_inline_markup(paragraph_text, mono_font_name=mono_font_name), body_style))
+        elif block_type == "quote":
+            quote_text = str(block.get("text") or "").strip()
+            if quote_text:
+                story.append(Paragraph(_render_pdf_inline_markup(quote_text, mono_font_name=mono_font_name), quote_style))
+        elif block_type == "display_math":
+            math_text = _normalize_pdf_math_text(str(block.get("text") or ""))
+            if math_text:
+                story.append(Paragraph(_escape_pdf_text(math_text), math_style))
         elif block_type == "list":
             items = [str(item).strip() for item in block.get("items") or [] if str(item).strip()]
             if items:
                 story.append(
                     ListFlowable(
-                        [ListItem(Paragraph(_render_pdf_inline_markup(item), body_style)) for item in items],
+                        [ListItem(Paragraph(_render_pdf_inline_markup(item, mono_font_name=mono_font_name), body_style)) for item in items],
                         bulletType="1" if str(block.get("kind") or "bullet") == "ordered" else "bullet",
                         leftIndent=18,
                     )
@@ -382,33 +497,28 @@ def append_markdown_pdf_story(
             if table_rows_data:
                 num_cols = max((len(r) for r in table_rows_data), default=1)
                 col_width = _PDF_TABLE_TOTAL_WIDTH / num_cols
-                table_cell_style = ParagraphStyle(
-                    "TableCell",
-                    parent=body_style,
-                    fontSize=max(7, (getattr(body_style, "fontSize", 10) or 10) - 1),
-                    leading=max(9, (getattr(body_style, "leading", 14) or 14) - 2),
-                    spaceAfter=2,
-                    spaceBefore=2,
-                )
-                table_data = [
-                    [
-                        Paragraph(_render_pdf_inline_markup(str(cell or "")), table_cell_style)
-                        for cell in row
-                    ]
-                    for row in table_rows_data
-                ]
+                table_data = []
+                for row_index, row in enumerate(table_rows_data):
+                    cell_style = table_header_style if row_index == 0 and len(table_rows_data) > 1 else table_body_style
+                    table_data.append(
+                        [
+                            Paragraph(_render_pdf_inline_markup(str(cell or ""), mono_font_name=mono_font_name), cell_style)
+                            for cell in row
+                        ]
+                    )
                 rendered_table = Table(
-                    table_data, colWidths=[col_width] * num_cols, hAlign="LEFT", repeatRows=0
+                    table_data, colWidths=[col_width] * num_cols, hAlign="LEFT", repeatRows=1 if len(table_rows_data) > 1 else 0
                 )
                 rendered_table.setStyle(
                     TableStyle([
-                        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#c8cdd8")),
-                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef2fa")),
-                        ("TOPPADDING", (0, 0), (-1, -1), 4),
-                        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-                        ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f7f9fd")]),
+                        ("BOX", (0, 0), (-1, -1), 0.7, colors.HexColor("#d7deea")),
+                        ("INNERGRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#dde4ef")),
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#edf3ff")),
+                        ("TOPPADDING", (0, 0), (-1, -1), 6),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f9fbfe")]),
                         ("VALIGN", (0, 0), (-1, -1), "TOP"),
                     ])
                 )

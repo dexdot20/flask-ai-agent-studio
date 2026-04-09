@@ -503,6 +503,7 @@ def build_conversation_pdf_download(conversation: dict, messages: list[dict]) ->
             heading_style=subheading_style,
             subheading_style=subheading_style,
             code_style=code_style,
+            mono_font_name=_MONO_FONT,
             heading_level_offset=2,
         )
         for label, value in section["details"]:
@@ -515,6 +516,7 @@ def build_conversation_pdf_download(conversation: dict, messages: list[dict]) ->
                 heading_style=subheading_style,
                 subheading_style=subheading_style,
                 code_style=code_style,
+                mono_font_name=_MONO_FONT,
                 heading_level_offset=2,
             )
 
