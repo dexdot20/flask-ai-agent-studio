@@ -6,21 +6,21 @@ It is not a minimal prompt/response demo. The app keeps conversation history in 
 
 ## Screenshots
 
-### Chat and tool execution
+### Tool execution
 
-![Chat and tool execution](screenshots/Screenshot_2026-04-09_18-04-09.png)
+![Tool execution](screenshots/Screenshot_2026-04-09_18-04-09.png)
 
-### Assistant response actions
+### Long-term memory (RAG)
 
-![Assistant response actions](screenshots/Screenshot_2026-04-09_18-05-21.png)
-
-### Settings page
-
-![Settings page](screenshots/Screenshot_2026-04-09_18-05-58.png)
+![Long-term memory (RAG)](screenshots/Screenshot_2026-04-09_18-05-21.png)
 
 ### Canvas view
 
-![Canvas view](screenshots/Screenshot_2026-04-09_18-07-19.png)
+![Canvas view](screenshots/Screenshot_2026-04-09_18-05-58.png)
+
+### Settings page
+
+![Settings page](screenshots/Screenshot_2026-04-09_18-07-19.png)
 
 ## Contents
 
