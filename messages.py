@@ -304,6 +304,21 @@ def _normalize_clarification_rounds(
     clarification_response: dict | None,
     all_clarification_rounds: list[dict] | None = None,
 ) -> list[dict]:
+    # Only inject clarification context when the current turn actually carries a
+    # clarification response.  Historical rounds (all_clarification_rounds) may
+    # supplement the current round with earlier Q/A, but they must never be
+    # injected on their own — those answers were already consumed by earlier
+    # turns and re-injecting them on every subsequent non-clarification turn
+    # misleads the model into treating the current user message as a
+    # clarification response.
+    current_has_clarification = (
+        isinstance(clarification_response, dict)
+        and isinstance(clarification_response.get("answers"), dict)
+        and bool(clarification_response["answers"])
+    )
+    if not current_has_clarification:
+        return []
+
     normalized_rounds: list[dict] = []
     raw_rounds = all_clarification_rounds if isinstance(all_clarification_rounds, list) else []
     if not raw_rounds:

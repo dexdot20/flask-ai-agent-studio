@@ -4202,12 +4202,14 @@ def _run_save_to_conversation_memory(tool_args: dict, runtime_state: dict):
         tool_args.get("value", ""),
         message_id=message_id,
     )
+    updated = entry.get("updated_existing") is True
     return {
         "status": "ok",
-        "entry": entry,
+        "key": entry.get("key") or tool_args.get("key", ""),
+        "updated_existing": updated,
     }, (
         f"Conversation memory updated: {entry['key']}"
-        if entry.get("updated_existing") is True
+        if updated
         else f"Conversation memory saved: {entry['key']}"
     )
 

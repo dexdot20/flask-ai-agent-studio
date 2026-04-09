@@ -131,6 +131,7 @@ from messages import (
     SUMMARY_LABEL,
     _build_canvas_prompt_payload,
     build_api_messages,
+    build_runtime_context_injection,
     build_runtime_system_message,
     build_tool_call_contract,
     build_user_message_for_model,
@@ -4165,8 +4166,17 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertLess(content.index("## Clarification Response"), content.index("## Knowledge Base"))
 
     def test_build_runtime_system_message_includes_all_clarification_rounds(self):
+        """When the current turn carries a clarification response, all earlier
+        rounds should also be rendered so the model has the full Q/A history."""
         message = build_runtime_system_message(
             active_tool_names=["search_knowledge_base"],
+            clarification_response={
+                "assistant_message_id": "99",
+                "answers": {
+                    "price": {"display": "199 TL - 3990 TL"},
+                    "competition": {"display": "Bolca var"},
+                },
+            },
             all_clarification_rounds=[
                 {
                     "questions": [
@@ -7130,8 +7140,7 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(summary, "Conversation memory updated: Preferred language")
-        self.assertTrue(result["entry"].get("updated_existing"))
-        self.assertEqual(result["entry"]["id"], original_entry["id"])
+        self.assertTrue(result.get("updated_existing"))
         entries = get_conversation_memory(conversation_id)
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0]["id"], original_entry["id"])
@@ -18569,6 +18578,91 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("Title: Compact Example", tool_message["content"])
         self.assertIn("URL: https://example.com/compact", tool_message["content"])
         self.assertNotIn("raw_content", tool_message["content"])
+
+    # ------------------------------------------------------------------
+    # Clarification injection guard: stale rounds must not leak
+    # ------------------------------------------------------------------
+
+    def test_build_runtime_system_message_suppresses_clarification_rounds_on_non_clarification_turn(self):
+        """When the current turn is NOT a clarification turn (clarification_response is None),
+        historical all_clarification_rounds must not produce a ## Clarification Response section."""
+        message = build_runtime_system_message(
+            active_tool_names=["search_knowledge_base"],
+            clarification_response=None,
+            all_clarification_rounds=[
+                {
+                    "questions": [{"id": "q1", "label": "Which option?"}],
+                    "answers": {"q1": {"display": "Option A"}},
+                },
+            ],
+        )
+        content = message["content"]
+        self.assertNotIn("## Clarification Response", content)
+        self.assertNotIn("Option A", content)
+
+    def test_context_injection_suppresses_clarification_when_no_current_response(self):
+        """build_runtime_context_injection must not include clarification data
+        when clarification_response is None, even if all_clarification_rounds is populated."""
+        injection = build_runtime_context_injection(
+            active_tool_names=["search_web"],
+            clarification_response=None,
+            all_clarification_rounds=[
+                {
+                    "questions": [{"id": "q1", "label": "Budget?"}],
+                    "answers": {"q1": {"display": "200 TL"}},
+                },
+            ],
+        )
+        self.assertNotIn("## Clarification Response", injection)
+        self.assertNotIn("200 TL", injection)
+
+    def test_context_injection_includes_clarification_when_current_response_present(self):
+        """build_runtime_context_injection should include clarification data when
+        the current turn carries a clarification response."""
+        injection = build_runtime_context_injection(
+            active_tool_names=["search_web"],
+            clarification_response={
+                "assistant_message_id": "5",
+                "answers": {"q1": {"display": "200 TL"}},
+            },
+            all_clarification_rounds=[
+                {
+                    "questions": [{"id": "q1", "label": "Budget?"}],
+                    "answers": {"q1": {"display": "200 TL"}},
+                },
+            ],
+        )
+        self.assertIn("## Clarification Response", injection)
+        self.assertIn("200 TL", injection)
+
+    # ------------------------------------------------------------------
+    # save_to_conversation_memory result compactness
+    # ------------------------------------------------------------------
+
+    def test_save_to_conversation_memory_result_excludes_internal_fields(self):
+        """The tool result for save_to_conversation_memory should not include
+        verbose internal DB fields like id, conversation_id, message_id, or created_at."""
+        from agent import _run_save_to_conversation_memory
+
+        with self.app.app_context():
+            conv_id = self._create_conversation()
+            runtime_state = {
+                "agent_context": {"conversation_id": conv_id, "source_message_id": None},
+            }
+            result, summary = _run_save_to_conversation_memory(
+                {"entry_type": "tool_result", "key": "test_key", "value": "test_value"},
+                runtime_state,
+            )
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result["key"], "test_key")
+            self.assertFalse(result.get("updated_existing", False))
+            # Internal DB fields must NOT be present
+            self.assertNotIn("entry", result)
+            self.assertNotIn("id", result)
+            self.assertNotIn("conversation_id", result)
+            self.assertNotIn("message_id", result)
+            self.assertNotIn("created_at", result)
+            self.assertIn("saved", summary)
 
 
 if __name__ == "__main__":
