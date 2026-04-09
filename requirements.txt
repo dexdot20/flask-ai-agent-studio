@@ -1,4 +1,4 @@
-## Core runtime dependencies shared by the Flask app, its services, and the proxy-aware OpenRouter client.
+## Core runtime dependencies shared by the Flask app, document/image/canvas tooling, and provider clients.
 flask>=3.0
 openai>=1.54.0
 httpx>=0.27

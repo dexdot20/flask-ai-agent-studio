@@ -1,4 +1,4 @@
-## Optional OCR stack using EasyOCR.
+## Optional OCR stack using EasyOCR and the PyTorch vision runtime.
 easyocr>=1.7.2
 numpy>=1.26
 torch>=2.3

@@ -1,6 +1,6 @@
 # Flask ChatBot: Multi-Provider + Tools + RAG + OCR + Multimodal + Canvas + Memory + Workspace
 
-This is a single-page Flask chat application built around DeepSeek plus optional OpenRouter models, multi-step tool use, local RAG, dedicated local OCR, configurable image analysis modes, conversation summarization, pruning, user-configurable entropy-aware context selection, persistent memory, conversation-scoped memory, editable canvas documents, page-aware canvas navigation, and a per-conversation workspace sandbox.
+This is a single-page Flask chat application built around DeepSeek plus optional OpenRouter models, multi-step tool use, local RAG, dedicated local OCR, configurable helper/direct image analysis, conversation summarization, pruning, user-configurable entropy-aware context selection, persistent conversation memory, editable canvas documents, page-aware canvas navigation, and a per-conversation workspace sandbox.
 
 It is not a minimal prompt/response demo. The app keeps conversation history in SQLite, restores assistant metadata when a conversation is reopened, supports editing earlier user messages, streams tool progress and reasoning, can enrich a user turn with local OCR or extracted document text before the model sees it, and can compact older content with summaries and pruning.
 
@@ -48,13 +48,13 @@ It is not a minimal prompt/response demo. The app keeps conversation history in 
 - Supports model-emitted tool JSON fallback handling
 - Limits tool rounds with configurable `max_steps` from 1 to 50
 - Forces a final-answer phase when the tool budget is exhausted
-- Tracks estimated prompt composition locally across runtime instructions, tool specs, canvas context, conversation memory, scratchpad, tool trace, tool memory, RAG context, message history, tool calls, tool results, and provider overhead
+- Tracks estimated prompt composition locally across the stable runtime/system prefix, tool specs, canvas context, conversation memory, scratchpad, tool trace, tool memory, RAG context, message history, tool calls, tool results, and provider overhead
 - Estimates per-turn and session cost when pricing is known for the selected provider; unsupported providers fall back to unknown-cost reporting
 - Writes rotating agent trace logs to `logs/agent-trace.log` by default
 
 ### Attachments
 
-- Image uploads can use a helper vision-capable LLM, go directly to the active multimodal chat model, or use the configured local OCR depending on the selected image-processing method
+- Image uploads can use a helper vision-capable LLM selected separately in Settings, go directly to the active multimodal chat model, or use the configured local OCR depending on the selected image-processing method
 - Document uploads are extracted locally and injected into the conversation context
 - Supported image formats:
   - PNG
@@ -173,7 +173,7 @@ Quick start:
 bash install.sh
 ```
 
-The installer asks for a system profile, accelerator, image stack (`None`, `OCR only`, or `OCR + VL`), and OCR provider when needed. It writes `.env`, installs only the dependency sets needed for that selection, and automatically downloads the local RAG and vision model caches into `models/` when those features are enabled. If you prefer a manual setup, follow the steps below.
+The installer asks for a system profile, accelerator, and image stack, then writes `.env`, installs only the dependency sets needed for that selection, and downloads the local RAG cache when that feature is enabled. Runtime image handling now uses helper-model analysis, direct multimodal requests, or OCR-only processing, so no separate local vision-model download is required for normal use. If you prefer a manual setup, follow the steps below.
 
 ### 1) Create a virtual environment
 
@@ -222,11 +222,12 @@ YOUTUBE_TRANSCRIPTS_ENABLED=true
 YOUTUBE_TRANSCRIPT_MODEL_SIZE=small
 YOUTUBE_TRANSCRIPT_DEVICE=auto
 YOUTUBE_TRANSCRIPT_COMPUTE_TYPE=int8
+YOUTUBE_TRANSCRIPT_DEFAULT_LANGUAGE=
 ```
 
 ### 3) Hardware and runtime requirements
 
-RAG can now fall back to CPU-only embedding, and OCR can run without any local vision model.
+RAG can now fall back to CPU-only embedding, and OCR-only image handling can run without any local vision model.
 
 - RAG embeddings work on CPU or CUDA; set `BGE_M3_DEVICE=cpu` for a CPU-only path, leave it on auto to use CUDA when available, and explicit CUDA requests fall back to CPU with a warning if the CUDA stack is unavailable.
 - Local OCR can run in OCR-only mode with EasyOCR or PaddleOCR.
@@ -339,6 +340,9 @@ At least one provider key is required.
 | `RAG_SEARCH_DEFAULT_TOP_K` | `5` | Default knowledge-base search size |
 | `RAG_AUTO_INJECT_THRESHOLD` | `0.50` | Seed value used to derive the default sensitivity preset |
 | `RAG_SEARCH_MIN_SIMILARITY` | `0.35` | Minimum similarity shown in search results |
+| `RAG_CHUNK_SIZE` | `1800` | Maximum chunk size used when splitting RAG sources |
+| `RAG_CHUNK_OVERLAP` | `250` | Overlap between consecutive RAG chunks |
+| `RAG_MAX_CHUNKS_PER_SOURCE` | `2` | Maximum number of chunks kept per source |
 | `RAG_QUERY_EXPANSION_ENABLED` | `true` | Expands some search queries before retrieval |
 | `RAG_QUERY_EXPANSION_MAX_VARIANTS` | `2` | Maximum query expansion variants |
 | `RAG_TEMPORAL_DECAY_ALPHA` | `0.15` | Score decay factor for recency weighting |
@@ -363,6 +367,16 @@ Note: `rag_context_size` and `rag_sensitivity` are the runtime settings used dur
 | `OCR_PRELOAD` | `true` | Preload the OCR engine on startup |
 
 Remote helper/direct image modes rely on at least one configured provider key plus a vision-capable model selected in Settings. No local vision model download is required anymore.
+
+### YouTube transcript extraction
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `YOUTUBE_TRANSCRIPTS_ENABLED` | `false` | Enables local YouTube transcript extraction |
+| `YOUTUBE_TRANSCRIPT_MODEL_SIZE` | `small` | Whisper model size used for transcription |
+| `YOUTUBE_TRANSCRIPT_DEVICE` | `auto` | Device used by the transcription backend |
+| `YOUTUBE_TRANSCRIPT_COMPUTE_TYPE` | `int8` | Compute type used by the transcription backend |
+| `YOUTUBE_TRANSCRIPT_DEFAULT_LANGUAGE` | empty | Optional language hint for transcription |
 
 ### Fetch, summarization, and prompt budgets
 
@@ -421,13 +435,18 @@ The scratchpad is organized into named sections: `lessons`, `profile`, `notes`, 
 The Settings page persists these values in `app_settings`:
 
 - `user_preferences`
+- `general_instructions`
+- `ai_personality`
 - `scratchpad`
 - `max_steps`
 - `max_parallel_tools`
 - `temperature`
 - `clarification_max_questions`
 - `sub_agent_max_steps`
+- `sub_agent_timeout_seconds`
 - `sub_agent_allowed_tool_names`
+- `sub_agent_retry_attempts`
+- `sub_agent_retry_delay_seconds`
 - `web_cache_ttl_hours`
 - `openrouter_prompt_cache_enabled`
 - `chat_summary_detail_level`
@@ -435,6 +454,7 @@ The Settings page persists these values in `app_settings`:
 - `visible_model_order`
 - `operation_model_preferences`
 - `image_processing_method`
+- `image_helper_model`
 - `active_tools`
 - `rag_auto_inject`
 - `rag_sensitivity`
@@ -466,7 +486,9 @@ The Settings page persists these values in `app_settings`:
 - `sub_agent_max_parallel_tools`
 - `reasoning_auto_collapse`
 
-The delegated helper receives only explicit delegated task text, but users can configure its preferred model, fallback models, maximum step budget, parallel-tool limit, and which web research tools it may use from the Settings page. Cache behavior is also partially user-controlled via web cache TTL and the OpenRouter prompt-cache toggle.
+`general_instructions` is the canonical stored field for assistant-behavior text; `user_preferences` remains as a compatibility alias for the same value.
+
+The delegated helper receives only explicit delegated task text, but users can configure its preferred model, fallback models, maximum step budget, timeout, retry behavior, parallel-tool limit, and which web research tools it may use from the Settings page. Cache behavior is also partially user-controlled via web cache TTL and the OpenRouter prompt-cache toggle.
 
 Prompt caching behavior is optimized in three different ways:
 
@@ -496,7 +518,7 @@ Prompt caching behavior is optimized in three different ways:
 
 The app includes a dedicated `/settings` page.
 
-- Assistant tab: user preferences, OpenRouter model management, visible chat-model ordering, task-specific model preferences, temperature, image-processing method, tool-step budget, clarification limits, sub-agent controls, fetch clipping, canvas limits, summarization, pruning, and context-selection strategy controls
+- Assistant tab: general instructions, AI personality, OpenRouter model management, visible chat-model ordering, task-specific model preferences, temperature, image-processing method, helper image model, tool-step budget, clarification limits, sub-agent timeout/retry controls, fetch clipping, canvas limits, summarization, pruning, and context-selection strategy controls
 - Memory tab: conversation memory, scratchpad, tool-memory auto-injection, RAG auto-injection, RAG source pools, and user profile memory behavior
 - Tools tab: active tool permissions, including canvas and project-workspace tools
 - Knowledge tab: knowledge-base uploads, RAG maintenance, and sync controls
@@ -544,8 +566,9 @@ If you attach an image:
 1. The frontend validates file type and size.
 2. The backend revalidates and reads the upload.
 3. The image is optimized locally.
-4. Depending on the selected mode, the app either runs local OCR, asks the configured helper model for an image description, or attaches the image directly to the multimodal main-model request.
-5. OCR and helper-model outputs are injected into the user message as text context; direct multimodal mode keeps the image as an actual visual input block.
+4. Depending on the selected mode, the app either runs local OCR, asks the configured helper model for an image description, or attaches the image directly to the multimodal main-model request. The supported modes are `auto`, `llm_helper`, `llm_direct`, and `local_ocr`.
+5. `auto` prefers helper-model analysis when available, then direct multimodal input, and finally OCR. `llm_helper` uses the dedicated `image_helper_model` setting, while `llm_direct` requires a vision-capable chat model.
+6. OCR and helper-model outputs are injected into the user message as text context; direct multimodal mode keeps the image as an actual visual input block.
 
 The backend also stores the analysis so follow-up questions about the same image can use the `image_explain` tool when helper or direct multimodal processing is available. In OCR-only mode, image uploads still work but `image_explain` is not exposed.
 
@@ -561,6 +584,8 @@ If you attach a document (DOCX, PDF, TXT, CSV, Markdown, or a common code/config
 
 The same extraction path is also used by the knowledge-base upload form in Settings, where the uploaded file can be indexed as an `uploaded_document` source with a title, description, and auto-inject preference.
 
+PDFs can also be submitted in visual mode. In that path, the backend renders only the first three pages as page images, stores those images as conversation assets, and exposes a read-only page-aware Canvas preview. Visual PDF mode requires a vision-capable model.
+
 ### Scratchpad workflow
 
 - The scratchpad is a persistent memory store organized into named sections: `lessons`, `profile`, `notes`, `problems`, `tasks`, `preferences`, and `domain`.
@@ -575,10 +600,11 @@ The same extraction path is also used by the knowledge-base upload form in Setti
 ### Conversation memory workflow
 
 - Conversation memory is separate from the scratchpad and is scoped to the current chat only.
-- The model can save important chat-specific facts, decisions, constraints, discovered repo or environment facts, or critical tool outcomes with `save_to_conversation_memory`.
+- It is the default durable memory sink for chat-specific facts, decisions, constraints, discovered repo or environment facts, and important tool outcomes.
+- The model can save those details with `save_to_conversation_memory`; saving the same key again refreshes the existing entry instead of creating a duplicate.
 - The model can remove obsolete or incorrect chat-specific entries with `delete_conversation_memory_entry`.
 - Conversation memory is injected into the runtime system prompt on later turns in the same conversation.
-- Prefer it as the default memory sink for information that should survive the rest of the chat but should not be promoted to long-term cross-conversation memory.
+- It survives prompt compaction, summarization, and pruning, so prefer it for information that should survive the rest of the chat but should not be promoted to long-term cross-conversation memory.
 - Save incrementally during long or tool-heavy chats; multiple small records are better than one late overloaded summary.
 
 ### User profile memory workflow
@@ -674,7 +700,7 @@ Only tools enabled in Settings are exposed to the model. If RAG is disabled, `se
 
 Save one short conversation-scoped memory entry for the current chat only.
 
-- Prefer this over the scratchpad for chat-specific information.
+- Prefer this over the scratchpad for chat-specific information. If the same key already exists in the current conversation, it is refreshed instead of duplicated.
 
 - Arguments:
   - `entry_type` (string, required) - one of `user_info`, `task_context`, `tool_result`, or `decision`
@@ -739,7 +765,7 @@ Answer a follow-up question about a previously uploaded image saved in the curre
 
 #### `sub_agent`
 
-Delegate a bounded web-research or inspection task to a helper sub-agent. The helper runs its own bounded tool loop and returns a compact summary.
+Delegate a bounded web-research or inspection task to a helper sub-agent. The helper runs its own bounded tool loop and returns a compact summary, or an evidence-backed partial summary if it cannot produce a clean final answer.
 
 - Arguments:
   - `task` (string, required) - delegated task rewritten as clear English instructions; include only research-relevant details
