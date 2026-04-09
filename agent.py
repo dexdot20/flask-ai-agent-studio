@@ -1742,6 +1742,54 @@ def _user_requested_canvas_mutation(messages: list[dict], prompt_tool_names: lis
     return any(re.search(pattern, normalized, re.IGNORECASE) for pattern in patterns)
 
 
+def _conversation_has_prior_canvas_mutations(messages: list[dict]) -> bool:
+    """Return True if a canvas mutation tool was called before the latest user message.
+
+    This establishes that canvas editing is actively in progress in the conversation,
+    which is used as a structural signal to detect hallucinated completion claims.
+    """
+    latest_user_idx = _get_latest_user_message_index(messages)
+    if latest_user_idx < 0:
+        return False
+    for message in messages[:latest_user_idx]:
+        if not isinstance(message, dict):
+            continue
+        for tool_call in parse_message_tool_calls(message.get("tool_calls")):
+            if not isinstance(tool_call, dict):
+                continue
+            function_payload = tool_call.get("function") if isinstance(tool_call.get("function"), dict) else {}
+            tool_name = str(function_payload.get("name") or tool_call.get("name") or "").strip()
+            if tool_name in CANVAS_MUTATION_TOOL_NAMES:
+                return True
+    return False
+
+
+def _response_mentions_canvas(content_text: str) -> bool:
+    """Return True if the model's response text contains the word 'canvas'."""
+    return "canvas" in str(content_text or "").casefold()
+
+
+def _canvas_mutation_skipped_structurally(
+    content_text: str,
+    messages: list[dict],
+    prompt_tool_names: list[str],
+) -> bool:
+    """Return True when structural evidence indicates the model skipped a required canvas mutation.
+
+    The invariant: if canvas editing is already in session (prior mutations exist),
+    the model's response mentions canvas, but no canvas mutation tool was called this
+    turn, the model has described canvas state without the backing tool evidence.
+    This check is language-agnostic — it relies on tool execution history, not NL patterns.
+    """
+    if not set(prompt_tool_names or []).intersection(CANVAS_MUTATION_TOOL_NAMES):
+        return False
+    if not _response_mentions_canvas(content_text):
+        return False
+    if _conversation_has_canvas_mutation_tool_call_after_latest_user(messages):
+        return False
+    return _conversation_has_prior_canvas_mutations(messages)
+
+
 def _conversation_has_canvas_mutation_tool_call_after_latest_user(messages: list[dict]) -> bool:
     latest_user_index = _get_latest_user_message_index(messages)
     if latest_user_index < 0:
@@ -1766,14 +1814,17 @@ def _conversation_has_canvas_mutation_tool_call_after_latest_user(messages: list
 def _should_retry_for_skipped_canvas_mutation(
     messages: list[dict],
     prompt_tool_names: list[str],
+    content_text: str = "",
 ) -> bool:
-    if not _user_requested_canvas_mutation(messages, prompt_tool_names):
+    if not set(prompt_tool_names or []).intersection(CANVAS_MUTATION_TOOL_NAMES):
         return False
     if _has_canvas_mutation_retry_instruction(messages):
         return False
     if _conversation_has_canvas_mutation_tool_call_after_latest_user(messages):
         return False
-    return True
+    if _user_requested_canvas_mutation(messages, prompt_tool_names):
+        return True
+    return _canvas_mutation_skipped_structurally(content_text, messages, prompt_tool_names)
 
 
 def _conversation_has_clarification_tool_call(messages: list[dict]) -> bool:
@@ -7240,7 +7291,7 @@ def run_agent_stream(
                 pending_step_retry_reason = "clarification_tool_retry"
                 step -= 1
                 continue
-            if _should_retry_for_skipped_canvas_mutation(messages, normalized_prompt_tool_names):
+            if _should_retry_for_skipped_canvas_mutation(messages, normalized_prompt_tool_names, content_text):
                 _trace_agent_event(
                     "canvas_mutation_tool_retry_requested",
                     trace_id=trace_id,
@@ -7916,7 +7967,10 @@ def run_agent_stream(
             pending_final_retry_reason = None
             working_memory_instruction = _build_working_state_instruction(working_state)
             final_extra_messages = [working_memory_instruction] if working_memory_instruction is not None else []
-            if _user_requested_canvas_mutation(messages, normalized_prompt_tool_names) and not successful_canvas_mutation:
+            if not successful_canvas_mutation and (
+                _user_requested_canvas_mutation(messages, normalized_prompt_tool_names)
+                or _canvas_mutation_skipped_structurally(total_clean_content, messages, normalized_prompt_tool_names)
+            ):
                 final_extra_messages.append(_build_unfulfilled_canvas_request_instruction())
             final_messages, _ = apply_context_compaction(final_extra_messages, reason="pre_final_answer")
             final_messages = [*final_messages, final_instruction_builder()]

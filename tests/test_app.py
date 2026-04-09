@@ -28,6 +28,9 @@ from agent import (
     CONTEXT_OVERFLOW_RECOVERY_ERROR_TEXT,
     FINAL_ANSWER_ERROR_TEXT,
     FINAL_ANSWER_MISSING_TEXT,
+    _canvas_mutation_skipped_structurally,
+    _conversation_has_prior_canvas_mutations,
+    _response_mentions_canvas,
     _apply_tool_output_budget,
     _build_final_answer_instruction,
     _build_reasoning_replay_instruction,
@@ -19286,6 +19289,104 @@ class AppRoutesTestCase(unittest.TestCase):
             self.assertNotIn("created_at", result)
             self.assertIn("saved", summary)
 
+    # ------------------------------------------------------------------
+    # Canvas mutation structural skip detection
+    # ------------------------------------------------------------------
+    def _canvas_prior_mutation_messages(self, user_text="Hepsini ekleyelim", assistant_text=""):
+        """Build a minimal message list where a canvas mutation tool was called before the latest user."""
+        prior_assistant = {
+            "role": "assistant",
+            "tool_calls": [{"function": {"name": "batch_canvas_edits"}, "id": "tc1"}],
+        }
+        tool_result = {"role": "tool", "content": '{"status": "ok"}', "tool_call_id": "tc1"}
+        msgs = [prior_assistant, tool_result, {"role": "user", "content": user_text}]
+        if assistant_text:
+            msgs.append({"role": "assistant", "content": assistant_text})
+        return msgs
+
+    def test_canvas_mutation_skipped_structurally_detects_hallucination(self):
+        # Prior canvas mutations + response mentions canvas + no tool called this turn → True
+        messages = self._canvas_prior_mutation_messages(
+            assistant_text="Canvas'taki sistem promptu tamamen yeniden yapılandırıldı."
+        )
+        self.assertTrue(_canvas_mutation_skipped_structurally(
+            "Canvas'taki sistem promptu tamamen yeniden yapılandırıldı.",
+            messages,
+            list(CANVAS_MUTATION_TOOL_NAMES),
+        ))
+
+    def test_canvas_mutation_skipped_structurally_exact_screenshot_text(self):
+        # Reproduce the exact failing pattern from the exported conversation
+        text = "Yapıldı. Canvas\u2019taki Kimya Manyağı Sistem Promptu tamamen yeniden yapılandırıldı ve Rick & House esintili tüm öneriler dahil edildi."
+        messages = self._canvas_prior_mutation_messages(assistant_text=text)
+        self.assertTrue(_canvas_mutation_skipped_structurally(
+            text, messages, list(CANVAS_MUTATION_TOOL_NAMES),
+        ))
+
+    def test_canvas_mutation_skipped_structurally_no_prior_mutations(self):
+        # No prior canvas mutations in the conversation → False even if canvas is mentioned
+        messages = [
+            {"role": "user", "content": "Canvas düzenle"},
+            {"role": "assistant", "content": "Canvas'a ekledim."},
+        ]
+        self.assertFalse(_canvas_mutation_skipped_structurally(
+            "Canvas'a ekledim.", messages, list(CANVAS_MUTATION_TOOL_NAMES),
+        ))
+
+    def test_canvas_mutation_skipped_structurally_no_canvas_in_response(self):
+        # Prior mutations exist but model response does not mention canvas → False
+        messages = self._canvas_prior_mutation_messages(assistant_text="Tamam, eklendi.")
+        self.assertFalse(_canvas_mutation_skipped_structurally(
+            "Tamam, eklendi.", messages, list(CANVAS_MUTATION_TOOL_NAMES),
+        ))
+
+    def test_canvas_mutation_skipped_structurally_tool_was_called_this_turn(self):
+        # Prior mutations exist, canvas mentioned, but a mutation tool was also called this turn → False
+        prior_assistant = {
+            "role": "assistant",
+            "tool_calls": [{"function": {"name": "batch_canvas_edits"}, "id": "tc1"}],
+        }
+        tool_result = {"role": "tool", "content": '{"status": "ok"}', "tool_call_id": "tc1"}
+        this_turn_assistant = {
+            "role": "assistant",
+            "tool_calls": [{"function": {"name": "batch_canvas_edits"}, "id": "tc2"}],
+        }
+        messages = [
+            prior_assistant, tool_result,
+            {"role": "user", "content": "Ekleyelim"},
+            this_turn_assistant,
+            {"role": "tool", "content": '{"status": "ok"}', "tool_call_id": "tc2"},
+        ]
+        self.assertFalse(_canvas_mutation_skipped_structurally(
+            "Canvas güncellendi.", messages, list(CANVAS_MUTATION_TOOL_NAMES),
+        ))
+
+    def test_canvas_mutation_skipped_structurally_no_tools_in_prompt(self):
+        # No canvas mutation tools available in prompt → False regardless of history
+        messages = self._canvas_prior_mutation_messages(assistant_text="Canvas güncellendi.")
+        self.assertFalse(_canvas_mutation_skipped_structurally(
+            "Canvas güncellendi.", messages, [],
+        ))
+
+    def test_conversation_has_prior_canvas_mutations_positive(self):
+        messages = self._canvas_prior_mutation_messages()
+        self.assertTrue(_conversation_has_prior_canvas_mutations(messages))
+
+    def test_conversation_has_prior_canvas_mutations_negative(self):
+        # No tool calls at all
+        messages = [
+            {"role": "assistant", "content": "Merhaba"},
+            {"role": "user", "content": "Ekleyelim"},
+        ]
+        self.assertFalse(_conversation_has_prior_canvas_mutations(messages))
+
+    def test_response_mentions_canvas(self):
+        self.assertTrue(_response_mentions_canvas("Canvas'taki belge güncellendi."))
+        self.assertTrue(_response_mentions_canvas("I updated the canvas."))
+        self.assertFalse(_response_mentions_canvas("No changes here."))
+        self.assertFalse(_response_mentions_canvas(""))
+
 
 if __name__ == "__main__":
     unittest.main()
+
