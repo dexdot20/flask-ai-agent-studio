@@ -4921,13 +4921,36 @@ function renderBubbleWithCursor(bubbleEl, text) {
     return;
   }
 
+  bubbleEl.hidden = false;
   bubbleEl.classList.add("streaming-text");
   bubbleEl.innerHTML = renderStreamingMarkdown(text);
+
+  const findStreamingCursorContainer = (rootEl) => {
+    let cursorHost = rootEl;
+    while (cursorHost instanceof Element && cursorHost.lastChild) {
+      const lastChild = cursorHost.lastChild;
+      if (lastChild.nodeType === Node.TEXT_NODE) {
+        if (String(lastChild.textContent || "").trim()) {
+          return cursorHost;
+        }
+        lastChild.remove();
+        continue;
+      }
+      if (!(lastChild instanceof Element)) {
+        return cursorHost;
+      }
+      if (["BR", "HR", "IMG", "INPUT"].includes(lastChild.tagName)) {
+        return cursorHost;
+      }
+      cursorHost = lastChild;
+    }
+    return rootEl;
+  };
 
   const cursorEl = document.createElement("span");
   cursorEl.className = "stream-cursor";
   cursorEl.textContent = "▋";
-  bubbleEl.appendChild(cursorEl);
+  findStreamingCursorContainer(bubbleEl).appendChild(cursorEl);
 }
 
 function renderBubbleMarkdown(bubbleEl, text) {
@@ -4935,6 +4958,7 @@ function renderBubbleMarkdown(bubbleEl, text) {
     return;
   }
 
+  bubbleEl.hidden = false;
   bubbleEl.classList.remove("streaming-text");
   bubbleEl.innerHTML = renderMarkdown(text);
 }
@@ -5755,6 +5779,46 @@ function buildAssistantMetadata({
         ...(usage ? { usage } : {}),
       }
     : null;
+}
+
+function getAssistantReasoningStorageKey(conversationId, messageId) {
+  const normalizedConversationId = String(conversationId || "").trim();
+  const normalizedMessageId = Number(messageId);
+  if (!normalizedConversationId || !Number.isInteger(normalizedMessageId) || normalizedMessageId <= 0) {
+    return null;
+  }
+  return `assistant-reasoning:${normalizedConversationId}:${normalizedMessageId}`;
+}
+
+function saveAssistantReasoning(conversationId, messageId, reasoningText) {
+  const storageKey = getAssistantReasoningStorageKey(conversationId, messageId);
+  if (!storageKey) {
+    return;
+  }
+
+  const text = String(reasoningText || "").trim();
+  try {
+    if (text) {
+      sessionStorage.setItem(storageKey, text);
+    } else {
+      sessionStorage.removeItem(storageKey);
+    }
+  } catch (_) {
+    // Ignore storage errors.
+  }
+}
+
+function getAssistantReasoning(conversationId, messageId) {
+  const storageKey = getAssistantReasoningStorageKey(conversationId, messageId);
+  if (!storageKey) {
+    return "";
+  }
+
+  try {
+    return String(sessionStorage.getItem(storageKey) || "").trim();
+  } catch (_) {
+    return "";
+  }
 }
 
 function normalizeClarificationQuestion(question, index) {
@@ -7093,8 +7157,8 @@ function createAssistantStreamingGroup() {
   stepLog.style.display = "none";
 
   const asstBubble = document.createElement("div");
-  asstBubble.className = "bubble thinking cursor";
-  asstBubble.textContent = "Working...";
+  asstBubble.className = "bubble";
+  asstBubble.hidden = true;
 
   activeAssistantStreamingBubble = asstBubble;
   activeAssistantStreamingHasVisibleAnswer = false;
@@ -7139,7 +7203,7 @@ function finalizeAssistantStreamingGroup(asstGroup, stepLog, metadata) {
   updateAssistantFetchBadge(asstGroup, metadata);
   updateAssistantToolTrace(asstGroup, metadata);
   updateAssistantSubAgentTrace(asstGroup, metadata);
-  updateReasoningPanel(asstGroup, getReasoningText(metadata), { autoCollapse: true });
+  updateReasoningPanel(asstGroup, getReasoningText(metadata), { forceOpen: true });
   appendClarificationPanel(asstGroup, metadata, {});
 }
 
@@ -7161,6 +7225,7 @@ function applyPersistedMessageIds(persistedIds, assistantEntry) {
   const assistantId = Number(persistedIds.assistant_message_id);
   if (assistantEntry && isPersistedMessageId(assistantId)) {
     assistantEntry.id = assistantId;
+    saveAssistantReasoning(currentConvId, assistantId, assistantEntry?.metadata?.reasoning_content || "");
   }
 }
 
@@ -9756,11 +9821,17 @@ function updateVisionDetails(group, metadata) {
   appendVisionDetails(group, metadata);
 }
 
-function getReasoningText(metadata) {
+function getReasoningText(metadata, messageId = null, conversationId = currentConvId) {
   if (!metadata || typeof metadata !== "object") {
-    return "";
+    return getAssistantReasoning(conversationId, messageId);
   }
-  return String(metadata.reasoning_content || "").trim();
+
+  const reasoningText = String(metadata.reasoning_content || "").trim();
+  if (reasoningText) {
+    return reasoningText;
+  }
+
+  return getAssistantReasoning(conversationId, messageId);
 }
 
 function getToolTraceEntries(metadata) {
@@ -10747,7 +10818,7 @@ function createMessageGroup(role, text, metadata = null, options = {}) {
     updateAssistantFetchBadge(group, metadata);
     updateAssistantToolTrace(group, metadata);
     updateAssistantSubAgentTrace(group, metadata);
-    updateReasoningPanel(group, getReasoningText(metadata));
+    updateReasoningPanel(group, getReasoningText(metadata, options.messageId));
   }
 
   if (options.isInlineEditingTarget) {
@@ -11033,6 +11104,10 @@ async function sendMessage(options = {}) {
       if (visibleAnswer === fullAnswer) {
         return;
       }
+      if (!String(fullAnswer || "").trim()) {
+        visibleAnswer = fullAnswer;
+        return;
+      }
 
       visibleAnswer = fullAnswer;
       renderBubbleWithCursor(asstBubble, visibleAnswer);
@@ -11058,6 +11133,10 @@ async function sendMessage(options = {}) {
         window.clearTimeout(pendingAnswerRenderTimer);
       }
       pendingAnswerRenderTimer = null;
+    }
+    if (!String(fullAnswer || "").trim()) {
+      visibleAnswer = fullAnswer;
+      return;
     }
 
     visibleAnswer = fullAnswer;
@@ -11154,11 +11233,14 @@ async function sendMessage(options = {}) {
 
     await streamNdjsonResponse(response, (event) => {
       if (event.type === "status" && event.status === "compacting") {
-        const compactingMessage = String(event.message || "Compacting conversation...").trim() || "Compacting conversation...";
-        asstBubble.classList.add("thinking");
-        asstBubble.classList.add("cursor");
-        asstBubble.textContent = compactingMessage;
-        scrollToBottom();
+        if (activeAssistantStreamingHasVisibleAnswer) {
+          const compactingMessage = String(event.message || "Compacting conversation...").trim() || "Compacting conversation...";
+          asstBubble.hidden = false;
+          asstBubble.classList.add("thinking");
+          asstBubble.classList.add("cursor");
+          asstBubble.textContent = compactingMessage;
+          scrollToBottom();
+        }
       } else if (event.type === "step_started") {
         latestStepInfo = {
           step: event.step || latestStepInfo.step,
@@ -11356,11 +11438,8 @@ async function sendMessage(options = {}) {
         }
         scrollToBottom();
       } else if (event.type === "answer_start") {
-        const wasThinking = asstBubble.classList.contains("thinking");
         asstBubble.classList.remove("thinking");
-        if (wasThinking) {
-          asstBubble.textContent = "";
-        }
+        asstBubble.classList.remove("cursor");
       } else if (event.type === "reasoning_start") {
         updateReasoningPanel(asstGroup, rawReasoning, { forceOpen: true, streaming: true });
         scrollToBottom();
@@ -11581,6 +11660,7 @@ async function sendMessage(options = {}) {
       history.push(...assistantToolHistory, assistantEntry);
       applyPersistedMessageIds(persistedMessageIds, assistantEntry);
     }
+    saveAssistantReasoning(currentConvId, persistedMessageIds?.assistant_message_id || assistantEntry.id, rawReasoning);
     finalizeAssistantStreamingGroup(asstGroup, stepLog, assistantEntry.metadata);
     maybePromptToSaveSubAgentResearch(
       receivedHistorySync
@@ -11630,6 +11710,7 @@ async function sendMessage(options = {}) {
         history.push(...assistantToolHistory, assistantEntry);
         applyPersistedMessageIds(persistedMessageIds, assistantEntry);
       }
+      saveAssistantReasoning(currentConvId, persistedMessageIds?.assistant_message_id || assistantEntry.id, rawReasoning);
       finalizeAssistantStreamingGroup(asstGroup, stepLog, assistantEntry.metadata);
       maybePromptToSaveSubAgentResearch(
         receivedHistorySync

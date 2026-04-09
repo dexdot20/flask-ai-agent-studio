@@ -815,9 +815,10 @@ body.sidebar-collapsed .chat-area {
 
 .stream-cursor {
   font-size: 0.8em;
-  display: inline-block;
-  margin-left: 2px;
-  vertical-align: baseline;
+  display: inline;
+  margin-left: 1px;
+  line-height: 1;
+  vertical-align: text-bottom;
   animation: streamCursorBlink 0.85s step-end infinite;
 }
 

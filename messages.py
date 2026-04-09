@@ -599,6 +599,25 @@ def _clip_canvas_preview_line(line: str, *, format_name: str | None = None) -> t
     return line[: max_chars - 2].rstrip() + "..", True
 
 
+def _build_full_canvas_preview_lines_if_fit(
+    all_lines: list[str],
+    *,
+    max_lines: int,
+    max_chars: int,
+    max_tokens: int,
+) -> list[str] | None:
+    if len(all_lines) > max_lines:
+        return None
+
+    numbered_lines = [f"{index}: {line}" for index, line in enumerate(all_lines, start=1)]
+    preview_text = "\n".join(numbered_lines)
+    if len(preview_text) > max_chars:
+        return None
+    if max_tokens > 0 and len(preview_text.encode("utf-8")) > max_tokens * 2:
+        return None
+    return numbered_lines
+
+
 def _document_attachment_is_represented_in_canvas(attachment: dict, canvas_document_lookup: dict[str, list[str]]) -> bool:
     if not canvas_document_lookup:
         return False
@@ -1138,22 +1157,31 @@ def _build_canvas_prompt_payload(
             "viewports": [viewport for viewport in (canvas_viewports or []) if isinstance(viewport, dict)],
         }
 
-    for index, line in enumerate(all_lines, start=1):
-        preview_line, line_was_clipped = _clip_canvas_preview_line(line, format_name=line_format)
-        numbered_line = f"{index}: {preview_line}"
-        extra_chars = len(numbered_line) + (1 if visible_lines else 0)
-        if visible_lines and (len(visible_lines) >= max_lines or visible_char_count + extra_chars > max_chars):
-            break
-        if not visible_lines and extra_chars > max_chars:
-            visible_lines.append(numbered_line[:max_chars])
-            visible_char_count = len(visible_lines[0])
+    full_preview_lines = _build_full_canvas_preview_lines_if_fit(
+        all_lines,
+        max_lines=max_lines,
+        max_chars=max_chars,
+        max_tokens=max_tokens,
+    )
+    if full_preview_lines is not None:
+        visible_lines = full_preview_lines
+    else:
+        for index, line in enumerate(all_lines, start=1):
+            preview_line, line_was_clipped = _clip_canvas_preview_line(line, format_name=line_format)
+            numbered_line = f"{index}: {preview_line}"
+            extra_chars = len(numbered_line) + (1 if visible_lines else 0)
+            if visible_lines and (len(visible_lines) >= max_lines or visible_char_count + extra_chars > max_chars):
+                break
+            if not visible_lines and extra_chars > max_chars:
+                visible_lines.append(numbered_line[:max_chars])
+                visible_char_count = len(visible_lines[0])
+                if line_was_clipped:
+                    clipped_line_count += 1
+                break
+            visible_lines.append(numbered_line)
+            visible_char_count += extra_chars
             if line_was_clipped:
                 clipped_line_count += 1
-            break
-        visible_lines.append(numbered_line)
-        visible_char_count += extra_chars
-        if line_was_clipped:
-            clipped_line_count += 1
 
     # Content-size trim using UTF-8 byte budget as a language-agnostic proxy for
     # token cost. tiktoken (cl100k_base) severely underestimates actual provider
@@ -1348,6 +1376,7 @@ def _build_canvas_truncated_excerpt_guidance(active_tool_names: list[str]) -> st
         inspect_guidance = "Do not guess line numbers outside the visible excerpt when no canvas read tool is enabled."
     return (
         "- Guidance: This canvas excerpt is truncated. Use visible line numbers for line-level canvas edits. "
+        "The Canvas UI may show more content than the model currently has in context; only the excerpt below and any pinned viewports are visible to you right now. "
         "If an explicit document_path is listed in the workspace summary or active document block, use that exact value. Otherwise do not invent a path; target the active document or use document_id instead. "
         f"{inspect_guidance} Never guess line numbers outside the visible excerpt."
     )
@@ -1387,6 +1416,7 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
         "- If the document is multi-page and the task is page-specific, use focus_canvas_page instead of manually estimating a page's line range.",
         "- When multiple files or canvas regions are involved, batch independent inspection calls together in one answer instead of requesting them one by one.",
         "- If you do not know the document_id, use the document_path carefully: use document_path only when an explicit project path is shown in the Canvas Workspace Summary or Active Canvas Document block; otherwise do not invent a path and target the active document or use document_id.",
+        "- For optional selector fields such as document_id or document_path, omit the key entirely when unknown; never send null.",
         "- Use rewrite_canvas_document when most of the document should change or when you already know the complete intended replacement content.",
         "- When you already know the required edits across multiple canvas documents, emit all of those edit tool calls in a single answer instead of editing one document, waiting, and then editing the next.",
         "- Preferred pattern for multi-file canvas work: batch inspections first, then batch all known edits in one answer.",

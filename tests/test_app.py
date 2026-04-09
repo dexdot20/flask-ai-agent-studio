@@ -311,7 +311,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["clarification_max_questions"], 5)
         self.assertAlmostEqual(payload["temperature"], 0.7)
         self.assertEqual(payload["canvas_prompt_max_lines"], 250)
-        self.assertEqual(payload["canvas_prompt_max_tokens"], 2000)
+        self.assertEqual(payload["canvas_prompt_max_tokens"], 4000)
         self.assertEqual(payload["canvas_expand_max_lines"], 1600)
         self.assertEqual(payload["canvas_scroll_window_lines"], 200)
         self.assertEqual(payload["sub_agent_max_steps"], 6)
@@ -1717,7 +1717,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(full_payload["visible_line_end"], 3)
         self.assertFalse(full_payload["is_truncated"])
 
-    def test_build_canvas_prompt_payload_clips_long_markdown_lines(self):
+    def test_build_canvas_prompt_payload_keeps_full_long_markdown_lines_when_document_fits_budget(self):
         long_line = "A" * 220
         document = normalize_canvas_document(
             {
@@ -1730,6 +1730,25 @@ class AppRoutesTestCase(unittest.TestCase):
         )
 
         payload = _build_canvas_prompt_payload([document], max_lines=10)
+
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["clipped_line_count"], 0)
+        self.assertEqual(payload["visible_lines"][0], f"1: {long_line}")
+        self.assertEqual(payload["visible_lines"][1], "2: short line")
+
+    def test_build_canvas_prompt_payload_clips_long_markdown_lines_when_needed_to_fit_budget(self):
+        long_line = "A" * 220
+        document = normalize_canvas_document(
+            {
+                "id": "doc-1",
+                "title": "report.md",
+                "format": "markdown",
+                "language": "markdown",
+                "content": f"{long_line}\nshort line",
+            }
+        )
+
+        payload = _build_canvas_prompt_payload([document], max_lines=10, max_chars=120)
 
         self.assertIsNotNone(payload)
         self.assertEqual(payload["clipped_line_count"], 1)
@@ -4370,6 +4389,8 @@ class AppRoutesTestCase(unittest.TestCase):
                 "create_canvas_document",
                 "rewrite_canvas_document",
                 "replace_canvas_lines",
+                "expand_canvas_document",
+                "scroll_canvas_document",
             ],
             canvas_documents=[
                 {
@@ -4559,6 +4580,8 @@ class AppRoutesTestCase(unittest.TestCase):
                 "create_canvas_document",
                 "rewrite_canvas_document",
                 "replace_canvas_lines",
+                "expand_canvas_document",
+                "scroll_canvas_document",
             ],
             canvas_documents=[
                 {
@@ -4566,14 +4589,67 @@ class AppRoutesTestCase(unittest.TestCase):
                     "title": "report.md",
                     "format": "markdown",
                     "language": "markdown",
-                    "content": ("A" * 220) + "\nshort line",
+                    "content": ("A" * 260) + "\nshort line",
                 }
             ],
+            canvas_prompt_max_tokens=120,
         )
 
         content = message["content"]
         self.assertIn("Preview compaction: 1 long line(s) were clipped for token efficiency", content)
         self.assertIn("scroll_canvas_document or expand_canvas_document", content)
+
+    def test_runtime_system_message_does_not_compact_small_canvas_document_that_fits_budget(self):
+        message = build_runtime_system_message(
+            active_tool_names=[
+                "rewrite_canvas_document",
+                "replace_canvas_lines",
+                "expand_canvas_document",
+                "scroll_canvas_document",
+            ],
+            canvas_documents=[
+                {
+                    "id": "canvas-1",
+                    "title": "notes.md",
+                    "format": "markdown",
+                    "language": "markdown",
+                    "content": ("A" * 220) + "\nshort line",
+                }
+            ],
+            canvas_prompt_max_tokens=10_000,
+        )
+
+        content = message["content"]
+        self.assertNotIn("Preview compaction:", content)
+        self.assertIn(f"1: {'A' * 220}", content)
+
+    def test_runtime_system_message_explains_canvas_ui_vs_prompt_excerpt_when_truncated(self):
+        message = build_runtime_system_message(
+            active_tool_names=[
+                "rewrite_canvas_document",
+                "replace_canvas_lines",
+                "expand_canvas_document",
+                "scroll_canvas_document",
+            ],
+            canvas_documents=[
+                {
+                    "id": "canvas-1",
+                    "title": "notes.md",
+                    "path": "notes.md",
+                    "format": "markdown",
+                    "language": "markdown",
+                    "content": "\n".join(f"line {index} - {'A' * 180}" for index in range(1, 40)),
+                }
+            ],
+            canvas_prompt_max_tokens=120,
+        )
+
+        content = message["content"]
+        self.assertIn("This canvas excerpt is truncated", content)
+        self.assertIn("The Canvas UI may show more content than the model currently has in context", content)
+        self.assertIn("only the excerpt below and any pinned viewports are visible to you right now", content)
+        self.assertIn("expand_canvas_document", content)
+        self.assertIn("scroll_canvas_document", content)
 
     def test_canvas_tool_specs_prefer_smallest_valid_edit(self):
         batch_guidance = TOOL_SPEC_BY_NAME["batch_canvas_edits"]["prompt"]["guidance"]
@@ -5598,6 +5674,36 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIsNone(_validate_tool_arguments("grep_fetched_content", tool_args))
         self.assertEqual(tool_args["context_lines"], 5)
         self.assertEqual(tool_args["max_matches"], 30)
+
+    def test_batch_canvas_edits_validator_drops_optional_null_selectors(self):
+        from agent import _validate_tool_arguments
+
+        tool_args = {
+            "document_path": None,
+            "targets": [
+                {
+                    "document_id": "doc-1",
+                    "document_path": None,
+                    "operations": [
+                        {"action": "insert", "after_line": 1, "lines": ["Yeni satir"]},
+                    ],
+                }
+            ],
+        }
+
+        self.assertIsNone(_validate_tool_arguments("batch_canvas_edits", tool_args))
+        self.assertNotIn("document_path", tool_args)
+        self.assertNotIn("document_path", tool_args["targets"][0])
+
+    def test_validator_treats_required_null_field_as_missing(self):
+        from agent import _validate_tool_arguments
+
+        tool_args = {"url": None}
+
+        self.assertEqual(
+            _validate_tool_arguments("fetch_url", tool_args),
+            "Missing required argument 'url' for fetch_url",
+        )
 
     def test_execute_tool_batches_search_web_queries_above_schema_limit(self):
         queries = [f"query {index}" for index in range(1, 8)]
@@ -6718,7 +6824,20 @@ class AppRoutesTestCase(unittest.TestCase):
     def test_reasoning_panel_uses_markdown_rendering(self):
         script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
         script_text = script_path.read_text(encoding="utf-8")
-        self.assertIn('body.innerHTML = renderMarkdown(text);', script_text)
+        self.assertIn('body.innerHTML = renderReasoning(text);', script_text)
+
+    def test_reasoning_panel_stays_open_when_stream_finishes(self):
+        script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
+        script_text = script_path.read_text(encoding="utf-8")
+        self.assertIn('updateReasoningPanel(asstGroup, getReasoningText(metadata), { forceOpen: true });', script_text)
+        self.assertNotIn('updateReasoningPanel(asstGroup, getReasoningText(metadata), { autoCollapse: true });', script_text)
+
+    def test_reasoning_is_restored_from_session_cache_after_refresh(self):
+        script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
+        script_text = script_path.read_text(encoding="utf-8")
+        self.assertIn("assistant-reasoning:", script_text)
+        self.assertIn("saveAssistantReasoning(currentConvId, persistedMessageIds?.assistant_message_id || assistantEntry.id, rawReasoning);", script_text)
+        self.assertIn("updateReasoningPanel(group, getReasoningText(metadata, options.messageId));", script_text)
 
     def test_reasoning_css_includes_markdown_styles(self):
         style_path = Path(__file__).resolve().parent.parent / "static" / "style.css"
@@ -7188,110 +7307,24 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn(".clarification-options__search", style_text)
         self.assertIn(".bubble.streaming-text", style_text)
 
-    def test_frontend_streaming_render_uses_typed_markdown_queue(self):
+    def test_frontend_streaming_render_uses_frame_buffered_markdown_rendering(self):
         script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
         script_text = script_path.read_text(encoding="utf-8")
         style_path = Path(__file__).resolve().parent.parent / "static" / "style.css"
         style_text = style_path.read_text(encoding="utf-8")
-        html_path = Path(__file__).resolve().parent.parent / "templates" / "index.html"
-        html_text = html_path.read_text(encoding="utf-8")
 
-        self.assertIn("const STREAM_TYPING_INTERVAL_MS = 24;", script_text)
         self.assertIn("let visibleAnswer = \"\";", script_text)
-        self.assertIn("visibleAnswer = fullAnswer.slice(0, visibleAnswer.length + stepSize);", script_text)
-        self.assertIn("function confirmCanvasOpenForDocument(", script_text)
-        self.assertIn("function openCanvasConfirmModal(options = {})", script_text)
-        self.assertIn("function findPersistedAssistantEntryForSubAgentPrompt(preferredAssistantId = null)", script_text)
-        self.assertIn("function getConversationSignature(entries = history)", script_text)
-        self.assertIn("function scheduleConversationRefreshAfterStream()", script_text)
-        self.assertIn("async function refreshConversationFromServer()", script_text)
+        self.assertIn("visibleAnswer = fullAnswer;", script_text)
+        self.assertIn("if (!String(fullAnswer || \"\").trim()) {", script_text)
+        self.assertIn("renderBubbleWithCursor(asstBubble, visibleAnswer);", script_text)
+        self.assertIn("window.requestAnimationFrame(flushStreamingAnswerFrame)", script_text)
+        self.assertIn("asstBubble.hidden = true;", script_text)
+        self.assertIn("findStreamingCursorContainer", script_text)
+        self.assertIn("bubbleEl.hidden = false;", script_text)
         self.assertIn(".stream-cursor", style_text)
+        self.assertIn("line-height: 1;", style_text)
+        self.assertIn("vertical-align: text-bottom;", style_text)
         self.assertIn("@keyframes streamCursorBlink", style_text)
-        self.assertIn('id="canvas-confirm-modal"', html_text)
-        self.assertIn('id="canvas-confirm-open"', html_text)
-        self.assertIn('id="canvas-delete-btn"', html_text)
-        self.assertIn('id="canvas-clear-btn"', html_text)
-        self.assertIn('id="canvas-edit-btn"', html_text)
-        self.assertIn('id="canvas-save-btn"', html_text)
-        self.assertIn('id="canvas-meta-bar"', html_text)
-        self.assertIn('id="canvas-copy-ref-btn"', html_text)
-        self.assertIn('id="canvas-reset-filters-btn"', html_text)
-        self.assertIn('id="canvas-format-select"', html_text)
-        self.assertIn('id="canvas-diff"', html_text)
-        self.assertIn('id="canvas-role-filter"', html_text)
-        self.assertIn('id="canvas-path-filter"', html_text)
-        self.assertIn('id="canvas-tree"', html_text)
-        self.assertIn('role="tree"', html_text)
-        self.assertIn('id="canvas-toggle-btn"', html_text)
-        self.assertIn('id="canvas-search-status"', html_text)
-        self.assertIn('id="canvas-actions-edit"', html_text)
-        self.assertIn('id="canvas-actions-manage"', html_text)
-        self.assertIn('id="canvas-actions-export"', html_text)
-        self.assertIn('id="canvas-resize-handle"', html_text)
-        self.assertIn('id="summary-panel"', html_text)
-        self.assertIn('id="summary-focus-presets"', html_text)
-        self.assertIn('id="summary-detail-options"', html_text)
-        self.assertIn('id="summary-message-count-input"', html_text)
-        self.assertIn('id="summary-all-messages-checkbox"', html_text)
-        self.assertIn('Preserves the protected message window from Settings, then compresses the rest.', html_text)
-        self.assertIn('id="summary-progress"', html_text)
-        self.assertIn('id="summary-history-list"', html_text)
-        self.assertIn('id="stat-last-archived-rag"', html_text)
-        self.assertNotIn('id="summary-now-btn"', html_text)
-        self.assertNotIn('id="summary-undo-btn"', html_text)
-        self.assertIn('const canvasToggleBtn = document.getElementById("canvas-toggle-btn")', script_text)
-        self.assertIn('const canvasSearchStatus = document.getElementById("canvas-search-status")', script_text)
-        self.assertIn('const canvasMetaBar = document.getElementById("canvas-meta-bar")', script_text)
-        self.assertIn('const canvasCopyRefBtn = document.getElementById("canvas-copy-ref-btn")', script_text)
-        self.assertIn('const canvasResetFiltersBtn = document.getElementById("canvas-reset-filters-btn")', script_text)
-        self.assertIn('const canvasDeleteBtn = document.getElementById("canvas-delete-btn")', script_text)
-        self.assertIn('const canvasClearBtn = document.getElementById("canvas-clear-btn")', script_text)
-        self.assertIn('const canvasEditBtn = document.getElementById("canvas-edit-btn")', script_text)
-        self.assertIn('const canvasSaveBtn = document.getElementById("canvas-save-btn")', script_text)
-        self.assertIn('const canvasRoleFilter = document.getElementById("canvas-role-filter")', script_text)
-        self.assertIn('const canvasPathFilter = document.getElementById("canvas-path-filter")', script_text)
-        self.assertIn('function renderCanvasMetaBar(renderState)', script_text)
-        self.assertIn('function resetCanvasFilters({ silent = false } = {})', script_text)
-        self.assertIn('function getCanvasVisibleDocuments(documents)', script_text)
-        self.assertIn('function buildCanvasTreeNodes(documents)', script_text)
-        self.assertIn('function setCanvasSearchStatus(message, tone = "muted")', script_text)
-        self.assertIn('function updateCanvasSearchFeedback(renderState, matchCount = 0)', script_text)
-        self.assertIn('function handleCanvasTreeItemKeydown(event)', script_text)
-        self.assertIn('function syncCanvasToggleButton()', script_text)
-        self.assertIn('event.active_document_id', script_text)
-        self.assertIn('function renderCanvasTree(documents, activeDocument)', script_text)
-        self.assertIn('function renderHighlightedCodeBlock(codeText, rawLang = null)', script_text)
-        self.assertIn('async function saveCanvasEdits()', script_text)
-        self.assertIn("async function deleteCanvasDocuments(", script_text)
-        self.assertIn('const SUMMARY_FOCUS_PRESETS = [', script_text)
-        self.assertIn('const SUMMARY_DETAIL_OPTIONS = [', script_text)
-        self.assertIn('const summaryMessageCountInput = document.getElementById("summary-message-count-input")', script_text)
-        self.assertIn('const summaryAllMessagesCheckbox = document.getElementById("summary-all-messages-checkbox")', script_text)
-        self.assertIn('document.getElementById("stat-last-archived-rag")', script_text)
-        self.assertIn('The protected messages from Settings stay in place.', script_text)
-        self.assertIn('const summaryHistoryList = document.getElementById("summary-history-list")', script_text)
-        self.assertIn('function renderSummaryFocusPresets()', script_text)
-        self.assertIn('function renderSummaryDetailOptions()', script_text)
-        self.assertIn('function setSummaryDetailLevel(value)', script_text)
-        self.assertIn('function updateSummarySelectionUi()', script_text)
-        self.assertIn('function renderSummaryHistoryList()', script_text)
-        self.assertIn('async function undoConversationSummary(summaryId', script_text)
-        self.assertIn('return getVisibleHistoryEntries(entries).map((item) => ({', script_text)
-        self.assertIn('if (metadata?.is_pruned === true) {', script_text)
-        self.assertIn(".canvas-meta-bar", style_text)
-        self.assertIn(".canvas-meta-chip", style_text)
-        self.assertIn('.canvas-workspace-shell', style_text)
-        self.assertIn('.canvas-tree-panel', style_text)
-        self.assertIn('.canvas-tree-file.active', style_text)
-        self.assertIn('.canvas-action-group', style_text)
-        self.assertIn('.canvas-search-status', style_text)
-        self.assertIn('.summary-card', style_text)
-        self.assertIn('.summary-preset-grid', style_text)
-        self.assertIn('.summary-option-grid', style_text)
-        self.assertIn('.summary-option.is-active', style_text)
-        self.assertIn('.summary-progress', style_text)
-        self.assertIn('.summary-history-list', style_text)
-        self.assertIn('.summary-toggle', style_text)
 
     def test_settings_ui_exposes_fetch_threshold_input(self):
         html = self.client.get("/settings").get_data(as_text=True)
@@ -16334,6 +16367,34 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertLess(first_delta_index, second_delta_index)
         self.assertLess(second_delta_index, usage_index)
 
+    def test_run_agent_stream_can_disable_clarification_answer_buffering_for_live_chat(self):
+        responses = [
+            iter(
+                [
+                    self._stream_chunk(content="Hello "),
+                    self._stream_chunk(content="world"),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=3, total_tokens=5)),
+                ]
+            )
+        ]
+
+        with patch("agent.client.chat.completions.create", side_effect=responses), patch(
+            "agent.get_app_settings",
+            return_value={},
+        ):
+            events = list(
+                run_agent_stream(
+                    [{"role": "user", "content": "Selam"}],
+                    "deepseek-chat",
+                    1,
+                    ["ask_clarifying_question"],
+                    buffer_clarification_answers=False,
+                )
+            )
+
+        answer_deltas = [event["text"] for event in events if event["type"] == "answer_delta"]
+        self.assertEqual(answer_deltas, ["Hello ", "world"])
+
     def test_chat_stream_response_disables_buffering(self):
         conversation_id = self._create_conversation()
         save_app_settings(
@@ -16354,7 +16415,7 @@ class AppRoutesTestCase(unittest.TestCase):
             ]
         )
 
-        with patch("routes.chat.run_agent_stream", return_value=fake_events):
+        with patch("routes.chat.run_agent_stream", return_value=fake_events) as mocked_stream:
             response = self.client.post(
                 "/chat",
                 json={
@@ -16368,6 +16429,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers.get("Cache-Control"), "no-cache")
         self.assertEqual(response.headers.get("X-Accel-Buffering"), "no")
+        self.assertFalse(mocked_stream.call_args.kwargs["buffer_clarification_answers"])
 
     def test_chat_edit_resend_replaces_future_messages(self):
         conversation_id = self._create_conversation()

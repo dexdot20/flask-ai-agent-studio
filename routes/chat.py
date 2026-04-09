@@ -4337,6 +4337,7 @@ def register_chat_routes(app) -> None:
                 active_tool_names,
                 prompt_tool_names=prompt_tool_names,
                 max_parallel_tools=get_max_parallel_tools(settings),
+                buffer_clarification_answers=False,
                 temperature=temperature,
                 fetch_url_token_threshold=fetch_url_token_threshold,
                 fetch_url_clip_aggressiveness=fetch_url_clip_aggressiveness,

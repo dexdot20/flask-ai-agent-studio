@@ -3696,6 +3696,19 @@ def _parse_json_like_value(value):
     return _parse_json_like_text(value)
 
 
+def _drop_null_tool_fields(value):
+    if isinstance(value, dict):
+        normalized = {}
+        for key, item in value.items():
+            if item is None:
+                continue
+            normalized[key] = _drop_null_tool_fields(item)
+        return normalized
+    if isinstance(value, list):
+        return [_drop_null_tool_fields(item) for item in value]
+    return value
+
+
 def _coerce_clarification_question_item(raw_question):
     if isinstance(raw_question, dict):
         return raw_question
@@ -3742,6 +3755,12 @@ def _validate_tool_arguments(tool_name: str, tool_args: dict) -> str | None:
         _coerce_search_tool_queries(tool_args, ensure_key=True)
     if tool_name == "create_canvas_document" and not str(tool_args.get("title") or "").strip():
         tool_args["title"] = _infer_create_canvas_document_title(tool_args)
+
+    # Models sometimes emit optional selectors like document_path as explicit null.
+    # Treat those as omitted fields so otherwise-valid tool calls still execute.
+    normalized_tool_args = _drop_null_tool_fields(tool_args)
+    tool_args.clear()
+    tool_args.update(normalized_tool_args)
 
     schema = spec.get("parameters") or {}
     properties = schema.get("properties") or {}
@@ -6403,6 +6422,7 @@ def run_agent_stream(
     prompt_tool_names: list[str] | None = None,
     max_parallel_tools: int | None = None,
     *,
+    buffer_clarification_answers: bool = True,
     temperature: float = 0.7,
     fetch_url_token_threshold: int | None = None,
     fetch_url_clip_aggressiveness: int | None = None,
@@ -7134,7 +7154,10 @@ def run_agent_stream(
         try:
             turn_result = yield from stream_model_turn(
                 turn_messages,
-                buffer_answer="ask_clarifying_question" in set(normalized_prompt_tool_names),
+                buffer_answer=(
+                    buffer_clarification_answers
+                    and "ask_clarifying_question" in set(normalized_prompt_tool_names)
+                ),
                 call_type="agent_step",
                 retry_reason=step_retry_reason,
             )
