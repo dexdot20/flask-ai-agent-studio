@@ -2604,6 +2604,105 @@ def _build_clarification_rag_query(message_content: str, clarification_response:
     return " ".join(query_parts).strip()
 
 
+def _filter_clarification_answers_for_questions(
+    answers: dict | None,
+    questions: list[dict] | None,
+) -> dict[str, dict[str, str]]:
+    normalized_answers = answers if isinstance(answers, dict) else {}
+    normalized_questions = questions if isinstance(questions, list) else []
+    filtered_answers: dict[str, dict[str, str]] = {}
+
+    for question in normalized_questions:
+        if not isinstance(question, dict):
+            continue
+        question_id = str(question.get("id") or "").strip()
+        if not question_id:
+            continue
+        answer = normalized_answers.get(question_id)
+        if not isinstance(answer, dict):
+            continue
+        display = str(answer.get("display") or "").strip()
+        if not display:
+            continue
+        filtered_answers[question_id] = {"display": display}
+
+    return filtered_answers
+
+
+def _find_latest_active_pending_clarification(messages: list[dict]) -> dict | None:
+    answered_assistant_ids: set[str] = set()
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("role") or "").strip() != "user":
+            continue
+        metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+        clarification_response = extract_clarification_response(metadata)
+        answers = clarification_response.get("answers") if isinstance(clarification_response, dict) else {}
+        assistant_message_id = str((clarification_response or {}).get("assistant_message_id") or "").strip()
+        if isinstance(answers, dict) and answers and assistant_message_id:
+            answered_assistant_ids.add(assistant_message_id)
+
+    latest_pending: dict | None = None
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("role") or "").strip() != "assistant":
+            continue
+        assistant_message_id = str(message.get("id") or "").strip()
+        if not assistant_message_id or assistant_message_id in answered_assistant_ids:
+            continue
+        metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+        pending_clarification = extract_pending_clarification(metadata)
+        questions = pending_clarification.get("questions") if isinstance(pending_clarification, dict) else []
+        if not isinstance(questions, list) or not questions:
+            continue
+        latest_pending = {
+            "assistant_message_id": assistant_message_id,
+            "message": message,
+            "pending_clarification": pending_clarification,
+        }
+
+    return latest_pending
+
+
+def _validate_clarification_response_against_messages(
+    clarification_response: dict | None,
+    conversation_messages: list[dict],
+) -> tuple[dict | None, str | None]:
+    response = clarification_response if isinstance(clarification_response, dict) else {}
+    answers = response.get("answers") if isinstance(response.get("answers"), dict) else {}
+    if not answers:
+        return None, None
+
+    assistant_message_id = str(response.get("assistant_message_id") or "").strip()
+    if not assistant_message_id:
+        return None, "This clarification response is invalid. Please answer the latest clarification request."
+
+    latest_pending = _find_latest_active_pending_clarification(conversation_messages)
+    if not isinstance(latest_pending, dict):
+        return None, "This clarification form is no longer current. Please answer the latest clarification request."
+
+    if assistant_message_id != str(latest_pending.get("assistant_message_id") or "").strip():
+        return None, "This clarification form is no longer current. Please answer the latest clarification request."
+
+    pending_clarification = latest_pending.get("pending_clarification") if isinstance(latest_pending, dict) else None
+    questions = pending_clarification.get("questions") if isinstance(pending_clarification, dict) else []
+    filtered_answers = _filter_clarification_answers_for_questions(answers, questions)
+    if not filtered_answers:
+        return None, "This clarification form no longer matches the latest clarification request. Please answer the latest clarification request."
+
+    normalized_assistant_message_id = response.get("assistant_message_id")
+    if normalized_assistant_message_id is None:
+        normalized_assistant_message_id = int(assistant_message_id)
+
+    return {
+        "assistant_message_id": normalized_assistant_message_id,
+        "questions": questions,
+        "answers": filtered_answers,
+    }, None
+
+
 def _collect_answered_clarification_rounds(messages: list[dict]) -> list[dict]:
     assistant_messages_by_id: dict[str, dict] = {}
     for message in messages:
@@ -2633,12 +2732,16 @@ def _collect_answered_clarification_rounds(messages: list[dict]) -> list[dict]:
         if isinstance(assistant_message, dict):
             assistant_metadata = assistant_message.get("metadata") if isinstance(assistant_message.get("metadata"), dict) else {}
             pending_clarification = extract_pending_clarification(assistant_metadata)
+        questions = pending_clarification.get("questions") if isinstance(pending_clarification, dict) else []
+        filtered_answers = _filter_clarification_answers_for_questions(answers, questions)
+        if not questions or not filtered_answers:
+            continue
 
         clarification_rounds.append(
             {
                 "assistant_message_id": assistant_message_id or None,
-                "questions": (pending_clarification or {}).get("questions") if isinstance(pending_clarification, dict) else None,
-                "answers": answers,
+                "questions": questions,
+                "answers": filtered_answers,
             }
         )
 
@@ -3668,6 +3771,32 @@ def register_chat_routes(app) -> None:
         vision_events = []
         video_events = []
         latest_user_message = messages[-1] if messages and messages[-1]["role"] == "user" else None
+
+        if latest_user_message is not None:
+            raw_clarification_response = extract_clarification_response(latest_user_message.get("metadata"))
+            raw_clarification_answers = raw_clarification_response.get("answers") if isinstance(raw_clarification_response, dict) else {}
+            if isinstance(raw_clarification_answers, dict) and raw_clarification_answers:
+                if conv_id is None:
+                    return jsonify(
+                        {
+                            "error": "This clarification form is no longer current. Please answer the latest clarification request.",
+                            "code": "stale_clarification_response",
+                        }
+                    ), 409
+
+                conversation_messages = get_conversation_messages(conv_id)
+                validated_clarification_response, clarification_error = _validate_clarification_response_against_messages(
+                    raw_clarification_response,
+                    conversation_messages,
+                )
+                if clarification_error:
+                    return jsonify({"error": clarification_error, "code": "stale_clarification_response"}), 409
+                if isinstance(validated_clarification_response, dict):
+                    user_metadata = latest_user_message.get("metadata") if isinstance(latest_user_message.get("metadata"), dict) else {}
+                    latest_user_message["metadata"] = {
+                        **user_metadata,
+                        "clarification_response": validated_clarification_response,
+                    }
 
         processed_attachments = []
         processed_document_uploads = []

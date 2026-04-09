@@ -160,6 +160,7 @@ from routes.auth import AUTH_LAST_SEEN_KEY, AUTH_REMEMBER_KEY, AUTH_SESSION_KEY
 from routes.chat import (
     OMITTED_TOOL_OUTPUT_TEXT,
     _build_budgeted_prompt_messages,
+    _collect_answered_clarification_rounds,
     _get_effective_summary_trigger_token_count,
     _build_tool_trace_context,
     _count_prunable_message_tokens,
@@ -171,6 +172,7 @@ from routes.chat import (
     _select_recent_prompt_window,
     _select_summary_source_messages_by_token_budget,
     _trim_rag_context_to_token_budget,
+    _validate_clarification_response_against_messages,
     build_summary_prompt_messages,
     maybe_create_conversation_summary,
 )
@@ -211,6 +213,38 @@ class AppRoutesTestCase(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 201)
         return response.get_json()["id"]
+
+    def _insert_pending_clarification_assistant(
+        self,
+        conversation_id: int,
+        *,
+        text: str = "Let me clarify a few details.",
+        questions: list[dict] | None = None,
+    ) -> int:
+        normalized_questions = questions or [
+            {
+                "id": "budget",
+                "label": "Budget?",
+                "input_type": "text",
+                "required": True,
+            }
+        ]
+        with self.app.app_context():
+            with get_db() as conn:
+                return insert_message(
+                    conn,
+                    conversation_id,
+                    "assistant",
+                    text,
+                    metadata=serialize_message_metadata(
+                        {
+                            "pending_clarification": {
+                                "questions": normalized_questions,
+                                "submit_label": "Send answers",
+                            }
+                        }
+                    ),
+                )
 
     @staticmethod
     def _stream_chunk(reasoning: str = "", content: str = "", tool_calls=None, usage=None):
@@ -4948,6 +4982,7 @@ class AppRoutesTestCase(unittest.TestCase):
 
     def test_chat_disables_clarification_tool_for_clarification_response_turn(self):
         conversation_id = self._create_conversation()
+        assistant_message_id = self._insert_pending_clarification_assistant(conversation_id)
         save_app_settings(
             {
                 "user_preferences": "",
@@ -4980,7 +5015,7 @@ class AppRoutesTestCase(unittest.TestCase):
                             "content": "Q: Budget?\nA: 200-300 TL",
                             "metadata": {
                                 "clarification_response": {
-                                    "assistant_message_id": 12,
+                                    "assistant_message_id": assistant_message_id,
                                     "answers": {
                                         "budget": {"display": "200-300 TL"},
                                     },
@@ -4996,6 +5031,7 @@ class AppRoutesTestCase(unittest.TestCase):
 
     def test_chat_keeps_clarification_tool_when_response_turn_also_has_new_user_request(self):
         conversation_id = self._create_conversation()
+        assistant_message_id = self._insert_pending_clarification_assistant(conversation_id)
         save_app_settings(
             {
                 "user_preferences": "",
@@ -5028,7 +5064,7 @@ class AppRoutesTestCase(unittest.TestCase):
                             "content": "Q: Budget?\nA: 200-300 TL\n\nİlk olarak bana sorular sor.",
                             "metadata": {
                                 "clarification_response": {
-                                    "assistant_message_id": 12,
+                                    "assistant_message_id": assistant_message_id,
                                     "answers": {
                                         "budget": {"display": "200-300 TL"},
                                     },
@@ -5041,6 +5077,128 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("ask_clarifying_question", mocked_stream.call_args.args[3])
+
+    def test_validate_clarification_response_against_messages_enriches_questions(self):
+        conversation_id = self._create_conversation()
+        assistant_message_id = self._insert_pending_clarification_assistant(
+            conversation_id,
+            questions=[
+                {
+                    "id": "budget",
+                    "label": "Budget?",
+                    "input_type": "text",
+                    "required": True,
+                },
+                {
+                    "id": "goal",
+                    "label": "Goal?",
+                    "input_type": "text",
+                    "required": False,
+                },
+            ],
+        )
+
+        with self.app.app_context():
+            validated, error = _validate_clarification_response_against_messages(
+                {
+                    "assistant_message_id": assistant_message_id,
+                    "answers": {
+                        "budget": {"display": "200-300 TL"},
+                        "unexpected": {"display": "ignore me"},
+                    },
+                },
+                get_conversation_messages(conversation_id),
+            )
+
+        self.assertIsNone(error)
+        self.assertEqual(validated["assistant_message_id"], assistant_message_id)
+        self.assertEqual(validated["questions"][0]["id"], "budget")
+        self.assertEqual(validated["answers"], {"budget": {"display": "200-300 TL"}})
+
+    def test_collect_answered_clarification_rounds_skips_orphaned_responses(self):
+        conversation_id = self._create_conversation()
+
+        with self.app.app_context():
+            with get_db() as conn:
+                insert_message(
+                    conn,
+                    conversation_id,
+                    "user",
+                    "Q: Budget?\nA: 200-300 TL",
+                    metadata=serialize_message_metadata(
+                        {
+                            "clarification_response": {
+                                "assistant_message_id": 999999,
+                                "answers": {"budget": {"display": "200-300 TL"}},
+                            }
+                        }
+                    ),
+                )
+            rounds = _collect_answered_clarification_rounds(get_conversation_messages(conversation_id))
+
+        self.assertEqual(rounds, [])
+
+    def test_chat_rejects_stale_clarification_response_turn(self):
+        conversation_id = self._create_conversation()
+        stale_assistant_message_id = self._insert_pending_clarification_assistant(conversation_id)
+
+        with self.app.app_context():
+            with get_db() as conn:
+                insert_message(
+                    conn,
+                    conversation_id,
+                    "user",
+                    "Q: Budget?\nA: 100 TL",
+                    metadata=serialize_message_metadata(
+                        {
+                            "clarification_response": {
+                                "assistant_message_id": stale_assistant_message_id,
+                                "answers": {"budget": {"display": "100 TL"}},
+                            }
+                        }
+                    ),
+                )
+
+        self._insert_pending_clarification_assistant(
+            conversation_id,
+            text="I need one more update.",
+            questions=[
+                {
+                    "id": "goal",
+                    "label": "Goal?",
+                    "input_type": "text",
+                    "required": True,
+                }
+            ],
+        )
+
+        with patch("routes.chat.run_agent_stream") as mocked_stream:
+            response = self.client.post(
+                "/chat",
+                json={
+                    "conversation_id": conversation_id,
+                    "model": "deepseek-chat",
+                    "user_content": "Q: Budget?\nA: 200-300 TL",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Q: Budget?\nA: 200-300 TL",
+                            "metadata": {
+                                "clarification_response": {
+                                    "assistant_message_id": stale_assistant_message_id,
+                                    "answers": {
+                                        "budget": {"display": "200-300 TL"},
+                                    },
+                                }
+                            },
+                        }
+                    ],
+                },
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["code"], "stale_clarification_response")
+        mocked_stream.assert_not_called()
 
     def test_index_uses_external_app_script(self):
         response = self.client.get("/")

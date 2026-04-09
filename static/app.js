@@ -5880,6 +5880,23 @@ function getPendingClarification(metadata) {
   };
 }
 
+function findLatestPendingClarificationMessageId(entries = history) {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const message = entries[index];
+    if (!message || message.role !== "assistant") {
+      continue;
+    }
+    if (!getPendingClarification(message.metadata)) {
+      continue;
+    }
+    const messageId = Number(message.id);
+    if (Number.isInteger(messageId) && messageId > 0) {
+      return messageId;
+    }
+  }
+  return null;
+}
+
 function getClarificationLiveValue(form, question, index) {
   const fieldName = `clarify_${index}`;
   if (question.input_type === "text") {
@@ -10599,16 +10616,35 @@ function appendClarificationPanel(group, metadata, options = {}) {
     }
 
     error.hidden = true;
-    saveClarificationDraft(options.messageId, null);
-    await sendMessage({
-      forcedText: collected.text,
-      forcedMetadata: {
-        clarification_response: {
-          assistant_message_id: Number(options.messageId),
-          answers: collected.answers,
+    const draft = collectClarificationDraft(form, clarification);
+    saveClarificationDraft(options.messageId, draft);
+    submitButton.disabled = true;
+    try {
+      const result = await sendMessage({
+        forcedText: collected.text,
+        forcedMetadata: {
+          clarification_response: {
+            assistant_message_id: Number(options.messageId),
+            answers: collected.answers,
+          },
         },
-      },
-    });
+      });
+
+      if (result?.ok) {
+        saveClarificationDraft(options.messageId, null);
+        return;
+      }
+
+      if (result?.errorCode === "stale_clarification_response") {
+        const latestPendingMessageId = findLatestPendingClarificationMessageId();
+        if (Number.isInteger(latestPendingMessageId) && latestPendingMessageId !== Number(options.messageId)) {
+          saveClarificationDraft(latestPendingMessageId, draft);
+          renderConversationHistory({ preserveScroll: true });
+        }
+      }
+    } finally {
+      submitButton.disabled = false;
+    }
   });
 
   panel.appendChild(form);
@@ -10858,7 +10894,7 @@ async function sendMessage(options = {}) {
   const pendingDocuments = [...selectedDocumentFiles];
   const pendingYouTubeUrl = selectedYouTubeUrl;
   if (!text && !pendingImages.length && !pendingDocuments.length && !pendingYouTubeUrl) {
-    return;
+    return { ok: false, errorCode: "" };
   }
 
   if (pendingDeleteMessageId !== null) {
@@ -10873,7 +10909,7 @@ async function sendMessage(options = {}) {
   if (pendingDocuments.length) {
     const modeSelectionAccepted = await promptPdfSubmissionMode(pendingDocuments);
     if (!modeSelectionAccepted) {
-      return;
+      return { ok: false, errorCode: "" };
     }
   }
 
@@ -10887,7 +10923,7 @@ async function sendMessage(options = {}) {
   if (pendingImages.length && !Boolean(featureFlags.image_uploads_enabled)) {
     clearSelectedImage();
     showError("Image uploads are disabled in .env.");
-    return;
+    return { ok: false, errorCode: "" };
   }
 
   const editingEntry = getHistoryMessage(editingMessageId);
@@ -10896,6 +10932,9 @@ async function sendMessage(options = {}) {
   if (!isEditing) {
     clearEditTarget();
   }
+
+  let sendSucceeded = false;
+  let sendErrorCode = "";
 
   clearToastRegion();
   inputEl.value = "";
@@ -10938,7 +10977,7 @@ async function sendMessage(options = {}) {
     if (editIndex < 0) {
       clearEditTarget();
       showError("The selected message could not be edited.");
-      return;
+      return { ok: false, errorCode: "" };
     }
 
     if (!pendingImages.length && !pendingDocuments.length && !pendingYouTubeUrl) {
@@ -11096,8 +11135,10 @@ async function sendMessage(options = {}) {
     }
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: "An unexpected error occurred." }));
-      throw new Error(error.error || "An unexpected error occurred.");
+      const error = await response.json().catch(() => ({ error: "An unexpected error occurred.", code: "" }));
+      const requestError = new Error(error.error || "An unexpected error occurred.");
+      requestError.code = typeof error.code === "string" ? error.code : "";
+      throw requestError;
     }
 
     await streamNdjsonResponse(response, (event) => {
@@ -11543,7 +11584,9 @@ async function sendMessage(options = {}) {
     }
     lastConversationSignature = getConversationSignature(history);
     scheduleConversationRefreshAfterStream();
+    sendSucceeded = true;
   } catch (error) {
+    sendErrorCode = String(error?.code || "").trim();
     if (pendingAnswerRenderTimer !== null) {
       flushAnswerRender();
     }
@@ -11604,6 +11647,8 @@ async function sendMessage(options = {}) {
     refreshEditBanner();
     inputEl.focus();
   }
+
+  return { ok: sendSucceeded, errorCode: sendErrorCode };
 }
 
 async function generateTitle(convId) {

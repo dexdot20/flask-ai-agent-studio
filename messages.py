@@ -228,8 +228,8 @@ def _build_clarification_policy_payload(active_tool_names: list[str], clarificat
             "If a good answer depends on missing requirements, ask for clarification instead of guessing. "
             "If the user explicitly asks you to ask questions first, you MUST emit an actual ask_clarifying_question tool call — "
             "outlining questions in your reasoning/thinking without emitting the call is not sufficient. "
-            "If the Clarification Response section already answers your pending questions for this turn, continue the task instead of calling ask_clarifying_question again. "
-            "and wait for the user's reply before continuing."
+            "After you ask clarifying questions, wait for the user's reply before continuing. "
+            "If the Clarification Response section is already present for this turn, that reply has already arrived; continue the task instead of calling ask_clarifying_question again."
         ),
     }
 
@@ -410,9 +410,9 @@ def _build_clarification_response_payload(
 
     return {
         "guidance": (
-            "The user message in a clarification turn is a direct response to your earlier clarifying questions. "
+            "The user message in a clarification turn is a direct response to your earlier clarifying questions and answers the active clarification request for this turn. "
             "The clarification answers below capture the answered rounds for this conversation. "
-            "Use those answers directly to continue the task, do not reinterpret them as retrieved knowledge-base content, "
+            "Use those answers directly to continue the task, do not question whether the user already answered, do not reinterpret them as retrieved knowledge-base content, "
             "and do not ask the same questions again unless the user changes the requirements or explicitly asks to revisit them. "
             "These answers are authoritative for the current turn. If they cover your pending questions, continue the task and do not call ask_clarifying_question again in this turn."
         ),
@@ -757,6 +757,31 @@ def prepare_context_injection_for_history(context_injection: str) -> str:
     return _strip_volatile_sections_from_context_injection(context_injection)
 
 
+def _filter_clarification_answers_for_questions(
+    answers: dict | None,
+    questions: list[dict] | None,
+) -> dict[str, dict[str, str]]:
+    normalized_answers = answers if isinstance(answers, dict) else {}
+    normalized_questions = questions if isinstance(questions, list) else []
+    filtered_answers: dict[str, dict[str, str]] = {}
+
+    for question in normalized_questions:
+        if not isinstance(question, dict):
+            continue
+        question_id = str(question.get("id") or "").strip()
+        if not question_id:
+            continue
+        answer = normalized_answers.get(question_id)
+        if not isinstance(answer, dict):
+            continue
+        display = str(answer.get("display") or "").strip()
+        if not display:
+            continue
+        filtered_answers[question_id] = {"display": display}
+
+    return filtered_answers
+
+
 def _collect_answered_clarification_skip_indexes(messages: list[dict]) -> set[int]:
     assistant_index_by_id: dict[str, int] = {}
     answered_assistant_ids: set[str] = set()
@@ -777,11 +802,24 @@ def _collect_answered_clarification_skip_indexes(messages: list[dict]) -> set[in
         if role == "user":
             clarification_response = extract_clarification_response(metadata)
             answers = clarification_response.get("answers") if isinstance(clarification_response, dict) else {}
-            if isinstance(answers, dict) and answers:
-                clarification_response_user_indexes.append(index)
             assistant_message_id = str((clarification_response or {}).get("assistant_message_id") or "").strip()
-            if assistant_message_id:
-                answered_assistant_ids.add(assistant_message_id)
+            if not isinstance(answers, dict) or not answers or not assistant_message_id:
+                continue
+
+            assistant_index = assistant_index_by_id.get(assistant_message_id)
+            if assistant_index is None:
+                continue
+
+            assistant_message = messages[assistant_index]
+            assistant_metadata = assistant_message.get("metadata") if isinstance(assistant_message.get("metadata"), dict) else {}
+            pending_clarification = extract_pending_clarification(assistant_metadata)
+            questions = pending_clarification.get("questions") if isinstance(pending_clarification, dict) else []
+            filtered_answers = _filter_clarification_answers_for_questions(answers, questions)
+            if not questions or not filtered_answers:
+                continue
+
+            clarification_response_user_indexes.append(index)
+            answered_assistant_ids.add(assistant_message_id)
 
     skip_indexes: set[int] = set()
     for clarification_user_index in clarification_response_user_indexes:
@@ -826,9 +864,7 @@ def _collect_answered_clarification_skip_indexes(messages: list[dict]) -> set[in
         if matched_tool_indexes:
             skip_indexes.add(probe_index)
             skip_indexes.update(matched_tool_indexes)
-
     return skip_indexes
-
 
 def _collect_canvas_saved_sub_agent_skip_indexes(messages: list[dict]) -> set[int]:
     skip_indexes: set[int] = set()
