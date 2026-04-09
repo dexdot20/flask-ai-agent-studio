@@ -725,6 +725,18 @@ def _strip_volatile_sections_from_context_injection(context_injection: str) -> s
     return "\n\n".join(section for section in retained_sections if section).strip()
 
 
+def prepare_context_injection_for_history(context_injection: str) -> str:
+    """Return the stable subset of a runtime context injection worth persisting.
+
+    The latest turn still receives the full runtime injection directly in the live
+    request payload. When that user message becomes historical, only the durable
+    non-volatile subset should remain attached to the stored message metadata so
+    future turns avoid replaying per-turn cache busters such as timestamps,
+    active tool lists, transient retrieval snippets, or canvas excerpts.
+    """
+    return _strip_volatile_sections_from_context_injection(context_injection)
+
+
 def _collect_answered_clarification_skip_indexes(messages: list[dict]) -> set[int]:
     assistant_index_by_id: dict[str, int] = {}
     answered_assistant_ids: set[str] = set()

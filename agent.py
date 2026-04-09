@@ -351,6 +351,7 @@ def _extract_usage_metrics(usage) -> dict[str, int]:
         "total_tokens",
         "prompt_cache_hit_tokens",
         "prompt_cache_miss_tokens",
+        "prompt_cache_write_tokens",
     )
     payload: dict = {}
 
@@ -386,6 +387,7 @@ def _extract_usage_metrics(usage) -> dict[str, int]:
 
     prompt_cache_hit_present = "prompt_cache_hit_tokens" in payload and payload.get("prompt_cache_hit_tokens") is not None
     prompt_cache_miss_present = "prompt_cache_miss_tokens" in payload and payload.get("prompt_cache_miss_tokens") is not None
+    prompt_cache_write_present = "prompt_cache_write_tokens" in payload and payload.get("prompt_cache_write_tokens") is not None
 
     # Normalize OpenRouter prompt_tokens_details.cached_tokens → prompt_cache_hit_tokens
     if not prompt_cache_hit_present:
@@ -400,9 +402,22 @@ def _extract_usage_metrics(usage) -> dict[str, int]:
             payload["prompt_cache_hit_tokens"] = cached
             prompt_cache_hit_present = True
 
+    if not prompt_cache_write_present:
+        prompt_tokens_details = payload.get("prompt_tokens_details")
+        if isinstance(prompt_tokens_details, dict):
+            cache_write_tokens = prompt_tokens_details.get("cache_write_tokens")
+        elif prompt_tokens_details is not None:
+            cache_write_tokens = getattr(prompt_tokens_details, "cache_write_tokens", None)
+        else:
+            cache_write_tokens = payload.get("cache_write_tokens")
+        if cache_write_tokens is not None:
+            payload["prompt_cache_write_tokens"] = cache_write_tokens
+            prompt_cache_write_present = True
+
     metrics = {key: _coerce_usage_int(payload.get(key)) for key in fields}
     metrics["cache_hit_present"] = prompt_cache_hit_present
     metrics["cache_miss_present"] = prompt_cache_miss_present
+    metrics["cache_write_present"] = prompt_cache_write_present
     metrics["cache_metrics_present"] = prompt_cache_hit_present or prompt_cache_miss_present
     return metrics
 
@@ -6140,6 +6155,7 @@ def run_agent_stream(
         "prompt_tokens": 0,
         "prompt_cache_hit_tokens": 0,
         "prompt_cache_miss_tokens": 0,
+        "prompt_cache_write_tokens": 0,
         "completion_tokens": 0,
         "total_tokens": 0,
         "estimated_input_tokens": 0,
@@ -6246,11 +6262,13 @@ def run_agent_stream(
                 "prompt_tokens": 0,
                 "prompt_cache_hit_tokens": 0,
                 "prompt_cache_miss_tokens": 0,
+                "prompt_cache_write_tokens": 0,
                 "completion_tokens": 0,
                 "total_tokens": 0,
                 "received": False,
                 "cache_hit_present": False,
                 "cache_miss_present": False,
+                "cache_write_present": False,
                 "cache_metrics_present": False,
             }
 
@@ -6258,12 +6276,14 @@ def run_agent_stream(
         prompt_tokens = metrics["prompt_tokens"]
         prompt_cache_hit_tokens = metrics["prompt_cache_hit_tokens"]
         prompt_cache_miss_tokens = metrics["prompt_cache_miss_tokens"]
+        prompt_cache_write_tokens = metrics["prompt_cache_write_tokens"]
         completion_tokens = metrics["completion_tokens"]
         total_tokens = metrics["total_tokens"]
         return {
             "prompt_tokens": prompt_tokens,
             "prompt_cache_hit_tokens": prompt_cache_hit_tokens,
             "prompt_cache_miss_tokens": prompt_cache_miss_tokens,
+            "prompt_cache_write_tokens": prompt_cache_write_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": total_tokens,
             "received": any(
@@ -6272,12 +6292,14 @@ def run_agent_stream(
                     prompt_tokens,
                     prompt_cache_hit_tokens,
                     prompt_cache_miss_tokens,
+                    prompt_cache_write_tokens,
                     completion_tokens,
                     total_tokens,
                 )
             ),
             "cache_hit_present": bool(metrics.get("cache_hit_present")),
             "cache_miss_present": bool(metrics.get("cache_miss_present")),
+            "cache_write_present": bool(metrics.get("cache_write_present")),
             "cache_metrics_present": bool(metrics.get("cache_metrics_present")),
         }
 
@@ -6400,6 +6422,7 @@ def run_agent_stream(
             "prompt_tokens": prompt_tokens_total,
             "prompt_cache_hit_tokens": usage_totals["prompt_cache_hit_tokens"],
             "prompt_cache_miss_tokens": usage_totals["prompt_cache_miss_tokens"],
+            "prompt_cache_write_tokens": usage_totals["prompt_cache_write_tokens"],
             "completion_tokens": usage_totals["completion_tokens"],
             "total_tokens": usage_totals["total_tokens"],
             "estimated_input_tokens": estimated_input_tokens,
@@ -6466,11 +6489,13 @@ def run_agent_stream(
             "prompt_tokens": 0,
             "prompt_cache_hit_tokens": 0,
             "prompt_cache_miss_tokens": 0,
+            "prompt_cache_write_tokens": 0,
             "completion_tokens": 0,
             "total_tokens": 0,
             "received": False,
             "cache_hit_present": False,
             "cache_miss_present": False,
+            "cache_write_present": False,
             "cache_metrics_present": False,
         }
         _trace_agent_event(
@@ -6557,6 +6582,7 @@ def run_agent_stream(
             prompt_token_basis = provider_usage["prompt_tokens"] if provider_usage["prompt_tokens"] > 0 else estimated_input_tokens
             cache_hit_tokens = provider_usage["prompt_cache_hit_tokens"] if provider_usage["cache_hit_present"] else None
             cache_miss_tokens = provider_usage["prompt_cache_miss_tokens"] if provider_usage["cache_miss_present"] else None
+            cache_write_tokens = provider_usage["prompt_cache_write_tokens"] if provider_usage["cache_write_present"] else 0
             cache_metrics_estimated = False
 
             if cache_hit_tokens is None and cache_miss_tokens is None:
@@ -6585,11 +6611,13 @@ def run_agent_stream(
 
             final_cache_hit_tokens = _coerce_usage_int(cache_hit_tokens)
             final_cache_miss_tokens = _coerce_usage_int(cache_miss_tokens)
+            final_cache_write_tokens = _coerce_usage_int(cache_write_tokens)
 
             usage_totals["prompt_tokens"] += provider_usage["prompt_tokens"]
             if provider_usage["received"]:
                 usage_totals["prompt_cache_hit_tokens"] += final_cache_hit_tokens
                 usage_totals["prompt_cache_miss_tokens"] += final_cache_miss_tokens
+                usage_totals["prompt_cache_write_tokens"] += final_cache_write_tokens
             usage_totals["completion_tokens"] += provider_usage["completion_tokens"]
             usage_totals["total_tokens"] += provider_usage["total_tokens"]
             if cache_metrics_estimated:
@@ -6608,6 +6636,7 @@ def run_agent_stream(
                     "prompt_tokens": provider_usage["prompt_tokens"] if provider_usage["received"] else None,
                     "prompt_cache_hit_tokens": final_cache_hit_tokens,
                     "prompt_cache_miss_tokens": final_cache_miss_tokens,
+                    "prompt_cache_write_tokens": final_cache_write_tokens,
                     "completion_tokens": provider_usage["completion_tokens"] if provider_usage["received"] else None,
                     "total_tokens": provider_usage["total_tokens"] if provider_usage["received"] else None,
                     "estimated_input_tokens": estimated_input_tokens,
@@ -6739,11 +6768,13 @@ def run_agent_stream(
                         provider_usage["prompt_tokens"] += usage_snapshot["prompt_tokens"]
                         provider_usage["prompt_cache_hit_tokens"] += usage_snapshot["prompt_cache_hit_tokens"]
                         provider_usage["prompt_cache_miss_tokens"] += usage_snapshot["prompt_cache_miss_tokens"]
+                        provider_usage["prompt_cache_write_tokens"] += usage_snapshot["prompt_cache_write_tokens"]
                         provider_usage["completion_tokens"] += usage_snapshot["completion_tokens"]
                         provider_usage["total_tokens"] += usage_snapshot["total_tokens"]
                         provider_usage["received"] = provider_usage["received"] or usage_snapshot["received"]
                         provider_usage["cache_hit_present"] = provider_usage["cache_hit_present"] or usage_snapshot["cache_hit_present"]
                         provider_usage["cache_miss_present"] = provider_usage["cache_miss_present"] or usage_snapshot["cache_miss_present"]
+                        provider_usage["cache_write_present"] = provider_usage["cache_write_present"] or usage_snapshot["cache_write_present"]
                         provider_usage["cache_metrics_present"] = provider_usage["cache_metrics_present"] or usage_snapshot["cache_metrics_present"]
             except Exception as exc:
                 stream_error = str(exc)

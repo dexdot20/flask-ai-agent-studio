@@ -6485,6 +6485,23 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(metrics["prompt_tokens"], 1000)
         self.assertEqual(metrics["prompt_cache_hit_tokens"], 800)
 
+    def test_extract_usage_metrics_normalizes_openrouter_cache_write_tokens(self):
+        usage = SimpleNamespace(
+            prompt_tokens=1000,
+            completion_tokens=50,
+            total_tokens=1050,
+            prompt_cache_hit_tokens=None,
+            prompt_cache_miss_tokens=None,
+            model_extra={
+                "prompt_tokens_details": {"cached_tokens": 800, "cache_write_tokens": 120}
+            },
+        )
+
+        metrics = _extract_usage_metrics(usage)
+
+        self.assertEqual(metrics["prompt_cache_write_tokens"], 120)
+        self.assertTrue(metrics["cache_write_present"])
+
     def test_extract_usage_metrics_prefers_deepseek_field_over_prompt_tokens_details(self):
         # When DeepSeek's native field is already present, it takes priority
         usage = SimpleNamespace(
@@ -11662,6 +11679,111 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(usage_event["prompt_cache_miss_tokens"], 200)
         self.assertTrue(usage_event["cache_metrics_estimated"])
         self.assertTrue(usage_event["model_calls"][0]["cache_metrics_estimated"])
+
+    def test_run_agent_stream_keeps_openrouter_cache_write_tokens(self):
+        responses = [
+            iter(
+                [
+                    self._stream_chunk_openrouter(content="Final answer."),
+                    self._stream_chunk_openrouter(
+                        usage=SimpleNamespace(
+                            prompt_tokens=1000,
+                            completion_tokens=50,
+                            total_tokens=1050,
+                            model_extra={
+                                "prompt_tokens_details": {"cached_tokens": 800, "cache_write_tokens": 120}
+                            },
+                        )
+                    ),
+                ]
+            )
+        ]
+        mock_create = Mock(side_effect=responses)
+        fake_target = {
+            "record": {"provider": model_registry.OPENROUTER_PROVIDER, "api_model": "anthropic/claude-sonnet-4.5"},
+            "client": SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=mock_create))),
+            "api_model": "anthropic/claude-sonnet-4.5",
+            "extra_body": {},
+        }
+
+        with patch("agent.resolve_model_target", return_value=fake_target):
+            events = list(
+                run_agent_stream(
+                    [{"role": "user", "content": "Test"}],
+                    "openrouter:anthropic/claude-sonnet-4.5",
+                    1,
+                    [],
+                )
+            )
+
+        usage_event = next(event for event in events if event["type"] == "usage")
+        self.assertEqual(usage_event["prompt_cache_write_tokens"], 120)
+        self.assertEqual(usage_event["model_calls"][0]["prompt_cache_write_tokens"], 120)
+
+    def test_chat_route_persists_only_cache_friendly_context_injection(self):
+        conversation_id = self._create_conversation()
+
+        save_app_settings(
+            {
+                "user_preferences": "",
+                "max_steps": "1",
+                "active_tools": "[]",
+                "rag_auto_inject": "false",
+            }
+        )
+
+        injected_context = (
+            "## Current Date and Time\n"
+            "- Time: 21:40\n\n"
+            "## Tool Execution History\n"
+            "- search_web [done]: cached summary\n\n"
+            "## Active Tools This Turn\n"
+            "- Callable tools: search_web"
+        )
+
+        def fake_build_budgeted_prompt_messages(*args, **kwargs):
+            return (
+                [{"role": "system", "content": "Stable system"}, {"role": "user", "content": "Hello"}],
+                [{"role": "system", "content": "Stable system"}, {"role": "user", "content": "Hello"}],
+                {"estimated_total_tokens": 2},
+                injected_context,
+            )
+
+        def fake_run_agent_stream(*args, **kwargs):
+            return iter(
+                [
+                    {"type": "answer_start"},
+                    {"type": "answer_delta", "text": "Done"},
+                    {"type": "tool_capture", "tool_results": []},
+                    {"type": "done"},
+                ]
+            )
+
+        with patch("routes.chat._build_budgeted_prompt_messages", side_effect=fake_build_budgeted_prompt_messages), patch(
+            "routes.chat.run_agent_stream",
+            side_effect=fake_run_agent_stream,
+        ), patch("routes.chat.sync_conversations_to_rag_safe"):
+            response = self.client.post(
+                "/chat",
+                json={
+                    "conversation_id": conversation_id,
+                    "model": "deepseek-chat",
+                    "user_content": "Hello",
+                    "messages": [
+                        {"role": "user", "content": "Hello"},
+                    ],
+                },
+            )
+            response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+
+        conversation_response = self.client.get(f"/api/conversations/{conversation_id}")
+        self.assertEqual(conversation_response.status_code, 200)
+        persisted_messages = conversation_response.get_json()["messages"]
+        persisted_user_message = next(message for message in persisted_messages if message["role"] == "user")
+        persisted_metadata = parse_message_metadata(persisted_user_message.get("metadata"))
+        self.assertNotIn("context_injection", persisted_metadata)
 
     def test_run_agent_stream_estimates_openrouter_cache_hits_when_provider_omits_cache_usage(self):
         responses = [

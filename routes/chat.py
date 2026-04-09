@@ -134,6 +134,7 @@ from messages import (
     extract_freeform_clarification_user_content,
     format_knowledge_base_auto_context,
     normalize_chat_messages,
+    prepare_context_injection_for_history,
     prepend_runtime_context,
 )
 from image_service import analyze_uploaded_image, can_answer_image_questions
@@ -3599,11 +3600,12 @@ def register_chat_routes(app) -> None:
             canvas_prompt_max_tokens=get_canvas_prompt_max_tokens(settings),
             workspace_root=workspace_root,
         )
-        if persisted_user_message_id is not None and current_context_injection:
+        persisted_context_injection = prepare_context_injection_for_history(current_context_injection or "")
+        if persisted_user_message_id is not None and persisted_context_injection:
             update_message_metadata(
                 persisted_user_message_id,
                 {
-                    "context_injection": current_context_injection,
+                    "context_injection": persisted_context_injection,
                 },
             )
 
