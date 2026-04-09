@@ -576,6 +576,7 @@ def _build_assistant_message_metadata(
 ) -> str | None:
     return serialize_message_metadata(
         {
+            "reasoning_content": reasoning,
             "tool_results": tool_results or [],
             "sub_agent_traces": sub_agent_traces or [],
             "canvas_documents": canvas_documents or [],
@@ -585,7 +586,8 @@ def _build_assistant_message_metadata(
             "tool_trace": tool_trace_entries or [],
             "pending_clarification": pending_clarification,
             "usage": usage_data,
-        }
+        },
+        include_private_fields=True,
     )
 
 

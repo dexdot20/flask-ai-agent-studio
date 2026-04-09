@@ -4930,7 +4930,12 @@ async function downloadConversation(format) {
 
   setExportStatus(`Preparing ${format.toUpperCase()} export…`, "muted");
   try {
-    const response = await fetch(`/api/conversations/${currentConvId}/export?format=${encodeURIComponent(format)}`);
+    const reasoningByMessageId = collectConversationReasoningExportMap();
+    const response = await fetch(`/api/conversations/${currentConvId}/export?format=${encodeURIComponent(format)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reasoning_by_message_id: reasoningByMessageId }),
+    });
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
       throw new Error(payload.error || "Conversation export failed.");
@@ -4940,7 +4945,7 @@ async function downloadConversation(format) {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `${currentConvTitle || "conversation"}.${format}`;
+    anchor.download = getSuggestedDownloadFilename(response, `${currentConvTitle || "conversation"}.${format}`);
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
@@ -4965,6 +4970,23 @@ function getSuggestedDownloadFilename(response, fallbackFilename) {
   } catch (_) {
     return rawFilename;
   }
+}
+
+function collectConversationReasoningExportMap(entries = history, conversationId = currentConvId) {
+  const reasoningByMessageId = {};
+  getVisibleHistoryEntries(entries).forEach((message) => {
+    if (!message || message.role !== "assistant" || !isPersistedMessageId(message.id)) {
+      return;
+    }
+
+    const reasoningText = getReasoningText(message.metadata, message.id, conversationId);
+    if (!reasoningText) {
+      return;
+    }
+
+    reasoningByMessageId[String(message.id)] = reasoningText;
+  });
+  return reasoningByMessageId;
 }
 
 async function downloadCanvasDocument(format) {

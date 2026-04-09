@@ -104,7 +104,7 @@ def _sanitize_download_filename(value: str, fallback: str = "canvas") -> str:
     return normalized[:80] or fallback
 
 
-def _load_conversation_payload(conv_id: int):
+def _load_conversation_payload(conv_id: int, include_private_metadata: bool = False):
     with get_db() as conn:
         conversation = conn.execute(
             "SELECT * FROM conversations WHERE id = ?",
@@ -112,8 +112,53 @@ def _load_conversation_payload(conv_id: int):
         ).fetchone()
         if not conversation:
             return None, None
-        messages = [message_row_to_dict(message) for message in get_conversation_message_rows(conn, conv_id)]
+        messages = [
+            message_row_to_dict(message, include_private_metadata=include_private_metadata)
+            for message in get_conversation_message_rows(conn, conv_id)
+        ]
     return conversation, messages
+
+
+def _normalize_export_reasoning_map(value) -> dict[int, str]:
+    source = value if isinstance(value, dict) else {}
+    cleaned: dict[int, str] = {}
+    for raw_message_id, raw_reasoning in list(source.items())[:500]:
+        try:
+            message_id = int(raw_message_id)
+        except (TypeError, ValueError):
+            continue
+        if message_id <= 0:
+            continue
+        reasoning_text = str(raw_reasoning or "").strip()
+        if not reasoning_text:
+            continue
+        cleaned[message_id] = reasoning_text[:20_000]
+    return cleaned
+
+
+def _apply_export_reasoning_map(messages: list[dict] | None, reasoning_by_message_id: dict[int, str]) -> list[dict]:
+    if not reasoning_by_message_id:
+        return list(messages or [])
+
+    merged_messages = []
+    for message in messages or []:
+        if not isinstance(message, dict):
+            continue
+
+        next_message = dict(message)
+        role = str(next_message.get("role") or "").strip()
+        message_id = int(next_message.get("id") or 0)
+        fallback_reasoning = reasoning_by_message_id.get(message_id, "")
+        metadata = next_message.get("metadata") if isinstance(next_message.get("metadata"), dict) else {}
+
+        if role == "assistant" and fallback_reasoning and not str(metadata.get("reasoning_content") or "").strip():
+            next_metadata = dict(metadata)
+            next_metadata["reasoning_content"] = fallback_reasoning
+            next_message["metadata"] = next_metadata
+
+        merged_messages.append(next_message)
+
+    return merged_messages
 
 
 def _load_conversation_memory_payload(conv_id: int, limit: int = 200) -> dict:
@@ -624,12 +669,17 @@ def register_conversation_routes(app) -> None:
         payload.update({"deleted_entry_id": entry_id})
         return jsonify(payload)
 
-    @app.route("/api/conversations/<int:conv_id>/export", methods=["GET"])
+    @app.route("/api/conversations/<int:conv_id>/export", methods=["GET", "POST"])
     def export_conversation(conv_id):
         format_name = str(request.args.get("format") or "md").strip().lower()
-        conversation, messages = _load_conversation_payload(conv_id)
+        export_request_payload = request.get_json(silent=True) if request.method == "POST" else {}
+        reasoning_by_message_id = _normalize_export_reasoning_map(
+            (export_request_payload or {}).get("reasoning_by_message_id")
+        )
+        conversation, messages = _load_conversation_payload(conv_id, include_private_metadata=True)
         if not conversation:
             return jsonify({"error": "Not found."}), 404
+        messages = _apply_export_reasoning_map(messages, reasoning_by_message_id)
 
         base_name = _sanitize_download_filename(conversation["title"] or "conversation", fallback="conversation")
         payload_conversation = dict(conversation)

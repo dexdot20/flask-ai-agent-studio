@@ -1338,24 +1338,35 @@ def delete_conversation_video_assets(conversation_id: int) -> list[str]:
     return [str(row["video_id"] or "").strip() for row in rows if str(row["video_id"] or "").strip()]
 
 
-def _strip_private_message_metadata_fields(metadata: dict | None) -> dict:
+def _strip_private_message_metadata_fields(
+    metadata: dict | None,
+    *,
+    include_private_fields: bool = False,
+) -> dict:
     if not isinstance(metadata, dict):
         return {}
     cleaned = dict(metadata)
-    cleaned.pop("reasoning_content", None)
+    if not include_private_fields:
+        cleaned.pop("reasoning_content", None)
     return cleaned
 
 
-def parse_message_metadata(raw_metadata) -> dict:
+def parse_message_metadata(raw_metadata, *, include_private_fields: bool = False) -> dict:
     if isinstance(raw_metadata, dict):
-        return _strip_private_message_metadata_fields(raw_metadata)
+        return _strip_private_message_metadata_fields(
+            raw_metadata,
+            include_private_fields=include_private_fields,
+        )
     if not raw_metadata:
         return {}
     try:
         parsed = json.loads(raw_metadata)
     except Exception:
         return {}
-    return _strip_private_message_metadata_fields(parsed if isinstance(parsed, dict) else {})
+    return _strip_private_message_metadata_fields(
+        parsed if isinstance(parsed, dict) else {},
+        include_private_fields=include_private_fields,
+    )
 
 
 def _normalize_message_attachment(entry) -> dict | None:
@@ -2332,8 +2343,11 @@ def sanitize_edited_user_message_metadata(metadata: dict | None) -> dict:
     return {"attachments": attachments}
 
 
-def serialize_message_metadata(metadata: dict | None) -> str | None:
-    metadata = _strip_private_message_metadata_fields(metadata if isinstance(metadata, dict) else {})
+def serialize_message_metadata(metadata: dict | None, *, include_private_fields: bool = False) -> str | None:
+    metadata = _strip_private_message_metadata_fields(
+        metadata if isinstance(metadata, dict) else {},
+        include_private_fields=include_private_fields,
+    )
     cleaned = {}
     context_injection = str(metadata.get("context_injection") or "").strip()
 
@@ -2353,9 +2367,13 @@ def serialize_message_metadata(metadata: dict | None) -> str | None:
     key_points = metadata.get("key_points") if isinstance(metadata.get("key_points"), list) else (primary_image or {}).get("key_points")
     summary_source = (metadata.get("summary_source") or "").strip()
     generated_at = (metadata.get("generated_at") or "").strip()
+    reasoning_content = str(metadata.get("reasoning_content") or "").strip()
 
     if attachments:
         cleaned["attachments"] = attachments
+
+    if reasoning_content:
+        cleaned["reasoning_content"] = reasoning_content[:CONTENT_MAX_CHARS]
 
     if ocr_text:
         cleaned["ocr_text"] = ocr_text
@@ -2591,9 +2609,12 @@ def serialize_message_metadata(metadata: dict | None) -> str | None:
     return json.dumps(cleaned, ensure_ascii=False)
 
 
-def message_row_to_dict(row) -> dict:
+def message_row_to_dict(row, *, include_private_metadata: bool = False) -> dict:
     row_keys = set(row.keys()) if hasattr(row, "keys") else set()
-    metadata = parse_message_metadata(row["metadata"])
+    metadata = parse_message_metadata(
+        row["metadata"],
+        include_private_fields=include_private_metadata,
+    )
     usage = extract_message_usage(
         metadata,
         prompt_tokens=row["prompt_tokens"],
@@ -3689,7 +3710,7 @@ def update_message_metadata(message_id: int, metadata_updates: dict | None) -> N
         if row is None:
             return
 
-        merged = parse_message_metadata(row["metadata"])
+        merged = parse_message_metadata(row["metadata"], include_private_fields=True)
         for key, value in updates.items():
             if value in (None, "", [], {}):
                 merged.pop(key, None)
@@ -3698,7 +3719,7 @@ def update_message_metadata(message_id: int, metadata_updates: dict | None) -> N
 
         conn.execute(
             "UPDATE messages SET metadata = ? WHERE id = ?",
-            (serialize_message_metadata(merged), normalized_message_id),
+            (serialize_message_metadata(merged, include_private_fields=True), normalized_message_id),
         )
 
 

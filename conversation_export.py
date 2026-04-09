@@ -272,6 +272,10 @@ def _iter_message_sections(messages: list[dict]) -> list[dict]:
         if message_metadata:
             details.append(("Message Metadata", message_metadata))
 
+        reasoning_content = str(metadata.get("reasoning_content") or "").strip()
+        if role == "assistant" and reasoning_content:
+            details.append(("Reasoning", reasoning_content))
+
         tool_trace = metadata.get("tool_trace") if isinstance(metadata.get("tool_trace"), list) else []
         if tool_trace:
             lines = []
@@ -316,8 +320,8 @@ def _iter_message_sections(messages: list[dict]) -> list[dict]:
             if canvas_details:
                 details.append(("Canvas Documents", canvas_details))
 
-        has_user_facing_details = any(label != "Message Metadata" for label, _ in details)
-        if role == "assistant" and not content and not has_user_facing_details:
+        has_non_reasoning_details = any(label not in {"Message Metadata", "Reasoning"} for label, _ in details)
+        if role == "assistant" and not content and not has_non_reasoning_details:
             continue
 
         section_index += 1

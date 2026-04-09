@@ -6841,6 +6841,13 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("saveAssistantReasoning(currentConvId, persistedMessageIds?.assistant_message_id || assistantEntry.id, rawReasoning);", script_text)
         self.assertIn("updateReasoningPanel(group, getReasoningText(metadata, options.messageId));", script_text)
 
+    def test_conversation_export_posts_cached_reasoning_from_frontend(self):
+        script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
+        script_text = script_path.read_text(encoding="utf-8")
+        self.assertIn("function collectConversationReasoningExportMap(entries = history, conversationId = currentConvId)", script_text)
+        self.assertIn('body: JSON.stringify({ reasoning_by_message_id: reasoningByMessageId })', script_text)
+        self.assertIn('method: "POST"', script_text)
+
     def test_reasoning_css_includes_markdown_styles(self):
         style_path = Path(__file__).resolve().parent.parent / "static" / "style.css"
         style_text = style_path.read_text(encoding="utf-8")
@@ -9197,7 +9204,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(rows[1]["role"], "assistant")
         self.assertEqual(rows[1]["content"], "Hello world")
         assistant_metadata = json.loads(rows[1]["metadata"])
-        self.assertNotIn("reasoning_content", assistant_metadata)
+        self.assertEqual(assistant_metadata["reasoning_content"], "Analyzing request")
         self.assertEqual(assistant_metadata["tool_trace"][0]["tool_name"], "search_web")
         self.assertEqual(assistant_metadata["tool_trace"][0]["state"], "done")
         self.assertEqual(assistant_metadata["usage"]["estimated_input_tokens"], 11)
@@ -9212,6 +9219,7 @@ class AppRoutesTestCase(unittest.TestCase):
         assistant_message = conversation_response.get_json()["messages"][1]
         self.assertEqual(assistant_message["usage"]["estimated_input_tokens"], 11)
         self.assertEqual(assistant_message["usage"]["input_breakdown"]["core_instructions"], 5)
+        self.assertNotIn("reasoning_content", assistant_message["metadata"])
         self.assertEqual(assistant_message["metadata"]["tool_trace"][0]["tool_name"], "search_web")
 
     def test_failed_tool_summary_detection_marks_fetch_failures(self):
@@ -11427,7 +11435,8 @@ class AppRoutesTestCase(unittest.TestCase):
                 metadata=serialize_message_metadata(
                     {
                         "reasoning_content": "This stale reasoning should never be exported.",
-                    }
+                    },
+                    include_private_fields=True,
                 ),
             )
             insert_message(
@@ -11447,7 +11456,8 @@ class AppRoutesTestCase(unittest.TestCase):
                                 "state": "done",
                             }
                         ],
-                    }
+                    },
+                    include_private_fields=True,
                 ),
             )
 
@@ -11459,7 +11469,8 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("## 1. User", markdown_response.get_data(as_text=True))
         self.assertIn("## 2. Assistant", markdown_response.get_data(as_text=True))
         self.assertNotIn("_(empty)_", markdown_response.get_data(as_text=True))
-        self.assertNotIn("### Reasoning", markdown_response.get_data(as_text=True))
+        self.assertIn("### Reasoning", markdown_response.get_data(as_text=True))
+        self.assertIn("Reasoned through the request.", markdown_response.get_data(as_text=True))
         self.assertNotIn("This stale reasoning should never be exported.", markdown_response.get_data(as_text=True))
         self.assertIn("### Tool Trace", markdown_response.get_data(as_text=True))
 
@@ -11473,7 +11484,8 @@ class AppRoutesTestCase(unittest.TestCase):
 
         docx_document = Document(io.BytesIO(docx_response.data))
         docx_text = "\n".join(paragraph.text for paragraph in docx_document.paragraphs)
-        self.assertNotIn("Reasoned through the request.", docx_text)
+        self.assertIn("Reasoned through the request.", docx_text)
+        self.assertNotIn("This stale reasoning should never be exported.", docx_text)
         self.assertIn("A = {0, 1, 2}", docx_text)
         self.assertIn("x^2 + y^2 = z^2", docx_text)
         self.assertNotIn("$A = {0, 1, 2}$", docx_text)
@@ -11487,7 +11499,8 @@ class AppRoutesTestCase(unittest.TestCase):
 
         with pdfplumber.open(io.BytesIO(pdf_response.data)) as pdf:
             pdf_text = "\n".join(page.extract_text() or "" for page in pdf.pages)
-        self.assertNotIn("Reasoned through the request.", pdf_text)
+        self.assertIn("Reasoned through the request.", pdf_text)
+        self.assertNotIn("This stale reasoning should never be exported.", pdf_text)
         self.assertIn("A = {0, 1, 2}", pdf_text)
         self.assertIn("x^2 + y^2 = z^2", pdf_text)
         self.assertNotIn("$A = {0, 1, 2}$", pdf_text)
@@ -11566,6 +11579,46 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("### Sub-Agent Traces", exported_text)
         self.assertIn("Inspect report", exported_text)
         self.assertIn("Canvas saved: Yes", exported_text)
+
+    def test_conversation_export_endpoint_uses_client_reasoning_fallback_for_old_messages(self):
+        conversation_id = self._create_conversation("Legacy Reasoning Export")
+
+        with get_db() as conn:
+            insert_message(conn, conversation_id, "user", "Hello")
+            assistant_message_id = insert_message(
+                conn,
+                conversation_id,
+                "assistant",
+                "Legacy answer.",
+                metadata=serialize_message_metadata(
+                    {
+                        "tool_trace": [
+                            {
+                                "tool_name": "search_web",
+                                "step": 1,
+                                "preview": "legacy",
+                                "summary": "Legacy lookup",
+                                "state": "done",
+                            }
+                        ],
+                    }
+                ),
+            )
+
+        get_response = self.client.get(f"/api/conversations/{conversation_id}/export?format=md")
+        self.assertEqual(get_response.status_code, 200)
+        self.assertNotIn("Recovered cached reasoning.", get_response.get_data(as_text=True))
+
+        post_response = self.client.post(
+            f"/api/conversations/{conversation_id}/export?format=md",
+            json={"reasoning_by_message_id": {str(assistant_message_id): "Recovered cached reasoning."}},
+        )
+        self.assertEqual(post_response.status_code, 200)
+
+        exported_text = post_response.get_data(as_text=True)
+        self.assertIn("### Reasoning", exported_text)
+        self.assertIn("Recovered cached reasoning.", exported_text)
+        self.assertIn("Legacy answer.", exported_text)
 
     def test_conversation_export_endpoint_rejects_invalid_format(self):
         conversation_id = self._create_conversation("Exportable Chat")
