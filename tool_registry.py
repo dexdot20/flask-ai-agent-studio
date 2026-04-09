@@ -1367,7 +1367,7 @@ TOOL_SPECS = [
             "properties": {
                 "title": {
                     "type": "string",
-                    "description": "Document title shown in the canvas panel."
+                    "description": "Required document title shown in the canvas panel. Never omit it. If path is set, this should usually match the filename or basename."
                 },
                 "content": {
                     "type": "string",
@@ -1433,7 +1433,7 @@ TOOL_SPECS = [
         "prompt": {
             "purpose": "Creates an editable canvas document attached to the conversation, optionally as part of a project workspace.",
             "inputs": {
-                "title": "document title",
+                "title": "required document title; if path is known, usually reuse its basename or filename label",
                 "content": "full document body (raw source code for code format; markdown body for markdown format — no fences around code)",
                 "format": "markdown or code — set code for source files, scripts, configs, and any file with a code extension",
                 "language": "dominant code language e.g. python, cpp, javascript, bash, sql; auto-inferred from path extension if omitted",
@@ -1448,6 +1448,9 @@ TOOL_SPECS = [
                 "workspace_id": "optional workspace identifier"
             },
             "guidance": (
+                "Always include title. Never omit it. "
+                "If path is provided, set title from that path's basename or user-facing file label (for example src/app.py -> app.py). "
+                "If there is no path yet, still provide a concise artifact name such as README.md, Release Plan, or Draft Notes. "
                 "For source code files, always set format='code' and language so the document renders with syntax highlighting. "
                 "If path is provided (e.g. sketch.ino, src/main.py), format and language are inferred automatically — you can omit them. "
                 "The content field must contain raw code — do NOT wrap it in triple-backtick fences. "
@@ -1571,7 +1574,9 @@ TOOL_SPECS = [
             "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "operations": "ordered edit operations"},
             "guidance": (
                 "Use this when you want to inspect the exact before/after effect of planned canvas changes before applying them. "
-                "Each operation must be a replace, insert, or delete object using the same schema as batch_canvas_edits. "
+                "Each operation must be a plain JSON object with an action field set to replace, insert, or delete. "
+                "Do not wrap one operation in a string, array, or nested object shell. "
+                "Use the same schema as batch_canvas_edits: replace needs start_line, end_line, and lines; insert needs after_line and lines; delete needs start_line and end_line. "
                 "Prefer this over speculative prose descriptions when the user needs a concrete diff preview."
             ),
         },
@@ -1638,6 +1643,9 @@ TOOL_SPECS = [
                 "Use this when you already know several non-overlapping edits for one document or multiple documents. "
                 "Prefer one batch_canvas_edits call over serial replace_canvas_lines, insert_canvas_lines, or delete_canvas_lines calls when the targets are already known. "
                 "Every operation must target a disjoint region or insertion anchor. "
+                "Every operation must be a plain JSON object with an action field set to replace, insert, or delete. "
+                "Do not nest a single operation inside an extra array or wrapper object. "
+                "For replace use start_line, end_line, and lines. For insert use after_line and lines. For delete use start_line and end_line. "
                 "Line numbers are interpreted against the pre-batch document and adjusted automatically for earlier operations in the same batch. "
                 "When you are editing from a previously seen snippet, include expected_lines and expected_start_line on each operation so stale edits are rejected safely. "
                 "Use targets when multiple files should change together. In project mode, prefer document_path when possible."

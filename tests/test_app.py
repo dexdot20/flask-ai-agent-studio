@@ -4450,6 +4450,7 @@ class AppRoutesTestCase(unittest.TestCase):
 
     def test_canvas_tool_specs_prefer_smallest_valid_edit(self):
         batch_guidance = TOOL_SPEC_BY_NAME["batch_canvas_edits"]["prompt"]["guidance"]
+        create_guidance = TOOL_SPEC_BY_NAME["create_canvas_document"]["prompt"]["guidance"]
         rewrite_guidance = TOOL_SPEC_BY_NAME["rewrite_canvas_document"]["prompt"]["guidance"]
         replace_guidance = TOOL_SPEC_BY_NAME["replace_canvas_lines"]["prompt"]["guidance"]
         expand_description = TOOL_SPEC_BY_NAME["expand_canvas_document"]["description"]
@@ -4458,6 +4459,10 @@ class AppRoutesTestCase(unittest.TestCase):
         search_guidance = TOOL_SPEC_BY_NAME["search_canvas_document"]["prompt"]["guidance"]
 
         self.assertIn("Prefer one batch_canvas_edits call", batch_guidance)
+        self.assertIn("plain JSON object with an action field", batch_guidance)
+        self.assertIn("For replace use start_line, end_line, and lines", batch_guidance)
+        self.assertIn("Always include title", create_guidance)
+        self.assertIn("src/app.py -> app.py", create_guidance)
         self.assertIn("Do not default to this when only part of the file needs to change", rewrite_guidance)
         self.assertIn("Multiple localized replace_canvas_lines calls are fine", replace_guidance)
         self.assertIn("document_id is optional", expand_description)
@@ -4490,6 +4495,30 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("Snapshot rule", content)
         self.assertIn("expand_canvas_document returns a call-time snapshot", content)
         self.assertIn("call it again before relying on that older view", content)
+
+    def test_runtime_system_message_mentions_title_requirement_for_create_canvas_document(self):
+        message = build_runtime_system_message(active_tool_names=["create_canvas_document"])
+
+        content = message["content"]
+        self.assertIn("create_canvas_document always needs BOTH title and content", content)
+        self.assertIn("never omit title", content)
+
+    def test_runtime_system_message_mentions_batch_operation_shape(self):
+        message = build_runtime_system_message(
+            active_tool_names=["batch_canvas_edits"],
+            canvas_documents=[
+                {
+                    "id": "canvas-1",
+                    "title": "Draft",
+                    "format": "markdown",
+                    "content": "line 1\nline 2",
+                }
+            ],
+        )
+
+        content = message["content"]
+        self.assertIn("Every batch_canvas_edits operation must be a plain object", content)
+        self.assertIn("For batch_canvas_edits, replace needs start_line, end_line, and lines", content)
 
     def test_runtime_system_message_omits_disabled_scroll_guidance(self):
         message = build_runtime_system_message(
@@ -5263,6 +5292,18 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertIsNone(_validate_tool_arguments("search_web", tool_args))
         self.assertEqual(tool_args["queries"], ["repo overview"])
+
+    def test_create_canvas_document_validator_infers_missing_title_from_path(self):
+        from agent import _validate_tool_arguments
+
+        tool_args = {
+            "path": "src/app.py",
+            "content": "print('hello')",
+            "format": "code",
+        }
+
+        self.assertIsNone(_validate_tool_arguments("create_canvas_document", tool_args))
+        self.assertEqual(tool_args["title"], "app.py")
 
     def test_grep_fetched_content_validator_clamps_runtime_coercible_limits(self):
         from agent import _validate_tool_arguments
@@ -11601,6 +11642,40 @@ class AppRoutesTestCase(unittest.TestCase):
             "alpha\nbeta updated\ngamma\ndelta",
         )
 
+    def test_execute_tool_batch_canvas_edits_infers_missing_action_from_range_fields(self):
+        runtime_state = {
+            "canvas": create_canvas_runtime_state(
+                [
+                    {
+                        "id": "canvas-1",
+                        "title": "app.py",
+                        "path": "src/app.py",
+                        "format": "code",
+                        "content": "alpha\nbeta\ngamma",
+                    }
+                ]
+            )
+        }
+
+        result, summary = _execute_tool(
+            "batch_canvas_edits",
+            {
+                "document_path": "src/app.py",
+                "operations": [
+                    {"start_line": 2, "end_line": 2, "lines": ["beta updated"]},
+                ],
+            },
+            runtime_state,
+        )
+
+        self.assertEqual(result["action"], "lines_batch_edited")
+        self.assertEqual(result["applied_count"], 1)
+        self.assertIn("Canvas batch edit applied", summary)
+        self.assertEqual(
+            get_canvas_runtime_documents(runtime_state["canvas"])[0]["content"],
+            "alpha\nbeta updated\ngamma",
+        )
+
     def test_execute_tool_batch_canvas_edits_repairs_nested_operation_shapes(self):
         runtime_state = {
             "canvas": create_canvas_runtime_state(
@@ -11621,6 +11696,38 @@ class AppRoutesTestCase(unittest.TestCase):
             {
                 "document_path": "src/app.py",
                 "operations": [[{"replace": {"start_line": 2, "end_line": 2, "lines": "beta updated"}}]],
+            },
+            runtime_state,
+        )
+
+        self.assertEqual(result["action"], "lines_batch_edited")
+        self.assertEqual(result["applied_count"], 1)
+        self.assertIn("Canvas batch edit applied", summary)
+        self.assertEqual(
+            get_canvas_runtime_documents(runtime_state["canvas"])[0]["content"],
+            "alpha\nbeta updated\ngamma",
+        )
+
+    def test_execute_tool_batch_canvas_edits_repairs_prose_wrapped_json_payloads(self):
+        runtime_state = {
+            "canvas": create_canvas_runtime_state(
+                [
+                    {
+                        "id": "canvas-1",
+                        "title": "app.py",
+                        "path": "src/app.py",
+                        "format": "code",
+                        "content": "alpha\nbeta\ngamma",
+                    }
+                ]
+            )
+        }
+
+        result, summary = _execute_tool(
+            "batch_canvas_edits",
+            {
+                "document_path": "src/app.py",
+                "operations": "Please apply these edits: [{\"start_line\": 2, \"end_line\": 2, \"lines\": [\"beta updated\"]}]",
             },
             runtime_state,
         )

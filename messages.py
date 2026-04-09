@@ -1235,6 +1235,8 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
         "- Prefer the smallest valid canvas change that satisfies the request.",
         "- Do not rewrite the whole document when only part needs to change; use replace_canvas_lines, insert_canvas_lines, or delete_canvas_lines for local edits when the exact visible lines are known.",
         "- When several non-overlapping edits for the same document are already known, prefer batch_canvas_edits over serial line-edit calls.",
+        "- Every batch_canvas_edits operation must be a plain object with action set to replace, insert, or delete; do not wrap it in an array, string, or nested shell.",
+        "- For batch_canvas_edits, replace needs start_line, end_line, and lines; insert needs after_line and lines; delete needs start_line and end_line.",
         "- Use preview_canvas_changes before a large or risky batch when you need a non-mutating diff preview first.",
         "- Use transform_canvas_lines for bulk find-replace work; use count_only first when the replacement scope is uncertain.",
         "- Use update_canvas_metadata for title, summary, role, dependency, or symbol metadata changes that do not change document content.",
@@ -1254,6 +1256,9 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
         "- The content of a code document is raw source code — do NOT wrap it in triple-backtick fences.",
         "- When editing code lines, preserve indentation exactly. Each element of the lines array is one complete line.",
     ]
+    if "create_canvas_document" in active_set:
+        lines.insert(2, "- create_canvas_document always needs BOTH title and content.")
+        lines.insert(3, "- When creating a new canvas document, never omit title. If a project path is known, reuse its basename as the title; otherwise provide a short artifact name such as README.md, app.py, or Release Plan.")
     if search_guidance_line:
         lines.insert(9, search_guidance_line)
     if inspect_first_line:

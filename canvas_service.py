@@ -1361,10 +1361,23 @@ def _coerce_batch_canvas_json_value(value):
     if not isinstance(value, str):
         return value
     raw_value = value.strip()
+    if not raw_value:
+        return value
+
+    fenced_match = re.match(r"^```(?:json|javascript|js|python)?\s*(.*?)\s*```$", raw_value, flags=re.DOTALL | re.IGNORECASE)
+    if fenced_match:
+        raw_value = fenced_match.group(1).strip()
+
+    if not raw_value:
+        return value
+
+    fragment = _extract_batch_canvas_json_fragment(raw_value)
+    if raw_value[0] not in "[{" and fragment:
+        raw_value = fragment
+
     if not raw_value or raw_value[0] not in "[{":
-        fenced_match = re.match(r"^```(?:json|javascript|js|python)?\s*(.*?)\s*```$", raw_value, flags=re.DOTALL | re.IGNORECASE)
-        if fenced_match:
-            raw_value = fenced_match.group(1).strip()
+        if fragment:
+            raw_value = fragment
         if not raw_value or raw_value[0] not in "[{":
             return value
 
@@ -1386,6 +1399,57 @@ def _coerce_batch_canvas_json_value(value):
             except Exception:
                 continue
     return value
+
+
+def _extract_batch_canvas_json_fragment(text: str) -> str | None:
+    if not text:
+        return None
+
+    open_indices = [index for index in (text.find("{"), text.find("[")) if index >= 0]
+    if not open_indices:
+        return None
+
+    start_index = min(open_indices)
+    stack = [text[start_index]]
+    in_string: str | None = None
+    escape_next = False
+
+    for index in range(start_index + 1, len(text)):
+        char = text[index]
+
+        if in_string:
+            if escape_next:
+                escape_next = False
+                continue
+            if char == "\\":
+                escape_next = True
+                continue
+            if char == in_string:
+                in_string = None
+            continue
+
+        if char in {'"', "'"}:
+            in_string = char
+            continue
+
+        if char in "[{":
+            stack.append(char)
+            continue
+
+        if char in "]}":
+            if not stack:
+                return None
+            top = stack[-1]
+            if top == "{" and char == "}":
+                stack.pop()
+            elif top == "[" and char == "]":
+                stack.pop()
+            else:
+                return None
+            if not stack:
+                return text[start_index:index + 1]
+
+    return None
 
 
 def _normalize_batch_canvas_operations_input(operations):
@@ -1432,37 +1496,64 @@ def _normalize_batch_canvas_operation_candidate(operation):
     if not isinstance(normalized, dict):
         return normalized
 
+    def _unwrap_singleton(candidate):
+        while isinstance(candidate, list) and len(candidate) == 1:
+            candidate = _coerce_batch_canvas_json_value(candidate[0])
+        return candidate
+
     for wrapper_key in ("operation", "edit", "item", "payload", "args"):
-        wrapped_candidate = _coerce_batch_canvas_json_value(normalized.get(wrapper_key))
-        if isinstance(wrapped_candidate, dict):
-            merged_candidate = dict(wrapped_candidate)
-            for key, value in normalized.items():
-                if key == wrapper_key:
-                    continue
-                merged_candidate.setdefault(key, value)
-            normalized = merged_candidate
-            break
+        wrapped_candidate = _unwrap_singleton(_coerce_batch_canvas_json_value(normalized.get(wrapper_key)))
+        if not isinstance(wrapped_candidate, dict):
+            continue
+        merged_candidate = dict(wrapped_candidate)
+        for key, value in normalized.items():
+            if key == wrapper_key:
+                continue
+            merged_candidate.setdefault(key, value)
+        normalized = merged_candidate
+        break
+
+    for action_key in ("replace", "insert", "delete"):
+        wrapped_candidate = _unwrap_singleton(_coerce_batch_canvas_json_value(normalized.get(action_key)))
+        if not isinstance(wrapped_candidate, dict):
+            continue
+        merged_candidate = dict(wrapped_candidate)
+        for key, value in normalized.items():
+            if key == action_key or key in {"replace", "insert", "delete"}:
+                continue
+            merged_candidate.setdefault(key, value)
+        merged_candidate["action"] = action_key
+        normalized = merged_candidate
+        break
 
     action = str(normalized.get("action") or "").strip().lower()
-    if action:
-        return normalized
+    if action not in {"replace", "insert", "delete"}:
+        inferred_action = None
+        if "after_line" in normalized:
+            inferred_action = "insert"
+        elif "start_line" in normalized and "end_line" in normalized:
+            if any(key in normalized for key in ("lines", "content", "text", "value")):
+                inferred_action = "replace"
+            else:
+                inferred_action = "delete"
+        if not inferred_action:
+            return normalized
+        normalized = dict(normalized)
+        normalized["action"] = inferred_action
+        action = inferred_action
+    else:
+        normalized["action"] = action
 
-    nested_action_names = [
-        candidate
-        for candidate in ("replace", "insert", "delete")
-        if isinstance(normalized.get(candidate), dict)
-    ]
-    if len(nested_action_names) != 1:
-        return normalized
+    if action in {"replace", "insert"} and "lines" not in normalized:
+        line_payload = None
+        for field_name in ("lines", "content", "text", "value"):
+            if field_name in normalized:
+                line_payload = normalized.pop(field_name)
+                break
+        if line_payload is not None:
+            normalized["lines"] = _normalize_batch_canvas_lines(line_payload, field_name="lines")
 
-    nested_action = nested_action_names[0]
-    nested_operation = dict(normalized.get(nested_action) or {})
-    for key, value in normalized.items():
-        if key == nested_action or key in {"replace", "insert", "delete"}:
-            continue
-        nested_operation.setdefault(key, value)
-    nested_operation["action"] = nested_action
-    return nested_operation
+    return normalized
 
 
 def _normalize_batch_canvas_operation(operation: dict, index: int) -> dict:

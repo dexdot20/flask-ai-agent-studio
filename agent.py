@@ -3704,6 +3704,15 @@ def _coerce_clarification_question_item(raw_question):
     }
 
 
+def _infer_create_canvas_document_title(tool_args: dict) -> str:
+    raw_path = str(tool_args.get("path") or "").strip().replace("\\", "/")
+    if raw_path:
+        basename = raw_path.rstrip("/").split("/")[-1].strip()
+        if basename:
+            return basename
+    return "Canvas"
+
+
 def _validate_tool_arguments(tool_name: str, tool_args: dict) -> str | None:
     tool_name = _normalize_tool_name(tool_name)
     spec = TOOL_SPEC_BY_NAME.get(tool_name)
@@ -3719,6 +3728,8 @@ def _validate_tool_arguments(tool_name: str, tool_args: dict) -> str | None:
         tool_args["section"] = "notes"
     if tool_name in SEARCH_QUERY_BATCHED_TOOL_NAMES:
         _coerce_search_tool_queries(tool_args, ensure_key=True)
+    if tool_name == "create_canvas_document" and not str(tool_args.get("title") or "").strip():
+        tool_args["title"] = _infer_create_canvas_document_title(tool_args)
 
     schema = spec.get("parameters") or {}
     properties = schema.get("properties") or {}

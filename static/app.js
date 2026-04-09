@@ -67,6 +67,7 @@ const canvasDiffEl = document.getElementById("canvas-diff");
 const canvasEmptyState = document.getElementById("canvas-empty-state");
 const canvasEditorEl = document.getElementById("canvas-editor");
 const canvasDocumentEl = document.getElementById("canvas-document");
+const canvasWorkspaceMain = canvasDocumentEl?.closest(".canvas-workspace-main") || null;
 const canvasDocumentTabsEl = document.getElementById("canvas-document-tabs");
 const canvasMetaBar = document.getElementById("canvas-meta-bar");
 const canvasMetaChips = document.getElementById("canvas-meta-chips");
@@ -592,6 +593,7 @@ let lastSummaryTriggerEl = null;
 let lastMemoryTriggerEl = null;
 let streamingCanvasPreviews = new Map();
 let pendingCanvasPreviewTimer = 0;
+let pendingCanvasEditorPreviewTimer = 0;
 let lastCanvasStructureSignature = "";
 let latestSummaryStatus = null;
 let isSummaryOperationInFlight = false;
@@ -3431,6 +3433,49 @@ function setCanvasHint(message, tone = "muted") {
   canvasHint.dataset.tone = tone;
 }
 
+function clearCanvasEditingPreviewRender() {
+  if (!pendingCanvasEditorPreviewTimer) {
+    return;
+  }
+  globalThis.clearTimeout(pendingCanvasEditorPreviewTimer);
+  pendingCanvasEditorPreviewTimer = 0;
+}
+
+function getCanvasEditingPreviewDocument(activeDocument = getActiveCanvasDocument()) {
+  if (!activeDocument || !isCanvasEditing || !canvasEditorEl) {
+    return activeDocument;
+  }
+
+  const previewFormat = canvasFormatSelect?.value === "code" ? "code" : "markdown";
+  return normalizeCanvasDocument({
+    ...activeDocument,
+    format: previewFormat,
+    content: canvasEditorEl.value,
+  }) || activeDocument;
+}
+
+function scheduleCanvasEditingPreviewRender() {
+  if (!isCanvasEditing) {
+    return;
+  }
+  if (pendingCanvasEditorPreviewTimer) {
+    return;
+  }
+
+  pendingCanvasEditorPreviewTimer = globalThis.setTimeout(() => {
+    pendingCanvasEditorPreviewTimer = 0;
+    if (!isCanvasEditing) {
+      return;
+    }
+    const renderState = buildCanvasRenderState();
+    if (!renderState.activeDocument) {
+      renderCanvasPanel();
+      return;
+    }
+    updateCanvasActiveDocumentDisplay(renderState);
+  }, CANVAS_PREVIEW_RENDER_INTERVAL_MS);
+}
+
 function setPendingDocumentCanvasOpen(files) {
   if (!files || !files.length) {
     pendingDocumentCanvasOpen = null;
@@ -3448,11 +3493,13 @@ function renderCanvasMetaBar(renderState) {
     return;
   }
 
-  const { activeDocument, documents, isStreamingPreviewActive, visibleDocuments } = renderState;
-  if (!activeDocument || !(documents || []).length) {
+  const { activeDocument: baseActiveDocument, documents, isStreamingPreviewActive, visibleDocuments } = renderState;
+  if (!baseActiveDocument || !(documents || []).length) {
     resetCanvasMetaBar();
     return;
   }
+
+  const activeDocument = getCanvasEditingPreviewDocument(baseActiveDocument);
 
   const modeLabel = getCanvasMode(documents) === "project" ? "Project mode" : "Document mode";
   const countLabel = visibleDocuments.length === documents.length
@@ -3533,14 +3580,16 @@ function updateCanvasActiveDocumentDisplay(renderState) {
     visibleDocuments,
   } = renderState;
 
+  const displayDocument = getCanvasEditingPreviewDocument(activeDocument);
   activeCanvasDocumentId = activeDocument.id;
+  canvasWorkspaceMain?.classList.toggle("canvas-workspace-main--editing", Boolean(isCanvasEditing));
   const modeLabel = getCanvasMode(documents) === "project" ? "Project mode" : "Document mode";
-  const detailLabel = activeDocument.path || activeDocument.title;
-  const pageLabel = Number(activeDocument.page_count) > 1 ? ` · ${activeDocument.page_count} pages` : "";
-  const roleLabel = activeDocument.role ? ` · ${activeDocument.role}` : "";
-  const languageLabel = activeDocument.language ? ` · ${activeDocument.language}` : "";
-  const visualLabel = isVisualCanvasDocument(activeDocument) ? " · visual preview" : "";
-  canvasSubtitle.textContent = `${modeLabel} · ${visibleDocuments.length}/${documents.length} files · ${detailLabel} · ${activeDocument.line_count} lines${pageLabel}${roleLabel}${languageLabel}${visualLabel}`;
+  const detailLabel = displayDocument.path || displayDocument.title;
+  const pageLabel = Number(displayDocument.page_count) > 1 ? ` · ${displayDocument.page_count} pages` : "";
+  const roleLabel = displayDocument.role ? ` · ${displayDocument.role}` : "";
+  const languageLabel = displayDocument.language ? ` · ${displayDocument.language}` : "";
+  const visualLabel = isVisualCanvasDocument(displayDocument) ? " · visual preview" : "";
+  canvasSubtitle.textContent = `${modeLabel} · ${visibleDocuments.length}/${documents.length} files · ${detailLabel} · ${displayDocument.line_count} lines${pageLabel}${roleLabel}${languageLabel}${visualLabel}`;
   renderCanvasMetaBar(renderState);
   const activeToolNames = Array.isArray(appSettings.active_tools) ? new Set(appSettings.active_tools) : new Set();
   const canScrollCanvas = activeToolNames.has("scroll_canvas_document");
@@ -3548,20 +3597,22 @@ function updateCanvasActiveDocumentDisplay(renderState) {
   const promptLineLimit = Number(appSettings.canvas_prompt_max_lines || 250);
   const expandLineLimit = Number(appSettings.canvas_expand_max_lines || 1600);
   if (isStreamingPreviewActive) {
-    const previewTool = String(activeDocument.tool || "").trim();
+    const previewTool = String(displayDocument.tool || "").trim();
     setCanvasHint(
       CANVAS_EDIT_PREVIEW_TOOLS.has(previewTool)
         ? "Live Canvas edit preview. The preview updates as tool arguments stream in and is replaced by the committed document when the tool finishes."
         : "Live Canvas preview. The preview updates as the assistant streams content and is replaced by the committed document when the tool finishes.",
       "muted"
     );
-  } else if (isVisualCanvasDocument(activeDocument)) {
+  } else if (isCanvasEditing) {
+    setCanvasHint("Edit mode is live. The preview updates as you type; save to commit changes.", "muted");
+  } else if (isVisualCanvasDocument(displayDocument)) {
     setCanvasHint(
       "Visual canvas preview detected. This document is read-only and backed by page images, so line-based canvas edits do not apply.",
       "muted"
     );
-  } else if (Number.isFinite(activeDocument.line_count) && activeDocument.line_count > promptLineLimit) {
-    const hasExpandedRoom = activeDocument.line_count > expandLineLimit;
+  } else if (Number.isFinite(displayDocument.line_count) && displayDocument.line_count > promptLineLimit) {
+    const hasExpandedRoom = displayDocument.line_count > expandLineLimit;
     setCanvasHint(
       hasExpandedRoom
         ? canScrollCanvas && canExpandCanvas
@@ -3585,7 +3636,7 @@ function updateCanvasActiveDocumentDisplay(renderState) {
   canvasEmptyState.innerHTML = "<h3>No canvas document yet</h3><p>Ask the assistant to draft something substantial, then continue refining it with line-based edits.</p>";
   if (canvasFormatSelect) {
     canvasFormatSelect.disabled = !isCanvasEditing || isStreamingPreviewActive;
-    canvasFormatSelect.value = activeDocument.format || "markdown";
+    canvasFormatSelect.value = displayDocument.format || "markdown";
   }
   if (canvasSearchInput) {
     canvasSearchInput.disabled = isCanvasEditing || isStreamingPreviewActive;
@@ -3598,7 +3649,7 @@ function updateCanvasActiveDocumentDisplay(renderState) {
   }
   if (canvasEditBtn) {
     canvasEditBtn.hidden = isCanvasEditing;
-    canvasEditBtn.disabled = isStreamingPreviewActive || !isCanvasDocumentEditable(activeDocument);
+    canvasEditBtn.disabled = isStreamingPreviewActive || !isCanvasDocumentEditable(displayDocument);
   }
   if (canvasSaveBtn) {
     canvasSaveBtn.hidden = !isCanvasEditing;
@@ -3614,10 +3665,14 @@ function updateCanvasActiveDocumentDisplay(renderState) {
       editingCanvasDocumentId = activeDocument.id;
       canvasEditorEl.value = activeDocument.content || "";
     }
+    canvasEditorEl.classList.add("canvas-editor--editing");
+    canvasDocumentEl.classList.add("canvas-document--editing-preview");
     canvasEditorEl.hidden = false;
-    canvasDocumentEl.hidden = true;
-    canvasDocumentEl.innerHTML = "";
+    canvasDocumentEl.hidden = false;
+    canvasDocumentEl.innerHTML = renderCanvasDocumentBody(displayDocument);
+    bindCanvasPageNavigation(displayDocument);
   } else {
+    canvasDocumentEl.classList.remove("canvas-document--editing-preview");
     canvasDocumentEl.hidden = false;
     if (activeDocument.isStreamingPreview) {
       const existingPreviewEl = canvasDocumentEl.querySelector('[data-canvas-streaming-preview-container="true"]');
@@ -3635,6 +3690,7 @@ function updateCanvasActiveDocumentDisplay(renderState) {
       bindCanvasPageNavigation(activeDocument);
     }
     if (canvasEditorEl) {
+      canvasEditorEl.classList.remove("canvas-editor--editing");
       canvasEditorEl.hidden = true;
     }
   }
@@ -3643,7 +3699,8 @@ function updateCanvasActiveDocumentDisplay(renderState) {
   const matchCount = !isCanvasEditing && !isStreamingPreviewActive ? applyCanvasSearchHighlight(searchTerm) : 0;
   updateCanvasSearchFeedback(renderState, matchCount);
   if (canvasCopyBtn) {
-    canvasCopyBtn.disabled = isVisualCanvasDocument(activeDocument) || !String(activeDocument.content || "").length;
+    const copySourceText = isCanvasEditing && canvasEditorEl ? canvasEditorEl.value : displayDocument.content;
+    canvasCopyBtn.disabled = isCanvasEditing || isVisualCanvasDocument(displayDocument) || !String(copySourceText || "").length;
     canvasCopyBtn.hidden = !isCanvasPanelOpen;
   }
   if (canvasDeleteBtn) {
@@ -3968,18 +4025,22 @@ function renderCanvasPanel() {
 
   renderCanvasTree(renderDocuments, activeDocument);
   if (!renderDocuments.length) {
+    clearCanvasEditingPreviewRender();
     isCanvasEditing = false;
     editingCanvasDocumentId = null;
+    canvasWorkspaceMain?.classList.remove("canvas-workspace-main--editing");
     resetCanvasMetaBar();
     canvasSubtitle.textContent = "No canvas document yet.";
     setCanvasHint("");
     canvasEmptyState.hidden = false;
     canvasEmptyState.innerHTML = "<h3>No canvas document yet</h3><p>Create a blank file with New file, upload an existing text file, or ask the assistant to draft something substantial and keep refining it with line-based edits.</p>";
     if (canvasEditorEl) {
+      canvasEditorEl.classList.remove("canvas-editor--editing");
       canvasEditorEl.hidden = true;
       canvasEditorEl.value = "";
     }
     canvasDocumentEl.hidden = true;
+    canvasDocumentEl.classList.remove("canvas-document--editing-preview");
     canvasDocumentEl.innerHTML = "";
     if (canvasDiffEl) {
       canvasDiffEl.hidden = true;
@@ -4049,18 +4110,22 @@ function renderCanvasPanel() {
   }
 
   if (!activeDocument) {
+    clearCanvasEditingPreviewRender();
     isCanvasEditing = false;
     editingCanvasDocumentId = null;
+    canvasWorkspaceMain?.classList.remove("canvas-workspace-main--editing");
     resetCanvasMetaBar();
     canvasSubtitle.textContent = `Project mode · ${renderDocuments.length} files · no matches`;
     setCanvasHint("");
     canvasEmptyState.hidden = false;
     canvasEmptyState.innerHTML = "<h3>No files match the current filters</h3><p>Adjust the search term, role, or path filter to bring files back into view.</p>";
     if (canvasEditorEl) {
+      canvasEditorEl.classList.remove("canvas-editor--editing");
       canvasEditorEl.hidden = true;
       canvasEditorEl.value = "";
     }
     canvasDocumentEl.hidden = true;
+    canvasDocumentEl.classList.remove("canvas-document--editing-preview");
     canvasDocumentEl.innerHTML = "";
     if (canvasDiffEl) {
       canvasDiffEl.hidden = true;
@@ -4158,8 +4223,12 @@ function openCanvas(triggerEl = null) {
 }
 
 function closeCanvas() {
+  clearCanvasEditingPreviewRender();
   isCanvasEditing = false;
   editingCanvasDocumentId = null;
+  canvasWorkspaceMain?.classList.remove("canvas-workspace-main--editing");
+  canvasEditorEl?.classList.remove("canvas-editor--editing");
+  canvasDocumentEl?.classList.remove("canvas-document--editing-preview");
   setCanvasMobileTreeOpen(false);
   canvasPanel?.classList.remove("open");
   canvasOverlay?.classList.remove("open");
@@ -7651,6 +7720,7 @@ if (canvasSaveBtn) {
 }
 if (canvasCancelBtn) {
   canvasCancelBtn.addEventListener("click", () => {
+    clearCanvasEditingPreviewRender();
     isCanvasEditing = false;
     editingCanvasDocumentId = null;
     renderCanvasPanel();
@@ -7798,7 +7868,17 @@ if (canvasRoleFilter) {
 if (canvasPathFilter) {
   canvasPathFilter.addEventListener("change", () => renderCanvasPanel());
 }
+if (canvasFormatSelect) {
+  canvasFormatSelect.addEventListener("change", () => {
+    if (isCanvasEditing) {
+      scheduleCanvasEditingPreviewRender();
+    }
+  });
+}
 if (canvasEditorEl) {
+  canvasEditorEl.addEventListener("input", () => {
+    scheduleCanvasEditingPreviewRender();
+  });
   canvasEditorEl.addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
       event.preventDefault();
