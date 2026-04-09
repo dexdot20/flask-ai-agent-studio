@@ -4,9 +4,28 @@ This is a single-page Flask chat application built around DeepSeek plus optional
 
 It is not a minimal prompt/response demo. The app keeps conversation history in SQLite, restores assistant metadata when a conversation is reopened, supports editing earlier user messages, streams tool progress and reasoning, can enrich a user turn with local OCR or extracted document text before the model sees it, and can compact older content with summaries and pruning.
 
+## Screenshots
+
+### Chat and tool execution
+
+![Chat and tool execution](screenshots/Screenshot_2026-04-09_18-04-09.png)
+
+### Assistant response actions
+
+![Assistant response actions](screenshots/Screenshot_2026-04-09_18-05-21.png)
+
+### Settings page
+
+![Settings page](screenshots/Screenshot_2026-04-09_18-05-58.png)
+
+### Canvas view
+
+![Canvas view](screenshots/Screenshot_2026-04-09_18-07-19.png)
+
 ## Contents
 
 - [What the app does](#what-the-app-does)
+- [Screenshots](#screenshots)
 - [Architecture overview](#architecture-overview)
 - [Project structure](#project-structure)
 - [Installation](#installation)
