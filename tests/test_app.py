@@ -4698,6 +4698,17 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("default to conversation memory", conversation_guidance)
         self.assertIn("Multiple compact entries are better than one overloaded summary", conversation_guidance)
 
+    def test_search_tool_specs_allow_optional_conversation_memory_promotion(self):
+        knowledge_base_spec = TOOL_SPEC_BY_NAME["search_knowledge_base"]
+        tool_memory_spec = TOOL_SPEC_BY_NAME["search_tool_memory"]
+
+        self.assertIn("save_to_conversation_memory", knowledge_base_spec["parameters"]["properties"])
+        self.assertIn("memory_key", knowledge_base_spec["parameters"]["properties"])
+        self.assertIn("save_to_conversation_memory", tool_memory_spec["parameters"]["properties"])
+        self.assertIn("memory_key", tool_memory_spec["parameters"]["properties"])
+        self.assertIn("survive later turns in this chat", knowledge_base_spec["prompt"]["guidance"])
+        self.assertIn("survive later turns in this chat", tool_memory_spec["prompt"]["guidance"])
+
     def test_settings_patch_allows_manual_scratchpad_updates(self):
         response = self.client.patch(
             "/api/settings",
@@ -7149,6 +7160,121 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(entries[0]["id"], original_entry["id"])
         self.assertEqual(entries[0]["entry_type"], "task_context")
         self.assertEqual(entries[0]["value"], "Kullanıcı bu konuşmada kısa ve net Türkçe yanıt istiyor.")
+
+    def test_execute_tool_search_knowledge_base_can_save_compact_result_to_conversation_memory(self):
+        conversation_id = self._create_conversation()
+        search_result = {
+            "query": "python sort",
+            "count": 2,
+            "matches": [
+                {
+                    "source_name": "doc-1",
+                    "source_type": "uploaded_document",
+                    "similarity": 0.82,
+                    "text": "Python listeleri siralamak icin sorted kullanilir.",
+                },
+                {
+                    "source_name": "conversation-12",
+                    "source_type": "conversation",
+                    "similarity": 0.64,
+                    "text": "Onceki sohbette reverse sort ornegi verildi.",
+                },
+            ],
+        }
+
+        with patch("agent.search_knowledge_base_tool", return_value=search_result):
+            result, summary = _execute_tool(
+                "search_knowledge_base",
+                {
+                    "query": "python sort",
+                    "save_to_conversation_memory": True,
+                    "memory_key": "Sorting findings",
+                },
+                runtime_state={"agent_context": {"conversation_id": conversation_id}},
+            )
+
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["conversation_memory"]["status"], "ok")
+        self.assertEqual(result["conversation_memory"]["key"], "Sorting findings")
+        self.assertFalse(result["conversation_memory"]["updated_existing"])
+        self.assertEqual(summary, "2 knowledge chunks found; conversation memory saved: Sorting findings")
+        entries = get_conversation_memory(conversation_id)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["entry_type"], "tool_result")
+        self.assertEqual(entries[0]["key"], "Sorting findings")
+        self.assertIn("Knowledge base search for \"python sort\"", entries[0]["value"])
+        self.assertIn("doc-1 [uploaded_document] sim 0.82", entries[0]["value"])
+
+    def test_execute_tool_search_tool_memory_can_refresh_saved_finding(self):
+        conversation_id = self._create_conversation()
+        insert_conversation_memory_entry(
+            conversation_id,
+            "tool_result",
+            "Policy cache",
+            "Eski arama ozeti.",
+        )
+        search_result = {
+            "query": "example.com policy",
+            "count": 1,
+            "matches": [
+                {
+                    "source_name": "fetch_url: example.com/policy",
+                    "source_type": "tool_memory",
+                    "similarity": 0.91,
+                    "text": "Cached policy text.",
+                    "expiry_warning": "Expires within 1 hour",
+                }
+            ],
+        }
+
+        with patch("agent.search_tool_memory", return_value=search_result):
+            result, summary = _execute_tool(
+                "search_tool_memory",
+                {
+                    "query": "example.com policy",
+                    "save_to_conversation_memory": True,
+                    "memory_key": "Policy cache",
+                },
+                runtime_state={"agent_context": {"conversation_id": conversation_id}},
+            )
+
+        self.assertEqual(result["conversation_memory"]["status"], "ok")
+        self.assertTrue(result["conversation_memory"]["updated_existing"])
+        self.assertEqual(summary, "1 tool memory matches found; conversation memory updated: Policy cache")
+        entries = get_conversation_memory(conversation_id)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["key"], "Policy cache")
+        self.assertIn("Tool memory search for \"example.com policy\"", entries[0]["value"])
+        self.assertIn("Expires within 1 hour", entries[0]["value"])
+
+    def test_execute_tool_search_knowledge_base_ignores_falsey_string_save_flag(self):
+        conversation_id = self._create_conversation()
+        search_result = {
+            "query": "python sort",
+            "count": 1,
+            "matches": [
+                {
+                    "source_name": "doc-1",
+                    "source_type": "uploaded_document",
+                    "similarity": 0.82,
+                    "text": "Python listeleri siralamak icin sorted kullanilir.",
+                }
+            ],
+        }
+
+        with patch("agent.search_knowledge_base_tool", return_value=search_result):
+            result, summary = _execute_tool(
+                "search_knowledge_base",
+                {
+                    "query": "python sort",
+                    "save_to_conversation_memory": "false",
+                },
+                runtime_state={"agent_context": {"conversation_id": conversation_id}},
+            )
+
+        self.assertNotIn("conversation_memory", result)
+        self.assertEqual(summary, "1 knowledge chunks found")
+        self.assertEqual(get_conversation_memory(conversation_id), [])
 
     def test_execute_tool_does_not_delete_other_conversation_memory_entry(self):
         source_conversation_id = self._create_conversation("Source")

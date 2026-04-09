@@ -648,13 +648,21 @@ TOOL_SPECS = [
                     "minimum": 0.0,
                     "maximum": 1.0,
                 },
+                "save_to_conversation_memory": {
+                    "type": "boolean",
+                    "description": "If true, save a compact summary of the strongest search findings to conversation memory for this chat.",
+                },
+                "memory_key": {
+                    "type": "string",
+                    "description": "Optional short conversation-memory key to use when save_to_conversation_memory is true. Reuse the same key to refresh an existing finding.",
+                },
             },
             "required": ["query"],
         },
         "prompt": {
             "purpose": "Searches the internal RAG knowledge base built from files, URLs, notes, and conversations.",
-            "inputs": {"query": "semantic search query", "category": "optional category", "top_k": "1-12 results", "min_similarity": "optional threshold 0.0-1.0"},
-            "guidance": "Use category when the likely source type is clear, and use at most a few focused searches. Synthesize from returned chunks instead of retrying near-duplicate queries. If the current context is already sufficient, do not search again; unnecessary searches waste tokens.",
+            "inputs": {"query": "semantic search query", "category": "optional category", "top_k": "1-12 results", "min_similarity": "optional threshold 0.0-1.0", "save_to_conversation_memory": "optional boolean", "memory_key": "optional short memory label"},
+            "guidance": "Use category when the likely source type is clear, and use at most a few focused searches. Synthesize from returned chunks instead of retrying near-duplicate queries. If the current context is already sufficient, do not search again; unnecessary searches waste tokens. If the finding should survive later turns in this chat, set save_to_conversation_memory=true and provide a short memory_key.",
         },
     },
     {
@@ -684,16 +692,25 @@ TOOL_SPECS = [
                     "minimum": 0.0,
                     "maximum": 1.0,
                 },
+                "save_to_conversation_memory": {
+                    "type": "boolean",
+                    "description": "If true, save a compact summary of the strongest remembered findings to conversation memory for this chat.",
+                },
+                "memory_key": {
+                    "type": "string",
+                    "description": "Optional short conversation-memory key to use when save_to_conversation_memory is true. Reuse the same key to refresh an existing finding.",
+                },
             },
             "required": ["query"],
         },
         "prompt": {
             "purpose": "Searches memory of past web searches, URL fetches, and news lookups.",
-            "inputs": {"query": "semantic search query", "top_k": "1-10 results", "min_similarity": "optional threshold 0.0-1.0"},
+            "inputs": {"query": "semantic search query", "top_k": "1-10 results", "min_similarity": "optional threshold 0.0-1.0", "save_to_conversation_memory": "optional boolean", "memory_key": "optional short memory label"},
             "guidance": (
                 "Use before making a new web request if similar research may already exist and you cannot answer from the current context. "
                 "If high-similarity results already answer the question, reuse them instead of repeating the search. "
-                "When the response includes expires_at_utc, treat older or near-expiry results more cautiously. Unnecessary lookups waste tokens."
+                "When the response includes expires_at_utc, treat older or near-expiry results more cautiously. Unnecessary lookups waste tokens. "
+                "If the finding should survive later turns in this chat, set save_to_conversation_memory=true and provide a short memory_key."
             ),
         },
     },

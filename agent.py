@@ -244,6 +244,8 @@ SEARCH_QUERY_ARGUMENT_ALIASES = (
     "q",
 )
 SEARCH_TOOL_QUERY_BATCH_SIZE = 5
+SEARCH_MEMORY_PROMOTION_MATCH_LIMIT = 2
+SEARCH_MEMORY_PROMOTION_EXCERPT_LIMIT = 180
 PARALLEL_SAFE_TOOL_NAMES = WEB_TOOL_NAMES | {
     "image_explain",
     # RAG / memory reads
@@ -921,6 +923,16 @@ def _clean_tool_text(text: str, limit: int | None = None) -> str:
     if limit and len(cleaned) > limit:
         return cleaned[:limit].rstrip() + "…"
     return cleaned
+
+
+def _coerce_tool_bool(value, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value in (None, ""):
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 def _format_tool_execution_error(error: Exception | str) -> str:
@@ -4184,6 +4196,131 @@ def _run_read_scratchpad(tool_args: dict, runtime_state: dict):
     }, "Scratchpad read"
 
 
+def _is_parallel_safe_tool_call(tool_name: str, tool_args: dict) -> bool:
+    normalized_tool_name = _normalize_tool_name(tool_name)
+    normalized_tool_args = tool_args if isinstance(tool_args, dict) else {}
+    if normalized_tool_name in {"search_knowledge_base", "search_tool_memory"} and _coerce_tool_bool(
+        normalized_tool_args.get("save_to_conversation_memory")
+    ):
+        return False
+    return normalized_tool_name in PARALLEL_SAFE_TOOL_NAMES
+
+
+def _build_search_memory_default_key(tool_name: str, query: str) -> str:
+    label = "Knowledge base" if tool_name == "search_knowledge_base" else "Tool memory"
+    cleaned_query = _clean_tool_text(query, limit=88)
+    if cleaned_query:
+        return f"{label}: {cleaned_query}"[:120]
+    return label[:120]
+
+
+def _build_search_memory_value(tool_name: str, result: dict) -> str:
+    label = "Knowledge base search" if tool_name == "search_knowledge_base" else "Tool memory search"
+    query = _clean_tool_text(result.get("query") or "", limit=120)
+    matches = result.get("matches") if isinstance(result.get("matches"), list) else []
+    count = max(0, int(result.get("count") or len(matches)))
+    if not matches:
+        return f"{label} for \"{query or 'unknown query'}\" found no matches."
+
+    fragments: list[str] = []
+    for index, match in enumerate(matches[:SEARCH_MEMORY_PROMOTION_MATCH_LIMIT], start=1):
+        if not isinstance(match, dict):
+            continue
+        source_name = _clean_tool_text(match.get("source_name") or match.get("source") or f"Match {index}", limit=64)
+        source_type = _clean_tool_text(match.get("source_type") or match.get("category") or "", limit=24)
+        excerpt = _clean_tool_text(match.get("text") or "", limit=SEARCH_MEMORY_PROMOTION_EXCERPT_LIMIT)
+        details: list[str] = []
+        if source_name:
+            details.append(source_name)
+        if source_type:
+            details.append(f"[{source_type}]")
+        similarity = match.get("similarity")
+        if isinstance(similarity, (int, float)):
+            details.append(f"sim {float(similarity):.2f}")
+        expiry_warning = _clean_tool_text(match.get("expiry_warning") or "", limit=48)
+        expires_at = _clean_tool_text(match.get("expires_at_utc") or "", limit=32)
+        if expiry_warning:
+            details.append(expiry_warning)
+        elif tool_name == "search_tool_memory" and expires_at:
+            details.append(f"expires {expires_at}")
+        fragment = " ".join(part for part in details if part).strip()
+        if excerpt:
+            fragment = f"{fragment}: {excerpt}" if fragment else excerpt
+        if fragment:
+            fragments.append(f"#{index} {fragment}")
+
+    prefix = f"{label} for \"{query or 'unknown query'}\" found {count} match{'es' if count != 1 else ''}."
+    if not fragments:
+        return prefix
+    return f"{prefix} Top results: {' | '.join(fragments)}"
+
+
+def _maybe_save_search_result_to_conversation_memory(tool_name: str, tool_args: dict, result: dict, runtime_state: dict) -> dict | None:
+    if not _coerce_tool_bool(tool_args.get("save_to_conversation_memory")):
+        return None
+
+    if not CONVERSATION_MEMORY_ENABLED:
+        return {
+            "status": "disabled",
+            "error": "Conversation memory is disabled.",
+        }
+
+    matches = result.get("matches") if isinstance(result.get("matches"), list) else []
+    count = max(0, int(result.get("count") or len(matches)))
+    if count <= 0 or not matches:
+        return {
+            "status": "no_matches",
+            "saved": False,
+        }
+
+    agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
+    conversation_id = int(agent_context.get("conversation_id") or 0)
+    if conversation_id <= 0:
+        return {
+            "status": "unavailable",
+            "saved": False,
+            "error": "No active conversation context was provided.",
+        }
+
+    source_message_id = agent_context.get("source_message_id")
+    message_id = int(source_message_id) if source_message_id not in (None, "") else None
+    key = str(tool_args.get("memory_key") or "").strip() or _build_search_memory_default_key(tool_name, result.get("query", ""))
+    entry = insert_conversation_memory_entry(
+        conversation_id,
+        "tool_result",
+        key,
+        _build_search_memory_value(tool_name, result),
+        message_id=message_id,
+    )
+    updated = entry.get("updated_existing") is True
+    return {
+        "status": "ok",
+        "saved": True,
+        "key": entry.get("key") or key,
+        "updated_existing": updated,
+    }
+
+
+def _build_search_summary(base_summary: str, conversation_memory_result: dict | None) -> str:
+    if not isinstance(conversation_memory_result, dict):
+        return base_summary
+
+    status = str(conversation_memory_result.get("status") or "").strip().lower()
+    key = str(conversation_memory_result.get("key") or "").strip()
+    if status == "ok":
+        action = "updated" if conversation_memory_result.get("updated_existing") else "saved"
+        if key:
+            return f"{base_summary}; conversation memory {action}: {key}"
+        return f"{base_summary}; conversation memory {action}"
+    if status == "no_matches":
+        return f"{base_summary}; conversation memory skipped: no matches"
+    if status == "disabled":
+        return f"{base_summary}; conversation memory disabled"
+    if status == "unavailable":
+        return f"{base_summary}; conversation memory unavailable"
+    return base_summary
+
+
 def _run_save_to_conversation_memory(tool_args: dict, runtime_state: dict):
     if not CONVERSATION_MEMORY_ENABLED:
         return {"status": "error", "error": "Conversation memory is disabled."}, "Conversation memory disabled"
@@ -4686,7 +4823,6 @@ def _run_image_explain(tool_args: dict, runtime_state: dict):
 
 
 def _run_search_knowledge_base(tool_args: dict, runtime_state: dict):
-    del runtime_state
     result = search_knowledge_base_tool(
         tool_args.get("query", ""),
         category=tool_args.get("category"),
@@ -4694,17 +4830,34 @@ def _run_search_knowledge_base(tool_args: dict, runtime_state: dict):
         allowed_source_types=get_rag_source_types(),
         min_similarity=tool_args.get("min_similarity"),
     )
-    return result, f"{result.get('count', 0)} knowledge chunks found"
+    conversation_memory_result = _maybe_save_search_result_to_conversation_memory(
+        "search_knowledge_base",
+        tool_args,
+        result,
+        runtime_state,
+    )
+    if conversation_memory_result is not None:
+        result = dict(result)
+        result["conversation_memory"] = conversation_memory_result
+    return result, _build_search_summary(f"{result.get('count', 0)} knowledge chunks found", conversation_memory_result)
 
 
 def _run_search_tool_memory(tool_args: dict, runtime_state: dict):
-    del runtime_state
     result = search_tool_memory(
         tool_args.get("query", ""),
         top_k=tool_args.get("top_k", RAG_SEARCH_DEFAULT_TOP_K),
         min_similarity=tool_args.get("min_similarity"),
     )
-    return result, f"{result.get('count', 0)} tool memory matches found"
+    conversation_memory_result = _maybe_save_search_result_to_conversation_memory(
+        "search_tool_memory",
+        tool_args,
+        result,
+        runtime_state,
+    )
+    if conversation_memory_result is not None:
+        result = dict(result)
+        result["conversation_memory"] = conversation_memory_result
+    return result, _build_search_summary(f"{result.get('count', 0)} tool memory matches found", conversation_memory_result)
 
 
 def _run_search_web(tool_args: dict, runtime_state: dict):
@@ -5488,7 +5641,14 @@ def _tool_input_preview(tool_name: str, tool_args: dict) -> str:
         if isinstance(values, list):
             return ", ".join(str(value).strip() for value in values if str(value).strip())[:300]
     if tool_name in {"search_knowledge_base", "search_tool_memory"}:
-        return str(tool_args.get("query") or "").strip()[:300]
+        query = str(tool_args.get("query") or "").strip()
+        if _coerce_tool_bool(tool_args.get("save_to_conversation_memory")):
+            memory_key = str(tool_args.get("memory_key") or "").strip()
+            suffix = f"save:{memory_key}" if memory_key else "save:auto"
+            if query:
+                return f"{query} | {suffix}"[:300]
+            return suffix[:300]
+        return query[:300]
     if tool_name == "fetch_url":
         return str(tool_args.get("url") or "").strip()[:300]
     if tool_name == "fetch_url_summarized":
@@ -7318,8 +7478,8 @@ def run_agent_stream(
         # ---- Phase 2: execute pending slots (parallel for safe read-only tools, sequential for mutators) ----
         pending_slots = [s for s in slots if s["kind"] == "execute"]
         if pending_slots:
-            parallel_slots = [s for s in pending_slots if s["tool_name"] in PARALLEL_SAFE_TOOL_NAMES]
-            sequential_slots = [s for s in pending_slots if s["tool_name"] not in PARALLEL_SAFE_TOOL_NAMES]
+            parallel_slots = [s for s in pending_slots if _is_parallel_safe_tool_call(s["tool_name"], s.get("tool_args") or {})]
+            sequential_slots = [s for s in pending_slots if not _is_parallel_safe_tool_call(s["tool_name"], s.get("tool_args") or {})]
             sub_agent_parallel_slots = [s for s in parallel_slots if s["tool_name"] == "sub_agent"]
             direct_parallel_slots = [s for s in parallel_slots if s["tool_name"] != "sub_agent"]
             buffered_sub_agent_slots = (
