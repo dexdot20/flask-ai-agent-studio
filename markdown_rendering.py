@@ -4,7 +4,9 @@ import re
 from html import escape as html_escape
 
 from docx import Document
-from reportlab.platypus import ListFlowable, ListItem, Paragraph, Preformatted, Spacer
+from reportlab.lib import colors
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.platypus import ListFlowable, ListItem, Paragraph, Preformatted, Spacer, Table, TableStyle
 
 _MARKDOWN_FENCE_RE = re.compile(r"^\s*```([A-Za-z0-9_-]+)?\s*$")
 _MARKDOWN_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
@@ -96,6 +98,24 @@ def _split_inline_math_segments(text: str) -> list[dict[str, object]]:
     return segments
 
 
+_PDF_TABLE_TOTAL_WIDTH = 450.0  # pts, approx A4 content area with standard margins
+_PDF_INLINE_BOLD_RE = re.compile(r"\*\*(.+?)\*\*|__(.+?)__", re.DOTALL)
+_PDF_INLINE_ITALIC_RE = re.compile(
+    r"(?<!\w)\*(?!\s)(.+?)(?<!\s)\*(?!\w)|(?<!\w)_(?!\s)(.+?)(?<!\s)_(?!\w)", re.DOTALL
+)
+_PDF_INLINE_CODE_RE = re.compile(r"`([^`]+)`")
+
+
+def _apply_pdf_inline_formatting(text: str) -> str:
+    """Convert inline markdown formatting to ReportLab paragraph XML markup."""
+    # Escape HTML entities first so bold/italic regexes only match raw markers
+    value = html_escape(str(text or ""), quote=False)
+    value = _PDF_INLINE_BOLD_RE.sub(lambda m: f"<b>{m.group(1) or m.group(2)}</b>", value)
+    value = _PDF_INLINE_ITALIC_RE.sub(lambda m: f"<i>{m.group(1) or m.group(2)}</i>", value)
+    value = _PDF_INLINE_CODE_RE.sub(lambda m: f'<font face="Courier">{m.group(1)}</font>', value)
+    return value
+
+
 def _render_pdf_inline_markup(text: str) -> str:
     parts: list[str] = []
     for segment in _split_inline_math_segments(text):
@@ -103,7 +123,7 @@ def _render_pdf_inline_markup(text: str) -> str:
             math_text = _escape_pdf_text(str(segment.get("text") or ""))
             parts.append(f'<font face="Courier">{math_text}</font>')
         else:
-            parts.append(_escape_pdf_text(str(segment.get("text") or "")))
+            parts.append(_apply_pdf_inline_formatting(str(segment.get("text") or "")))
     return "".join(parts)
 
 
@@ -120,7 +140,7 @@ def _append_docx_inline_runs(paragraph, text: str) -> None:
             run.font.name = "Courier New"
 
 
-def _clean_markdown_inline(text: str) -> str:
+def _clean_markdown_inline(text: str, *, preserve_formatting: bool = False) -> str:
     value = _normalize_line_endings(text)
 
     def _replace_image(match: re.Match) -> str:
@@ -129,7 +149,7 @@ def _clean_markdown_inline(text: str) -> str:
         return alt_text or url
 
     def _replace_link(match: re.Match) -> str:
-        label = _clean_markdown_inline(match.group(1) or "")
+        label = _clean_markdown_inline(match.group(1) or "", preserve_formatting=preserve_formatting)
         url = (match.group(2) or "").strip()
         if not label:
             return url
@@ -139,9 +159,10 @@ def _clean_markdown_inline(text: str) -> str:
 
     value = re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", _replace_image, value)
     value = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", _replace_link, value)
-    value = re.sub(r"`([^`]+)`", lambda match: match.group(1), value)
-    value = re.sub(r"(\*\*|__)(.+?)\1", lambda match: match.group(2), value)
-    value = re.sub(r"(?<!\w)(\*|_)(?!\s)(.+?)(?<!\s)\1(?!\w)", lambda match: match.group(2), value)
+    if not preserve_formatting:
+        value = re.sub(r"`([^`]+)`", lambda match: match.group(1), value)
+        value = re.sub(r"(\*\*|__)(.+?)\1", lambda match: match.group(2), value)
+        value = re.sub(r"(?<!\w)(\*|_)(?!\s)(.+?)(?<!\s)\1(?!\w)", lambda match: match.group(2), value)
     value = re.sub(r"~~(.+?)~~", lambda match: match.group(1), value)
     value = re.sub(r"<(https?://[^>]+)>", lambda match: match.group(1), value)
     value = value.replace("\\*", "*").replace("\\_", "_").replace("\\`", "`")
@@ -150,7 +171,7 @@ def _clean_markdown_inline(text: str) -> str:
     return value.strip()
 
 
-def _iter_markdown_blocks(text: str) -> list[dict[str, object]]:
+def _iter_markdown_blocks(text: str, *, preserve_inline_formatting: bool = False) -> list[dict[str, object]]:
     normalized = _normalize_line_endings(text)
     if not normalized.strip():
         return []
@@ -168,7 +189,10 @@ def _iter_markdown_blocks(text: str) -> list[dict[str, object]]:
         nonlocal paragraph_lines
         if not paragraph_lines:
             return
-        paragraph_text = _clean_markdown_inline(" ".join(part.strip() for part in paragraph_lines if part.strip()))
+        paragraph_text = _clean_markdown_inline(
+            " ".join(part.strip() for part in paragraph_lines if part.strip()),
+            preserve_formatting=preserve_inline_formatting,
+        )
         paragraph_lines = []
         if paragraph_text:
             blocks.append({"type": "paragraph", "text": paragraph_text})
@@ -185,10 +209,17 @@ def _iter_markdown_blocks(text: str) -> list[dict[str, object]]:
         nonlocal table_rows
         if not table_rows:
             return
-        for row in table_rows:
-            row_text = _clean_markdown_inline(" | ".join(cell for cell in row if cell is not None))
-            if row_text:
-                blocks.append({"type": "paragraph", "text": row_text})
+        if preserve_inline_formatting:
+            cleaned: list[list[str]] = [
+                [_clean_markdown_inline(cell or "", preserve_formatting=True) for cell in row]
+                for row in table_rows
+            ]
+            blocks.append({"type": "table", "rows": cleaned})
+        else:
+            for row in table_rows:
+                row_text = _clean_markdown_inline(" | ".join(cell for cell in row if cell is not None))
+                if row_text:
+                    blocks.append({"type": "paragraph", "text": row_text})
         table_rows = []
 
     for line in normalized.split("\n"):
@@ -200,7 +231,7 @@ def _iter_markdown_blocks(text: str) -> list[dict[str, object]]:
                     flush_paragraph()
                     flush_list()
                     flush_table()
-                    blocks.extend(_iter_markdown_blocks(block_text))
+                    blocks.extend(_iter_markdown_blocks(block_text, preserve_inline_formatting=preserve_inline_formatting))
                 else:
                     blocks.append({"type": "code", "text": block_text})
                 code_lines = []
@@ -241,7 +272,7 @@ def _iter_markdown_blocks(text: str) -> list[dict[str, object]]:
                 {
                     "type": "heading",
                     "level": len(heading_match.group(1)),
-                    "text": _clean_markdown_inline(heading_match.group(2)),
+                    "text": _clean_markdown_inline(heading_match.group(2), preserve_formatting=preserve_inline_formatting),
                 }
             )
             continue
@@ -263,7 +294,7 @@ def _iter_markdown_blocks(text: str) -> list[dict[str, object]]:
             if list_kind not in {None, "bullet"}:
                 flush_list()
             list_kind = "bullet"
-            list_items.append(_clean_markdown_inline(bullet_match.group(1)))
+            list_items.append(_clean_markdown_inline(bullet_match.group(1), preserve_formatting=preserve_inline_formatting))
             continue
 
         ordered_match = _MARKDOWN_ORDERED_RE.match(line)
@@ -273,7 +304,7 @@ def _iter_markdown_blocks(text: str) -> list[dict[str, object]]:
             if list_kind not in {None, "ordered"}:
                 flush_list()
             list_kind = "ordered"
-            list_items.append(_clean_markdown_inline(ordered_match.group(2)))
+            list_items.append(_clean_markdown_inline(ordered_match.group(2), preserve_formatting=preserve_inline_formatting))
             continue
 
         quote_match = _MARKDOWN_QUOTE_RE.match(line)
@@ -281,7 +312,7 @@ def _iter_markdown_blocks(text: str) -> list[dict[str, object]]:
             flush_paragraph()
             flush_list()
             flush_table()
-            quote_text = _clean_markdown_inline(quote_match.group(1))
+            quote_text = _clean_markdown_inline(quote_match.group(1), preserve_formatting=preserve_inline_formatting)
             if quote_text:
                 blocks.append({"type": "paragraph", "text": quote_text})
             continue
@@ -292,7 +323,7 @@ def _iter_markdown_blocks(text: str) -> list[dict[str, object]]:
     if in_code:
         block_text = "\n".join(code_lines)
         if code_language in {"markdown", "md", "mkd"}:
-            blocks.extend(_iter_markdown_blocks(block_text))
+            blocks.extend(_iter_markdown_blocks(block_text, preserve_inline_formatting=preserve_inline_formatting))
         else:
             blocks.append({"type": "code", "text": block_text})
 
@@ -346,6 +377,43 @@ def append_markdown_pdf_story(
             if code_text:
                 story.append(Preformatted(code_text, code_style))
                 story.append(Spacer(1, 4))
+        elif block_type == "table":
+            table_rows_data = block.get("rows") or []
+            if table_rows_data:
+                num_cols = max((len(r) for r in table_rows_data), default=1)
+                col_width = _PDF_TABLE_TOTAL_WIDTH / num_cols
+                table_cell_style = ParagraphStyle(
+                    "TableCell",
+                    parent=body_style,
+                    fontSize=max(7, (getattr(body_style, "fontSize", 10) or 10) - 1),
+                    leading=max(9, (getattr(body_style, "leading", 14) or 14) - 2),
+                    spaceAfter=2,
+                    spaceBefore=2,
+                )
+                table_data = [
+                    [
+                        Paragraph(_render_pdf_inline_markup(str(cell or "")), table_cell_style)
+                        for cell in row
+                    ]
+                    for row in table_rows_data
+                ]
+                rendered_table = Table(
+                    table_data, colWidths=[col_width] * num_cols, hAlign="LEFT", repeatRows=0
+                )
+                rendered_table.setStyle(
+                    TableStyle([
+                        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#c8cdd8")),
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef2fa")),
+                        ("TOPPADDING", (0, 0), (-1, -1), 4),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f7f9fd")]),
+                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ])
+                )
+                story.append(rendered_table)
+                story.append(Spacer(1, 8))
         elif block_type == "spacer":
             story.append(Spacer(1, 4))
 

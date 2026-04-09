@@ -7473,6 +7473,14 @@ def run_agent_stream(
             yield {"type": "tool_error", "step": step, "tool": "parser", "error": tool_call_error}
             break
 
+        # If content was buffered (not streamed live) because the model co-produced tool
+        # calls in the same turn, emit it now before tool execution so the user sees
+        # any pre-tool commentary the model generated.
+        answer_emitted = bool(turn_result.get("answer_emitted"))
+        if content_text.strip() and not answer_emitted and tool_calls and not tool_call_error:
+            for event in emit_answer(content_text):
+                yield event
+
         if content_text and not tool_calls:
             if needs_separator_for_sync and content_text.strip():
                 total_clean_content += "\n\n"
@@ -7817,6 +7825,8 @@ def run_agent_stream(
                     if s["tool_name"] == "sub_agent":
                         res, summ = yield from _run_sub_agent_stream(s["tool_args"], runtime_state)
                     else:
+                        if s.get("is_canvas"):
+                            yield {"type": "canvas_executing", "tool": s["tool_name"], "call_id": s["call_id"]}
                         res, summ = _execute_tool(s["tool_name"], s["tool_args"], runtime_state=runtime_state)
                     s["exec_result"] = {"ok": True, "result": res, "summary": summ}
                 except Exception as exc:

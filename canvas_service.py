@@ -3172,52 +3172,85 @@ def build_pdf_download(document: dict) -> bytes:
         raise ValueError("Canvas document is invalid.")
 
     styles = getSampleStyleSheet()
+    _heading_color = colors.HexColor("#131d35")
+    _text_color = colors.HexColor("#1a2540")
+    _code_bg = colors.HexColor("#f0f3f9")
+
     title_style = ParagraphStyle(
         "CanvasTitle",
         parent=styles["Title"],
         fontName=_BOLD_FONT,
+        fontSize=22,
+        leading=28,
+        textColor=_heading_color,
+        spaceAfter=10,
+        spaceBefore=0,
     )
     body_style = ParagraphStyle(
         "CanvasBody",
         parent=styles["BodyText"],
         fontName=_BODY_FONT,
-        fontSize=10,
-        leading=14,
-        spaceAfter=6,
+        fontSize=11,
+        leading=17,
+        textColor=_text_color,
+        spaceAfter=7,
+        firstLineIndent=0,
     )
     heading1_style = ParagraphStyle(
         "CanvasH1",
         parent=styles["Heading1"],
         fontName=_BOLD_FONT,
-        textColor=colors.HexColor("#1f2a44"),
+        fontSize=18,
+        leading=24,
+        textColor=_heading_color,
         spaceAfter=8,
-        spaceBefore=14,
+        spaceBefore=18,
     )
     heading_style = ParagraphStyle(
-        "CanvasHeading",
+        "CanvasH2",
         parent=styles["Heading2"],
         fontName=_BOLD_FONT,
-        textColor=colors.HexColor("#1f2a44"),
-        spaceAfter=8,
+        fontSize=14,
+        leading=19,
+        textColor=_heading_color,
+        spaceAfter=6,
+        spaceBefore=14,
+    )
+    subheading_style = ParagraphStyle(
+        "CanvasH3",
+        parent=styles["Heading3"],
+        fontName=_BOLD_FONT,
+        fontSize=12,
+        leading=16,
+        textColor=_heading_color,
+        spaceAfter=5,
         spaceBefore=10,
     )
     code_style = ParagraphStyle(
         "CanvasCode",
         parent=styles["Code"],
         fontName=_MONO_FONT,
-        fontSize=8.5,
-        leading=11,
-        leftIndent=10,
-        rightIndent=10,
-        backColor=colors.HexColor("#f3f5f9"),
-        borderPadding=8,
+        fontSize=9,
+        leading=13,
+        leftIndent=12,
+        rightIndent=12,
+        backColor=_code_bg,
+        borderPadding=10,
+        spaceAfter=8,
     )
 
-    story = [Paragraph(escape(normalized["title"]), title_style), Spacer(1, 6)]
+    _left_margin = 22 * mm
+    _right_margin = 22 * mm
+
+    story = [Paragraph(escape(normalized["title"]), title_style), Spacer(1, 8)]
     if normalized.get("format") == "code":
         story.append(Preformatted(_normalize_line_endings(normalized["content"]), code_style))
         output = BytesIO()
-        doc = SimpleDocTemplate(output, pagesize=A4, topMargin=18 * mm, bottomMargin=18 * mm)
+        doc = SimpleDocTemplate(
+            output, pagesize=A4,
+            topMargin=20 * mm, bottomMargin=20 * mm,
+            leftMargin=_left_margin, rightMargin=_right_margin,
+        )
         doc.build(story)
         return output.getvalue()
 
@@ -3227,12 +3260,16 @@ def build_pdf_download(document: dict) -> bytes:
         body_style=body_style,
         heading1_style=heading1_style,
         heading_style=heading_style,
-        subheading_style=heading_style,
+        subheading_style=subheading_style,
         code_style=code_style,
         heading_level_offset=0,
     )
 
     output = BytesIO()
-    doc = SimpleDocTemplate(output, pagesize=A4, topMargin=18 * mm, bottomMargin=18 * mm)
+    doc = SimpleDocTemplate(
+        output, pagesize=A4,
+        topMargin=20 * mm, bottomMargin=20 * mm,
+        leftMargin=_left_margin, rightMargin=_right_margin,
+    )
     doc.build(story)
     return output.getvalue()

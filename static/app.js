@@ -1551,6 +1551,12 @@ function getCanvasStreamingStatusMessage(toolName, document, phase = "loading") 
     }
     return `Updating ${label} live...`;
   }
+  if (phase === "executing") {
+    if (normalizedToolName === "create_canvas_document") return `Creating ${label}...`;
+    if (normalizedToolName === "rewrite_canvas_document") return `Rewriting ${label}...`;
+    if (CANVAS_EDIT_PREVIEW_TOOLS.has(normalizedToolName)) return `Applying edits to ${label}...`;
+    return `Updating ${label}...`;
+  }
   if (normalizedToolName === "create_canvas_document") {
     return `Preparing live draft for ${label}...`;
   }
@@ -11801,6 +11807,11 @@ async function sendMessage(options = {}) {
           renderCanvasPanel();
         }
         setCanvasStatus(getCanvasStreamingStatusMessage(event.tool, previewDocument, "loading"), "muted");
+      } else if (event.type === "canvas_executing") {
+        if (isCanvasStreamingPreviewTool(event.tool)) {
+          const executingPreview = [...streamingCanvasPreviews.values()][0] || null;
+          setCanvasStatus(getCanvasStreamingStatusMessage(event.tool, executingPreview, "executing"), "muted");
+        }
       } else if (event.type === "canvas_content_delta") {
         if (!isCanvasStreamingPreviewTool(event.tool)) {
           return;
@@ -11827,7 +11838,11 @@ async function sendMessage(options = {}) {
           || null;
         const previousSelectedDocument = getCanvasDocumentById(previousDocuments, previousActiveId);
         const previousVersionOfNextDocument = getCanvasDocumentById(previousDocuments, nextActiveCandidate?.id || previousActiveId);
-        if (previousVersionOfNextDocument && nextActiveCandidate && previousVersionOfNextDocument.content !== nextActiveCandidate.content) {
+        // Skip diff animation when a streaming preview already showed the user the new content
+        const hadStreamingPreviewForDoc =
+          nextActiveCandidate &&
+          [...streamingCanvasPreviews.values()].some((p) => p.id === nextActiveCandidate.id);
+        if (!hadStreamingPreviewForDoc && previousVersionOfNextDocument && nextActiveCandidate && previousVersionOfNextDocument.content !== nextActiveCandidate.content) {
           pendingCanvasDiff = {
             documentId: nextActiveCandidate.id,
             diff: buildCanvasDiff(previousVersionOfNextDocument.content, nextActiveCandidate.content),
