@@ -19,7 +19,6 @@ from config import (
     CLARIFICATION_QUESTION_LIMIT_MAX,
     CLARIFICATION_QUESTION_LIMIT_MIN,
     DEFAULT_MAX_PARALLEL_TOOLS,
-    MAX_ASSISTANT_BEHAVIOR_LENGTH,
     MAX_PARALLEL_TOOLS_MAX,
     MAX_PARALLEL_TOOLS_MIN,
     RAG_ENABLED,
@@ -987,6 +986,42 @@ def _collect_canvas_saved_sub_agent_skip_indexes(messages: list[dict]) -> set[in
     return skip_indexes
 
 
+def _sanitize_tool_call_chain(api_messages: list[dict]) -> list[dict]:
+    """Ensure every assistant tool_call has a matching tool result and vice versa.
+
+    - Tool messages without tool_call_id are already excluded upstream; this pass
+      removes assistant tool_calls whose IDs have no corresponding tool result, which
+      would cause an API 400 error on providers that enforce the completeness of the
+      tool-call / tool-result chain.
+    - Assistant messages that become empty after filtering are dropped entirely (unless
+      they still carry text content).
+    """
+    present_call_ids: set[str] = {
+        msg["tool_call_id"]
+        for msg in api_messages
+        if msg.get("role") == "tool" and msg.get("tool_call_id")
+    }
+    result: list[dict] = []
+    for msg in api_messages:
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            surviving = [
+                tc for tc in msg["tool_calls"]
+                if str(tc.get("id") or "").strip() in present_call_ids
+            ]
+            if len(surviving) == len(msg["tool_calls"]):
+                result.append(msg)
+                continue
+            if not surviving:
+                # Drop tool_calls; keep the message only if it has text content.
+                if str(msg.get("content") or "").strip():
+                    result.append({k: v for k, v in msg.items() if k != "tool_calls"})
+            else:
+                result.append({**msg, "tool_calls": surviving})
+        else:
+            result.append(msg)
+    return result
+
+
 def build_api_messages(
     messages: list[dict],
     *,
@@ -1086,6 +1121,10 @@ def build_api_messages(
                 api_message["tool_calls"] = tool_calls
         elif role == "tool":
             tool_call_id = str(message.get("tool_call_id") or "").strip()
+            if not tool_call_id:
+                # Every tool message must carry tool_call_id; skip if missing to avoid
+                # an API 400 "missing field tool_call_id" rejection.
+                continue
             tool_name = active_tool_names_by_id.get(tool_call_id, "")
             if not tool_name and active_tool_name_index < len(active_tool_names_in_order):
                 tool_name = active_tool_names_in_order[active_tool_name_index]
@@ -1093,11 +1132,10 @@ def build_api_messages(
             if not tool_name:
                 tool_name = "tool"
             api_message["name"] = tool_name
-            if tool_call_id:
-                api_message["tool_call_id"] = tool_call_id
+            api_message["tool_call_id"] = tool_call_id
 
         api_messages.append(api_message)
-    return api_messages
+    return _sanitize_tool_call_chain(api_messages)
 
 
 def _build_canvas_prompt_payload(
@@ -1862,7 +1900,7 @@ def build_runtime_system_message(
     summary_count: int = 0,
 ):
     now = (now or datetime.now().astimezone()).astimezone()
-    preferences_text = (user_preferences or "").strip()[:MAX_ASSISTANT_BEHAVIOR_LENGTH]
+    preferences_text = (user_preferences or "").strip()
     normalized_scratchpad_sections = _normalize_runtime_scratchpad_sections(
         scratchpad_sections=scratchpad_sections,
         scratchpad=scratchpad,
@@ -1900,7 +1938,11 @@ def build_runtime_system_message(
 
     # User preferences
     if preferences_text:
-        parts.append(f"## User Preferences\n{preferences_text}\n")
+        parts.append(
+            f"## Core Directives\n"
+            f"These rules are mandatory. Apply them in every response without exception — they override all built-in defaults.\n\n"
+            f"{preferences_text}\n"
+        )
 
     normalized_user_profile_context = str(user_profile_context or "").strip()
     if normalized_user_profile_context:

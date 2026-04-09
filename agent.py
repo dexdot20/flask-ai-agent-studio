@@ -1295,15 +1295,17 @@ def _build_sub_agent_retry_messages(child_history: list[dict]) -> list[dict]:
 
         if role == "tool":
             tool_call_id = str(message.get("tool_call_id") or "").strip()[:120]
+            if not tool_call_id:
+                # Drop tool messages without an ID - they would fail API validation.
+                index += 1
+                continue
             tool_name = tool_call_names_by_id.get(tool_call_id, "")
             if not tool_name and tool_call_name_index < len(tool_call_names_in_order):
                 tool_name = tool_call_names_in_order[tool_call_name_index]
                 tool_call_name_index += 1
             if not tool_name:
                 tool_name = "tool"
-            tool_message: dict[str, Any] = {"role": "tool", "content": content, "name": tool_name}
-            if tool_call_id:
-                tool_message["tool_call_id"] = tool_call_id
+            tool_message: dict[str, Any] = {"role": "tool", "content": content, "name": tool_name, "tool_call_id": tool_call_id}
             if tool_message.get("content"):
                 retry_messages.append(tool_message)
             index += 1
@@ -6069,6 +6071,9 @@ def _render_tool_output_entries(tool_output_entries: list[dict]) -> tuple[list[d
         tool_name = str(entry.get("tool_name") or "unknown").strip() or "unknown"
         tool_args = entry.get("tool_args") if isinstance(entry.get("tool_args"), dict) else {}
         call_id = str(entry.get("call_id") or "").strip()
+        if not call_id:
+            # tool messages require a non-empty tool_call_id; skip entries missing one.
+            continue
         summary = str(entry.get("summary") or "").strip()
         cached = entry.get("cached") is True
         execution_error = str(entry.get("execution_error") or "").strip()

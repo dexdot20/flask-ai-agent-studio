@@ -13,10 +13,8 @@ from config import (
     DEFAULT_WEB_CACHE_TTL_HOURS,
     DEFAULT_SETTINGS,
     ENTROPY_PROFILE_PRESETS,
-    MAX_AI_PERSONALITY_LENGTH,
     MAX_PARALLEL_TOOLS_MAX,
     MAX_PARALLEL_TOOLS_MIN,
-    MAX_USER_PREFERENCES_LENGTH,
     OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED,
     RAG_CONTEXT_SIZE_PRESETS,
     RAG_ENABLED,
@@ -609,7 +607,7 @@ def register_page_routes(app) -> None:
 
         if general_instructions is not None or ai_personality is not None:
             normalized_general_instructions = (
-                (general_instructions or "").strip()[:MAX_USER_PREFERENCES_LENGTH]
+                (general_instructions or "").strip()
                 if general_instructions is not None
                 else (
                     str(default_persona.get("general_instructions") or "")
@@ -618,7 +616,7 @@ def register_page_routes(app) -> None:
                 )
             )
             normalized_ai_personality = (
-                (ai_personality or "").strip()[:MAX_AI_PERSONALITY_LENGTH]
+                (ai_personality or "").strip()
                 if ai_personality is not None
                 else (
                     str(default_persona.get("ai_personality") or "")
