@@ -36,6 +36,11 @@
         {% endfor %}
       </select>
     </div>
+    <div class="model-select-wrapper">
+      <select id="persona-select" title="Select persona">
+        <option value="">Default persona</option>
+      </select>
+    </div>
     <button class="btn-ghost btn-canvas" id="canvas-toggle-btn" type="button" data-icon="◫" aria-controls="canvas-panel" aria-expanded="false" aria-label="Open Canvas" title="Open Canvas">
       <span class="btn-canvas__label">Canvas</span>
       <span id="canvas-btn-indicator" class="canvas-btn-indicator" hidden></span>
@@ -65,6 +70,14 @@
         {% for m in models %}
         <option value="{{ m.id }}">{{ m.name }}</option>
         {% endfor %}
+      </select>
+    </div>
+  </div>
+  <div class="mobile-tools-panel__section mobile-tools-panel__section--model">
+    <div class="settings-label">Persona</div>
+    <div class="model-select-wrapper model-select-wrapper--mobile">
+      <select id="mobile-persona-select" title="Select persona">
+        <option value="">Default persona</option>
       </select>
     </div>
   </div>

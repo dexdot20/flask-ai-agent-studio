@@ -32,6 +32,8 @@ const fixBtn = document.getElementById("fix-btn");
 const sendBtn = document.getElementById("send-btn");
 const modelSel = document.getElementById("model-select");
 const mobileModelSel = document.getElementById("mobile-model-select");
+const personaSel = document.getElementById("persona-select");
+const mobilePersonaSel = document.getElementById("mobile-persona-select");
 const emptyState = document.getElementById("empty-state");
 const errorArea = document.getElementById("error-area");
 const editBanner = document.getElementById("edit-banner");
@@ -559,6 +561,7 @@ let isStreaming = false;
 let isFixing = false;
 let currentConvId = null;
 let currentConvTitle = "New Chat";
+let currentConversationPersonaId = null;
 let conversationMemoryEntries = [];
 let conversationMemoryEnabled = false;
 let activeAbortController = null;
@@ -1088,7 +1091,7 @@ const CANVAS_PANEL_DEFAULT_WIDTH = 620;
 const CANVAS_PANEL_MIN_WIDTH = 420;
 const CANVAS_PANEL_MAX_WIDTH = 1100;
 const CANVAS_ROOT_PATH_FILTER = "__root__";
-const CANVAS_PREVIEW_RENDER_INTERVAL_MS = 150;
+const CANVAS_PREVIEW_RENDER_INTERVAL_MS = 32;
 const CANVAS_CODE_FILE_EXTENSIONS = new Set([
   ".bat",
   ".c",
@@ -2635,23 +2638,94 @@ function renderMarkdown(text) {
   return renderMathExpressionsInHtml(sanitizeHtml(escHtml(rawText).replace(/\n/g, "<br>")));
 }
 
-function renderStreamingCanvasPreviewContent(document) {
-  if (document?.format === "code") {
-    return sanitizeHtml(`<div class="canvas-code-document canvas-code-document--streaming">${renderHighlightedCodeBlock(document.content, document.language || null)}</div>`);
+function renderCanvasMarkdownSheet(contentHtml, options = {}) {
+  const extraClasses = Array.isArray(options.extraClasses) ? options.extraClasses.filter(Boolean) : [];
+  const classes = ["canvas-page-sheet", ...extraClasses].join(" ");
+  const rawAttributes = options.attributes && typeof options.attributes === "object"
+    ? Object.entries(options.attributes)
+        .filter(([, value]) => value !== undefined && value !== null && value !== "")
+        .map(([key, value]) => `${key}="${escHtml(String(value))}"`)
+        .join(" ")
+    : "";
+  const attributeText = rawAttributes ? ` ${rawAttributes}` : "";
+  return (
+    `<div class="canvas-document-shell">` +
+      `<div class="canvas-page-content">` +
+        `<article class="${classes}"${attributeText}>${contentHtml}</article>` +
+      `</div>` +
+    `</div>`
+  );
+}
+
+function getStreamingCanvasPreviewFormat(document) {
+  return document?.format === "code" ? "code" : "markdown";
+}
+
+function getStreamingCanvasPreviewLabel(document) {
+  const format = getStreamingCanvasPreviewFormat(document);
+  if (format === "code") {
+    return String(document?.language || "Code draft").trim() || "Code draft";
   }
-  return renderMarkdown(document?.content || "");
+  return "Markdown draft";
+}
+
+function getStreamingCanvasPreviewText(document) {
+  return String(document?.content || "").replace(/\r\n?/g, "\n");
+}
+
+function getStreamingCanvasPreviewPlaceholder(document) {
+  return getStreamingCanvasPreviewFormat(document) === "code"
+    ? "// Streaming code draft will appear here..."
+    : "Streaming draft will appear here...";
+}
+
+function renderStreamingCanvasPreviewContent(document) {
+  const format = getStreamingCanvasPreviewFormat(document);
+  const content = getStreamingCanvasPreviewText(document);
+  const placeholder = getStreamingCanvasPreviewPlaceholder(document);
+  const label = getStreamingCanvasPreviewLabel(document);
+  return sanitizeHtml(
+    `<section class="canvas-stream-draft canvas-stream-draft--${format}" data-canvas-streaming-draft="true">` +
+      `<div class="canvas-stream-draft__toolbar">` +
+        `<span class="canvas-stream-draft__label" data-canvas-streaming-draft-label="true">${escHtml(label)}</span>` +
+        `<span class="canvas-stream-draft__live">Live</span>` +
+      `</div>` +
+      `<pre class="canvas-stream-draft__body${format === "code" ? " canvas-stream-draft__body--code" : ""}" data-canvas-streaming-draft-body="true">${escHtml(content || placeholder)}</pre>` +
+    `</section>`
+  );
+}
+
+function updateStreamingCanvasPreviewElement(containerEl, document) {
+  if (!containerEl) {
+    return;
+  }
+
+  const draftRoot = containerEl.querySelector('[data-canvas-streaming-draft="true"]');
+  const draftLabel = containerEl.querySelector('[data-canvas-streaming-draft-label="true"]');
+  const draftBody = containerEl.querySelector('[data-canvas-streaming-draft-body="true"]');
+  if (!draftRoot || !draftLabel || !draftBody) {
+    containerEl.innerHTML = renderStreamingCanvasPreviewContent(document);
+    return;
+  }
+
+  const format = getStreamingCanvasPreviewFormat(document);
+  draftRoot.className = `canvas-stream-draft canvas-stream-draft--${format}`;
+  draftLabel.textContent = getStreamingCanvasPreviewLabel(document);
+  draftBody.className = `canvas-stream-draft__body${format === "code" ? " canvas-stream-draft__body--code" : ""}`;
+  draftBody.textContent = getStreamingCanvasPreviewText(document) || getStreamingCanvasPreviewPlaceholder(document);
 }
 
 function renderStreamingCanvasDocumentBody(document) {
   const documentId = escHtml(String(document?.id || "").trim());
   const format = escHtml(String(document?.format || "markdown").trim().toLowerCase() || "markdown");
-  return (
-    `<div class="canvas-document-shell">` +
-      `<article class="canvas-page-sheet canvas-page-sheet--streaming" data-canvas-streaming-preview-container="true" data-canvas-streaming-preview-id="${documentId}" data-canvas-streaming-preview-format="${format}">` +
-        `${renderStreamingCanvasPreviewContent(document)}` +
-      `</article>` +
-    `</div>`
-  );
+  return renderCanvasMarkdownSheet(renderStreamingCanvasPreviewContent(document), {
+    extraClasses: ["canvas-page-sheet--streaming"],
+    attributes: {
+      "data-canvas-streaming-preview-container": "true",
+      "data-canvas-streaming-preview-id": documentId,
+      "data-canvas-streaming-preview-format": format,
+    },
+  });
 }
 
 function renderCanvasDocumentBody(document) {
@@ -2691,7 +2765,7 @@ function renderCanvasDocumentBody(document) {
     );
   }
   if (!isCanvasPageAwareDocument(document)) {
-    return renderMarkdown(document.content);
+    return renderCanvasMarkdownSheet(renderMarkdown(document.content));
   }
   const currentPage = getCanvasCurrentPage(document) || setCanvasCurrentPage(document, 1);
   const currentSection = getCanvasPageSection(document, currentPage);
@@ -3108,7 +3182,11 @@ function getCanvasDocumentCollection(entries = history) {
 function resetStreamingCanvasPreview() {
   streamingCanvasPreviews.clear();
   if (pendingCanvasPreviewTimer) {
-    globalThis.clearTimeout(pendingCanvasPreviewTimer);
+    if (typeof globalThis.cancelAnimationFrame === "function") {
+      globalThis.cancelAnimationFrame(pendingCanvasPreviewTimer);
+    } else {
+      globalThis.clearTimeout(pendingCanvasPreviewTimer);
+    }
     pendingCanvasPreviewTimer = 0;
   }
 }
@@ -3303,10 +3381,15 @@ function scheduleCanvasPreviewRender() {
   if (pendingCanvasPreviewTimer) {
     return;
   }
-  pendingCanvasPreviewTimer = globalThis.setTimeout(() => {
+  const flushPreviewFrame = () => {
     pendingCanvasPreviewTimer = 0;
     renderCanvasPreviewFrame();
-  }, CANVAS_PREVIEW_RENDER_INTERVAL_MS);
+  };
+  if (typeof globalThis.requestAnimationFrame === "function") {
+    pendingCanvasPreviewTimer = globalThis.requestAnimationFrame(flushPreviewFrame);
+    return;
+  }
+  pendingCanvasPreviewTimer = globalThis.setTimeout(flushPreviewFrame, CANVAS_PREVIEW_RENDER_INTERVAL_MS);
 }
 
 function getActiveCanvasDocument(entries = history) {
@@ -3437,7 +3520,11 @@ function clearCanvasEditingPreviewRender() {
   if (!pendingCanvasEditorPreviewTimer) {
     return;
   }
-  globalThis.clearTimeout(pendingCanvasEditorPreviewTimer);
+  if (typeof globalThis.cancelAnimationFrame === "function") {
+    globalThis.cancelAnimationFrame(pendingCanvasEditorPreviewTimer);
+  } else {
+    globalThis.clearTimeout(pendingCanvasEditorPreviewTimer);
+  }
   pendingCanvasEditorPreviewTimer = 0;
 }
 
@@ -3462,7 +3549,7 @@ function scheduleCanvasEditingPreviewRender() {
     return;
   }
 
-  pendingCanvasEditorPreviewTimer = globalThis.setTimeout(() => {
+  const flushEditingPreviewFrame = () => {
     pendingCanvasEditorPreviewTimer = 0;
     if (!isCanvasEditing) {
       return;
@@ -3473,7 +3560,12 @@ function scheduleCanvasEditingPreviewRender() {
       return;
     }
     updateCanvasActiveDocumentDisplay(renderState);
-  }, CANVAS_PREVIEW_RENDER_INTERVAL_MS);
+  };
+  if (typeof globalThis.requestAnimationFrame === "function") {
+    pendingCanvasEditorPreviewTimer = globalThis.requestAnimationFrame(flushEditingPreviewFrame);
+    return;
+  }
+  pendingCanvasEditorPreviewTimer = globalThis.setTimeout(flushEditingPreviewFrame, CANVAS_PREVIEW_RENDER_INTERVAL_MS);
 }
 
 function setPendingDocumentCanvasOpen(files) {
@@ -3681,7 +3773,7 @@ function updateCanvasActiveDocumentDisplay(renderState) {
       const nextPreviewId = String(activeDocument.id || "").trim();
       const nextPreviewFormat = String(activeDocument.format || "markdown").trim().toLowerCase() || "markdown";
       if (existingPreviewEl && existingPreviewId === nextPreviewId && existingPreviewFormat === nextPreviewFormat) {
-        existingPreviewEl.innerHTML = renderStreamingCanvasPreviewContent(activeDocument);
+        updateStreamingCanvasPreviewElement(existingPreviewEl, activeDocument);
       } else {
         canvasDocumentEl.innerHTML = renderStreamingCanvasDocumentBody(activeDocument);
       }
@@ -3825,19 +3917,6 @@ function openCanvasConfirmModal(options = {}) {
   canvasConfirmOpenBtn?.focus();
 }
 
-function confirmCanvasOpenForDocument(pendingRequest, documentCount, callbacks = {}) {
-  const fileCount = Number(pendingRequest?.fileCount || 1);
-  const fileName = String(pendingRequest?.fileName || "document").trim() || "document";
-  const requestLabel = fileCount > 1 ? `${fileCount} uploaded documents` : fileName;
-  const documentLabel = documentCount === 1 ? "canvas document" : `${documentCount} canvas documents`;
-  openCanvasConfirmModal({
-    title: "Open document in Canvas?",
-    message: `${requestLabel} ${fileCount === 1 ? "is" : "are"} ready in Canvas. ${documentLabel.charAt(0).toUpperCase()}${documentLabel.slice(1)} ${documentCount === 1 ? "is" : "are"} available now.`,
-    onConfirm: callbacks.onConfirm,
-    onCancel: callbacks.onCancel,
-  });
-}
-
 function promptPdfSubmissionMode(files) {
   const pdfFiles = (files || []).filter((file) => isPdfDocumentFile(file));
   if (!pdfFiles.length) {
@@ -3874,6 +3953,32 @@ function promptPdfSubmissionMode(files) {
 
 function escapeRegExp(text) {
   return String(text || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+function promptDocumentCanvasAction(files) {
+  const documentFiles = (files || []).filter((file) => isDocumentFile(file));
+  if (!documentFiles.length) {
+    return Promise.resolve("prompt");
+  }
+
+  if (!canvasConfirmModal || !canvasConfirmTitle || !canvasConfirmMessage) {
+    return Promise.resolve("prompt");
+  }
+
+  const fileCount = documentFiles.length;
+  const fileName = String(documentFiles[0]?.name || "document").trim() || "document";
+  const requestLabel = fileCount > 1 ? `${fileCount} documents` : fileName;
+  const pronoun = fileCount > 1 ? "them" : "it";
+
+  return new Promise((resolve) => {
+    openCanvasConfirmModal({
+      title: "Open document in Canvas?",
+      message: `${requestLabel} can be added to AI Canvas for editing and later reuse. Choose Later to keep ${pronoun} attached to this message only.`,
+      onConfirm: () => resolve("open"),
+      onCancel: () => resolve("skip"),
+      onDismiss: () => resolve("skip"),
+    });
+  });
+}
 }
 
 function setCanvasAttention(enabled) {
@@ -4199,7 +4304,8 @@ function renderCanvasPanel() {
   }
 }
 
-function openCanvas(triggerEl = null) {
+function openCanvas(triggerEl = null, options = {}) {
+  const shouldFocusPanel = options.focusPanel !== false;
   closeMemoryPanel();
   closeSummaryPanel();
   closeMobileTools();
@@ -4219,7 +4325,9 @@ function openCanvas(triggerEl = null) {
   applyCanvasPanelWidth(readCanvasWidthPreference(), false);
   closeCanvasOverflowMenu();
   renderCanvasPanel();
-  canvasClose?.focus();
+  if (shouldFocusPanel) {
+    canvasClose?.focus();
+  }
 }
 
 function closeCanvas() {
@@ -7627,6 +7735,93 @@ function syncModelSelectors(value, label = "") {
   writeModelPreference(nextValue);
 }
 
+function normalizePersonaId(value) {
+  if (value === null || value === undefined || value === "") {
+    return "";
+  }
+  const parsed = Number.parseInt(String(value), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? String(parsed) : "";
+}
+
+function getKnownPersonas() {
+  return Array.isArray(appSettings.personas) ? appSettings.personas : [];
+}
+
+function findPersonaById(personaId) {
+  const normalizedPersonaId = normalizePersonaId(personaId);
+  if (!normalizedPersonaId) {
+    return null;
+  }
+  return getKnownPersonas().find((persona) => normalizePersonaId(persona?.id) === normalizedPersonaId) || null;
+}
+
+function getDefaultPersonaId() {
+  return normalizePersonaId(appSettings.default_persona_id);
+}
+
+function buildDefaultPersonaLabel() {
+  const defaultPersona = findPersonaById(getDefaultPersonaId());
+  return defaultPersona ? `Default: ${defaultPersona.name}` : "No persona";
+}
+
+function populatePersonaSelectors() {
+  const selectors = [personaSel, mobilePersonaSel].filter(Boolean);
+  if (!selectors.length) {
+    return;
+  }
+
+  const options = [
+    { value: "", label: buildDefaultPersonaLabel() },
+    ...getKnownPersonas().map((persona) => ({
+      value: normalizePersonaId(persona?.id),
+      label: String(persona?.name || `Persona ${persona?.id || ""}`).trim() || `Persona ${persona?.id || ""}`,
+    })),
+  ];
+
+  selectors.forEach((selectEl) => {
+    const fragment = document.createDocumentFragment();
+    options.forEach((optionData) => {
+      const option = document.createElement("option");
+      option.value = optionData.value;
+      option.textContent = optionData.label;
+      fragment.append(option);
+    });
+    selectEl.replaceChildren(fragment);
+  });
+}
+
+function syncPersonaSelectors(value = "") {
+  const nextValue = normalizePersonaId(value);
+  populatePersonaSelectors();
+  if (personaSel) {
+    personaSel.value = nextValue;
+  }
+  if (mobilePersonaSel) {
+    mobilePersonaSel.value = nextValue;
+  }
+}
+
+function applyConversationPersonaSelection(personaId) {
+  currentConversationPersonaId = normalizePersonaId(personaId);
+  syncPersonaSelectors(currentConversationPersonaId);
+}
+
+async function persistConversationPersona(personaId) {
+  if (!currentConvId) {
+    return;
+  }
+  const response = await fetch(`/api/conversations/${currentConvId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ persona_id: normalizePersonaId(personaId) || null }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || "Unable to update conversation persona.");
+  }
+  applyConversationPersonaSelection(data.persona_id);
+}
+
 function isMobileViewport() {
   return window.matchMedia("(max-width: 980px)").matches;
 }
@@ -7938,6 +8133,21 @@ if (mobileLogoutBtn) {
 if (mobileSummaryBtn) {
   mobileSummaryBtn.addEventListener("click", () => openSummaryPanel(mobileSummaryBtn));
 }
+
+async function handlePersonaSelectionChange(nextPersonaId) {
+  const previousPersonaId = currentConversationPersonaId;
+  applyConversationPersonaSelection(nextPersonaId);
+  if (!currentConvId) {
+    return;
+  }
+  try {
+    await persistConversationPersona(currentConversationPersonaId);
+  } catch (error) {
+    applyConversationPersonaSelection(previousPersonaId);
+    showError(error.message || "Unable to update conversation persona.");
+  }
+}
+
 if (modelSel) {
   modelSel.addEventListener("change", () => {
     syncModelSelectors(modelSel.value);
@@ -7946,6 +8156,16 @@ if (modelSel) {
 if (mobileModelSel) {
   mobileModelSel.addEventListener("change", () => {
     syncModelSelectors(mobileModelSel.value);
+  });
+}
+if (personaSel) {
+  personaSel.addEventListener("change", () => {
+    void handlePersonaSelectionChange(personaSel.value);
+  });
+}
+if (mobilePersonaSel) {
+  mobilePersonaSel.addEventListener("change", () => {
+    void handlePersonaSelectionChange(mobilePersonaSel.value);
   });
 }
 summaryClose?.addEventListener("click", closeSummaryPanel);
@@ -8357,6 +8577,8 @@ async function openConversation(id) {
   userScrolledUp = false;
   currentConvId = id;
   currentConvTitle = String(data.conversation?.title || "New Chat").trim() || "New Chat";
+  currentConversationPersonaId = normalizePersonaId(data.conversation?.persona_id);
+  syncPersonaSelectors(currentConversationPersonaId);
   const conversationModelId = String(data.conversation?.model || "").trim();
   const nextModelId = resolvePreferredModelSelection(conversationModelId);
   if (nextModelId) {
@@ -8406,6 +8628,7 @@ function startNewChat() {
   userScrolledUp = false;
   currentConvId = null;
   currentConvTitle = "New Chat";
+  currentConversationPersonaId = "";
   history = [];
   conversationMemoryEntries = [];
   conversationMemoryEnabled = featureFlags.conversation_memory_enabled !== false;
@@ -8428,6 +8651,7 @@ function startNewChat() {
   if (preferredModelId) {
     syncModelSelectors(preferredModelId, getKnownModelLabel(preferredModelId));
   }
+  syncPersonaSelectors(currentConversationPersonaId);
   clearToastRegion();
   loadSidebar();
   inputEl.focus();
@@ -10539,7 +10763,12 @@ async function sendMessage(options = {}) {
     }
   }
 
-  setPendingDocumentCanvasOpen(pendingDocuments);
+  let documentCanvasAction = "prompt";
+  if (pendingDocuments.length) {
+    documentCanvasAction = await promptDocumentCanvasAction(pendingDocuments);
+  }
+
+  setPendingDocumentCanvasOpen(documentCanvasAction === "open" ? pendingDocuments : null);
 
   if (pendingImages.length && !Boolean(featureFlags.image_uploads_enabled)) {
     clearSelectedImage();
@@ -10563,11 +10792,17 @@ async function sendMessage(options = {}) {
     const response = await fetch("/api/conversations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: "New Chat", model: modelSel.value }),
+      body: JSON.stringify({
+        title: "New Chat",
+        model: modelSel.value,
+        persona_id: currentConversationPersonaId || null,
+      }),
     });
     const conversation = await response.json();
     currentConvId = conversation.id;
     currentConvTitle = String(conversation.title || "New Chat").trim() || "New Chat";
+    currentConversationPersonaId = normalizePersonaId(conversation.persona_id);
+    syncPersonaSelectors(currentConversationPersonaId);
     loadSidebar();
     updateExportPanel();
   }
@@ -10720,6 +10955,7 @@ async function sendMessage(options = {}) {
           submission_mode: getDocumentSubmissionMode(file),
         }))
       ));
+      formData.append("document_canvas_action", documentCanvasAction);
       if (pendingYouTubeUrl) {
         formData.append("youtube_url", pendingYouTubeUrl);
       }
@@ -10811,22 +11047,8 @@ async function sendMessage(options = {}) {
           setCanvasStatus(`${String(event.file_name || "PDF").trim() || "PDF"} attached in visual mode. Up to the first ${VISUAL_PDF_PAGE_LIMIT} pages will be used for image analysis, and Canvas editing is unavailable for this upload.`, "muted");
         }
 
-        const pendingCanvasRequest = event.canvas_document ? consumePendingDocumentCanvasOpen() : null;
-        if (event.canvas_document && pendingCanvasRequest && !isCanvasOpen()) {
-          const documentCount = Number(pendingCanvasRequest.fileCount || 1);
-          const requestLabel = Number(pendingCanvasRequest.fileCount || 1) > 1
-            ? `${pendingCanvasRequest.fileCount} documents`
-            : pendingCanvasRequest.fileName;
-          confirmCanvasOpenForDocument(pendingCanvasRequest, documentCount, {
-            onConfirm: () => {
-              openCanvas();
-              setCanvasStatus(`${requestLabel} opened in Canvas.`, "success");
-            },
-            onCancel: () => {
-              setCanvasAttention(true);
-              setCanvasStatus(`${requestLabel} ${Number(pendingCanvasRequest.fileCount || 1) > 1 ? "are" : "is"} ready in Canvas. Open the panel when needed.`, "muted");
-            },
-          });
+        if (event.canvas_document && !isCanvasOpen()) {
+          setCanvasAttention(true);
         }
         scrollToBottom();
       } else if (event.type === "step_update") {
@@ -11043,7 +11265,7 @@ async function sendMessage(options = {}) {
         }
         const previewDocument = ensureStreamingCanvasPreview(event.tool, event.preview_key, event.snapshot);
         if (!isCanvasOpen()) {
-          setCanvasAttention(true);
+          openCanvas(null, { focusPanel: false });
         } else {
           renderCanvasPanel();
         }
@@ -11061,7 +11283,7 @@ async function sendMessage(options = {}) {
           }
           previewDocument.line_count = previewDocument.content ? previewDocument.content.split("\n").length : 0;
           if (!isCanvasOpen()) {
-            setCanvasAttention(true);
+            openCanvas(null, { focusPanel: false });
           }
           setCanvasStatus(getCanvasStreamingStatusMessage(event.tool, previewDocument, "streaming"), "muted");
           scheduleCanvasPreviewRender();
@@ -11104,18 +11326,10 @@ async function sendMessage(options = {}) {
             const requestLabel = Number(pendingCanvasRequest.fileCount || 1) > 1
               ? `${pendingCanvasRequest.fileCount} documents`
               : pendingCanvasRequest.fileName;
-            confirmCanvasOpenForDocument(pendingCanvasRequest, streamingCanvasDocuments.length, {
-              onConfirm: () => {
-                openCanvas();
-                setCanvasStatus(`${requestLabel} opened in Canvas.`, "success");
-              },
-              onCancel: () => {
-                setCanvasAttention(true);
-                setCanvasStatus(`${requestLabel} ${Number(pendingCanvasRequest.fileCount || 1) > 1 ? "are" : "is"} ready in Canvas. Open the panel when needed.`, "muted");
-              },
-            });
+            openCanvas(null, { focusPanel: false });
+            setCanvasStatus(`${requestLabel} opened in Canvas.`, "success");
           } else if (event.auto_open && !canvasWasOpen) {
-            openCanvas();
+            openCanvas(null, { focusPanel: false });
             setCanvasStatus(activeDocumentChangeMessage || "Canvas updated.", "success");
           } else if (activeDocumentChangeMessage) {
             if (canvasWasOpen) {
@@ -11306,6 +11520,7 @@ const initialSidebarPref = readSidebarPreference();
 setSidebarOpen(initialSidebarPref === null ? !isMobileViewport() : initialSidebarPref, false);
 const initialModelId = resolvePreferredModelSelection(modelSel ? modelSel.value : "");
 syncModelSelectors(initialModelId, getKnownModelLabel(initialModelId));
+applyConversationPersonaSelection("");
 loadSidebar();
 updateExportPanel();
 void loadKnowledgeBaseDocuments();

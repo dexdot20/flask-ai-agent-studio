@@ -44,6 +44,7 @@
 
       <nav class="settings-tabs" id="settings-tabs" aria-label="Settings tabs">
         <button class="settings-tab-btn active" id="general-tab" type="button" data-settings-tab="general">General</button>
+        <button class="settings-tab-btn" id="personas-tab" type="button" data-settings-tab="personas">Personas</button>
         <button class="settings-tab-btn" id="models-tab" type="button" data-settings-tab="models">Models</button>
         <button class="settings-tab-btn" id="context-tab" type="button" data-settings-tab="context">Context</button>
         <button class="settings-tab-btn" id="tools-tab" type="button" data-settings-tab="tools">Tools</button>
@@ -87,31 +88,19 @@
                 <div class="settings-page-section-card__header">
                   <div>
                     <span class="settings-section-kicker">Assistant behavior</span>
-                    <h3>Response defaults</h3>
+                    <h3>Default persona</h3>
                   </div>
-                  <p>Saved once and injected into every conversation automatically.</p>
+                  <p>Choose which persona new and unassigned conversations should use by default.</p>
                 </div>
                 <div class="settings-form-cluster">
-                  <label class="settings-label" for="general-instructions-input">General instructions</label>
-                  <p class="settings-copy">Use this for persistent response rules, formatting preferences, and global assistant instructions.</p>
+                  <label class="settings-label" for="default-persona-select">Default persona</label>
+                  <select id="default-persona-select" class="settings-select">
+                    <option value="">No default persona</option>
+                  </select>
+                  <p class="settings-copy">Per-conversation personas override this choice. Use the Personas tab to create multiple assistants and assign them conversation by conversation.</p>
                   <div class="settings-inline-actions">
-                    <select id="general-instructions-template-select" class="settings-select" aria-label="General instructions templates">
-                      <option value="">Choose a template</option>
-                    </select>
-                    <button class="btn-ghost" id="general-instructions-template-apply-btn" type="button">Apply template</button>
+                    <button class="btn-ghost" id="open-personas-tab-btn" type="button">Manage personas</button>
                   </div>
-                  <textarea id="general-instructions-input" rows="6" placeholder="Example: Keep answers concise, state assumptions clearly, and use bullets only when they improve scanning."></textarea>
-                </div>
-                <div class="settings-form-cluster">
-                  <label class="settings-label" for="ai-personality-input">AI personality</label>
-                  <p class="settings-copy">Define the assistant's tone and persona without changing factual accuracy or instruction-following.</p>
-                  <div class="settings-inline-actions">
-                    <select id="ai-personality-template-select" class="settings-select" aria-label="AI personality templates">
-                      <option value="">Choose a template</option>
-                    </select>
-                    <button class="btn-ghost" id="ai-personality-template-apply-btn" type="button">Apply template</button>
-                  </div>
-                  <textarea id="ai-personality-input" rows="5" placeholder="Example: Sound like a pragmatic senior engineer: calm, direct, rigorous, and low-fluff."></textarea>
                 </div>
                 <label class="settings-label" for="temperature-input">Response temperature (0.0-2.0)</label>
                 <input type="number" class="settings-number" id="temperature-input" min="0" max="2" step="0.1" value="0.7" />
@@ -164,6 +153,64 @@
                 <label class="settings-label" for="image-helper-model-select">Helper image model</label>
                 <select id="image-helper-model-select"></select>
                 <p class="settings-copy">Used only for Helper LLM description mode and stored image follow-up questions. Leave empty to fall back to the default chat model when it supports images.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-tab-panel" data-settings-panel="personas" aria-labelledby="personas-tab" hidden>
+          <div class="settings-page-grid settings-page-grid--two settings-page-grid--model-catalog">
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Persona library</span>
+                  <h3>Available personas</h3>
+                </div>
+                <p>Create multiple persistent AI personas and reuse them across conversations.</p>
+              </div>
+              <div class="settings-inline-actions">
+                <button class="btn-primary" id="persona-new-btn" type="button">New persona</button>
+                <span id="persona-status" class="settings-status" data-tone="muted">Ready to create a persona</span>
+              </div>
+              <div id="persona-list" class="model-management-list" style="margin-top: 1rem;"></div>
+            </div>
+
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Persona editor</span>
+                  <h3 id="persona-editor-title">Create persona</h3>
+                </div>
+                <p>Conversation personas replace the default persona for that conversation, but they still remain below direct user instructions at runtime.</p>
+              </div>
+              <div class="settings-model-catalog-form">
+                <label class="settings-label" for="persona-name-input">Persona name</label>
+                <input id="persona-name-input" class="settings-text" type="text" placeholder="Example: Pragmatic Engineer" />
+
+                <label class="settings-label" for="general-instructions-input">General instructions</label>
+                <p class="settings-copy">Persistent response rules, formatting preferences, and strict behavior constraints for this persona.</p>
+                <div class="settings-inline-actions">
+                  <select id="general-instructions-template-select" class="settings-select" aria-label="General instructions templates">
+                    <option value="">Choose a template</option>
+                  </select>
+                  <button class="btn-ghost" id="general-instructions-template-apply-btn" type="button">Apply template</button>
+                </div>
+                <textarea id="general-instructions-input" rows="6" placeholder="Example: Keep answers concise, state assumptions clearly, and use bullets only when they improve scanning."></textarea>
+
+                <label class="settings-label" for="ai-personality-input">AI personality</label>
+                <p class="settings-copy">Tone, attitude, and presentation style for this persona without weakening factual accuracy or instruction-following.</p>
+                <div class="settings-inline-actions">
+                  <select id="ai-personality-template-select" class="settings-select" aria-label="AI personality templates">
+                    <option value="">Choose a template</option>
+                  </select>
+                  <button class="btn-ghost" id="ai-personality-template-apply-btn" type="button">Apply template</button>
+                </div>
+                <textarea id="ai-personality-input" rows="5" placeholder="Example: Sound like a pragmatic senior engineer: calm, direct, rigorous, and low-fluff."></textarea>
+
+                <div class="settings-inline-actions">
+                  <button class="btn-primary" id="persona-save-btn" type="button">Create persona</button>
+                  <button class="btn-ghost btn-ghost--danger" id="persona-delete-btn" type="button" hidden>Delete persona</button>
+                </div>
               </div>
             </div>
           </div>

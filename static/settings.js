@@ -19,6 +19,15 @@ const generalInstructionsTemplateApplyBtn = document.getElementById("general-ins
 const aiPersonalityEl = document.getElementById("ai-personality-input");
 const aiPersonalityTemplateSelectEl = document.getElementById("ai-personality-template-select");
 const aiPersonalityTemplateApplyBtn = document.getElementById("ai-personality-template-apply-btn");
+const defaultPersonaEl = document.getElementById("default-persona-select");
+const openPersonasTabBtn = document.getElementById("open-personas-tab-btn");
+const personaListEl = document.getElementById("persona-list");
+const personaNameEl = document.getElementById("persona-name-input");
+const personaSaveBtn = document.getElementById("persona-save-btn");
+const personaDeleteBtn = document.getElementById("persona-delete-btn");
+const personaNewBtn = document.getElementById("persona-new-btn");
+const personaStatusEl = document.getElementById("persona-status");
+const personaEditorTitleEl = document.getElementById("persona-editor-title");
 const temperatureEl = document.getElementById("temperature-input");
 const scratchpadListEl = document.getElementById("scratchpad-list");
 const scratchpadAddBtn = document.getElementById("scratchpad-add-btn");
@@ -237,6 +246,9 @@ const builtinModelCatalog = Array.isArray(appSettings.available_models)
   : [];
 
 let hasUnsavedChanges = false;
+let hasUnsavedSettingsChanges = false;
+let hasUnsavedPersonaChanges = false;
+let activePersonaId = null;
 let draftCustomModels = Array.isArray(appSettings.custom_models)
   ? appSettings.custom_models.map((model) => normalizeDraftCustomModel(model))
   : [];
@@ -318,12 +330,326 @@ function applyBehaviorTemplate(selectEl, textareaEl, templates) {
   }
   textareaEl.value = selectedTemplate.text;
   autoResize(textareaEl);
-  markDirty();
+  markPersonaDirty();
 }
 
 function initializeAssistantBehaviorTemplates() {
   populateBehaviorTemplateSelect(generalInstructionsTemplateSelectEl, GENERAL_INSTRUCTION_TEMPLATES);
   populateBehaviorTemplateSelect(aiPersonalityTemplateSelectEl, AI_PERSONALITY_TEMPLATES);
+}
+
+function normalizePersonaId(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const parsed = Number.parseInt(String(value), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function getPersonas() {
+  return Array.isArray(appSettings.personas) ? appSettings.personas : [];
+}
+
+function findPersonaById(personaId) {
+  const normalizedPersonaId = normalizePersonaId(personaId);
+  if (!normalizedPersonaId) {
+    return null;
+  }
+  return getPersonas().find((persona) => normalizePersonaId(persona?.id) === normalizedPersonaId) || null;
+}
+
+function describePersona(persona) {
+  const generalInstructions = String(persona?.general_instructions || "")
+    .split("\n")
+    .map((value) => value.trim())
+    .find(Boolean) || "";
+  const aiPersonality = String(persona?.ai_personality || "")
+    .split("\n")
+    .map((value) => value.trim())
+    .find(Boolean) || "";
+  return generalInstructions || aiPersonality || "No persistent instructions yet.";
+}
+
+function setPersonaStatus(message, tone = "muted") {
+  if (!personaStatusEl) {
+    return;
+  }
+  personaStatusEl.textContent = message;
+  personaStatusEl.dataset.tone = tone;
+}
+
+function setPersonaActionsDisabled(disabled) {
+  if (personaSaveBtn) {
+    personaSaveBtn.disabled = disabled;
+  }
+  if (personaDeleteBtn) {
+    personaDeleteBtn.disabled = disabled || !activePersonaId;
+  }
+  if (personaNewBtn) {
+    personaNewBtn.disabled = disabled;
+  }
+}
+
+function renderDefaultPersonaSelect() {
+  if (!defaultPersonaEl) {
+    return;
+  }
+  const selectedDefaultPersonaId = normalizePersonaId(appSettings.default_persona_id);
+  const fragment = document.createDocumentFragment();
+
+  const emptyOption = document.createElement("option");
+  emptyOption.value = "";
+  emptyOption.textContent = "No default persona";
+  fragment.append(emptyOption);
+
+  getPersonas().forEach((persona) => {
+    const option = document.createElement("option");
+    option.value = String(persona.id);
+    option.textContent = String(persona.name || `Persona ${persona.id}`).trim() || `Persona ${persona.id}`;
+    fragment.append(option);
+  });
+
+  defaultPersonaEl.replaceChildren(fragment);
+  defaultPersonaEl.value = selectedDefaultPersonaId ? String(selectedDefaultPersonaId) : "";
+}
+
+function fillPersonaForm(persona) {
+  if (personaNameEl) {
+    personaNameEl.value = String(persona?.name || "");
+  }
+  if (generalInstructionsEl) {
+    generalInstructionsEl.value = String(persona?.general_instructions || "");
+    autoResize(generalInstructionsEl);
+  }
+  if (aiPersonalityEl) {
+    aiPersonalityEl.value = String(persona?.ai_personality || "");
+    autoResize(aiPersonalityEl);
+  }
+}
+
+function selectPersonaForEditing(personaId) {
+  activePersonaId = normalizePersonaId(personaId);
+  const persona = findPersonaById(activePersonaId);
+  if (persona) {
+    if (personaEditorTitleEl) {
+      personaEditorTitleEl.textContent = `Edit ${persona.name}`;
+    }
+    if (personaSaveBtn) {
+      personaSaveBtn.textContent = "Save persona";
+    }
+    if (personaDeleteBtn) {
+      personaDeleteBtn.hidden = false;
+    }
+    fillPersonaForm(persona);
+    setPersonaStatus(`Editing ${persona.name}`, "muted");
+  } else {
+    activePersonaId = null;
+    if (personaEditorTitleEl) {
+      personaEditorTitleEl.textContent = "Create persona";
+    }
+    if (personaSaveBtn) {
+      personaSaveBtn.textContent = "Create persona";
+    }
+    if (personaDeleteBtn) {
+      personaDeleteBtn.hidden = true;
+    }
+    fillPersonaForm(null);
+    setPersonaStatus("Ready to create a persona", "muted");
+  }
+  clearPersonaDirty();
+  renderPersonaList();
+  setPersonaActionsDisabled(false);
+}
+
+function renderPersonaList() {
+  if (!personaListEl) {
+    return;
+  }
+
+  const personas = getPersonas();
+  personaListEl.innerHTML = "";
+  if (!personas.length) {
+    personaListEl.innerHTML = '<p class="settings-copy">No personas yet. Create one to define persistent tone and behavior.</p>';
+    return;
+  }
+
+  const defaultPersonaId = normalizePersonaId(appSettings.default_persona_id);
+  personas.forEach((persona) => {
+    const row = document.createElement("div");
+    row.className = "model-management-row";
+    if (normalizePersonaId(persona.id) === activePersonaId) {
+      row.classList.add("persona-row--active");
+    }
+
+    const meta = document.createElement("div");
+    meta.className = "model-management-row__meta";
+
+    const title = document.createElement("strong");
+    title.textContent = String(persona.name || `Persona ${persona.id}`).trim() || `Persona ${persona.id}`;
+
+    const subtitle = document.createElement("div");
+    subtitle.className = "model-management-row__subtitle";
+    subtitle.textContent = describePersona(persona);
+
+    meta.append(title, subtitle);
+
+    const badges = document.createElement("div");
+    badges.className = "model-management-row__badges";
+    if (normalizePersonaId(persona.id) === defaultPersonaId) {
+      const badge = document.createElement("span");
+      badge.className = "model-management-badge";
+      badge.textContent = "Default";
+      badges.append(badge);
+    }
+    if (badges.childElementCount) {
+      meta.append(badges);
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "settings-inline-actions";
+
+    const editBtn = document.createElement("button");
+    editBtn.type = "button";
+    editBtn.className = "btn-ghost";
+    editBtn.textContent = "Edit";
+    editBtn.addEventListener("click", () => {
+      if (
+        hasUnsavedPersonaChanges
+        && normalizePersonaId(persona.id) !== activePersonaId
+        && !window.confirm("Discard unsaved persona changes?")
+      ) {
+        return;
+      }
+      selectPersonaForEditing(persona.id);
+    });
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "btn-ghost btn-ghost--danger";
+    deleteBtn.textContent = "Delete";
+    deleteBtn.addEventListener("click", () => {
+      if (
+        hasUnsavedPersonaChanges
+        && normalizePersonaId(persona.id) !== activePersonaId
+        && !window.confirm("Discard unsaved persona changes?")
+      ) {
+        return;
+      }
+      selectPersonaForEditing(persona.id);
+      void deleteActivePersona();
+    });
+
+    actions.append(editBtn, deleteBtn);
+    row.append(meta, actions);
+    personaListEl.append(row);
+  });
+}
+
+function applyPersonaResponseData(data, { preserveSelection = true } = {}) {
+  appSettings.personas = Array.isArray(data?.personas) ? data.personas : [];
+  appSettings.default_persona_id = normalizePersonaId(data?.default_persona_id);
+  renderDefaultPersonaSelect();
+
+  const responsePersonaId = normalizePersonaId(data?.persona?.id);
+  const nextPersonaId = responsePersonaId || (preserveSelection ? activePersonaId : null);
+  if (nextPersonaId && findPersonaById(nextPersonaId)) {
+    selectPersonaForEditing(nextPersonaId);
+    return;
+  }
+  if (getPersonas().length) {
+    selectPersonaForEditing(getPersonas()[0].id);
+    return;
+  }
+  selectPersonaForEditing(null);
+}
+
+function collectPersonaFormPayload() {
+  return {
+    name: personaNameEl?.value.trim() || "",
+    general_instructions: generalInstructionsEl?.value.trim() || "",
+    ai_personality: aiPersonalityEl?.value.trim() || "",
+  };
+}
+
+async function saveActivePersona() {
+  const payload = collectPersonaFormPayload();
+  const isUpdate = Boolean(activePersonaId);
+  if (!payload.name) {
+    setPersonaStatus("Persona name is required.", "error");
+    return false;
+  }
+
+  setPersonaActionsDisabled(true);
+  setPersonaStatus(isUpdate ? "Saving persona..." : "Creating persona...", "warning");
+
+  try {
+    const response = await fetch(activePersonaId ? `/api/personas/${activePersonaId}` : "/api/personas", {
+      method: isUpdate ? "PATCH" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || "Persona save failed.");
+    }
+
+    applyPersonaResponseData(data, { preserveSelection: false });
+    clearPersonaDirty();
+    setPersonaStatus(isUpdate ? "Persona saved" : "Persona created", "success");
+    return true;
+  } catch (error) {
+    setPersonaStatus(error.message || "Persona save failed.", "error");
+    return false;
+  } finally {
+    setPersonaActionsDisabled(false);
+  }
+}
+
+async function deleteActivePersona() {
+  const persona = findPersonaById(activePersonaId);
+  if (!persona) {
+    setPersonaStatus("Select a persona first.", "warning");
+    return false;
+  }
+  if (!window.confirm(`Delete persona \"${persona.name}\"?`)) {
+    return false;
+  }
+
+  setPersonaActionsDisabled(true);
+  setPersonaStatus("Deleting persona...", "warning");
+
+  try {
+    const response = await fetch(`/api/personas/${persona.id}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || "Persona delete failed.");
+    }
+
+    applyPersonaResponseData(data, { preserveSelection: false });
+    clearPersonaDirty();
+    setPersonaStatus(`${persona.name} deleted`, "success");
+    return true;
+  } catch (error) {
+    setPersonaStatus(error.message || "Persona delete failed.", "error");
+    return false;
+  } finally {
+    setPersonaActionsDisabled(false);
+  }
+}
+
+async function saveAllSettings() {
+  if (hasUnsavedPersonaChanges) {
+    const personaSaved = await saveActivePersona();
+    if (!personaSaved) {
+      return;
+    }
+  }
+  if (hasUnsavedSettingsChanges) {
+    await saveSettings();
+  }
 }
 
 function setSettingsStatus(message, tone = "muted") {
@@ -342,16 +668,45 @@ function setDirtyPill(message, tone = "muted") {
   dirtyPillEl.dataset.tone = tone;
 }
 
+function updateDirtyIndicators() {
+  hasUnsavedChanges = hasUnsavedSettingsChanges || hasUnsavedPersonaChanges;
+  if (hasUnsavedSettingsChanges && hasUnsavedPersonaChanges) {
+    setSettingsStatus("Unsaved settings and persona", "warning");
+    setDirtyPill("Unsaved settings and persona", "warning");
+    return;
+  }
+  if (hasUnsavedSettingsChanges) {
+    setSettingsStatus("Unsaved changes", "warning");
+    setDirtyPill("Unsaved changes", "warning");
+    return;
+  }
+  if (hasUnsavedPersonaChanges) {
+    setSettingsStatus("Unsaved persona draft", "warning");
+    setDirtyPill("Unsaved persona draft", "warning");
+    return;
+  }
+  setSettingsStatus("Saved", "success");
+  setDirtyPill("All changes saved", "success");
+}
+
 function markDirty() {
-  hasUnsavedChanges = true;
-  setSettingsStatus("Unsaved changes", "warning");
-  setDirtyPill("Unsaved changes", "warning");
+  hasUnsavedSettingsChanges = true;
+  updateDirtyIndicators();
 }
 
 function clearDirtyState() {
-  hasUnsavedChanges = false;
-  setSettingsStatus("Saved", "success");
-  setDirtyPill("All changes saved", "success");
+  hasUnsavedSettingsChanges = false;
+  updateDirtyIndicators();
+}
+
+function markPersonaDirty() {
+  hasUnsavedPersonaChanges = true;
+  updateDirtyIndicators();
+}
+
+function clearPersonaDirty() {
+  hasUnsavedPersonaChanges = false;
+  updateDirtyIndicators();
 }
 
 function normalizeScratchpadNote(value) {
@@ -1639,13 +1994,12 @@ function syncOverviewStats() {
 }
 
 function applySettingsToForm() {
-  if (generalInstructionsEl) {
-    generalInstructionsEl.value = appSettings.general_instructions || appSettings.user_preferences || "";
-    autoResize(generalInstructionsEl);
-  }
-  if (aiPersonalityEl) {
-    aiPersonalityEl.value = appSettings.ai_personality || "";
-    autoResize(aiPersonalityEl);
+  renderDefaultPersonaSelect();
+  if (getPersonas().length) {
+    const nextPersonaId = findPersonaById(activePersonaId) ? activePersonaId : getPersonas()[0].id;
+    selectPersonaForEditing(nextPersonaId);
+  } else {
+    selectPersonaForEditing(null);
   }
   if (temperatureEl) temperatureEl.value = String(appSettings.temperature ?? 0.7);
   if (maxStepsEl) maxStepsEl.value = String(appSettings.max_steps || 5);
@@ -1759,6 +2113,8 @@ function applyServerSettingsData(data) {
   appSettings.ai_personality = data.ai_personality || "";
   appSettings.user_preferences = appSettings.general_instructions;
   appSettings.effective_user_preferences = data.effective_user_preferences || "";
+  appSettings.default_persona_id = normalizePersonaId(data.default_persona_id);
+  appSettings.personas = Array.isArray(data.personas) ? data.personas : [];
   appSettings.scratchpad = data.scratchpad || "";
   appSettings.scratchpad_sections = data.scratchpad_sections && typeof data.scratchpad_sections === "object"
     ? data.scratchpad_sections
@@ -1834,6 +2190,9 @@ async function refreshSettings() {
 
     applySettingsToForm();
     applyFeatureAvailability();
+    hasUnsavedSettingsChanges = false;
+    hasUnsavedPersonaChanges = false;
+    updateDirtyIndicators();
     setSettingsStatus("Ready");
     setDirtyPill("All changes saved", "muted");
   } catch (error) {
@@ -1844,12 +2203,8 @@ async function refreshSettings() {
 
 async function saveSettings() {
   const scratchpadSections = readScratchpadSectionsFromList();
-  const generalInstructions = generalInstructionsEl?.value.trim() || "";
-  const aiPersonality = aiPersonalityEl?.value.trim() || "";
   const payload = {
-    user_preferences: generalInstructions,
-    general_instructions: generalInstructions,
-    ai_personality: aiPersonality,
+    default_persona_id: defaultPersonaEl?.value || "",
     temperature: readFloatSetting(temperatureEl, 0.7, { min: 0, max: 2 }),
     max_steps: readNumericSetting(maxStepsEl, 5, { allowZero: false }),
     max_parallel_tools: readNumericSetting(maxParallelToolsEl, 4, { allowZero: false }),
@@ -2258,14 +2613,16 @@ function initializeTabs() {
 }
 
 function registerDirtyListeners() {
+  personaNameEl?.addEventListener("input", markPersonaDirty);
   generalInstructionsEl?.addEventListener("input", () => {
     autoResize(generalInstructionsEl);
-    markDirty();
+    markPersonaDirty();
   });
   aiPersonalityEl?.addEventListener("input", () => {
     autoResize(aiPersonalityEl);
-    markDirty();
+    markPersonaDirty();
   });
+  defaultPersonaEl?.addEventListener("change", markDirty);
   maxStepsEl?.addEventListener("input", markDirty);
   maxParallelToolsEl?.addEventListener("input", markDirty);
   subAgentMaxStepsEl?.addEventListener("input", markDirty);
@@ -2346,6 +2703,19 @@ generalInstructionsTemplateApplyBtn?.addEventListener("click", () => {
 aiPersonalityTemplateApplyBtn?.addEventListener("click", () => {
   applyBehaviorTemplate(aiPersonalityTemplateSelectEl, aiPersonalityEl, AI_PERSONALITY_TEMPLATES);
 });
+openPersonasTabBtn?.addEventListener("click", () => activateTab("personas"));
+personaNewBtn?.addEventListener("click", () => {
+  if (hasUnsavedPersonaChanges && !window.confirm("Discard unsaved persona changes?")) {
+    return;
+  }
+  selectPersonaForEditing(null);
+});
+personaSaveBtn?.addEventListener("click", () => {
+  void saveActivePersona();
+});
+personaDeleteBtn?.addEventListener("click", () => {
+  void deleteActivePersona();
+});
 addCustomModelBtn?.addEventListener("click", addCustomModelFromInputs);
 customModelReasoningModeEl?.addEventListener("change", syncCustomModelReasoningControls);
 customModelRoutingModeEl?.addEventListener("change", syncCustomModelProviderControls);
@@ -2375,12 +2745,12 @@ kbSyncBtn?.addEventListener("click", () => {
 });
 saveButtons.forEach((button) => {
   button.addEventListener("click", () => {
-    void saveSettings();
+    void saveAllSettings();
   });
 });
 
 window.addEventListener("beforeunload", (event) => {
-  if (!hasUnsavedChanges) {
+  if (!hasUnsavedSettingsChanges && !hasUnsavedPersonaChanges) {
     return;
   }
   event.preventDefault();
@@ -2390,7 +2760,7 @@ window.addEventListener("beforeunload", (event) => {
 window.addEventListener("keydown", (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
     event.preventDefault();
-    void saveSettings();
+    void saveAllSettings();
   }
 });
 

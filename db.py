@@ -40,6 +40,10 @@ from config import (
     IMAGE_STORAGE_DIR,
     DEFAULT_MAX_PARALLEL_TOOLS,
     ENTROPY_PROFILE_PRESETS,
+    MAX_AI_PERSONALITY_LENGTH,
+    MAX_PERSONA_COUNT,
+    MAX_PERSONA_NAME_LENGTH,
+    MAX_USER_PREFERENCES_LENGTH,
     PROMPT_MAX_INPUT_TOKENS,
     PROMPT_PREFLIGHT_SUMMARY_TOKEN_COUNT,
     PROMPT_RAG_MAX_TOKENS,
@@ -183,6 +187,7 @@ def init_db() -> None:
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 title      TEXT    NOT NULL DEFAULT 'New Chat',
                 model      TEXT    NOT NULL DEFAULT 'deepseek-chat',
+                persona_id INTEGER REFERENCES personas(id) ON DELETE SET NULL,
                 created_at TEXT    NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT    NOT NULL DEFAULT (datetime('now'))
             );
@@ -206,6 +211,14 @@ def init_db() -> None:
                 key        TEXT PRIMARY KEY,
                 value      TEXT NOT NULL DEFAULT '',
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS personas (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                name                 TEXT NOT NULL,
+                general_instructions TEXT NOT NULL DEFAULT '',
+                ai_personality       TEXT NOT NULL DEFAULT '',
+                created_at           TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at           TEXT NOT NULL DEFAULT (datetime('now'))
             );
             CREATE TABLE IF NOT EXISTS user_profile (
                 key        TEXT PRIMARY KEY,
@@ -302,6 +315,8 @@ def init_db() -> None:
             ON video_assets(conversation_id, created_at, video_id);
             CREATE INDEX IF NOT EXISTS idx_conversation_memory_conversation_created
             ON conversation_memory(conversation_id, created_at, id);
+            CREATE INDEX IF NOT EXISTS idx_personas_updated_at
+            ON personas(updated_at, id);
             """
         )
 
@@ -394,6 +409,7 @@ def datetime_utc_now_iso() -> str:
 
 def initialize_database() -> None:
     init_db()
+    ensure_persona_schema()
     ensure_messages_metadata_column()
     ensure_messages_tool_history_columns()
     ensure_messages_position_column()
@@ -403,6 +419,108 @@ def initialize_database() -> None:
 
 def _normalize_user_profile_value(value, max_length: int = 500) -> str:
     return " ".join(str(value or "").strip().split())[:max_length]
+
+
+def _persona_row_to_dict(row) -> dict | None:
+    if not row:
+        return None
+    return {
+        "id": int(row["id"]),
+        "name": str(row["name"] or "").strip(),
+        "general_instructions": normalize_assistant_behavior_text(row["general_instructions"]),
+        "ai_personality": normalize_assistant_behavior_text(row["ai_personality"]),
+        "created_at": str(row["created_at"] or "").strip(),
+        "updated_at": str(row["updated_at"] or "").strip(),
+    }
+
+
+def _coerce_positive_int(value) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def normalize_persona_name(value) -> str:
+    return " ".join(str(value or "").strip().split())[:MAX_PERSONA_NAME_LENGTH]
+
+
+def _normalize_persona_behavior(value, max_length: int) -> str:
+    return normalize_assistant_behavior_text(value)[:max_length]
+
+
+def _get_persona_by_id(conn, persona_id: int | None) -> dict | None:
+    normalized_persona_id = _coerce_positive_int(persona_id)
+    if normalized_persona_id is None:
+        return None
+    row = conn.execute(
+        """SELECT id, name, general_instructions, ai_personality, created_at, updated_at
+           FROM personas WHERE id = ?""",
+        (normalized_persona_id,),
+    ).fetchone()
+    return _persona_row_to_dict(row)
+
+
+def _migrate_global_behavior_to_default_persona(conn) -> None:
+    row = conn.execute("SELECT COUNT(*) AS count FROM personas").fetchone()
+    if int(row["count"] or 0) > 0:
+        return
+
+    settings_rows = conn.execute(
+        "SELECT key, value FROM app_settings WHERE key IN (?, ?, ?)",
+        ("general_instructions", "user_preferences", "ai_personality"),
+    ).fetchall()
+    settings = {str(setting_row["key"] or "").strip(): setting_row["value"] for setting_row in settings_rows}
+    general_instructions = normalize_assistant_behavior_text(settings.get("general_instructions", ""))
+    if not general_instructions:
+        general_instructions = normalize_assistant_behavior_text(settings.get("user_preferences", ""))
+    ai_personality = normalize_assistant_behavior_text(settings.get("ai_personality", ""))
+    if not general_instructions and not ai_personality:
+        return
+
+    cursor = conn.execute(
+        "INSERT INTO personas (name, general_instructions, ai_personality) VALUES (?, ?, ?)",
+        (
+            "Default",
+            general_instructions[:MAX_USER_PREFERENCES_LENGTH],
+            ai_personality[:MAX_AI_PERSONALITY_LENGTH],
+        ),
+    )
+    persona_id = _coerce_positive_int(cursor.lastrowid)
+    if persona_id is None:
+        return
+
+    _upsert_app_setting(conn, "default_persona_id", str(persona_id))
+    _upsert_app_setting(conn, "general_instructions", "")
+    _upsert_app_setting(conn, "user_preferences", "")
+    _upsert_app_setting(conn, "ai_personality", "")
+
+
+def ensure_persona_schema() -> None:
+    with get_db() as conn:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS personas (
+                   id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                   name                 TEXT NOT NULL,
+                   general_instructions TEXT NOT NULL DEFAULT '',
+                   ai_personality       TEXT NOT NULL DEFAULT '',
+                   created_at           TEXT NOT NULL DEFAULT (datetime('now')),
+                   updated_at           TEXT NOT NULL DEFAULT (datetime('now'))
+               )"""
+        )
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(conversations)").fetchall()}
+        if "persona_id" not in columns:
+            conn.execute(
+                "ALTER TABLE conversations ADD COLUMN persona_id INTEGER REFERENCES personas(id) ON DELETE SET NULL"
+            )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_personas_updated_at ON personas(updated_at, id)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_conversations_persona_id ON conversations(persona_id, updated_at, id)"
+        )
+        _migrate_global_behavior_to_default_persona(conn)
 
 
 CONVERSATION_MEMORY_ENTRY_TYPES = {"user_info", "task_context", "tool_result", "decision"}
@@ -2540,6 +2658,227 @@ def normalize_assistant_behavior_text(value) -> str:
     return str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
 
 
+def count_personas() -> int:
+    with get_db() as conn:
+        row = conn.execute("SELECT COUNT(*) AS count FROM personas").fetchone()
+    return int(row["count"] or 0)
+
+
+def list_personas() -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT id, name, general_instructions, ai_personality, created_at, updated_at
+               FROM personas
+               ORDER BY lower(name) ASC, id ASC"""
+        ).fetchall()
+    return [_persona_row_to_dict(row) for row in rows if row]
+
+
+def get_persona(persona_id: int | None) -> dict | None:
+    with get_db() as conn:
+        return _get_persona_by_id(conn, persona_id)
+
+
+def get_default_persona_id(settings: dict | None = None) -> int | None:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get("default_persona_id") if isinstance(source, dict) else None
+    return _coerce_positive_int(raw_value)
+
+
+def get_default_persona(settings: dict | None = None) -> dict | None:
+    return get_persona(get_default_persona_id(settings))
+
+
+def build_persona_preferences(persona: dict | None) -> str:
+    if not isinstance(persona, dict):
+        return ""
+    general_instructions = normalize_assistant_behavior_text(persona.get("general_instructions", ""))
+    ai_personality = normalize_assistant_behavior_text(persona.get("ai_personality", ""))
+    parts = []
+    if general_instructions:
+        parts.append(f"General instructions:\n{general_instructions}")
+    if ai_personality:
+        parts.append(f"AI personality:\n{ai_personality}")
+    return "\n\n".join(parts).strip()
+
+
+def create_persona(name: str, general_instructions: str = "", ai_personality: str = "") -> dict:
+    normalized_name = normalize_persona_name(name)
+    if not normalized_name:
+        raise ValueError("Persona name is required.")
+
+    normalized_general_instructions = _normalize_persona_behavior(general_instructions, MAX_USER_PREFERENCES_LENGTH)
+    normalized_ai_personality = _normalize_persona_behavior(ai_personality, MAX_AI_PERSONALITY_LENGTH)
+
+    with get_db() as conn:
+        row = conn.execute("SELECT COUNT(*) AS count FROM personas").fetchone()
+        if int(row["count"] or 0) >= MAX_PERSONA_COUNT:
+            raise ValueError(f"Persona limit reached ({MAX_PERSONA_COUNT}).")
+        cursor = conn.execute(
+            "INSERT INTO personas (name, general_instructions, ai_personality) VALUES (?, ?, ?)",
+            (normalized_name, normalized_general_instructions, normalized_ai_personality),
+        )
+        return _get_persona_by_id(conn, cursor.lastrowid)
+
+
+def upsert_default_persona(
+    general_instructions: str = "",
+    ai_personality: str = "",
+    *,
+    name: str = "Default",
+) -> dict:
+    normalized_name = normalize_persona_name(name) or "Default"
+    normalized_general_instructions = _normalize_persona_behavior(general_instructions, MAX_USER_PREFERENCES_LENGTH)
+    normalized_ai_personality = _normalize_persona_behavior(ai_personality, MAX_AI_PERSONALITY_LENGTH)
+
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT value FROM app_settings WHERE key = ?",
+            ("default_persona_id",),
+        ).fetchone()
+        current_default_persona = _get_persona_by_id(conn, row["value"] if row else None)
+        if current_default_persona:
+            conn.execute(
+                """UPDATE personas
+                   SET name = ?, general_instructions = ?, ai_personality = ?, updated_at = datetime('now')
+                   WHERE id = ?""",
+                (
+                    normalized_name,
+                    normalized_general_instructions,
+                    normalized_ai_personality,
+                    current_default_persona["id"],
+                ),
+            )
+            persona = _get_persona_by_id(conn, current_default_persona["id"])
+        else:
+            row = conn.execute("SELECT COUNT(*) AS count FROM personas").fetchone()
+            if int(row["count"] or 0) >= MAX_PERSONA_COUNT:
+                raise ValueError(f"Persona limit reached ({MAX_PERSONA_COUNT}).")
+            cursor = conn.execute(
+                "INSERT INTO personas (name, general_instructions, ai_personality) VALUES (?, ?, ?)",
+                (normalized_name, normalized_general_instructions, normalized_ai_personality),
+            )
+            persona = _get_persona_by_id(conn, cursor.lastrowid)
+
+        _upsert_app_setting(conn, "default_persona_id", str(persona["id"]))
+        return persona
+
+
+def update_persona(
+    persona_id: int,
+    *,
+    name: str | None = None,
+    general_instructions: str | None = None,
+    ai_personality: str | None = None,
+) -> dict | None:
+    normalized_persona_id = _coerce_positive_int(persona_id)
+    if normalized_persona_id is None:
+        return None
+
+    with get_db() as conn:
+        current = _get_persona_by_id(conn, normalized_persona_id)
+        if not current:
+            return None
+
+        next_name = current["name"] if name is None else normalize_persona_name(name)
+        if not next_name:
+            raise ValueError("Persona name is required.")
+
+        next_general_instructions = (
+            current["general_instructions"]
+            if general_instructions is None
+            else _normalize_persona_behavior(general_instructions, MAX_USER_PREFERENCES_LENGTH)
+        )
+        next_ai_personality = (
+            current["ai_personality"]
+            if ai_personality is None
+            else _normalize_persona_behavior(ai_personality, MAX_AI_PERSONALITY_LENGTH)
+        )
+        conn.execute(
+            """UPDATE personas
+               SET name = ?, general_instructions = ?, ai_personality = ?, updated_at = datetime('now')
+               WHERE id = ?""",
+            (
+                next_name,
+                next_general_instructions,
+                next_ai_personality,
+                normalized_persona_id,
+            ),
+        )
+        return _get_persona_by_id(conn, normalized_persona_id)
+
+
+def delete_persona(persona_id: int) -> bool:
+    normalized_persona_id = _coerce_positive_int(persona_id)
+    if normalized_persona_id is None:
+        return False
+
+    with get_db() as conn:
+        current = _get_persona_by_id(conn, normalized_persona_id)
+        if not current:
+            return False
+        row = conn.execute(
+            "SELECT value FROM app_settings WHERE key = ?",
+            ("default_persona_id",),
+        ).fetchone()
+        default_persona_id = _coerce_positive_int(row["value"] if row else None)
+        conn.execute("DELETE FROM personas WHERE id = ?", (normalized_persona_id,))
+        if default_persona_id == normalized_persona_id:
+            _upsert_app_setting(conn, "default_persona_id", "")
+        return True
+
+
+def get_conversation_persona(conversation_id: int | None) -> dict | None:
+    normalized_conversation_id = _coerce_positive_int(conversation_id)
+    if normalized_conversation_id is None:
+        return None
+    with get_db() as conn:
+        row = conn.execute(
+            """SELECT p.id, p.name, p.general_instructions, p.ai_personality, p.created_at, p.updated_at
+               FROM conversations c
+               JOIN personas p ON p.id = c.persona_id
+               WHERE c.id = ?""",
+            (normalized_conversation_id,),
+        ).fetchone()
+    return _persona_row_to_dict(row)
+
+
+def get_effective_conversation_persona(conversation_id: int | None, settings: dict | None = None) -> dict | None:
+    persona = get_conversation_persona(conversation_id)
+    if persona:
+        return persona
+    return get_default_persona(settings)
+
+
+def build_conversation_assistant_behavior(conversation_id: int | None, settings: dict | None = None) -> str:
+    persona = get_effective_conversation_persona(conversation_id, settings)
+    if persona:
+        return build_persona_preferences(persona)
+    return build_effective_user_preferences(settings)
+
+
+def set_conversation_persona(conversation_id: int, persona_id: int | None) -> bool:
+    normalized_conversation_id = _coerce_positive_int(conversation_id)
+    if normalized_conversation_id is None:
+        return False
+    normalized_persona_id = _coerce_positive_int(persona_id)
+
+    with get_db() as conn:
+        conversation = conn.execute(
+            "SELECT id FROM conversations WHERE id = ?",
+            (normalized_conversation_id,),
+        ).fetchone()
+        if not conversation:
+            return False
+        if normalized_persona_id is not None and _get_persona_by_id(conn, normalized_persona_id) is None:
+            raise ValueError("Persona not found.")
+        conn.execute(
+            "UPDATE conversations SET persona_id = ?, updated_at = datetime('now') WHERE id = ?",
+            (normalized_persona_id, normalized_conversation_id),
+        )
+        return True
+
+
 def get_general_instructions(settings: dict | None = None) -> str:
     source = settings if settings is not None else get_app_settings()
     general_instructions = normalize_assistant_behavior_text(source.get("general_instructions", ""))
@@ -2587,6 +2926,8 @@ def count_scratchpad_notes(value) -> int:
 def _normalize_app_setting_value(key: str, value):
     if key == "scratchpad" or key in SCRATCHPAD_SECTION_SETTING_KEYS.values():
         return normalize_scratchpad_text(value)
+    if key == "default_persona_id":
+        return str(_coerce_positive_int(value) or "")
     if key in {"user_preferences", "general_instructions", "ai_personality"}:
         return normalize_assistant_behavior_text(value)
     return value

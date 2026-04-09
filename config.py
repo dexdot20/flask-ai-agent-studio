@@ -232,6 +232,8 @@ PRIVATE_NETWORKS = [
 MAX_USER_PREFERENCES_LENGTH = 2000
 MAX_AI_PERSONALITY_LENGTH = 2000
 MAX_ASSISTANT_BEHAVIOR_LENGTH = MAX_USER_PREFERENCES_LENGTH + MAX_AI_PERSONALITY_LENGTH + 128
+MAX_PERSONA_NAME_LENGTH = 80
+MAX_PERSONA_COUNT = 50
 SCRATCHPAD_DEFAULT_SECTION = "notes"
 SCRATCHPAD_SECTION_ORDER = (
     "lessons",
@@ -359,6 +361,7 @@ DEFAULT_SETTINGS = {
     "user_preferences": "",
     "general_instructions": "",
     "ai_personality": "",
+    "default_persona_id": "",
     "scratchpad": "",
     "scratchpad_lessons": "",
     "scratchpad_profile": "",

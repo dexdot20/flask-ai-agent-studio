@@ -34,6 +34,7 @@ from config import (
 )
 from routes.auth import is_login_pin_enabled
 from db import (
+    build_persona_preferences,
     build_effective_user_preferences,
     count_scratchpad_notes,
     get_active_tool_names,
@@ -49,6 +50,8 @@ from db import (
     get_chat_summary_trigger_token_count,
     get_clarification_max_questions,
     get_context_selection_strategy,
+    get_default_persona,
+    get_default_persona_id,
     get_entropy_profile,
     get_entropy_protect_code_blocks_enabled,
     get_entropy_protect_tool_results_enabled,
@@ -78,13 +81,16 @@ from db import (
     get_summary_skip_first,
     get_summary_skip_last,
     get_general_instructions,
+    get_persona,
     get_tool_memory_auto_inject_enabled,
     get_web_cache_ttl_hours,
+    list_personas,
     normalize_active_tool_names,
     normalize_rag_source_types,
     normalize_sub_agent_allowed_tool_names,
     normalize_scratchpad_text,
     save_app_settings,
+    upsert_default_persona,
 )
 from model_registry import (
     MODEL_OPERATION_KEYS,
@@ -336,8 +342,17 @@ def build_settings_payload() -> dict:
     raw = get_app_settings()
     available_models = get_all_models(raw)
     visible_chat_models = get_visible_chat_models(raw)
-    general_instructions = get_general_instructions(raw)
-    ai_personality = get_ai_personality(raw)
+    default_persona = get_default_persona(raw)
+    general_instructions = (
+        default_persona.get("general_instructions", "")
+        if isinstance(default_persona, dict)
+        else get_general_instructions(raw)
+    )
+    ai_personality = (
+        default_persona.get("ai_personality", "")
+        if isinstance(default_persona, dict)
+        else get_ai_personality(raw)
+    )
     configured_active_tools = normalize_active_tool_names(raw.get("active_tools"))
     if raw.get("active_tools") is None:
         configured_active_tools = get_active_tool_names(raw)
@@ -345,7 +360,13 @@ def build_settings_payload() -> dict:
         "user_preferences": general_instructions,
         "general_instructions": general_instructions,
         "ai_personality": ai_personality,
-        "effective_user_preferences": build_effective_user_preferences(raw),
+        "effective_user_preferences": (
+            build_persona_preferences(default_persona)
+            if isinstance(default_persona, dict)
+            else build_effective_user_preferences(raw)
+        ),
+        "default_persona_id": get_default_persona_id(raw),
+        "personas": list_personas(),
         "scratchpad": raw.get("scratchpad", ""),
         "scratchpad_sections": build_scratchpad_sections_payload(raw),
         "max_steps": int(raw.get("max_steps", DEFAULT_SETTINGS["max_steps"])),
@@ -467,6 +488,7 @@ def register_page_routes(app) -> None:
         user_preferences = data.get("user_preferences")
         general_instructions = data.get("general_instructions")
         ai_personality = data.get("ai_personality")
+        default_persona_id_raw = data.get("default_persona_id")
         max_steps_raw = data.get("max_steps")
         max_parallel_tools_raw = data.get("max_parallel_tools")
         temperature_raw = data.get("temperature")
@@ -521,6 +543,7 @@ def register_page_routes(app) -> None:
             user_preferences is None
             and general_instructions is None
             and ai_personality is None
+            and default_persona_id_raw is None
             and scratchpad is None
             and scratchpad_sections_raw is None
             and max_steps_raw is None
@@ -573,21 +596,61 @@ def register_page_routes(app) -> None:
             return jsonify({"error": "No settings provided."}), 400
 
         settings = get_app_settings()
+        default_persona = get_default_persona(settings)
 
         if general_instructions is None and user_preferences is not None:
             general_instructions = user_preferences
 
-        if general_instructions is not None:
-            if not isinstance(general_instructions, str):
-                return jsonify({"error": "Invalid general instructions."}), 400
-            normalized_general_instructions = general_instructions.strip()[:MAX_USER_PREFERENCES_LENGTH]
-            settings["general_instructions"] = normalized_general_instructions
-            settings["user_preferences"] = normalized_general_instructions
+        if general_instructions is not None and not isinstance(general_instructions, str):
+            return jsonify({"error": "Invalid general instructions."}), 400
 
-        if ai_personality is not None:
-            if not isinstance(ai_personality, str):
-                return jsonify({"error": "Invalid AI personality."}), 400
-            settings["ai_personality"] = ai_personality.strip()[:MAX_AI_PERSONALITY_LENGTH]
+        if ai_personality is not None and not isinstance(ai_personality, str):
+            return jsonify({"error": "Invalid AI personality."}), 400
+
+        if general_instructions is not None or ai_personality is not None:
+            normalized_general_instructions = (
+                (general_instructions or "").strip()[:MAX_USER_PREFERENCES_LENGTH]
+                if general_instructions is not None
+                else (
+                    str(default_persona.get("general_instructions") or "")
+                    if isinstance(default_persona, dict)
+                    else get_general_instructions(settings)
+                )
+            )
+            normalized_ai_personality = (
+                (ai_personality or "").strip()[:MAX_AI_PERSONALITY_LENGTH]
+                if ai_personality is not None
+                else (
+                    str(default_persona.get("ai_personality") or "")
+                    if isinstance(default_persona, dict)
+                    else get_ai_personality(settings)
+                )
+            )
+
+            if normalized_general_instructions or normalized_ai_personality or isinstance(default_persona, dict):
+                persona = upsert_default_persona(
+                    normalized_general_instructions,
+                    normalized_ai_personality,
+                )
+                settings["default_persona_id"] = str(persona["id"])
+
+            settings["general_instructions"] = ""
+            settings["user_preferences"] = ""
+            settings["ai_personality"] = ""
+
+        if default_persona_id_raw is not None:
+            if default_persona_id_raw in (None, ""):
+                settings["default_persona_id"] = ""
+            else:
+                try:
+                    default_persona_id = int(default_persona_id_raw)
+                except (TypeError, ValueError):
+                    return jsonify({"error": "default_persona_id must be an integer or empty."}), 400
+                if default_persona_id <= 0:
+                    return jsonify({"error": "default_persona_id must be a positive integer."}), 400
+                if get_persona(default_persona_id) is None:
+                    return jsonify({"error": "default_persona_id must reference an existing persona."}), 400
+                settings["default_persona_id"] = str(default_persona_id)
 
         if scratchpad is not None:
             if not isinstance(scratchpad, str):

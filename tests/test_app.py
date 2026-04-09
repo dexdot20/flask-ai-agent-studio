@@ -80,7 +80,9 @@ from canvas_service import (
 )
 from db import (
     append_to_scratchpad,
+    build_conversation_assistant_behavior,
     build_effective_user_preferences,
+    build_persona_preferences,
     build_user_profile_system_context,
     count_visible_message_tokens,
     create_image_asset,
@@ -267,6 +269,8 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["general_instructions"], "")
         self.assertEqual(payload["ai_personality"], "")
         self.assertEqual(payload["effective_user_preferences"], "")
+        self.assertEqual(payload["personas"], [])
+        self.assertIsNone(payload["default_persona_id"])
         self.assertEqual(payload["scratchpad"], "")
         self.assertEqual(payload["max_steps"], 5)
         self.assertEqual(payload["max_parallel_tools"], 4)
@@ -432,6 +436,12 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["user_preferences"], "Keep answers short.")
         self.assertEqual(payload["general_instructions"], "Keep answers short.")
         self.assertEqual(payload["ai_personality"], "Sound like a pragmatic senior engineer.")
+        self.assertEqual(len(payload["personas"]), 1)
+        self.assertEqual(payload["personas"][0]["name"], "Default")
+        self.assertIsInstance(payload["default_persona_id"], int)
+        self.assertEqual(payload["personas"][0]["id"], payload["default_persona_id"])
+        self.assertEqual(payload["personas"][0]["general_instructions"], "Keep answers short.")
+        self.assertEqual(payload["personas"][0]["ai_personality"], "Sound like a pragmatic senior engineer.")
         self.assertIn("General instructions:\nKeep answers short.", payload["effective_user_preferences"])
         self.assertIn("AI personality:\nSound like a pragmatic senior engineer.", payload["effective_user_preferences"])
         self.assertEqual(payload["scratchpad"], "")
@@ -572,6 +582,78 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertNotIn("legacy_unused", payload["operation_model_preferences"])
         self.assertEqual(payload["operation_model_fallback_preferences"]["sub_agent"], ["deepseek-chat"])
         self.assertNotIn("legacy_unused", payload["operation_model_fallback_preferences"])
+
+    def test_persona_crud_and_conversation_persona_override(self):
+        response = self.client.post(
+            "/api/personas",
+            json={
+                "name": "Analyst",
+                "general_instructions": "Focus on evidence.",
+                "ai_personality": "Sound analytical.",
+            },
+        )
+        self.assertEqual(response.status_code, 201)
+        analyst_persona = response.get_json()["persona"]
+
+        response = self.client.post(
+            "/api/personas",
+            json={
+                "name": "Teacher",
+                "general_instructions": "Explain step by step.",
+                "ai_personality": "Sound patient.",
+            },
+        )
+        self.assertEqual(response.status_code, 201)
+        teacher_persona = response.get_json()["persona"]
+
+        response = self.client.patch(
+            "/api/settings",
+            json={"default_persona_id": analyst_persona["id"]},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["default_persona_id"], analyst_persona["id"])
+
+        response = self.client.post(
+            "/api/conversations",
+            json={"title": "Persona Chat", "model": "deepseek-chat"},
+        )
+        self.assertEqual(response.status_code, 201)
+        conversation_payload = response.get_json()
+        conversation_id = conversation_payload["id"]
+        self.assertIsNone(conversation_payload["persona_id"])
+
+        self.assertEqual(
+            build_conversation_assistant_behavior(conversation_id, get_app_settings()),
+            build_persona_preferences(analyst_persona),
+        )
+
+        response = self.client.patch(
+            f"/api/conversations/{conversation_id}",
+            json={"persona_id": teacher_persona["id"]},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["persona_id"], teacher_persona["id"])
+
+        response = self.client.get(f"/api/conversations/{conversation_id}")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["conversation"]["persona"]["id"], teacher_persona["id"])
+
+        self.assertEqual(
+            build_conversation_assistant_behavior(conversation_id, get_app_settings()),
+            build_persona_preferences(teacher_persona),
+        )
+
+        response = self.client.delete(f"/api/personas/{teacher_persona['id']}")
+        self.assertEqual(response.status_code, 200)
+
+        response = self.client.get(f"/api/conversations/{conversation_id}")
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.get_json()["conversation"]["persona"])
+
+        self.assertEqual(
+            build_conversation_assistant_behavior(conversation_id, get_app_settings()),
+            build_persona_preferences(analyst_persona),
+        )
 
     def test_delete_conversation_message_soft_deletes_it_and_returns_filtered_history(self):
         conversation_id = self._create_conversation()
@@ -9759,6 +9841,65 @@ class AppRoutesTestCase(unittest.TestCase):
         canvas_event = next((event for event in events if event["type"] == "canvas_sync"), None)
         self.assertIsNotNone(canvas_event)
         self.assertFalse(canvas_event.get("auto_open"))
+
+    def test_uploaded_document_can_skip_canvas_creation(self):
+        conversation_id = self._create_conversation()
+
+        with patch("routes.chat.run_agent_stream", return_value=iter([{"type": "done"}])):
+            response = self.client.post(
+                "/chat",
+                data={
+                    "conversation_id": str(conversation_id),
+                    "model": "deepseek-chat",
+                    "user_content": "Please review this file",
+                    "messages": json.dumps([
+                        {"role": "user", "content": "Please review this file"},
+                    ]),
+                    "document_canvas_action": "skip",
+                    "document": (io.BytesIO(b"Project notes\n\nDetails"), "notes.txt", "text/plain"),
+                },
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        events = [json.loads(line) for line in response.get_data(as_text=True).strip().splitlines()]
+        document_event = next((event for event in events if event["type"] == "document_processed"), None)
+        self.assertIsNotNone(document_event)
+        self.assertIsNone(document_event.get("canvas_document"))
+
+        canvas_event = next((event for event in events if event["type"] == "canvas_sync"), None)
+        self.assertIsNone(canvas_event)
+
+        conversation_response = self.client.get(f"/api/conversations/{conversation_id}")
+        self.assertEqual(conversation_response.status_code, 200)
+        messages = conversation_response.get_json()["messages"]
+        latest_canvas_state = find_latest_canvas_state(messages)
+        self.assertEqual(latest_canvas_state["documents"], [])
+
+    def test_uploaded_document_can_auto_open_canvas_when_requested(self):
+        conversation_id = self._create_conversation()
+
+        with patch("routes.chat.run_agent_stream", return_value=iter([{"type": "done"}])):
+            response = self.client.post(
+                "/chat",
+                data={
+                    "conversation_id": str(conversation_id),
+                    "model": "deepseek-chat",
+                    "user_content": "Please review this file",
+                    "messages": json.dumps([
+                        {"role": "user", "content": "Please review this file"},
+                    ]),
+                    "document_canvas_action": "open",
+                    "document": (io.BytesIO(b"Project notes\n\nDetails"), "notes.txt", "text/plain"),
+                },
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        events = [json.loads(line) for line in response.get_data(as_text=True).strip().splitlines()]
+        canvas_event = next((event for event in events if event["type"] == "canvas_sync"), None)
+        self.assertIsNotNone(canvas_event)
+        self.assertTrue(canvas_event.get("auto_open"))
 
     def test_render_pdf_pages_for_vision_limits_output_to_first_pages(self):
         fake_pdf = SimpleNamespace(pages=[object(), object(), object(), object()])

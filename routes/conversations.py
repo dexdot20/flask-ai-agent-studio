@@ -35,6 +35,8 @@ from config import (
     RAG_SOURCE_TOOL_RESULT,
 )
 from db import (
+    create_persona,
+    delete_persona,
     delete_conversation_file_assets,
     delete_conversation_memory_entry,
     delete_conversation_image_assets,
@@ -42,6 +44,9 @@ from db import (
     extract_message_attachments,
     extract_sub_agent_traces,
     get_app_settings,
+    get_default_persona_id,
+    get_persona,
+    get_conversation_persona,
     get_rag_source_types,
     get_conversation_message_rows,
     get_conversation_messages,
@@ -58,7 +63,9 @@ from db import (
     sanitize_edited_user_message_metadata,
     serialize_message_metadata,
     soft_delete_messages,
+    list_personas,
     update_conversation_memory_entry,
+    update_persona,
 )
 from doc_service import build_canvas_markdown, extract_document_text, infer_canvas_format, infer_canvas_language, read_uploaded_document
 from model_registry import (
@@ -115,6 +122,14 @@ def _load_conversation_memory_payload(conv_id: int, limit: int = 200) -> dict:
         "conversation_memory_enabled": CONVERSATION_MEMORY_ENABLED,
         "memory": memory_entries,
         "memory_count": len(memory_entries),
+    }
+
+
+def _build_persona_response_payload(**extra) -> dict:
+    return {
+        "personas": list_personas(),
+        "default_persona_id": get_default_persona_id(),
+        **extra,
     }
 
 
@@ -379,7 +394,7 @@ def register_conversation_routes(app) -> None:
         with get_db() as conn:
             rows = conn.execute(
                 """
-                SELECT c.id, c.title, c.model, c.updated_at,
+                SELECT c.id, c.title, c.model, c.persona_id, c.updated_at,
                        COUNT(m.id) AS message_count
                 FROM conversations c
                   LEFT JOIN messages m ON m.conversation_id = c.id AND m.deleted_at IS NULL
@@ -389,23 +404,103 @@ def register_conversation_routes(app) -> None:
             ).fetchall()
         return jsonify([dict(row) for row in rows])
 
+    @app.route("/api/personas", methods=["GET"])
+    def list_personas_route():
+        return jsonify(_build_persona_response_payload())
+
+    @app.route("/api/personas", methods=["POST"])
+    def create_persona_route():
+        data = request.get_json(silent=True) or {}
+        name = data.get("name")
+        general_instructions = data.get("general_instructions")
+        ai_personality = data.get("ai_personality")
+
+        if not isinstance(name, str):
+            return jsonify({"error": "Persona name is required."}), 400
+        if general_instructions is not None and not isinstance(general_instructions, str):
+            return jsonify({"error": "general_instructions must be a string."}), 400
+        if ai_personality is not None and not isinstance(ai_personality, str):
+            return jsonify({"error": "ai_personality must be a string."}), 400
+
+        try:
+            persona = create_persona(
+                name,
+                general_instructions=general_instructions or "",
+                ai_personality=ai_personality or "",
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        return jsonify(_build_persona_response_payload(persona=persona)), 201
+
+    @app.route("/api/personas/<int:persona_id>", methods=["PATCH"])
+    def update_persona_route(persona_id):
+        data = request.get_json(silent=True) or {}
+        if not any(key in data for key in ("name", "general_instructions", "ai_personality")):
+            return jsonify({"error": "No persona fields provided."}), 400
+
+        name = data.get("name") if "name" in data else None
+        general_instructions = data.get("general_instructions") if "general_instructions" in data else None
+        ai_personality = data.get("ai_personality") if "ai_personality" in data else None
+
+        if name is not None and not isinstance(name, str):
+            return jsonify({"error": "name must be a string."}), 400
+        if general_instructions is not None and not isinstance(general_instructions, str):
+            return jsonify({"error": "general_instructions must be a string."}), 400
+        if ai_personality is not None and not isinstance(ai_personality, str):
+            return jsonify({"error": "ai_personality must be a string."}), 400
+
+        try:
+            persona = update_persona(
+                persona_id,
+                name=name,
+                general_instructions=general_instructions,
+                ai_personality=ai_personality,
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        if not persona:
+            return jsonify({"error": "Persona not found."}), 404
+
+        return jsonify(_build_persona_response_payload(persona=persona))
+
+    @app.route("/api/personas/<int:persona_id>", methods=["DELETE"])
+    def delete_persona_route(persona_id):
+        deleted = delete_persona(persona_id)
+        if not deleted:
+            return jsonify({"error": "Persona not found."}), 404
+        return jsonify(_build_persona_response_payload(deleted_persona_id=persona_id))
+
     @app.route("/api/conversations", methods=["POST"])
     def create_conversation():
         data = request.get_json(silent=True) or {}
         title = (data.get("title") or "New Chat")[:120]
+        raw_persona_id = data.get("persona_id") if "persona_id" in data else None
+        persona_id = _parse_optional_int(raw_persona_id)
         settings = get_app_settings()
         model = normalize_model_id(data.get("model"), default=get_default_chat_model_id(settings))
         if not is_valid_model_id(model):
             return jsonify({"error": "Invalid model."}), 400
+        if raw_persona_id not in (None, "") and persona_id is None:
+            return jsonify({"error": "persona_id must be an integer or empty."}), 400
+        if persona_id is not None and get_persona(persona_id) is None:
+            return jsonify({"error": "Persona not found."}), 400
         with get_db() as conn:
             cursor = conn.execute(
-                "INSERT INTO conversations (title, model) VALUES (?, ?)",
-                (title, model),
+                "INSERT INTO conversations (title, model, persona_id) VALUES (?, ?, ?)",
+                (title, model, persona_id),
             )
             conversation_id = cursor.lastrowid
         if RAG_ENABLED:
             sync_conversations_to_rag_safe(conversation_id=conversation_id)
-        return jsonify({"id": conversation_id, "title": title, "model": model, "model_label": get_model_label(model, settings)}), 201
+        return jsonify({
+            "id": conversation_id,
+            "title": title,
+            "model": model,
+            "persona_id": persona_id,
+            "model_label": get_model_label(model, settings),
+        }), 201
 
     @app.route("/api/conversations/<int:conv_id>", methods=["GET"])
     def get_conversation(conv_id):
@@ -415,6 +510,7 @@ def register_conversation_routes(app) -> None:
         settings = get_app_settings()
         conversation_payload = dict(conversation)
         conversation_payload["model_label"] = get_model_label(conversation_payload.get("model") or "", settings)
+        conversation_payload["persona"] = get_conversation_persona(conv_id)
         return jsonify(
             {
                 "conversation": conversation_payload,
@@ -1088,19 +1184,47 @@ def register_conversation_routes(app) -> None:
         return "", 204
 
     @app.route("/api/conversations/<int:conv_id>", methods=["PATCH"])
-    def update_conversation_title(conv_id):
+    def update_conversation(conv_id):
         data = request.get_json(silent=True) or {}
-        title = (data.get("title") or "").strip()[:120]
-        if not title:
-            return jsonify({"error": "Title required."}), 400
+        title_provided = "title" in data
+        persona_provided = "persona_id" in data
+        if not title_provided and not persona_provided:
+            return jsonify({"error": "Provide title and/or persona_id."}), 400
+
+        title = None
+        if title_provided:
+            title = (data.get("title") or "").strip()[:120]
+            if not title:
+                return jsonify({"error": "Title required."}), 400
+
+        raw_persona_id = data.get("persona_id") if persona_provided else None
+        persona_id = _parse_optional_int(raw_persona_id) if persona_provided else None
+        if persona_provided and raw_persona_id not in (None, "") and persona_id is None:
+            return jsonify({"error": "persona_id must be an integer or empty."}), 400
+        if persona_provided and persona_id is not None and get_persona(persona_id) is None:
+            return jsonify({"error": "Persona not found."}), 400
+
         with get_db() as conn:
+            conversation = conn.execute(
+                "SELECT id, title, persona_id FROM conversations WHERE id = ?",
+                (conv_id,),
+            ).fetchone()
+            if not conversation:
+                return jsonify({"error": "Not found."}), 404
+
+            next_title = title if title_provided else str(conversation["title"] or "New Chat").strip() or "New Chat"
+            next_persona_id = persona_id if persona_provided else conversation["persona_id"]
             conn.execute(
-                "UPDATE conversations SET title = ?, updated_at = datetime('now') WHERE id = ?",
-                (title, conv_id),
+                "UPDATE conversations SET title = ?, persona_id = ?, updated_at = datetime('now') WHERE id = ?",
+                (next_title, next_persona_id, conv_id),
             )
         if RAG_ENABLED:
             sync_conversations_to_rag_safe(conversation_id=conv_id)
-        return jsonify({"id": conv_id, "title": title})
+        return jsonify({
+            "id": conv_id,
+            "title": next_title,
+            "persona_id": int(next_persona_id) if next_persona_id is not None else None,
+        })
 
     @app.route("/api/rag/documents", methods=["GET"])
     def list_rag_documents():

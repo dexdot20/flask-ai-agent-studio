@@ -43,7 +43,7 @@ from config import (
     YOUTUBE_TRANSCRIPTS_ENABLED,
 )
 from db import (
-    build_effective_user_preferences,
+    build_conversation_assistant_behavior,
     build_user_profile_system_context,
     get_canvas_expand_max_lines,
     get_canvas_prompt_max_lines,
@@ -2281,6 +2281,7 @@ def _model_prefers_cache_friendly_prefix(model_id: str | None, settings: dict | 
 def _build_budgeted_prompt_messages(
     canonical_messages: list[dict],
     settings: dict,
+    conversation_id: int | None,
     active_tool_names: list[str],
     clarification_response: dict | None,
     all_clarification_rounds: list[dict] | None,
@@ -2301,7 +2302,7 @@ def _build_budgeted_prompt_messages(
     tool_trace_context = _build_tool_trace_context(ordered_messages)
     user_profile_context = build_user_profile_system_context(max_tokens=500)
     scratchpad_sections = get_all_scratchpad_sections(settings)
-    assistant_behavior = build_effective_user_preferences(settings)
+    assistant_behavior = build_conversation_assistant_behavior(conversation_id, settings)
     max_parallel_tools = get_max_parallel_tools(settings)
     clarification_max_questions = get_clarification_max_questions(settings)
     runtime_tool_names = resolve_runtime_tool_names(
@@ -2937,7 +2938,7 @@ def maybe_create_conversation_summary(
             " ",
             str(continuation_focus or _extract_summary_continuation_focus(canonical_messages) or ""),
         ).strip()[:400]
-        assistant_behavior = build_effective_user_preferences(settings)
+        assistant_behavior = build_conversation_assistant_behavior(conversation_id, settings)
         summary_user_preferences_parts = [assistant_behavior] if assistant_behavior else []
         detail_instruction = _build_summary_detail_instruction(summary_detail_level)
         if detail_instruction:
@@ -3370,6 +3371,8 @@ def parse_chat_request_payload():
     if request.mimetype and request.mimetype.startswith("multipart/form-data"):
         image_files = [file for file in request.files.getlist("image") if getattr(file, "filename", "")]
         document_files = [file for file in request.files.getlist("document") if getattr(file, "filename", "")]
+        raw_document_canvas_action = str(request.form.get("document_canvas_action", "prompt") or "prompt").strip().lower()
+        document_canvas_action = raw_document_canvas_action if raw_document_canvas_action in {"open", "skip", "prompt"} else "prompt"
         raw_document_modes = request.form.get("document_modes", "[]")
         try:
             document_modes = json.loads(raw_document_modes)
@@ -3387,9 +3390,12 @@ def parse_chat_request_payload():
             "images": image_files,
             "documents": document_files,
             "document_modes": document_modes,
+            "document_canvas_action": document_canvas_action,
         }
 
     data = request.get_json(silent=True) or {}
+    raw_document_canvas_action = str(data.get("document_canvas_action", "prompt") or "prompt").strip().lower()
+    document_canvas_action = raw_document_canvas_action if raw_document_canvas_action in {"open", "skip", "prompt"} else "prompt"
 
     return {
         "messages": parse_messages_payload(data.get("messages", [])),
@@ -3401,6 +3407,7 @@ def parse_chat_request_payload():
         "images": [],
         "documents": [],
         "document_modes": [],
+        "document_canvas_action": document_canvas_action,
     }
 
 
@@ -3647,6 +3654,9 @@ def register_chat_routes(app) -> None:
         uploaded_images = payload["images"]
         uploaded_documents = payload["documents"]
         uploaded_document_modes = payload.get("document_modes") if isinstance(payload.get("document_modes"), list) else []
+        document_canvas_action = str(payload.get("document_canvas_action") or "prompt").strip().lower()
+        if document_canvas_action not in {"open", "skip", "prompt"}:
+            document_canvas_action = "prompt"
 
         if not messages:
             return jsonify({"error": "No messages provided."}), 400
@@ -4094,24 +4104,35 @@ def register_chat_routes(app) -> None:
         workspace_root = get_workspace_root(workspace_runtime_state)
         document_events = []
         if processed_document_uploads:
-            pre_created_canvas_state = create_canvas_runtime_state(
-                initial_canvas_documents,
-                active_document_id=initial_canvas_active_document_id,
-                viewports=latest_canvas_state.get("viewports") if isinstance(latest_canvas_state.get("viewports"), dict) else {},
-            )
-            for upload in processed_document_uploads:
-                canvas_doc = create_canvas_document(
-                    pre_created_canvas_state,
-                    upload["doc_name"],
-                    upload["canvas_md"],
-                    format_name=upload["canvas_format"],
-                    language_name=upload["canvas_language"],
-                    content_mode=upload.get("content_mode"),
-                    canvas_mode=upload.get("canvas_mode"),
-                    source_file_id=upload.get("source_file_id"),
-                    source_mime_type=upload.get("source_mime_type"),
-                    visual_page_image_ids=upload.get("visual_page_image_ids"),
+            uploaded_canvas_enabled = document_canvas_action != "skip"
+            uploaded_canvas_auto_open = document_canvas_action == "open"
+            canvas_documents_by_file_id: dict[str, dict] = {}
+
+            if uploaded_canvas_enabled:
+                pre_created_canvas_state = create_canvas_runtime_state(
+                    initial_canvas_documents,
+                    active_document_id=initial_canvas_active_document_id,
+                    viewports=latest_canvas_state.get("viewports") if isinstance(latest_canvas_state.get("viewports"), dict) else {},
                 )
+                for upload in processed_document_uploads:
+                    canvas_doc = create_canvas_document(
+                        pre_created_canvas_state,
+                        upload["doc_name"],
+                        upload["canvas_md"],
+                        format_name=upload["canvas_format"],
+                        language_name=upload["canvas_language"],
+                        content_mode=upload.get("content_mode"),
+                        canvas_mode=upload.get("canvas_mode"),
+                        source_file_id=upload.get("source_file_id"),
+                        source_mime_type=upload.get("source_mime_type"),
+                        visual_page_image_ids=upload.get("visual_page_image_ids"),
+                    )
+                    canvas_documents_by_file_id[str(upload["attachment"]["file_id"])] = canvas_doc
+                initial_canvas_documents = get_canvas_runtime_documents(pre_created_canvas_state)
+                initial_canvas_active_document_id = get_canvas_runtime_active_document_id(pre_created_canvas_state)
+                initial_canvas_viewports = get_canvas_viewport_payloads(pre_created_canvas_state)
+
+            for upload in processed_document_uploads:
                 document_events.append(
                     {
                         "type": "document_processed",
@@ -4120,19 +4141,17 @@ def register_chat_routes(app) -> None:
                         "file_name": upload["doc_name"],
                         "file_mime_type": upload["doc_mime_type"],
                         "text_truncated": upload["text_truncated"],
-                        "canvas_document": canvas_doc,
+                        "canvas_document": canvas_documents_by_file_id.get(str(upload["attachment"]["file_id"])),
                         "visual_only": upload.get("visual_only") is True,
-                        "open_canvas": False,
+                        "open_canvas": uploaded_canvas_auto_open,
                     }
                 )
-            initial_canvas_documents = get_canvas_runtime_documents(pre_created_canvas_state)
-            initial_canvas_active_document_id = get_canvas_runtime_active_document_id(pre_created_canvas_state)
-            initial_canvas_viewports = get_canvas_viewport_payloads(pre_created_canvas_state)
         all_clarification_rounds = _collect_answered_clarification_rounds(canonical_messages)
         conversation_memory = get_conversation_memory(conv_id) if conv_id and CONVERSATION_MEMORY_ENABLED else []
         api_messages, request_api_messages, prompt_budget_stats, current_context_injection = _build_budgeted_prompt_messages(
             canonical_messages,
             settings,
+            conv_id,
             active_tool_names,
             clarification_response,
             all_clarification_rounds,
@@ -4328,15 +4347,16 @@ def register_chat_routes(app) -> None:
             if document_events:
                 for document_event in document_events:
                     yield json.dumps(document_event, ensure_ascii=False) + "\n"
-                yield json.dumps(
-                    {
-                        "type": "canvas_sync",
-                        "documents": initial_canvas_documents,
-                        "active_document_id": initial_canvas_active_document_id,
-                        "auto_open": False,
-                    },
-                    ensure_ascii=False,
-                ) + "\n"
+                if document_canvas_action != "skip":
+                    yield json.dumps(
+                        {
+                            "type": "canvas_sync",
+                            "documents": initial_canvas_documents,
+                            "active_document_id": initial_canvas_active_document_id,
+                            "auto_open": document_canvas_action == "open",
+                        },
+                        ensure_ascii=False,
+                    ) + "\n"
 
             try:
                 for event in agent_stream:
