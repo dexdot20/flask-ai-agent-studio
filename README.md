@@ -569,15 +569,17 @@ The same extraction path is also used by the knowledge-base upload form in Setti
 - `replace_scratchpad` completely rewrites a single named section with new content.
 - `read_scratchpad` reads the current state of all sections exactly as stored, useful before reorganizing content.
 - The scratchpad is included in the runtime system prompt for every turn.
-- Use it for long-term user facts, preferences, or constraints that should survive across conversations.
+- Use it sparingly for durable, general, cross-conversation facts only.
+- If a detail mainly belongs to the current chat, current task, or recent tool work, prefer conversation memory instead of the scratchpad.
 
 ### Conversation memory workflow
 
 - Conversation memory is separate from the scratchpad and is scoped to the current chat only.
-- The model can save important chat-specific facts, decisions, constraints, or critical tool outcomes with `save_to_conversation_memory`.
+- The model can save important chat-specific facts, decisions, constraints, discovered repo or environment facts, or critical tool outcomes with `save_to_conversation_memory`.
 - The model can remove obsolete or incorrect chat-specific entries with `delete_conversation_memory_entry`.
 - Conversation memory is injected into the runtime system prompt on later turns in the same conversation.
-- Use it for information that should survive the rest of the chat but should not be promoted to long-term cross-conversation memory.
+- Prefer it as the default memory sink for information that should survive the rest of the chat but should not be promoted to long-term cross-conversation memory.
+- Save incrementally during long or tool-heavy chats; multiple small records are better than one late overloaded summary.
 
 ### User profile memory workflow
 
@@ -672,6 +674,8 @@ Only tools enabled in Settings are exposed to the model. If RAG is disabled, `se
 
 Save one short conversation-scoped memory entry for the current chat only.
 
+- Prefer this over the scratchpad for chat-specific information.
+
 - Arguments:
   - `entry_type` (string, required) - one of `user_info`, `task_context`, `tool_result`, or `decision`
   - `key` (string, required) - short label for the fact or result
@@ -688,6 +692,9 @@ Delete one outdated conversation memory entry by id.
 
 Append one or more durable facts to one named section of the persistent scratchpad.
 
+- Reserve this for rare, durable, general facts that should matter across future conversations.
+- If the information is mainly about the current chat or task, store it in conversation memory instead.
+
 - Arguments:
   - `section` (string, required) - target section: `lessons`, `profile`, `notes`, `problems`, `tasks`, `preferences`, or `domain`
   - `notes` (array of strings, required) - one short durable fact per item; minimum 1 item
@@ -695,6 +702,8 @@ Append one or more durable facts to one named section of the persistent scratchp
 #### `replace_scratchpad`
 
 Completely replace one named section of the persistent scratchpad.
+
+- Use this only to reorganize durable cross-conversation memory.
 
 - Arguments:
   - `section` (string, required) - target section (same enum as `append_scratchpad`)

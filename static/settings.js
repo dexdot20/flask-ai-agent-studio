@@ -212,15 +212,15 @@ const DEFAULT_SCRATCHPAD_SECTION_META = {
   },
   notes: {
     title: "General Notes",
-    description: "Durable uncategorized context that does not fit the other sections.",
+    description: "Durable general uncategorized context that does not fit the other sections.",
   },
   problems: {
     title: "Open Problems",
-    description: "Unresolved issues, unknowns, or blockers worth revisiting later.",
+    description: "Recurring or durable unresolved issues worth revisiting across conversations.",
   },
   tasks: {
     title: "In-Progress Tasks",
-    description: "Longer-running workstreams the assistant should preserve continuity on.",
+    description: "Longer-running cross-conversation workstreams the assistant should preserve continuity on.",
   },
   preferences: {
     title: "User Preferences",

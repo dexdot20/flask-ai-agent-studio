@@ -198,7 +198,7 @@ def build_conversation_memory_section(entries) -> list[str]:
 
     parts = [
         "## Conversation Memory",
-        "*Use this as the durable working memory for this chat. It survives prompt compaction, summarization, and pruning, so prefer it for important user details, active constraints, decisions, and critical tool outcomes that must not be lost later in the conversation.*\n",
+        "*Use this as the primary durable working memory for this chat. It survives prompt compaction, summarization, and pruning, so prefer saving chat-specific details here instead of the scratchpad unless they are clearly general cross-conversation memory.*\n",
     ]
     for entry in normalized_entries:
         entry_id = entry.get("id")
@@ -1729,11 +1729,14 @@ def build_runtime_system_message(
     if conversation_memory_tools_enabled:
         parts.append("## Conversation Memory Write Policy")
         parts.append(
-            "- **Use save_to_conversation_memory** proactively for important conversation-scoped facts that should survive later turns in this same chat.\n"
-            "- **DO save**: confirmed user details relevant to this chat, active goals, firm constraints, decisions, and critical tool results that may matter later in the conversation.\n"
+            "- **Use save_to_conversation_memory** proactively and often for important conversation-scoped facts that should survive later turns in this same chat.\n"
+            "- **Default choice**: if information mainly matters for this chat, save it to conversation memory rather than the scratchpad.\n"
+            "- **DO save**: confirmed user details relevant to this chat, active goals, firm constraints, accepted decisions, discovered repo or environment facts, and critical tool results that may matter later in the conversation.\n"
+            "- **Save incrementally**: after important clarifications, tool results, plan changes, and decision points, prefer a new compact record over hoping the detail remains visible in context.\n"
             "- **Especially save before context loss**: details that would be expensive to rediscover after summarization, pruning, or long tool-heavy detours.\n"
-            "- **DO NOT save**: raw verbose outputs, broad summaries, speculative inferences, or durable cross-conversation facts better suited for the scratchpad.\n"
+            "- **DO NOT save**: raw verbose outputs, broad summaries, speculative inferences, or durable general facts better suited for the scratchpad.\n"
             "- **Style**: `key` should be a short label and `value` should be one compact factual line.\n"
+            "- **Prefer multiple small entries**: one fact, decision, or result per memory entry is better than one overloaded summary.\n"
             "- **Prefer update over duplication**: Reuse the same key for the same fact. Saving an existing key refreshes that memory instead of creating noisy duplicates.\n"
             "- **Cleanup**: If an entry becomes wrong or obsolete, remove it with delete_conversation_memory_entry."
         )
@@ -1743,7 +1746,7 @@ def build_runtime_system_message(
     if non_empty_scratchpad_sections or any(name in {"append_scratchpad", "replace_scratchpad"} for name in runtime_tool_names):
         parts.append("## Scratchpad (AI Persistent Memory)")
         _scratchpad_intro = (
-            "*This is the live persistent scratchpad for the assistant. It is already visible in the prompt, so read it directly here first."
+            "*This is the live persistent scratchpad for rare cross-conversation general memory. Keep it sparse. It is already visible in the prompt, so read it directly here first."
         )
         if "read_scratchpad" in runtime_tool_names:
             _scratchpad_intro += " Use read_scratchpad only if you want the structured stored memory as a tool result before editing it."
@@ -1757,10 +1760,11 @@ def build_runtime_system_message(
         if any(name in {"append_scratchpad", "replace_scratchpad"} for name in runtime_tool_names):
             parts.append(
                 "\n### Memory Write Policy\n"
-                "- **DO save**: Only durable, high-signal facts that are likely to change future answers or actions. Examples: stable user preferences, long-lived constraints, confirmed identity details, and recurring requirements.\n"
+                "- **DO save**: Only minimal durable general facts that are likely to matter across future conversations. Examples: stable user preferences, long-lived general constraints, confirmed identity details, and recurring requirements.\n"
+                "- **Default away from scratchpad**: If a detail is mainly about the current chat, current task, recent tool results, current repo state, or temporary plans, save it to conversation memory instead or do not store it at all.\n"
                 "- **DO NOT save**: One-off tasks, transient project state, raw tool outputs, web/search results, speculative inferences, broad summaries, or details already obvious from the current chat.\n"
-                "- **Before saving**: Ask whether this information will still matter in a future conversation and whether it is specific enough to be useful as a single short note. If not, do not save it.\n"
-                "- **Use the right section**: Preferences belong in User Preferences, reasoning patterns in User Profile & Mindset, durable takeaways in Lessons Learned, unresolved items in Open Problems, ongoing work in In-Progress Tasks, technical background in Domain Facts, and overflow facts in General Notes.\n"
+                "- **Before saving**: Ask whether this information is both general enough for future conversations and important enough to deserve long-term storage. If not, do not save it.\n"
+                "- **Use the right section**: Preferences belong in User Preferences, reasoning patterns in User Profile & Mindset, durable takeaways in Lessons Learned, recurring unresolved issues in Open Problems, long-running cross-conversation continuity in In-Progress Tasks, technical background in Domain Facts, and overflow facts in General Notes.\n"
                 "- **Web findings**: Do not turn search/news/URL results into scratchpad entries unless the result is clearly durable and the user would reasonably expect it to be remembered later. Never save them just because they were requested.\n"
                 "- **Style**: Each `notes` item must be one single short standalone fact. Never put multiple facts in one item. `append_scratchpad` appends to one section at a time, and `replace_scratchpad` rewrites one section at a time."
             )

@@ -4,7 +4,10 @@ from concurrent.futures import ThreadPoolExecutor
 import math
 import logging
 import json
+import os
 import re
+import shutil
+import tempfile
 from datetime import datetime
 from threading import Lock
 
@@ -35,6 +38,7 @@ from config import (
     RAG_SOURCE_CONVERSATION,
     RAG_SOURCE_TOOL_MEMORY,
     RAG_SOURCE_TOOL_RESULT,
+    SCRATCHPAD_SECTION_SETTING_KEYS,
     YOUTUBE_TRANSCRIPTS_DISABLED_FEATURE_ERROR,
     YOUTUBE_TRANSCRIPTS_ENABLED,
 )
@@ -276,6 +280,253 @@ def _schedule_rag_conversation_sync(conversation_id: int | None, *, force: bool 
         sync_conversations_to_rag_safe(conversation_id=conversation_id, force=force)
         return
     sync_conversations_to_rag_background(current_app._get_current_object(), conversation_id=conversation_id, force=force)
+
+
+def _snapshot_workspace_tree(conversation_id: int | None) -> dict | None:
+    if conversation_id is None:
+        return None
+
+    try:
+        workspace_runtime_state = create_workspace_runtime_state(conversation_id)
+        workspace_root = get_workspace_root(workspace_runtime_state)
+    except Exception:
+        return None
+
+    normalized_root = str(workspace_root or "").strip()
+    if not normalized_root:
+        return None
+
+    backup_dir = tempfile.mkdtemp(prefix=f"chat-edit-workspace-{int(conversation_id)}-")
+    backup_root = os.path.join(backup_dir, "workspace")
+    existed = os.path.isdir(normalized_root)
+    if existed:
+        try:
+            shutil.copytree(normalized_root, backup_root)
+        except Exception:
+            shutil.rmtree(backup_dir, ignore_errors=True)
+            return None
+
+    return {
+        "root_path": normalized_root,
+        "backup_dir": backup_dir,
+        "backup_root": backup_root,
+        "root_existed": existed,
+    }
+
+
+def _restore_workspace_tree(snapshot: dict | None) -> None:
+    if not isinstance(snapshot, dict):
+        return
+
+    root_path = str(snapshot.get("root_path") or "").strip()
+    if not root_path:
+        return
+
+    backup_root = str(snapshot.get("backup_root") or "").strip()
+    root_existed = snapshot.get("root_existed") is True
+
+    if os.path.isdir(root_path):
+        shutil.rmtree(root_path, ignore_errors=True)
+
+    if root_existed and os.path.isdir(backup_root):
+        os.makedirs(os.path.dirname(root_path), exist_ok=True)
+        shutil.copytree(backup_root, root_path)
+
+
+def _cleanup_workspace_snapshot(snapshot: dict | None) -> None:
+    if not isinstance(snapshot, dict):
+        return
+
+    backup_dir = str(snapshot.get("backup_dir") or "").strip()
+    if backup_dir:
+        shutil.rmtree(backup_dir, ignore_errors=True)
+
+
+def _capture_edit_replay_snapshot(
+    conn,
+    conversation_id: int,
+    edited_message_row,
+    later_message_ids: list[int],
+    settings: dict,
+) -> dict:
+    max_message_row = conn.execute(
+        "SELECT COALESCE(MAX(id), 0) AS max_id FROM messages WHERE conversation_id = ?",
+        (conversation_id,),
+    ).fetchone()
+    conversation_row = conn.execute(
+        "SELECT model FROM conversations WHERE id = ?",
+        (conversation_id,),
+    ).fetchone()
+
+    conversation_memory_rows = [
+        dict(row)
+        for row in conn.execute(
+            """SELECT id, conversation_id, message_id, entry_type, key, value, created_at
+               FROM conversation_memory
+               WHERE conversation_id = ?
+               ORDER BY id""",
+            (conversation_id,),
+        ).fetchall()
+    ]
+    user_profile_rows = [
+        dict(row)
+        for row in conn.execute(
+            "SELECT key, value, confidence, source, updated_at FROM user_profile ORDER BY key",
+        ).fetchall()
+    ]
+
+    scratchpad_section_values = {}
+    for section_id, value in get_all_scratchpad_sections(settings).items():
+        setting_key = SCRATCHPAD_SECTION_SETTING_KEYS.get(section_id)
+        if setting_key:
+            scratchpad_section_values[setting_key] = str(value or "")
+
+    notes_key = SCRATCHPAD_SECTION_SETTING_KEYS.get("notes")
+    if notes_key and notes_key in scratchpad_section_values:
+        scratchpad_section_values["scratchpad"] = scratchpad_section_values[notes_key]
+
+    return {
+        "conversation_id": int(conversation_id),
+        "conversation_model": str(conversation_row["model"] if conversation_row else ""),
+        "max_message_id": int(max_message_row["max_id"] if max_message_row else 0),
+        "edited_message": {
+            "id": int(edited_message_row["id"]),
+            "content": str(edited_message_row["content"] or ""),
+            "metadata": str(edited_message_row["metadata"] or ""),
+            "prompt_tokens": edited_message_row["prompt_tokens"],
+            "completion_tokens": edited_message_row["completion_tokens"],
+            "total_tokens": edited_message_row["total_tokens"],
+        },
+        "later_message_ids": [int(message_id) for message_id in later_message_ids if int(message_id) > 0],
+        "conversation_memory_rows": conversation_memory_rows,
+        "user_profile_rows": user_profile_rows,
+        "scratchpad_section_values": scratchpad_section_values,
+        "workspace_snapshot": _snapshot_workspace_tree(conversation_id),
+    }
+
+
+def _rollback_edit_replay_snapshot(
+    snapshot: dict,
+    *,
+    created_image_ids: list[str] | None = None,
+    created_file_ids: list[str] | None = None,
+    created_video_ids: list[str] | None = None,
+) -> None:
+    if not isinstance(snapshot, dict):
+        return
+
+    conversation_id = int(snapshot.get("conversation_id") or 0)
+    if conversation_id <= 0:
+        return
+
+    edited_message = snapshot.get("edited_message") if isinstance(snapshot.get("edited_message"), dict) else {}
+    edited_message_id = int(edited_message.get("id") or 0)
+    later_message_ids = [
+        int(message_id)
+        for message_id in (snapshot.get("later_message_ids") or [])
+        if int(message_id) > 0
+    ]
+    conversation_memory_rows = snapshot.get("conversation_memory_rows") if isinstance(snapshot.get("conversation_memory_rows"), list) else []
+    user_profile_rows = snapshot.get("user_profile_rows") if isinstance(snapshot.get("user_profile_rows"), list) else []
+    scratchpad_section_values = snapshot.get("scratchpad_section_values") if isinstance(snapshot.get("scratchpad_section_values"), dict) else {}
+    max_message_id = int(snapshot.get("max_message_id") or 0)
+    conversation_model = str(snapshot.get("conversation_model") or "")
+
+    with get_db() as conn:
+        if edited_message_id > 0:
+            conn.execute(
+                """UPDATE messages
+                   SET content = ?, metadata = ?, prompt_tokens = ?, completion_tokens = ?, total_tokens = ?, deleted_at = NULL
+                   WHERE id = ? AND conversation_id = ?""",
+                (
+                    str(edited_message.get("content") or ""),
+                    str(edited_message.get("metadata") or ""),
+                    edited_message.get("prompt_tokens"),
+                    edited_message.get("completion_tokens"),
+                    edited_message.get("total_tokens"),
+                    edited_message_id,
+                    conversation_id,
+                ),
+            )
+
+        if later_message_ids:
+            restore_soft_deleted_messages(conn, conversation_id, later_message_ids)
+
+        if max_message_id > 0:
+            conn.execute(
+                "DELETE FROM messages WHERE conversation_id = ? AND id > ?",
+                (conversation_id, max_message_id),
+            )
+
+        conn.execute("DELETE FROM conversation_memory WHERE conversation_id = ?", (conversation_id,))
+        for row in conversation_memory_rows:
+            if not isinstance(row, dict):
+                continue
+            conn.execute(
+                """INSERT INTO conversation_memory (id, conversation_id, message_id, entry_type, key, value, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    int(row.get("id") or 0) or None,
+                    int(row.get("conversation_id") or conversation_id),
+                    int(row.get("message_id")) if row.get("message_id") not in (None, "") else None,
+                    str(row.get("entry_type") or "task_context"),
+                    str(row.get("key") or ""),
+                    str(row.get("value") or ""),
+                    str(row.get("created_at") or datetime.now().astimezone().isoformat(timespec="seconds")),
+                ),
+            )
+
+        conn.execute("DELETE FROM user_profile")
+        for row in user_profile_rows:
+            if not isinstance(row, dict):
+                continue
+            conn.execute(
+                """INSERT INTO user_profile (key, value, confidence, source, updated_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (
+                    str(row.get("key") or ""),
+                    str(row.get("value") or ""),
+                    float(row.get("confidence") or 0.0),
+                    str(row.get("source") or ""),
+                    str(row.get("updated_at") or datetime.now().astimezone().isoformat(timespec="seconds")),
+                ),
+            )
+
+        for setting_key, setting_value in scratchpad_section_values.items():
+            normalized_setting_key = str(setting_key or "").strip()
+            if not normalized_setting_key:
+                continue
+            conn.execute(
+                """INSERT INTO app_settings (key, value, updated_at)
+                   VALUES (?, ?, datetime('now'))
+                   ON CONFLICT(key) DO UPDATE SET
+                       value = excluded.value,
+                       updated_at = datetime('now')""",
+                (normalized_setting_key, str(setting_value or "")),
+            )
+
+        if conversation_model:
+            conn.execute(
+                "UPDATE conversations SET model = ?, updated_at = datetime('now') WHERE id = ?",
+                (conversation_model, conversation_id),
+            )
+
+    _restore_workspace_tree(snapshot.get("workspace_snapshot"))
+
+    for image_id in created_image_ids or []:
+        normalized_image_id = str(image_id or "").strip()
+        if normalized_image_id:
+            delete_image_asset(normalized_image_id, conversation_id=conversation_id)
+    for file_id in created_file_ids or []:
+        normalized_file_id = str(file_id or "").strip()
+        if normalized_file_id:
+            delete_file_asset(normalized_file_id, conversation_id=conversation_id)
+    for video_id in created_video_ids or []:
+        normalized_video_id = str(video_id or "").strip()
+        if normalized_video_id:
+            delete_video_asset(normalized_video_id, conversation_id=conversation_id)
+
+    _schedule_rag_conversation_sync(conversation_id=conversation_id, force=True)
 
 
 def _prioritize_summary_messages(messages: list[dict] | None) -> list[dict]:
@@ -3424,6 +3675,7 @@ def register_chat_routes(app) -> None:
                 latest_user_message.get("metadata"),
             )
         persisted_user_message_id = None
+        edit_replay_snapshot = None
         canonical_messages = messages
 
         if latest_user_message is not None and conv_id:
@@ -3440,7 +3692,9 @@ def register_chat_routes(app) -> None:
             if edited_message_id is not None:
                 with get_db() as conn:
                     existing_message = conn.execute(
-                        "SELECT id, role, position FROM messages WHERE id = ? AND conversation_id = ? AND deleted_at IS NULL",
+                        """SELECT id, role, position, content, metadata, prompt_tokens, completion_tokens, total_tokens
+                           FROM messages
+                           WHERE id = ? AND conversation_id = ? AND deleted_at IS NULL""",
                         (edited_message_id, conv_id),
                     ).fetchone()
                     if not existing_message:
@@ -3462,6 +3716,13 @@ def register_chat_routes(app) -> None:
                             (conv_id, existing_message["position"]),
                         ).fetchall()
                     ]
+                    edit_replay_snapshot = _capture_edit_replay_snapshot(
+                        conn,
+                        conv_id,
+                        existing_message,
+                        later_message_ids,
+                        settings,
+                    )
                     if later_message_ids:
                         soft_delete_messages(
                             conn,
@@ -3723,6 +3984,43 @@ def register_chat_routes(app) -> None:
                     stored_sub_agent_traces = [*stored_sub_agent_traces, next_entry]
                 return next_entry
 
+            edit_replay_rolled_back = False
+
+            def rollback_edited_replay_state(reason: str) -> None:
+                nonlocal edit_replay_rolled_back
+                if not isinstance(edit_replay_snapshot, dict) or edit_replay_rolled_back:
+                    return
+
+                _rollback_edit_replay_snapshot(
+                    edit_replay_snapshot,
+                    created_image_ids=[
+                        str(asset.get("image_id") or "").strip()
+                        for asset in created_image_assets
+                        if isinstance(asset, dict)
+                    ],
+                    created_file_ids=[
+                        str(asset.get("file_id") or "").strip()
+                        for asset in created_file_assets
+                        if isinstance(asset, dict)
+                    ],
+                    created_video_ids=[
+                        str(asset.get("video_id") or "").strip()
+                        for asset in created_video_assets
+                        if isinstance(asset, dict)
+                    ],
+                )
+                edit_replay_rolled_back = True
+                LOGGER.warning(
+                    "Edited replay rolled back (%s) for conversation=%s edited_message_id=%s",
+                    reason,
+                    conv_id,
+                    persisted_user_message_id,
+                )
+
+            def finalize_edited_replay_snapshot() -> None:
+                if isinstance(edit_replay_snapshot, dict):
+                    _cleanup_workspace_snapshot(edit_replay_snapshot.get("workspace_snapshot"))
+
             for vision_event in vision_events:
                 yield json.dumps(vision_event, ensure_ascii=False) + "\n"
 
@@ -3903,9 +4201,37 @@ def register_chat_routes(app) -> None:
                     yield json.dumps(event, ensure_ascii=False) + "\n"
             except GeneratorExit:
                 stream_aborted = True
+                rollback_edited_replay_state("stream_aborted")
+                finalize_edited_replay_snapshot()
+                raise
+            except Exception as exc:
+                rollback_edited_replay_state("stream_error")
+                if isinstance(edit_replay_snapshot, dict):
+                    yield json.dumps(
+                        {
+                            "type": "tool_error",
+                            "step": 1,
+                            "tool": "chat",
+                            "error": "Edited replay failed. Previous state restored.",
+                        },
+                        ensure_ascii=False,
+                    ) + "\n"
+                    if conv_id:
+                        yield json.dumps(
+                            {
+                                "type": "history_sync",
+                                "messages": get_conversation_messages(conv_id),
+                            },
+                            ensure_ascii=False,
+                        ) + "\n"
+                    yield json.dumps({"type": "done"}, ensure_ascii=False) + "\n"
+                    finalize_edited_replay_snapshot()
+                    LOGGER.warning("Edited replay stream failed: %s", exc)
+                    return
+                finalize_edited_replay_snapshot()
                 raise
             finally:
-                if stream_aborted:
+                if stream_aborted and not isinstance(edit_replay_snapshot, dict):
                     with app_obj.app_context():
                         _persist_streaming_assistant_message(
                             conv_id,
@@ -4080,6 +4406,8 @@ def register_chat_routes(app) -> None:
                             _schedule_rag_conversation_sync(conversation_id=conv_id)
 
                     _maybe_run_conversation_pruning(conv_id, settings)
+
+            finalize_edited_replay_snapshot()
 
         return Response(
             stream_with_context(generate()),

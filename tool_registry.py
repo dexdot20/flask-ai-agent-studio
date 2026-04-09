@@ -260,8 +260,8 @@ TOOL_SPECS = [
     {
         "name": "append_scratchpad",
         "description": (
-            "Append one or more durable facts to one section of the persistent scratchpad. "
-            "Use this only for long-lived, high-signal information that will likely change future answers or actions. "
+            "Append one or more rare durable general facts to one section of the persistent scratchpad. "
+            "Reserve this for cross-conversation memory only. If the detail is mainly about the current chat or task, save it to conversation memory instead. "
             "Do not store temporary task details, sensitive secrets, one-off requests, or speculative inferences."
         ),
         "parameters": {
@@ -282,16 +282,17 @@ TOOL_SPECS = [
             "required": ["section", "notes"],
         },
         "prompt": {
-            "purpose": "Saves one or more short durable memory lines into a specific scratchpad section only when they are likely to matter later.",
+            "purpose": "Saves one or more short durable cross-conversation memory lines into a specific scratchpad section only when they are likely to matter later.",
             "inputs": {
                 "section": "target section id such as preferences, profile, lessons, tasks, problems, notes, or domain",
                 "notes": "list of single short durable memory lines — one fact per item",
             },
             "guidance": (
                 "Use very sparingly. Save only durable user-specific facts, recurring constraints, or stable preferences that are likely to matter in future conversations. "
+                "If the information mainly belongs to the current chat, task, investigation, or tool run, save it to conversation memory instead. "
                 "Do not save temporary requests, current-task details, large summaries, tool outputs, web/search results, speculative guesses, or sensitive data. "
-                "If the information would not change future responses or behavior, do not store it. "
-                "Choose the section deliberately: preferences for stable style/language instructions, profile for reasoning patterns, lessons for takeaways, problems for unresolved issues, tasks for long-running work, domain for durable technical facts, and notes for anything durable that does not fit elsewhere. "
+                "If the information would not change future responses or behavior across conversations, do not store it. "
+                "Choose the section deliberately: preferences for stable style/language instructions, profile for reasoning patterns, lessons for takeaways, problems for recurring unresolved issues, tasks for long-running cross-conversation work, domain for durable technical facts, and notes for anything durable that does not fit elsewhere. "
                 "Each item in `notes` must be a single short standalone fact. Never combine multiple facts into one item."
             ),
         },
@@ -300,8 +301,8 @@ TOOL_SPECS = [
         "name": "replace_scratchpad",
         "description": (
             "Completely replace one section of the persistent scratchpad. "
-            "Use this to rewrite, reorganize, or remove outdated durable facts in a single section. "
-            "Do not store temporary task details or speculative inferences."
+            "Use this to rewrite, reorganize, or remove outdated durable general facts in a single section. "
+            "Reserve scratchpad edits for cross-conversation memory, not current-chat state."
         ),
         "parameters": {
             "type": "object",
@@ -326,7 +327,8 @@ TOOL_SPECS = [
             },
             "guidance": (
                 "Use carefully to prune or reorganize existing facts in one section. Ensure you do not accidentally delete important existing preferences or lessons from that section. "
-                "Keep the final text compact and only include durable, high-signal facts. Prefer a short bulleted list over paragraphs."
+                "Keep the final text compact and only include durable, general, high-signal facts that should matter across future conversations. "
+                "If the content is mainly about the current chat or task, keep it out of the scratchpad and use conversation memory instead. Prefer a short bulleted list over paragraphs."
             ),
         },
     },
@@ -354,7 +356,7 @@ TOOL_SPECS = [
             "name": "save_to_conversation_memory",
             "description": (
                 "Save one compact conversation-scoped memory entry for this chat only. "
-                "Use it for important user details, active constraints, decisions, or critical tool outcomes that should not be lost later in the same conversation. "
+                "Use this as the default place to store important chat-specific details, active constraints, decisions, discovered repo or environment facts, or critical tool outcomes that should not be lost later in the same conversation. "
                 "If the same key already exists, the entry is refreshed instead of duplicated."
             ),
             "parameters": {
@@ -384,9 +386,10 @@ TOOL_SPECS = [
                     "value": "one compact factual line",
                 },
                 "guidance": (
-                    "Use this when the information is important within this conversation but not durable enough for the cross-conversation scratchpad. "
-                    "Prefer concise micro-summaries over raw outputs. Save critical tool outcomes only when they are likely to matter later in the same chat. "
-                    "Be proactive in long or tool-heavy conversations, especially before details may be summarized, pruned, or pushed out of the visible context window. "
+                    "Use this whenever the information is important within this conversation but not clearly durable general memory for the cross-conversation scratchpad. "
+                    "When choosing between scratchpad and conversation memory, default to conversation memory unless the fact is durable, general, and likely useful across future chats. "
+                    "Prefer concise micro-summaries over raw outputs. Save incrementally after important clarifications, tool results, decisions, and constraints instead of waiting for a later summary. "
+                    "Multiple compact entries are better than one overloaded summary. Be proactive in long or tool-heavy conversations, especially before details may be summarized, pruned, or pushed out of the visible context window. "
                     "Reuse the same key when updating the same fact so memory stays compact."
                 ),
             },

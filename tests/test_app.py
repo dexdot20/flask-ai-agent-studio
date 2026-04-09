@@ -92,6 +92,7 @@ from db import (
     get_app_settings,
     get_conversation_memory,
     get_conversation_messages,
+    get_all_scratchpad_sections,
     get_canvas_expand_max_lines,
     get_canvas_prompt_max_tokens,
     get_canvas_prompt_max_lines,
@@ -2637,6 +2638,199 @@ class AppRoutesTestCase(unittest.TestCase):
         persisted_metadata = parse_message_metadata(row["metadata"])
         self.assertNotIn("Stale branch excerpt", str(persisted_metadata.get("context_injection") or ""))
 
+    def test_chat_edit_rolls_back_mutable_state_when_replay_stream_fails(self):
+        conversation_id = self._create_conversation()
+        workspace_root = os.path.join(self.temp_dir.name, "edit-replay-workspace")
+        os.makedirs(workspace_root, exist_ok=True)
+        workspace_file = os.path.join(workspace_root, "notes.txt")
+        with open(workspace_file, "w", encoding="utf-8") as fh:
+            fh.write("baseline workspace")
+
+        append_to_scratchpad("Baseline scratchpad")
+        upsert_user_profile_entry("fact:preferred-tone", "baseline profile", confidence=0.9, source="test")
+
+        with get_db() as conn:
+            insert_message(conn, conversation_id, "user", "First prompt")
+            insert_message(conn, conversation_id, "assistant", "First answer")
+            edited_message_id = insert_message(conn, conversation_id, "user", "Original editable prompt")
+            insert_message(conn, conversation_id, "assistant", "Later assistant answer")
+            max_before = conn.execute(
+                "SELECT COALESCE(MAX(id), 0) AS max_id FROM messages WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()["max_id"]
+
+        insert_conversation_memory_entry(
+            conversation_id,
+            "task_context",
+            "critical-plan",
+            "baseline memory",
+            message_id=edited_message_id,
+        )
+
+        def failing_events():
+            append_to_scratchpad("Mutated scratchpad")
+            upsert_user_profile_entry("fact:preferred-tone", "mutated profile", confidence=0.2, source="test")
+            insert_conversation_memory_entry(
+                conversation_id,
+                "task_context",
+                "critical-plan",
+                "mutated memory",
+                message_id=edited_message_id,
+            )
+            with open(workspace_file, "w", encoding="utf-8") as fh:
+                fh.write("mutated workspace")
+            yield {"type": "answer_delta", "text": "Partial output"}
+            raise RuntimeError("forced replay failure")
+
+        with patch(
+            "routes.chat.create_workspace_runtime_state",
+            side_effect=lambda _conversation_id=None, _root_path=None: create_workspace_runtime_state(root_path=workspace_root),
+        ), patch("routes.chat.run_agent_stream", return_value=failing_events()), patch(
+            "routes.chat.sync_conversations_to_rag_safe"
+        ):
+            response = self.client.post(
+                "/chat",
+                json={
+                    "conversation_id": conversation_id,
+                    "model": "deepseek-chat",
+                    "edited_message_id": edited_message_id,
+                    "user_content": "Edited prompt that should rollback",
+                    "messages": [{"role": "user", "content": "Edited prompt that should rollback"}],
+                },
+            )
+            payload_text = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Previous state restored", payload_text)
+
+        with get_db() as conn:
+            edited_row = conn.execute(
+                "SELECT content, deleted_at FROM messages WHERE id = ? AND conversation_id = ?",
+                (edited_message_id, conversation_id),
+            ).fetchone()
+            later_row = conn.execute(
+                """SELECT deleted_at
+                   FROM messages
+                   WHERE conversation_id = ? AND role = 'assistant' AND content = ?
+                   ORDER BY id DESC
+                   LIMIT 1""",
+                (conversation_id, "Later assistant answer"),
+            ).fetchone()
+            max_after = conn.execute(
+                "SELECT COALESCE(MAX(id), 0) AS max_id FROM messages WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()["max_id"]
+
+        self.assertEqual(edited_row["content"], "Original editable prompt")
+        self.assertIsNone(edited_row["deleted_at"])
+        self.assertIsNotNone(later_row)
+        self.assertIsNone(later_row["deleted_at"])
+        self.assertEqual(max_after, max_before)
+
+        scratchpad_sections = get_all_scratchpad_sections(get_app_settings())
+        self.assertIn("Baseline scratchpad", scratchpad_sections.get("notes", ""))
+        self.assertNotIn("Mutated scratchpad", scratchpad_sections.get("notes", ""))
+
+        profile_entries = {entry["key"]: entry for entry in get_user_profile_entries()}
+        self.assertEqual(profile_entries["fact:preferred-tone"]["value"], "baseline profile")
+
+        memory_entries = get_conversation_memory(conversation_id)
+        baseline_entry = next((entry for entry in memory_entries if entry.get("key") == "critical-plan"), None)
+        self.assertIsNotNone(baseline_entry)
+        self.assertEqual(baseline_entry["value"], "baseline memory")
+
+        with open(workspace_file, "r", encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "baseline workspace")
+
+    def test_chat_edit_commits_mutable_state_on_successful_replay(self):
+        conversation_id = self._create_conversation()
+        workspace_root = os.path.join(self.temp_dir.name, "edit-replay-workspace-success")
+        os.makedirs(workspace_root, exist_ok=True)
+        workspace_file = os.path.join(workspace_root, "state.txt")
+        with open(workspace_file, "w", encoding="utf-8") as fh:
+            fh.write("before")
+
+        append_to_scratchpad("Before success")
+        upsert_user_profile_entry("fact:success-path", "before", confidence=0.6, source="test")
+
+        with get_db() as conn:
+            insert_message(conn, conversation_id, "user", "First prompt")
+            insert_message(conn, conversation_id, "assistant", "First answer")
+            edited_message_id = insert_message(conn, conversation_id, "user", "Original editable prompt")
+            later_message_id = insert_message(conn, conversation_id, "assistant", "Later assistant answer")
+
+        insert_conversation_memory_entry(
+            conversation_id,
+            "task_context",
+            "success-memory",
+            "before",
+            message_id=edited_message_id,
+        )
+
+        def successful_events():
+            append_to_scratchpad("Committed scratchpad")
+            upsert_user_profile_entry("fact:success-path", "after", confidence=0.9, source="test")
+            insert_conversation_memory_entry(
+                conversation_id,
+                "task_context",
+                "success-memory",
+                "after",
+                message_id=edited_message_id,
+            )
+            with open(workspace_file, "w", encoding="utf-8") as fh:
+                fh.write("after")
+            yield {"type": "answer_start"}
+            yield {"type": "answer_delta", "text": "Replay completed."}
+            yield {"type": "tool_capture", "tool_results": [], "canvas_documents": []}
+            yield {"type": "done"}
+
+        with patch(
+            "routes.chat.create_workspace_runtime_state",
+            side_effect=lambda _conversation_id=None, _root_path=None: create_workspace_runtime_state(root_path=workspace_root),
+        ), patch("routes.chat.run_agent_stream", return_value=successful_events()), patch(
+            "routes.chat.sync_conversations_to_rag_safe"
+        ):
+            response = self.client.post(
+                "/chat",
+                json={
+                    "conversation_id": conversation_id,
+                    "model": "deepseek-chat",
+                    "edited_message_id": edited_message_id,
+                    "user_content": "Edited prompt that should commit",
+                    "messages": [{"role": "user", "content": "Edited prompt that should commit"}],
+                },
+            )
+            response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+
+        with get_db() as conn:
+            edited_row = conn.execute(
+                "SELECT content FROM messages WHERE id = ? AND conversation_id = ?",
+                (edited_message_id, conversation_id),
+            ).fetchone()
+            later_row = conn.execute(
+                "SELECT deleted_at FROM messages WHERE id = ? AND conversation_id = ?",
+                (later_message_id, conversation_id),
+            ).fetchone()
+
+        self.assertEqual(edited_row["content"], "Edited prompt that should commit")
+        self.assertIsNotNone(later_row["deleted_at"])
+
+        scratchpad_sections = get_all_scratchpad_sections(get_app_settings())
+        self.assertIn("Committed scratchpad", scratchpad_sections.get("notes", ""))
+
+        profile_entries = {entry["key"]: entry for entry in get_user_profile_entries()}
+        self.assertEqual(profile_entries["fact:success-path"]["value"], "after")
+
+        memory_entries = get_conversation_memory(conversation_id)
+        committed_entry = next((entry for entry in memory_entries if entry.get("key") == "success-memory"), None)
+        self.assertIsNotNone(committed_entry)
+        self.assertEqual(committed_entry["value"], "after")
+
+        with open(workspace_file, "r", encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "after")
+
     def test_chat_route_separates_prompt_tools_from_execution_whitelist(self):
         captured = {}
         conversation_id = self._create_conversation()
@@ -3206,9 +3400,10 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("Scratchpad (AI Persistent Memory)", content)
         self.assertIn("### User Profile & Mindset", content)
         self.assertIn("The user is 22 years old.", content)
-        self.assertIn("Only durable, high-signal facts", content)
+        self.assertIn("Only minimal durable general facts", content)
+        self.assertIn("Default away from scratchpad", content)
         self.assertIn("Web findings", content)
-        self.assertIn("Ask whether this information will still matter in a future conversation", content)
+        self.assertIn("important enough to deserve long-term storage", content)
         self.assertIn("Never save them just because they were requested.", content)
         self.assertNotIn("Err on the side of saving if in doubt.", content)
         self.assertIn("Clarification**: If a good answer depends", content)
@@ -4438,6 +4633,15 @@ class AppRoutesTestCase(unittest.TestCase):
             self.assertTrue(str(prompt.get("guidance") or "").strip())
 
         self.assertEqual(TOOL_SPEC_BY_NAME["read_scratchpad"]["parameters"]["required"], [])
+
+    def test_memory_tool_specs_separate_scratchpad_and_conversation_memory(self):
+        scratchpad_guidance = TOOL_SPEC_BY_NAME["append_scratchpad"]["prompt"]["guidance"]
+        conversation_guidance = TOOL_SPEC_BY_NAME["save_to_conversation_memory"]["prompt"]["guidance"]
+
+        self.assertIn("conversation memory instead", scratchpad_guidance)
+        self.assertIn("future responses or behavior across conversations", scratchpad_guidance)
+        self.assertIn("default to conversation memory", conversation_guidance)
+        self.assertIn("Multiple compact entries are better than one overloaded summary", conversation_guidance)
 
     def test_settings_patch_allows_manual_scratchpad_updates(self):
         response = self.client.patch(
@@ -6764,7 +6968,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn('value="sub_agent"', html)
         self.assertIn('id="scratchpad-list"', html)
         self.assertIn('id="scratchpad-add-btn"', html)
-        self.assertIn('Capture lessons, user profile clues, open problems, ongoing tasks, preferences, domain facts, and general notes.', html)
+        self.assertIn('Reserve the scratchpad for durable cross-conversation lessons, profile clues, recurring problems, long-running workstreams, preferences, domain facts, and a few general notes.', html)
         self.assertIn('id="summary-mode-select"', html)
         self.assertIn('id="summary-trigger-input"', html)
         self.assertIn('id="fetch-threshold-input"', html)
@@ -6929,10 +7133,13 @@ class AppRoutesTestCase(unittest.TestCase):
         content = message["content"]
         self.assertIn("## Conversation Memory", content)
         self.assertIn("#7 [tool_result] 10:23 - Latest fetch: Belgelerde Python 3.12 hedefleniyor.", content)
-        self.assertIn("survives prompt compaction, summarization, and pruning", content)
+        self.assertIn("primary durable working memory for this chat", content)
         self.assertIn("## Conversation Memory Priority", content)
         self.assertIn("## Conversation Memory Write Policy", content)
+        self.assertIn("Default choice", content)
+        self.assertIn("Save incrementally", content)
         self.assertIn("Especially save before context loss", content)
+        self.assertIn("Prefer multiple small entries", content)
         self.assertIn("Prefer update over duplication", content)
         self.assertIn("save_to_conversation_memory", content)
 
