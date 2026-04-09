@@ -701,7 +701,7 @@ TOOL_SPECS = [
         "name": "search_web",
         "description": (
             "Search the web using DuckDuckGo. Use this only when you need current information, external verification, or facts that are not already answerable from the current conversation. "
-            "Provide one or more search queries."
+            "Provide one or more search queries. Do not pass max_results or other result-limit controls; the runtime already applies the search result cap."
         ),
         "parameters": {
             "type": "object",
@@ -714,12 +714,14 @@ TOOL_SPECS = [
                     "maxItems": 5,
                 }
             },
+            "additionalProperties": False,
             "required": ["queries"],
         },
         "prompt": {
             "purpose": "Runs a general web search and returns recent results.",
             "inputs": {"queries": "1-5 search queries"},
             "guidance": (
+                "search_web accepts only the queries array. Do not pass max_results, top_k, limit, or any other control arguments; the runtime already caps results. "
                 "Never pass more than 5 queries in a single call. If you need more search terms, split them across multiple search_web calls. "
                 "If the answer is already available from the current context or does not require external verification, do not search."
             ),

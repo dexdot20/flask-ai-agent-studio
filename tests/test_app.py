@@ -4294,6 +4294,7 @@ class AppRoutesTestCase(unittest.TestCase):
         rules_text = "\n".join(contract["rules"])
         batching_guidance = contract["batching_guidance"]
         self.assertIn("Use only the tools listed in the Active Tools section", rules_text)
+        self.assertIn("search_web accepts only the queries array", rules_text)
         self.assertIn("Batch independent tool calls into one assistant turn", batching_guidance)
         self.assertIn("GATHER", batching_guidance)
         self.assertIn("search_knowledge_base and search_tool_memory can be batched", batching_guidance)
@@ -4682,6 +4683,8 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertIn("current information, external verification", TOOL_SPEC_BY_NAME["search_web"]["description"])
         self.assertIn("If the answer is already available from the current context", TOOL_SPEC_BY_NAME["search_web"]["prompt"]["guidance"])
+        self.assertFalse(TOOL_SPEC_BY_NAME["search_web"]["parameters"].get("additionalProperties", True))
+        self.assertIn("Do not pass max_results", TOOL_SPEC_BY_NAME["search_web"]["prompt"]["guidance"])
         self.assertIn("current news coverage", TOOL_SPEC_BY_NAME["search_news_ddgs"]["description"])
         self.assertIn("current news verification", TOOL_SPEC_BY_NAME["search_news_google"]["description"])
         self.assertEqual(TOOL_SPEC_BY_NAME["read_scratchpad"]["parameters"]["required"], [])

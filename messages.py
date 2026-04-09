@@ -1376,6 +1376,11 @@ def build_tool_call_contract(
             "Use web-research tools only when the task genuinely needs current facts, external verification, or exact source text. If the answer is already available from the current context, do not search or fetch anything."
         )
 
+    if "search_web" in normalized_tool_names:
+        rules.append(
+            "search_web accepts only the queries array. Do not pass max_results, top_k, limit, or any other control arguments; the runtime already caps results and batches queries automatically."
+        )
+
     batching_sections = []
     parallel_safe_in_use = [name for name in normalized_tool_names if name in PARALLEL_SAFE_READ_ONLY_TOOL_NAMES]
     if parallel_safe_in_use:
