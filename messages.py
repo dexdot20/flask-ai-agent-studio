@@ -80,6 +80,104 @@ def extract_freeform_clarification_user_content(content: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _normalize_pending_clarification_payload(payload: dict | None) -> dict | None:
+    if not isinstance(payload, dict):
+        return None
+    return extract_pending_clarification({"pending_clarification": payload})
+
+
+def _build_clarification_option_summary(question: dict) -> str:
+    options = question.get("options") if isinstance(question.get("options"), list) else []
+    labels = [
+        str(option.get("label") or "").strip()
+        for option in options
+        if isinstance(option, dict) and str(option.get("label") or "").strip()
+    ]
+    if not labels:
+        return ""
+    return " | ".join(labels[:8])
+
+
+def _build_pending_clarification_message_content(payload: dict | None) -> str:
+    normalized_payload = _normalize_pending_clarification_payload(payload)
+    if not isinstance(normalized_payload, dict):
+        return ""
+
+    questions = normalized_payload.get("questions") if isinstance(normalized_payload.get("questions"), list) else []
+    if not questions:
+        return ""
+
+    intro = str(normalized_payload.get("intro") or "").strip()
+    lines = [intro or "Before I answer, I need a few details."]
+    lines.append("Please answer this question:" if len(questions) == 1 else "Please answer these questions:")
+
+    for index, question in enumerate(questions, start=1):
+        label = str(question.get("label") or f"Question {index}").strip() or f"Question {index}"
+        question_line = f"{index}. {label}"
+        if question.get("required") is False:
+            question_line += " (optional)"
+        option_summary = _build_clarification_option_summary(question)
+        if option_summary:
+            question_line += f" Options: {option_summary}."
+        lines.append(question_line)
+
+    return "\n".join(lines).strip()
+
+
+def _build_clarification_response_message_content(
+    content: str,
+    clarification_response: dict | None,
+    *,
+    clarification_questions: list[dict] | None = None,
+) -> str:
+    normalized_content = str(content or "").strip()
+    response = clarification_response if isinstance(clarification_response, dict) else {}
+    answers = response.get("answers") if isinstance(response.get("answers"), dict) else {}
+    if not answers:
+        return normalized_content
+    if normalized_content:
+        return normalized_content
+
+    normalized_questions = clarification_questions if isinstance(clarification_questions, list) else []
+    question_lookup = {}
+    ordered_question_ids: list[str] = []
+    for question in normalized_questions:
+        if not isinstance(question, dict):
+            continue
+        question_id = str(question.get("id") or "").strip()
+        if not question_id:
+            continue
+        question_lookup[question_id] = str(question.get("label") or "").strip() or question_id
+        ordered_question_ids.append(question_id)
+
+    lines: list[str] = []
+    emitted_question_ids: set[str] = set()
+    for question_id in ordered_question_ids:
+        answer = answers.get(question_id)
+        if not isinstance(answer, dict):
+            continue
+        display = str(answer.get("display") or "").strip()
+        if not display:
+            continue
+        lines.append(f"Q: {question_lookup.get(question_id) or question_id}")
+        lines.append(f"A: {display}")
+        emitted_question_ids.add(question_id)
+
+    for question_id, answer in answers.items():
+        normalized_question_id = str(question_id or "").strip()
+        if not normalized_question_id or normalized_question_id in emitted_question_ids:
+            continue
+        if not isinstance(answer, dict):
+            continue
+        display = str(answer.get("display") or "").strip()
+        if not display:
+            continue
+        lines.append(f"Q: {question_lookup.get(normalized_question_id) or normalized_question_id}")
+        lines.append(f"A: {display}")
+
+    return "\n".join(lines).strip()
+
+
 def _format_summary_message_for_model(content: str, metadata: dict | None = None) -> str:
     normalized_content = str(content or "").strip()
     if normalized_content.lower().startswith(SUMMARY_LABEL.lower()):
@@ -532,6 +630,7 @@ def build_user_message_for_model(
     metadata: dict | None = None,
     *,
     canvas_documents: list[dict] | None = None,
+    clarification_questions: list[dict] | None = None,
 ) -> str:
     content = (content or "").strip()
     metadata = metadata if isinstance(metadata, dict) else {}
@@ -539,9 +638,11 @@ def build_user_message_for_model(
     clarification_response = extract_clarification_response(metadata)
     clarification_answers = clarification_response.get("answers") if isinstance(clarification_response, dict) else {}
     if isinstance(clarification_answers, dict) and clarification_answers:
-        freeform_content = extract_freeform_clarification_user_content(content)
-        clarification_placeholder = "[Clarification answers provided - see the Clarification Response section for the full Q/A.]"
-        content = f"{freeform_content}\n\n{clarification_placeholder}".strip() if freeform_content else clarification_placeholder
+        content = _build_clarification_response_message_content(
+            content,
+            clarification_response,
+            clarification_questions=clarification_questions,
+        )
 
     attachments = extract_message_attachments(metadata)
     canvas_document_lookup = _build_canvas_document_lookup(canvas_documents)
@@ -694,8 +795,14 @@ def build_user_message_for_api(
     metadata: dict | None = None,
     *,
     canvas_documents: list[dict] | None = None,
+    clarification_questions: list[dict] | None = None,
 ) -> str | list[dict]:
-    text_content = build_user_message_for_model(content, metadata, canvas_documents=canvas_documents)
+    text_content = build_user_message_for_model(
+        content,
+        metadata,
+        canvas_documents=canvas_documents,
+        clarification_questions=clarification_questions,
+    )
     visual_blocks = [
         *_build_direct_image_api_blocks(metadata),
         *_build_visual_document_api_blocks(metadata),
@@ -783,60 +890,14 @@ def _filter_clarification_answers_for_questions(
 
 
 def _collect_answered_clarification_skip_indexes(messages: list[dict]) -> set[int]:
-    assistant_index_by_id: dict[str, int] = {}
-    answered_assistant_ids: set[str] = set()
-    clarification_response_user_indexes: list[int] = []
-    latest_user_message_index = max(
-        (index for index, message in enumerate(messages) if isinstance(message, dict) and message.get("role") == "user"),
-        default=-1,
-    )
-
-    for index, message in enumerate(messages):
-        if not isinstance(message, dict):
-            continue
-        role = str(message.get("role") or "").strip()
-        message_id = str(message.get("id") or "").strip()
-        metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
-        if role == "assistant" and message_id:
-            assistant_index_by_id[message_id] = index
-        if role == "user":
-            clarification_response = extract_clarification_response(metadata)
-            answers = clarification_response.get("answers") if isinstance(clarification_response, dict) else {}
-            assistant_message_id = str((clarification_response or {}).get("assistant_message_id") or "").strip()
-            if not isinstance(answers, dict) or not answers or not assistant_message_id:
-                continue
-
-            assistant_index = assistant_index_by_id.get(assistant_message_id)
-            if assistant_index is None:
-                continue
-
-            assistant_message = messages[assistant_index]
-            assistant_metadata = assistant_message.get("metadata") if isinstance(assistant_message.get("metadata"), dict) else {}
-            pending_clarification = extract_pending_clarification(assistant_metadata)
-            questions = pending_clarification.get("questions") if isinstance(pending_clarification, dict) else []
-            filtered_answers = _filter_clarification_answers_for_questions(answers, questions)
-            if not questions or not filtered_answers:
-                continue
-
-            clarification_response_user_indexes.append(index)
-            answered_assistant_ids.add(assistant_message_id)
-
     skip_indexes: set[int] = set()
-    for clarification_user_index in clarification_response_user_indexes:
-        if clarification_user_index != latest_user_message_index:
-            skip_indexes.add(clarification_user_index)
-
-    for assistant_message_id in answered_assistant_ids:
-        assistant_index = assistant_index_by_id.get(assistant_message_id)
-        if assistant_index is None:
+    for assistant_index, assistant_message in enumerate(messages):
+        if not isinstance(assistant_message, dict):
             continue
-
-        assistant_message = messages[assistant_index]
         assistant_metadata = assistant_message.get("metadata") if isinstance(assistant_message.get("metadata"), dict) else {}
         if not extract_pending_clarification(assistant_metadata):
             continue
 
-        skip_indexes.add(assistant_index)
         tool_indexes: list[int] = []
         probe_index = assistant_index - 1
         while probe_index >= 0 and str(messages[probe_index].get("role") or "").strip() == "tool":
@@ -923,6 +984,21 @@ def build_api_messages(
     active_tool_names_by_id: dict[str, str] = {}
     active_tool_names_in_order: list[str] = []
     active_tool_name_index = 0
+    clarification_questions_by_assistant_id: dict[str, list[dict]] = {}
+
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("role") or "").strip() != "assistant":
+            continue
+        message_id = str(message.get("id") or "").strip()
+        if not message_id:
+            continue
+        metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+        pending_clarification = extract_pending_clarification(metadata)
+        questions = pending_clarification.get("questions") if isinstance(pending_clarification, dict) else []
+        if isinstance(questions, list) and questions:
+            clarification_questions_by_assistant_id[message_id] = questions
 
     for index, message in enumerate(messages):
         if index in skip_indexes:
@@ -942,15 +1018,31 @@ def build_api_messages(
                         "content": context_injection,
                     }
                 )
+            clarification_response = extract_clarification_response(metadata)
+            assistant_message_id = str((clarification_response or {}).get("assistant_message_id") or "").strip()
+            clarification_questions = clarification_questions_by_assistant_id.get(assistant_message_id)
             if embed_visual_documents:
-                content = build_user_message_for_api(content, metadata, canvas_documents=canvas_documents)
+                content = build_user_message_for_api(
+                    content,
+                    metadata,
+                    canvas_documents=canvas_documents,
+                    clarification_questions=clarification_questions,
+                )
             else:
-                content = build_user_message_for_model(content, metadata, canvas_documents=canvas_documents)
+                content = build_user_message_for_model(
+                    content,
+                    metadata,
+                    canvas_documents=canvas_documents,
+                    clarification_questions=clarification_questions,
+                )
         elif role == "summary":
             role = "assistant"
             content = _format_summary_message_for_model(content, metadata)
         elif role == "assistant":
             tool_calls = parse_message_tool_calls(message.get("tool_calls"))
+            pending_clarification = extract_pending_clarification(metadata)
+            if pending_clarification and not tool_calls and not str(content or "").strip():
+                content = _build_pending_clarification_message_content(pending_clarification)
             if tool_calls and not content.strip():
                 content = None
             active_tool_names_by_id = {}
@@ -1443,7 +1535,7 @@ def build_tool_call_contract(
             "Your reasoning or thinking process is NOT a substitute for the tool call — "
             "you must emit the function call even if you already outlined the questions in your thinking. "
             "Do not say that you prepared questions unless you emitted the tool call in that same turn. "
-            "Each question label and option label must use plain structured UI fields only: avoid Q:/A: prefixes, markdown bullets, XML/tag wrappers, or <|...|> markers. "
+            "Each question label and option label must use plain UI text only in structured fields: avoid Q:/A: prefixes, markdown bullets, XML/tag wrappers, or <|...|> markers. "
             f"Ask at most {limit} question(s) per call and keep the assistant-visible reply short and brief."
         )
 

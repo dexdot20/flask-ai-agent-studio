@@ -4275,15 +4275,14 @@ def register_chat_routes(app) -> None:
                         "open_canvas": uploaded_canvas_auto_open,
                     }
                 )
-        all_clarification_rounds = _collect_answered_clarification_rounds(canonical_messages)
         conversation_memory = get_conversation_memory(conv_id) if conv_id and CONVERSATION_MEMORY_ENABLED else []
         api_messages, request_api_messages, prompt_budget_stats, current_context_injection = _build_budgeted_prompt_messages(
             canonical_messages,
             settings,
             conv_id,
             active_tool_names,
-            clarification_response,
-            all_clarification_rounds,
+            None,
+            None,
             retrieved_context,
             tool_memory_context,
             model_id=model,

@@ -109,7 +109,7 @@ from db import (
     normalize_scratchpad_text,
     replace_scratchpad,
 )
-from messages import _build_canvas_prompt_payload, build_current_time_context
+from messages import _build_canvas_prompt_payload, _build_pending_clarification_message_content, build_current_time_context
 from image_service import answer_image_question
 from model_registry import (
     DEEPSEEK_PROVIDER,
@@ -4150,8 +4150,7 @@ def _normalize_clarification_payload(tool_args: dict) -> dict:
 
 
 def _build_clarification_text(payload: dict) -> str:
-    del payload
-    return ""
+    return _build_pending_clarification_message_content(payload)
 
 
 def _get_canvas_runtime_state(runtime_state: dict) -> dict:
@@ -7135,7 +7134,7 @@ def run_agent_stream(
         try:
             turn_result = yield from stream_model_turn(
                 turn_messages,
-                buffer_answer=False,
+                buffer_answer="ask_clarifying_question" in set(normalized_prompt_tool_names),
                 call_type="agent_step",
                 retry_reason=step_retry_reason,
             )

@@ -5421,7 +5421,7 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertEqual(content, "Use the document in canvas.")
 
-    def test_build_user_message_for_model_replaces_raw_clarification_qna_text(self):
+    def test_build_user_message_for_model_preserves_clarification_transcript(self):
         content = build_user_message_for_model(
             "Q: Budget?\nA: 200-300 TL\nQ: Goal?\nA: Sales",
             {
@@ -5435,10 +5435,29 @@ class AppRoutesTestCase(unittest.TestCase):
             },
         )
 
-        self.assertEqual(
-            content,
-            "[Clarification answers provided - see the Clarification Response section for the full Q/A.]",
+        self.assertEqual(content, "Q: Budget?\nA: 200-300 TL\nQ: Goal?\nA: Sales")
+
+    def test_build_user_message_for_model_reconstructs_clarification_transcript_when_content_is_empty(self):
+        content = build_user_message_for_model(
+            "",
+            {
+                "clarification_response": {
+                    "assistant_message_id": 12,
+                    "answers": {
+                        "budget": {"display": "200-300 TL"},
+                    },
+                }
+            },
+            clarification_questions=[
+                {
+                    "id": "budget",
+                    "label": "Budget?",
+                    "input_type": "text",
+                }
+            ],
         )
+
+        self.assertEqual(content, "Q: Budget?\nA: 200-300 TL")
 
     def test_build_user_message_for_model_preserves_freeform_request_beside_clarification_answers(self):
         content = build_user_message_for_model(
@@ -5453,10 +5472,7 @@ class AppRoutesTestCase(unittest.TestCase):
             },
         )
 
-        self.assertEqual(
-            content,
-            "İlk olarak bana sorular sor.\n\n[Clarification answers provided - see the Clarification Response section for the full Q/A.]",
-        )
+        self.assertEqual(content, "Q: Budget?\nA: 200-300 TL\n\nİlk olarak bana sorular sor.")
 
     def test_image_explain_tool_spec_requires_image_and_conversation_ids(self):
         spec = TOOL_SPEC_BY_NAME["image_explain"]
@@ -5687,7 +5703,13 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(summary, "Awaiting user clarification")
         self.assertEqual(result["status"], "needs_user_input")
         self.assertEqual(len(result["clarification"]["questions"]), 2)
-        self.assertEqual(result["text"], "")
+        self.assertEqual(
+            result["text"],
+            "Before I answer, I need a few details.\n"
+            "Please answer these questions:\n"
+            "1. Which scope?\n"
+            "2. What style?",
+        )
         self.assertEqual(result["clarification"]["intro"], "Before I answer, I need a few details.")
         self.assertEqual(result["clarification"]["questions"][0]["label"], "Which scope?")
 
@@ -5785,7 +5807,7 @@ class AppRoutesTestCase(unittest.TestCase):
             active_tool_names=["ask_clarifying_question"],
         )
 
-        self.assertIn("plain structured UI fields only", message["content"])
+        self.assertIn("plain UI text only", message["content"])
         self.assertIn("avoid Q:/A: prefixes", message["content"])
         self.assertNotIn("use a simple Q:/A: format", message["content"])
 
@@ -8621,7 +8643,13 @@ class AppRoutesTestCase(unittest.TestCase):
             )
 
         clarification_event = next(event for event in events if event["type"] == "clarification_request")
-        self.assertEqual(clarification_event["text"], "")
+        self.assertEqual(
+            clarification_event["text"],
+            "Before I answer, I need two details.\n"
+            "Please answer these questions:\n"
+            "1. Which scope? Options: Only this repo | General tool.\n"
+            "2. Anything else? (optional)",
+        )
         self.assertEqual(clarification_event["clarification"]["intro"], "Before I answer, I need two details.")
         self.assertEqual(clarification_event["clarification"]["questions"][0]["id"], "scope")
         self.assertFalse(any(event["type"] == "answer_delta" for event in events))
@@ -9171,7 +9199,12 @@ class AppRoutesTestCase(unittest.TestCase):
             [
                 {
                     "type": "clarification_request",
-                    "text": "",
+                    "text": (
+                        "Before I answer, I need two details.\n"
+                        "Please answer these questions:\n"
+                        "1. Which scope? Options: Only this repo | General tool.\n"
+                        "2. Anything else? (optional)"
+                    ),
                     "clarification": {
                         "intro": "Before I answer, I need two details.",
                         "submit_label": "Continue",
@@ -9225,7 +9258,82 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual([row["role"] for row in rows], ["user", "assistant"])
         assistant_metadata = json.loads(rows[1]["metadata"])
         self.assertEqual(rows[1]["content"], clarification_event["text"])
+        self.assertIn("Which scope?", rows[1]["content"])
         self.assertEqual(assistant_metadata["pending_clarification"]["questions"][0]["id"], "scope")
+
+    def test_chat_passes_clarification_history_as_transcript_without_runtime_injection(self):
+        conversation_id = self._create_conversation()
+        pending_questions = [
+            {
+                "id": "budget",
+                "label": "Budget?",
+                "input_type": "text",
+                "required": True,
+            }
+        ]
+        assistant_message_id = self._insert_pending_clarification_assistant(
+            conversation_id,
+            text="",
+            questions=pending_questions,
+        )
+        save_app_settings(
+            {
+                "user_preferences": "",
+                "max_steps": "2",
+                "active_tools": '[]',
+                "rag_auto_inject": "false",
+            }
+        )
+
+        fake_events = iter(
+            [
+                {"type": "done"},
+            ]
+        )
+
+        with patch("routes.chat.run_agent_stream", return_value=fake_events) as mocked_stream:
+            response = self.client.post(
+                "/chat",
+                json={
+                    "conversation_id": conversation_id,
+                    "model": "deepseek-chat",
+                    "user_content": "Q: Budget?\nA: 200-300 TL",
+                    "messages": [
+                        {
+                            "role": "assistant",
+                            "content": "",
+                            "metadata": {
+                                "pending_clarification": {
+                                    "questions": pending_questions,
+                                }
+                            },
+                        },
+                        {
+                            "role": "user",
+                            "content": "Q: Budget?\nA: 200-300 TL",
+                            "metadata": {
+                                "clarification_response": {
+                                    "assistant_message_id": assistant_message_id,
+                                    "answers": {
+                                        "budget": {"display": "200-300 TL"},
+                                    },
+                                }
+                            },
+                        },
+                    ],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        request_api_messages = mocked_stream.call_args.args[0]
+        assistant_messages = [message for message in request_api_messages if message["role"] == "assistant"]
+        user_messages = [message for message in request_api_messages if message["role"] == "user"]
+        system_messages = [message for message in request_api_messages if message["role"] == "system"]
+
+        self.assertTrue(any("Please answer this question:" in (message.get("content") or "") for message in assistant_messages))
+        self.assertTrue(any("1. Budget?" in (message.get("content") or "") for message in assistant_messages))
+        self.assertEqual(user_messages[-1]["content"], "Q: Budget?\nA: 200-300 TL")
+        self.assertFalse(any("## Clarification Response" in (message.get("content") or "") for message in system_messages))
 
     def test_chat_stream_persists_tool_history_rows(self):
         conversation_id = self._create_conversation()
@@ -13310,9 +13418,13 @@ class AppRoutesTestCase(unittest.TestCase):
             api_messages,
             [
                 {
+                    "role": "assistant",
+                    "content": "Before I answer, I need a few details.\nPlease answer this question:\n1. Budget?",
+                },
+                {
                     "role": "user",
-                    "content": "[Clarification answers provided - see the Clarification Response section for the full Q/A.]",
-                }
+                    "content": "Q: Budget?\nA: 200-300 TL",
+                },
             ],
         )
 
@@ -13469,9 +13581,21 @@ class AppRoutesTestCase(unittest.TestCase):
             api_messages,
             [
                 {
+                    "role": "assistant",
+                    "content": "Before I answer, I need a few details.\nPlease answer this question:\n1. Budget?",
+                },
+                {
                     "role": "user",
-                    "content": "[Clarification answers provided - see the Clarification Response section for the full Q/A.]",
-                }
+                    "content": "Q: Budget?\nA: 200-300 TL",
+                },
+                {
+                    "role": "assistant",
+                    "content": "Before I answer, I need a few details.\nPlease answer this question:\n1. Price?",
+                },
+                {
+                    "role": "user",
+                    "content": "Q: Price?\nA: 199 TL",
+                },
             ],
         )
 
@@ -13568,6 +13692,14 @@ class AppRoutesTestCase(unittest.TestCase):
 
     def test_chat_uses_compact_clarification_answers_for_rag_query(self):
         conversation_id = self._create_conversation()
+        assistant_message_id = self._insert_pending_clarification_assistant(
+            conversation_id,
+            questions=[
+                {"id": "group_size", "label": "Kaç kişisiniz?", "input_type": "text", "required": True},
+                {"id": "age_range", "label": "Yaş grubunuz nedir?", "input_type": "text", "required": True},
+                {"id": "city", "label": "Nerede yaşıyorsunuz?", "input_type": "text", "required": True},
+            ],
+        )
         save_app_settings(
             {
                 "user_preferences": "",
@@ -13605,7 +13737,7 @@ class AppRoutesTestCase(unittest.TestCase):
                             "content": message_text,
                             "metadata": {
                                 "clarification_response": {
-                                    "assistant_message_id": 7,
+                                    "assistant_message_id": assistant_message_id,
                                     "answers": {
                                         "group_size": {"display": "2 kişi"},
                                         "age_range": {"display": "15-18"},
