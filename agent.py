@@ -1360,6 +1360,69 @@ def _combine_sub_agent_reasoning(existing: str, incoming: str) -> str:
     return _clean_tool_text(f"{cleaned_existing}\n\n{cleaned_incoming}", limit=SUB_AGENT_MAX_REASONING_CHARS)
 
 
+def _is_sub_agent_placeholder_answer(text: str) -> bool:
+    cleaned_text = _clean_tool_text(text or "", limit=SUB_AGENT_MAX_SUMMARY_CHARS)
+    return cleaned_text in {FINAL_ANSWER_ERROR_TEXT, FINAL_ANSWER_MISSING_TEXT}
+
+
+def _is_sub_agent_internal_final_answer_error(tool_name: str, error_text: str) -> bool:
+    if _normalize_tool_name(str(tool_name or "").strip()) != "agent":
+        return False
+    cleaned_error = _clean_tool_text(error_text or "", limit=SUB_AGENT_MAX_ERROR_CHARS).lower()
+    return bool(cleaned_error) and "final answer" in cleaned_error
+
+
+def _build_sub_agent_missing_final_answer_summary(
+    tool_trace: list[dict],
+    artifacts: list[dict],
+    transcript_messages: list[dict],
+) -> str:
+    findings: list[str] = []
+    seen: set[str] = set()
+
+    def add_finding(value: str, label: str = "") -> None:
+        cleaned_value = _clean_tool_text(value or "", limit=300)
+        cleaned_label = _clean_tool_text(label or "", limit=120)
+        if not cleaned_value or _is_sub_agent_placeholder_answer(cleaned_value):
+            return
+        if cleaned_label and cleaned_label.lower() not in cleaned_value.lower():
+            candidate = f"{cleaned_label}: {cleaned_value}"
+        else:
+            candidate = cleaned_value
+        if candidate in seen:
+            return
+        seen.add(candidate)
+        findings.append(candidate)
+
+    for artifact in artifacts[:SUB_AGENT_MAX_ARTIFACTS]:
+        if not isinstance(artifact, dict):
+            continue
+        add_finding(artifact.get("value") or "", artifact.get("label") or "")
+        if len(findings) >= 3:
+            break
+
+    if len(findings) < 3:
+        for entry in reversed(_normalize_sub_agent_tool_trace(tool_trace)):
+            if str(entry.get("state") or "done") == "running":
+                continue
+            add_finding(entry.get("summary") or "")
+            if len(findings) >= 3:
+                break
+
+    if not findings:
+        for message in reversed(transcript_messages):
+            if not isinstance(message, dict) or str(message.get("role") or "").strip() != "assistant":
+                continue
+            add_finding(message.get("content") or "")
+            if findings:
+                break
+
+    prefix = "Sub-agent gathered tool output, but the delegated model did not write a usable final conclusion."
+    if findings:
+        return f"{prefix} Collected findings: {'; '.join(findings[:3])}"
+    return prefix
+
+
 def _upsert_sub_agent_tool_trace(entries: list[dict], call_map: dict[str, int], event: dict) -> None:
     tool_name = str(event.get("tool") or "").strip()
     if not tool_name:
@@ -4313,6 +4376,7 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
             child_answer = ""
             child_reasoning = ""
             child_errors: list[str] = []
+            missing_final_answer_output = False
             timed_out = False
             retryable_model_error = False
             fallback_attempt_logged = False
@@ -4353,6 +4417,11 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
                         elif event_type == "reasoning_delta":
                             child_reasoning += str(event.get("text") or "")
                         elif event_type in {"step_update", "tool_result", "tool_error"}:
+                            if event_type == "tool_error":
+                                internal_error_text = _clean_tool_text(event.get("error") or "", limit=SUB_AGENT_MAX_ERROR_CHARS)
+                                if _is_sub_agent_internal_final_answer_error(event.get("tool") or "", internal_error_text):
+                                    missing_final_answer_output = True
+                                    continue
                             _upsert_sub_agent_tool_trace(child_tool_trace, child_tool_trace_map, event)
                             yield {
                                 "type": "sub_agent_trace_update",
@@ -4390,6 +4459,9 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
                     child_errors.append(error_text)
 
             child_answer = _clean_tool_text(child_answer, limit=SUB_AGENT_MAX_SUMMARY_CHARS)
+            if _is_sub_agent_placeholder_answer(child_answer):
+                missing_final_answer_output = True
+                child_answer = ""
             child_reasoning = _clean_tool_text(child_reasoning, limit=SUB_AGENT_MAX_REASONING_CHARS)
             if child_answer:
                 child_history.append({"role": "assistant", "content": child_answer})
@@ -4415,14 +4487,29 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
 
             artifacts = _build_sub_agent_artifacts(aggregate_history, aggregate_tool_results)
             summary_text = child_answer or error_text or "Sub-agent finished without a final summary."
+            missing_final_answer_state = missing_final_answer_output and not child_answer
+            if missing_final_answer_state:
+                summary_text = _build_sub_agent_missing_final_answer_summary(
+                    aggregate_tool_trace,
+                    artifacts,
+                    aggregate_history,
+                )
 
             has_partial_output = bool(child_answer or aggregate_tool_trace or artifacts or aggregate_history)
             result_status = "ok"
-            if timed_out or error_text or retryable_model_error:
+            if timed_out or error_text or retryable_model_error or missing_final_answer_state:
                 result_status = "partial" if has_partial_output else "error"
+            if missing_final_answer_state and not has_partial_output and not error_text:
+                error_text = "The delegated model did not return a final answer."
 
-            if (timed_out or retryable_model_error) and retry_count < retry_attempts and time.monotonic() < overall_deadline:
-                retry_reason = "a timeout" if timed_out else "a model error"
+            if (timed_out or retryable_model_error or missing_final_answer_state) and retry_count < retry_attempts and time.monotonic() < overall_deadline:
+                retry_reason = (
+                    "a timeout"
+                    if timed_out
+                    else "a missing final answer"
+                    if missing_final_answer_state
+                    else "a model error"
+                )
                 resume_messages.extend(_build_sub_agent_retry_messages(aggregate_history))
                 resume_messages.append(_build_sub_agent_resume_message(child_model, retry_reason))
                 retry_count += 1
@@ -4437,12 +4524,32 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
             fallback_note = ""
             if fallback_continues:
                 next_model = _clean_tool_text(child_model_candidates[attempt_index], limit=120)
-                reason_label = "timeout" if timed_out else "model error"
-                prompt_reason_label = "a timeout" if timed_out else "a model error"
+                reason_label = (
+                    "timeout"
+                    if timed_out
+                    else "missing final answer"
+                    if missing_final_answer_state
+                    else "model error"
+                )
+                prompt_reason_label = (
+                    "a timeout"
+                    if timed_out
+                    else "a missing final answer"
+                    if missing_final_answer_state
+                    else "a model error"
+                )
                 fallback_note = f"Continued on {next_model} after {reason_label}."
                 latest_fallback_note = fallback_note
                 if not fallback_attempt_logged:
-                    fallback_attempts.append({"model": child_model, "error": error_text or fallback_note or "Retryable model failure."})
+                    fallback_attempts.append(
+                        {
+                            "model": child_model,
+                            "error": error_text
+                            or ("The delegated model did not return a final answer." if missing_final_answer_state else "")
+                            or fallback_note
+                            or "Retryable model failure.",
+                        }
+                    )
                     fallback_attempt_logged = True
                 resume_messages.extend(_build_sub_agent_retry_messages(aggregate_history))
                 resume_messages.append(_build_sub_agent_resume_message(child_model, prompt_reason_label))

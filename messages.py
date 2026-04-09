@@ -222,17 +222,13 @@ def _build_image_policy_payload(active_tool_names: list[str]) -> dict | None:
 def _build_clarification_policy_payload(active_tool_names: list[str], clarification_max_questions: int | None = None) -> dict | None:
     if "ask_clarifying_question" not in set(active_tool_names or []):
         return None
-    limit = _normalize_clarification_max_questions(clarification_max_questions)
     return {
         "tool": "ask_clarifying_question",
         "guidance": (
             "If a good answer depends on missing requirements, ask for clarification instead of guessing. "
             "If the user explicitly asks you to ask questions first, you MUST emit an actual ask_clarifying_question tool call — "
             "outlining questions in your reasoning/thinking without emitting the call is not sufficient. "
-            "Do not say that you prepared questions in assistant text unless you emitted the tool call in that same turn. "
             "If the Clarification Response section already answers your pending questions for this turn, continue the task instead of calling ask_clarifying_question again. "
-            f"Ask only the minimum number of questions needed, ask at most {limit} question(s) in one call, "
-            "use plain structured UI fields only, avoid Q:/A: prefixes, markdown bullets, XML/tag wrappers, code fences, or tokens like <| and |>, "
             "and wait for the user's reply before continuing."
         ),
     }
@@ -544,9 +540,18 @@ def build_user_message_for_model(
             if str(attachment.get("submission_mode") or "").strip().lower() == "visual":
                 file_name = str(attachment.get("file_name") or "PDF").strip() or "PDF"
                 page_count = max(1, int(attachment.get("visual_page_count") or len(attachment.get("visual_page_image_ids") or []) or 1))
-                visual_document_notices.append(
-                    f"Uploaded PDF for visual analysis: {file_name}. The first {page_count} page{'s are' if page_count != 1 else ' is'} attached as image input below."
-                )
+                try:
+                    total_page_count = max(page_count, int(attachment.get("visual_total_page_count") or 0))
+                except (TypeError, ValueError):
+                    total_page_count = page_count
+                if total_page_count > page_count:
+                    visual_document_notices.append(
+                        f"Uploaded PDF for visual analysis: {file_name}. PDF has {total_page_count} pages; only the first {page_count} page{'s are' if page_count != 1 else ' is'} attached as image input below."
+                    )
+                else:
+                    visual_document_notices.append(
+                        f"Uploaded PDF for visual analysis: {file_name}. {page_count} page{'s are' if page_count != 1 else ' is'} attached as image input below."
+                    )
                 continue
             context_block = str(attachment.get("file_context_block") or "").strip()
             if _document_attachment_is_represented_in_canvas(attachment, canvas_document_lookup):
@@ -1309,9 +1314,6 @@ def _build_active_tools_context(active_tool_names: list[str]) -> list[str]:
     parallel_safe_tool_names = [
         name for name in normalized_tool_names if name in PARALLEL_SAFE_READ_ONLY_TOOL_NAMES
     ]
-    sequential_tool_names = [
-        name for name in normalized_tool_names if name not in PARALLEL_SAFE_READ_ONLY_TOOL_NAMES
-    ]
 
     lines = [
         "## Active Tools This Turn",
@@ -1322,8 +1324,6 @@ def _build_active_tools_context(active_tool_names: list[str]) -> list[str]:
         lines.append(f"- Parallel-safe read tools: {_format_tool_name_list(parallel_safe_tool_names)}")
     else:
         lines.append("- Parallel-safe read tools: none")
-    if sequential_tool_names:
-        lines.append(f"- Sequential-only tools: {_format_tool_name_list(sequential_tool_names)}")
     lines.append("")
     return lines
 
@@ -1369,7 +1369,7 @@ def build_tool_call_contract(
             "Your reasoning or thinking process is NOT a substitute for the tool call — "
             "you must emit the function call even if you already outlined the questions in your thinking. "
             "Do not say that you prepared questions unless you emitted the tool call in that same turn. "
-            "Each question label and option label must be plain UI text only: no Q:/A: prefixes, markdown bullets, XML/tag wrappers, or <|...|> markers. "
+            "Each question label and option label must use plain structured UI fields only: avoid Q:/A: prefixes, markdown bullets, XML/tag wrappers, or <|...|> markers. "
             f"Ask at most {limit} question(s) per call and keep the assistant-visible reply short and brief."
         )
 
@@ -1564,12 +1564,12 @@ def _build_runtime_volatile_parts(
             volatile_parts.append("")
 
     if summary_count:
+        volatile_parts.append("## Conversation Summaries")
+        volatile_parts.append(f"- Count: {summary_count}")
         volatile_parts.append(
-            "## Conversation Summaries\n"
-            f"Count: {summary_count}\n"
-            "*Guidance: The full summary text is already included in the prompt as assistant summary messages below. "
-            "Treat those summary messages as authoritative compressed history for earlier deleted turns.*"
+            "- The summary messages already included below are authoritative compressed history for earlier deleted turns."
         )
+        volatile_parts.append("")
 
     normalized_tool_trace_context = str(tool_trace_context or "").strip()
     if normalized_tool_trace_context:
@@ -1681,6 +1681,10 @@ def build_runtime_system_message(
             workspace_root=workspace_root,
         )
     runtime_tool_names = resolved_runtime_tool_names
+    conversation_memory_tools_enabled = any(
+        name in {"save_to_conversation_memory", "delete_conversation_memory_entry"}
+        for name in runtime_tool_names
+    )
     if canvas_payload is None:
         canvas_payload = _build_canvas_prompt_payload(
             canvas_documents,
@@ -1715,15 +1719,14 @@ def build_runtime_system_message(
     if conversation_memory_section:
         parts.extend(conversation_memory_section)
 
-    if summary_count and any(name in {"save_to_conversation_memory", "delete_conversation_memory_entry"} for name in runtime_tool_names):
+    if summary_count and conversation_memory_tools_enabled:
         parts.append("## Conversation Memory Priority")
         parts.append(
-            "- Earlier turns in this chat have already been summarized or compacted. Treat Conversation Memory as the primary durable record for user constraints, important decisions, and critical past findings from older context.\n"
-            "- When a newly confirmed detail is likely to matter after more pruning or summarization, prefer saving it immediately instead of assuming it will remain obvious from the visible chat history."
+            "- Earlier turns in this chat have already been summarized or compacted. Treat Conversation Memory as the durable record for older constraints, decisions, and findings, and save newly confirmed details there before more context is lost."
         )
         parts.append("")
 
-    if any(name in {"save_to_conversation_memory", "delete_conversation_memory_entry"} for name in runtime_tool_names):
+    if conversation_memory_tools_enabled:
         parts.append("## Conversation Memory Write Policy")
         parts.append(
             "- **Use save_to_conversation_memory** proactively for important conversation-scoped facts that should survive later turns in this same chat.\n"
@@ -1860,8 +1863,10 @@ def prepend_runtime_context(
     runtime_tool_names: list[str] | None = None,
     current_context_injection: str | None = None,
     summary_count: int | None = None,
+    runtime_message: dict | None = None,
+    now: datetime | None = None,
 ):
-    now = datetime.now().astimezone()
+    normalized_now = (now or datetime.now().astimezone()).astimezone()
     resolved_runtime_tool_names = _normalize_tool_name_list(runtime_tool_names)
     if not resolved_runtime_tool_names:
         resolved_runtime_tool_names = resolve_runtime_tool_names(
@@ -1869,44 +1874,60 @@ def prepend_runtime_context(
             canvas_documents=canvas_documents,
             workspace_root=workspace_root,
         )
-    canvas_payload = _build_canvas_prompt_payload(
-        canvas_documents,
-        active_document_id=canvas_active_document_id,
-        canvas_viewports=canvas_viewports,
-        max_lines=canvas_prompt_max_lines or CANVAS_PROMPT_MAX_LINES,
-        max_tokens=canvas_prompt_max_tokens if canvas_prompt_max_tokens is not None else CANVAS_PROMPT_MAX_TOKENS,
-    )
+    injection_content = str(current_context_injection or "").strip()
+    canvas_payload = None
+    if runtime_message is None or not injection_content:
+        canvas_payload = _build_canvas_prompt_payload(
+            canvas_documents,
+            active_document_id=canvas_active_document_id,
+            canvas_viewports=canvas_viewports,
+            max_lines=canvas_prompt_max_lines or CANVAS_PROMPT_MAX_LINES,
+            max_tokens=canvas_prompt_max_tokens if canvas_prompt_max_tokens is not None else CANVAS_PROMPT_MAX_TOKENS,
+        )
 
-    runtime_message = build_runtime_system_message(
-        user_preferences,
-        active_tool_names or [],
-        clarification_response=clarification_response,
-        all_clarification_rounds=all_clarification_rounds,
-        retrieved_context=retrieved_context,
-        user_profile_context=user_profile_context,
-        conversation_memory=conversation_memory,
-        tool_trace_context=tool_trace_context,
-        tool_memory_context=tool_memory_context,
-        scratchpad=scratchpad,
-        scratchpad_sections=scratchpad_sections,
-        canvas_documents=canvas_documents,
-        canvas_active_document_id=canvas_active_document_id,
-        canvas_viewports=canvas_viewports,
-        canvas_prompt_max_lines=canvas_prompt_max_lines,
-        canvas_prompt_max_tokens=canvas_prompt_max_tokens,
-        workspace_root=workspace_root,
-        clarification_max_questions=clarification_max_questions,
-        max_parallel_tools=max_parallel_tools,
-        include_time_context=False,
-        include_volatile_context=False,
-        runtime_tool_names=resolved_runtime_tool_names,
-        canvas_payload=canvas_payload,
-        now=now,
-    )
+    if isinstance(runtime_message, dict):
+        runtime_message = {
+            "role": str(runtime_message.get("role") or "system"),
+            "content": str(runtime_message.get("content") or ""),
+        }
+    else:
+        runtime_message = build_runtime_system_message(
+            user_preferences,
+            active_tool_names or [],
+            clarification_response=clarification_response,
+            all_clarification_rounds=all_clarification_rounds,
+            retrieved_context=retrieved_context,
+            user_profile_context=user_profile_context,
+            conversation_memory=conversation_memory,
+            tool_trace_context=tool_trace_context,
+            tool_memory_context=tool_memory_context,
+            scratchpad=scratchpad,
+            scratchpad_sections=scratchpad_sections,
+            canvas_documents=canvas_documents,
+            canvas_active_document_id=canvas_active_document_id,
+            canvas_viewports=canvas_viewports,
+            canvas_prompt_max_lines=canvas_prompt_max_lines,
+            canvas_prompt_max_tokens=canvas_prompt_max_tokens,
+            workspace_root=workspace_root,
+            clarification_max_questions=clarification_max_questions,
+            max_parallel_tools=max_parallel_tools,
+            include_time_context=False,
+            include_volatile_context=False,
+            runtime_tool_names=resolved_runtime_tool_names,
+            canvas_payload=canvas_payload,
+            now=normalized_now,
+        )
 
     normalized_summary_count = summary_count if summary_count is not None else _count_summary_messages(messages)
-    injection_content = str(current_context_injection or "").strip()
     if not injection_content:
+        if canvas_payload is None:
+            canvas_payload = _build_canvas_prompt_payload(
+                canvas_documents,
+                active_document_id=canvas_active_document_id,
+                canvas_viewports=canvas_viewports,
+                max_lines=canvas_prompt_max_lines or CANVAS_PROMPT_MAX_LINES,
+                max_tokens=canvas_prompt_max_tokens if canvas_prompt_max_tokens is not None else CANVAS_PROMPT_MAX_TOKENS,
+            )
         injection_content = build_runtime_context_injection(
             active_tool_names=active_tool_names or [],
             clarification_response=clarification_response,
@@ -1924,7 +1945,7 @@ def prepend_runtime_context(
             canvas_payload=canvas_payload,
             summary_count=normalized_summary_count,
             include_time_context=True,
-            now=now,
+            now=normalized_now,
         )
 
     if not injection_content:

@@ -130,6 +130,7 @@ from messages import (
     SUMMARY_LABEL,
     build_api_messages,
     build_runtime_context_injection,
+    build_runtime_system_message,
     build_user_message_for_model,
     extract_freeform_clarification_user_content,
     format_knowledge_base_auto_context,
@@ -1817,25 +1818,30 @@ def _build_budgeted_prompt_messages(
     model_id: str | None = None,
 ) -> tuple[list[dict], list[dict], dict, str | None]:
     ordered_messages = [message for message in canonical_messages if isinstance(message, dict)]
+    summary_messages = [message for message in ordered_messages if str(message.get("role") or "").strip() == "summary"]
+    recent_messages = [message for message in ordered_messages if str(message.get("role") or "").strip() != "summary"]
     tool_trace_context = _build_tool_trace_context(ordered_messages)
     user_profile_context = build_user_profile_system_context(max_tokens=500)
     scratchpad_sections = get_all_scratchpad_sections(settings)
     assistant_behavior = build_effective_user_preferences(settings)
     max_parallel_tools = get_max_parallel_tools(settings)
+    clarification_max_questions = get_clarification_max_questions(settings)
     runtime_tool_names = resolve_runtime_tool_names(
         active_tool_names,
         canvas_documents=canvas_documents,
         workspace_root=workspace_root,
     )
     prompt_budget = max(2_000, get_prompt_max_input_tokens(settings) - get_prompt_response_token_reserve(settings))
-    base_runtime_messages = prepend_runtime_context(
-        [],
+    prompt_now = datetime.now().astimezone()
+    stable_runtime_message = build_runtime_system_message(
         assistant_behavior,
         runtime_tool_names,
+        clarification_response=clarification_response,
+        all_clarification_rounds=all_clarification_rounds,
         retrieved_context=None,
         user_profile_context=user_profile_context,
         conversation_memory=conversation_memory,
-        tool_trace_context=tool_trace_context,
+        tool_trace_context=None,
         tool_memory_context=None,
         scratchpad_sections=scratchpad_sections,
         canvas_documents=canvas_documents,
@@ -1844,10 +1850,34 @@ def _build_budgeted_prompt_messages(
         canvas_prompt_max_lines=canvas_prompt_max_lines,
         canvas_prompt_max_tokens=canvas_prompt_max_tokens,
         workspace_root=workspace_root,
-        clarification_max_questions=get_clarification_max_questions(settings),
+        clarification_max_questions=clarification_max_questions,
         max_parallel_tools=max_parallel_tools,
+        include_time_context=False,
+        include_volatile_context=False,
         runtime_tool_names=runtime_tool_names,
+        now=prompt_now,
     )
+    base_runtime_messages = [stable_runtime_message]
+    base_context_injection = build_runtime_context_injection(
+        active_tool_names=runtime_tool_names,
+        clarification_response=clarification_response,
+        all_clarification_rounds=all_clarification_rounds,
+        retrieved_context=None,
+        tool_trace_context=None,
+        tool_memory_context=None,
+        canvas_documents=canvas_documents,
+        canvas_active_document_id=canvas_active_document_id,
+        canvas_viewports=canvas_viewports,
+        canvas_prompt_max_lines=canvas_prompt_max_lines,
+        canvas_prompt_max_tokens=canvas_prompt_max_tokens,
+        workspace_root=workspace_root,
+        runtime_tool_names=runtime_tool_names,
+        summary_count=1 if summary_messages else 0,
+        include_time_context=True,
+        now=prompt_now,
+    )
+    if base_context_injection:
+        base_runtime_messages.append({"role": "system", "content": base_context_injection})
     base_system_tokens = _estimate_prompt_tokens(base_runtime_messages)
     context_selection_strategy = get_context_selection_strategy(settings)
     rag_budget_reserve = 0
@@ -1862,9 +1892,6 @@ def _build_budgeted_prompt_messages(
             max(0, int((prompt_budget - base_system_tokens) * (get_entropy_rag_budget_ratio(settings) / 100.0))),
         )
     history_budget = max(1_000, prompt_budget - base_system_tokens - rag_budget_reserve)
-
-    summary_messages = [message for message in ordered_messages if str(message.get("role") or "").strip() == "summary"]
-    recent_messages = [message for message in ordered_messages if str(message.get("role") or "").strip() != "summary"]
 
     prefix_anchor_budget = 0
     cache_friendly_prefix = _model_prefers_cache_friendly_prefix(model_id, settings)
@@ -1940,6 +1967,7 @@ def _build_budgeted_prompt_messages(
         runtime_tool_names=runtime_tool_names,
         summary_count=len(selected_summaries),
         include_time_context=True,
+        now=prompt_now,
     )
 
     api_messages = prepend_runtime_context(
@@ -1960,11 +1988,13 @@ def _build_budgeted_prompt_messages(
         canvas_prompt_max_lines=canvas_prompt_max_lines,
         canvas_prompt_max_tokens=canvas_prompt_max_tokens,
         workspace_root=workspace_root,
-        clarification_max_questions=get_clarification_max_questions(settings),
+        clarification_max_questions=clarification_max_questions,
         max_parallel_tools=max_parallel_tools,
         current_context_injection=current_context_injection,
         runtime_tool_names=runtime_tool_names,
         summary_count=len(selected_summaries),
+        runtime_message=stable_runtime_message,
+        now=prompt_now,
     )
 
     request_prompt_history_api = build_api_messages(
@@ -1990,11 +2020,13 @@ def _build_budgeted_prompt_messages(
         canvas_prompt_max_lines=canvas_prompt_max_lines,
         canvas_prompt_max_tokens=canvas_prompt_max_tokens,
         workspace_root=workspace_root,
-        clarification_max_questions=get_clarification_max_questions(settings),
+        clarification_max_questions=clarification_max_questions,
         max_parallel_tools=max_parallel_tools,
         current_context_injection=current_context_injection,
         runtime_tool_names=runtime_tool_names,
         summary_count=len(selected_summaries),
+        runtime_message=stable_runtime_message,
+        now=prompt_now,
     )
 
     estimated_total_tokens = _estimate_prompt_tokens(api_messages)

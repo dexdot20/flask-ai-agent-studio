@@ -4838,6 +4838,25 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("Visual summary: A dashboard is visible.", content)
         self.assertIn("Visual summary: A settings page is visible.", content)
 
+    def test_build_user_message_for_model_clarifies_visual_pdf_page_limit(self):
+        content = build_user_message_for_model(
+            "Analyze this PDF.",
+            {
+                "attachments": [
+                    {
+                        "kind": "document",
+                        "file_name": "exam.pdf",
+                        "submission_mode": "visual",
+                        "visual_page_count": 3,
+                        "visual_total_page_count": 6,
+                        "visual_page_image_ids": ["img-1", "img-2", "img-3"],
+                    }
+                ]
+            },
+        )
+
+        self.assertIn("PDF has 6 pages; only the first 3 pages are attached", content)
+
     def test_build_user_message_for_model_omits_document_context_already_in_canvas(self):
         content = build_user_message_for_model(
             "Use the document in canvas.",
@@ -7533,6 +7552,111 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(len(runtime_state["sub_agent_traces"]), 1)
         self.assertEqual(runtime_state["sub_agent_traces"][-1]["model"], "deepseek-reasoner")
         self.assertNotIn("fallback_note", runtime_state["sub_agent_traces"][-1])
+
+    def test_run_sub_agent_stream_falls_back_after_missing_final_answer(self):
+        runtime_state = {
+            "agent_context": {
+                "model": "deepseek-chat",
+                "enabled_tool_names": ["sub_agent", "search_web"],
+                "sub_agent_depth": 0,
+            },
+            "canvas": create_canvas_runtime_state(),
+            "canvas_limits": {"expand_max_lines": 800, "scroll_window_lines": 200},
+            "workspace": {"root_path": None},
+        }
+        settings = {
+            "operation_model_preferences": {"sub_agent": ""},
+            "operation_model_fallback_preferences": {"sub_agent": ["deepseek-reasoner", "deepseek-chat"]},
+            "sub_agent_retry_attempts": 0,
+            "sub_agent_timeout_seconds": 20,
+        }
+
+        attempts = [
+            iter(
+                [
+                    {"type": "step_update", "step": 1, "tool": "search_web", "preview": "undiagnosed syndrome", "call_id": "s1"},
+                    {"type": "tool_result", "step": 1, "tool": "search_web", "summary": "25 web results found", "call_id": "s1"},
+                    {
+                        "type": "tool_error",
+                        "step": 1,
+                        "tool": "agent",
+                        "error": "The model returned no final answer content. Retrying and waiting for a final answer.",
+                    },
+                    {"type": "answer_delta", "text": FINAL_ANSWER_MISSING_TEXT},
+                    {"type": "done"},
+                ]
+            ),
+            iter(
+                [
+                    {"type": "answer_delta", "text": "Recovered on fallback model."},
+                    {"type": "done"},
+                ]
+            ),
+        ]
+
+        with patch("agent.get_app_settings", return_value=settings), patch(
+            "agent.run_agent_stream", side_effect=attempts
+        ) as mocked_run:
+            events = list(_run_sub_agent_stream({"task": "Investigate unusual syndromes"}, runtime_state))
+
+        self.assertEqual(mocked_run.call_args_list[0].args[1], "deepseek-reasoner")
+        self.assertEqual(mocked_run.call_args_list[1].args[1], "deepseek-chat")
+        self.assertEqual(events[-1]["entry"]["model"], "deepseek-chat")
+        self.assertEqual(events[-1]["entry"]["summary"], "Recovered on fallback model.")
+        self.assertEqual(events[-1]["entry"]["fallback_note"], "Continued on deepseek-chat after missing final answer.")
+        self.assertTrue(all(item["tool_name"] != "agent" for item in events[-1]["entry"]["tool_trace"]))
+        self.assertEqual(runtime_state["sub_agent_traces"][-1]["fallback_note"], "Continued on deepseek-chat after missing final answer.")
+
+    def test_execute_tool_summarizes_partial_sub_agent_evidence_when_final_answer_missing(self):
+        runtime_state = {
+            "agent_context": {
+                "model": "deepseek-chat",
+                "enabled_tool_names": ["sub_agent", "search_web"],
+                "sub_agent_depth": 0,
+            },
+            "canvas": create_canvas_runtime_state(),
+            "canvas_limits": {"expand_max_lines": 800, "scroll_window_lines": 200},
+            "workspace": {"root_path": None},
+        }
+        settings = {
+            "operation_model_preferences": {"sub_agent": ""},
+            "operation_model_fallback_preferences": {"sub_agent": []},
+            "sub_agent_retry_attempts": 0,
+            "sub_agent_timeout_seconds": 20,
+        }
+
+        fake_child_events = iter(
+            [
+                {"type": "step_update", "step": 1, "tool": "search_web", "preview": "rare disease review", "call_id": "s1"},
+                {"type": "tool_result", "step": 1, "tool": "search_web", "summary": "25 web results found", "call_id": "s1"},
+                {
+                    "type": "tool_error",
+                    "step": 1,
+                    "tool": "agent",
+                    "error": "The model still did not provide a final answer in assistant content.",
+                },
+                {"type": "answer_delta", "text": FINAL_ANSWER_MISSING_TEXT},
+                {"type": "done"},
+            ]
+        )
+
+        with patch("agent.get_app_settings", return_value=settings), patch(
+            "agent.run_agent_stream", return_value=fake_child_events
+        ):
+            result, summary = _execute_tool(
+                "sub_agent",
+                {"task": "Investigate unusual syndromes"},
+                runtime_state,
+            )
+
+        self.assertEqual(result["status"], "partial")
+        self.assertNotIn("error", result)
+        self.assertIn("usable final conclusion", result["summary"])
+        self.assertIn("25 web results found", result["summary"])
+        self.assertTrue(summary.startswith("Sub-agent partial:"))
+        self.assertTrue(all(item["tool_name"] != "agent" for item in result["tool_trace"]))
+        self.assertEqual(runtime_state["sub_agent_traces"][-1]["status"], "partial")
+        self.assertNotIn(FINAL_ANSWER_MISSING_TEXT, runtime_state["sub_agent_traces"][-1]["summary"])
 
     def test_run_sub_agent_stream_tries_all_fallback_models_in_order(self):
         runtime_state = {
@@ -16044,7 +16168,7 @@ class AppRoutesTestCase(unittest.TestCase):
         ), patch("routes.chat.get_prompt_tool_memory_max_tokens", return_value=0), patch(
             "routes.chat.get_clarification_max_questions", return_value=5
         ):
-            _, stats, _ = _build_budgeted_prompt_messages(
+            _, _, stats, _ = _build_budgeted_prompt_messages(
                 canonical_messages,
                 settings,
                 active_tool_names=[],
@@ -17338,7 +17462,7 @@ class AppRoutesTestCase(unittest.TestCase):
         ), patch("routes.chat.get_prompt_tool_memory_max_tokens", return_value=240), patch(
             "routes.chat.get_clarification_max_questions", return_value=5
         ):
-            _, stats, _ = _build_budgeted_prompt_messages(
+            _, _, stats, _ = _build_budgeted_prompt_messages(
                 canonical_messages,
                 settings,
                 active_tool_names=[],
@@ -17353,6 +17477,65 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertGreater(stats["tool_memory_tokens"], 0)
         self.assertLessEqual(stats["tool_memory_tokens"], 240)
         self.assertGreater(stats["tool_memory_tokens"], stats["tool_trace_tokens"])
+
+    def test_budgeted_prompt_messages_base_system_tokens_ignore_tool_trace_payload(self):
+        traced_messages = [
+            {
+                "id": 1,
+                "position": 1,
+                "role": "assistant",
+                "content": "Finished the previous step.",
+                "metadata": {
+                    "tool_trace": [
+                        {
+                            "tool_name": "search_web",
+                            "state": "done",
+                            "preview": "query",
+                            "summary": "trace detail " * 120,
+                        }
+                    ]
+                },
+            },
+            {"id": 2, "position": 2, "role": "user", "content": "What changed?"},
+        ]
+        untraced_messages = [
+            {"id": 1, "position": 1, "role": "assistant", "content": "Finished the previous step."},
+            {"id": 2, "position": 2, "role": "user", "content": "What changed?"},
+        ]
+        settings = {"user_preferences": "", "scratchpad": ""}
+
+        with patch("routes.chat.get_prompt_max_input_tokens", return_value=6000), patch(
+            "routes.chat.get_prompt_response_token_reserve", return_value=1000
+        ), patch("routes.chat.get_prompt_recent_history_max_tokens", return_value=1000), patch(
+            "routes.chat.get_prompt_summary_max_tokens", return_value=0
+        ), patch("routes.chat.get_prompt_rag_max_tokens", return_value=0), patch(
+            "routes.chat.get_prompt_tool_trace_max_tokens", return_value=120
+        ), patch("routes.chat.get_prompt_tool_memory_max_tokens", return_value=0), patch(
+            "routes.chat.get_clarification_max_questions", return_value=5
+        ):
+            traced_result = _build_budgeted_prompt_messages(
+                traced_messages,
+                settings,
+                active_tool_names=[],
+                clarification_response=None,
+                all_clarification_rounds=None,
+                retrieved_context=None,
+                tool_memory_context=None,
+            )
+            untraced_result = _build_budgeted_prompt_messages(
+                untraced_messages,
+                settings,
+                active_tool_names=[],
+                clarification_response=None,
+                all_clarification_rounds=None,
+                retrieved_context=None,
+                tool_memory_context=None,
+            )
+
+        traced_stats = traced_result[2]
+        untraced_stats = untraced_result[2]
+        self.assertEqual(traced_stats["base_system_tokens"], untraced_stats["base_system_tokens"])
+        self.assertGreater(traced_stats["tool_trace_tokens"], 0)
 
     def test_budgeted_prompt_messages_keep_prefix_anchor_before_summaries(self):
         canonical_messages = normalize_chat_messages(
@@ -17382,7 +17565,7 @@ class AppRoutesTestCase(unittest.TestCase):
         ), patch("routes.chat.get_prompt_tool_memory_max_tokens", return_value=0), patch(
             "routes.chat.get_clarification_max_questions", return_value=5
         ):
-            api_messages, stats, _ = _build_budgeted_prompt_messages(
+            api_messages, _, stats, _ = _build_budgeted_prompt_messages(
                 canonical_messages,
                 settings,
                 active_tool_names=[],
@@ -17422,7 +17605,7 @@ class AppRoutesTestCase(unittest.TestCase):
         ), patch("routes.chat.get_prompt_tool_memory_max_tokens", return_value=0), patch(
             "routes.chat.get_clarification_max_questions", return_value=5
         ):
-            _, uncached_stats, _ = _build_budgeted_prompt_messages(
+            _, _, uncached_stats, _ = _build_budgeted_prompt_messages(
                 canonical_messages,
                 settings,
                 active_tool_names=[],
@@ -17431,7 +17614,7 @@ class AppRoutesTestCase(unittest.TestCase):
                 retrieved_context=None,
                 tool_memory_context=None,
             )
-            _, cached_stats, _ = _build_budgeted_prompt_messages(
+            _, _, cached_stats, _ = _build_budgeted_prompt_messages(
                 canonical_messages,
                 settings,
                 active_tool_names=[],
