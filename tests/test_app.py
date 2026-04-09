@@ -16462,6 +16462,136 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("Please continue with the config issue", selected_contents)
         self.assertNotIn("filler " * 200, selected_contents)
 
+    def test_budgeted_prompt_messages_keep_numeric_short_follow_up_with_previous_assistant(self):
+        canonical_messages = normalize_chat_messages(
+            [
+                {"id": 1, "position": 1, "role": "user", "content": "Older setup context " * 80},
+                {"id": 2, "position": 2, "role": "assistant", "content": "Older answer " * 60},
+                {"id": 3, "position": 3, "role": "user", "content": "Command output " * 140},
+                {
+                    "id": 4,
+                    "position": 4,
+                    "role": "assistant",
+                    "content": "1. Mevcut tunnel'a hostname ekleyelim.\n2. Yeni bir tunnel oluşturalım.\nHangisini seçiyorsunuz?",
+                },
+                {"id": 5, "position": 5, "role": "user", "content": "1"},
+            ]
+        )
+        settings = {"user_preferences": "", "scratchpad": ""}
+
+        with patch("routes.chat._select_prefix_prompt_window", return_value=[]), patch(
+            "routes.chat.get_prompt_max_input_tokens", return_value=6000
+        ), patch("routes.chat.get_prompt_response_token_reserve", return_value=1000), patch(
+            "routes.chat.get_prompt_recent_history_max_tokens", return_value=15
+        ), patch("routes.chat.get_prompt_summary_max_tokens", return_value=0), patch(
+            "routes.chat.get_prompt_rag_max_tokens", return_value=0
+        ), patch("routes.chat.get_prompt_tool_trace_max_tokens", return_value=0), patch(
+            "routes.chat.get_prompt_tool_memory_max_tokens", return_value=0
+        ), patch("routes.chat.get_clarification_max_questions", return_value=5):
+            api_messages, _, stats, _ = _build_budgeted_prompt_messages(
+                canonical_messages,
+                settings,
+                active_tool_names=[],
+                clarification_response=None,
+                all_clarification_rounds=None,
+                retrieved_context=None,
+                tool_memory_context=None,
+            )
+
+        visible_history = [message for message in api_messages if message["role"] in {"assistant", "user"}]
+
+        self.assertEqual([entry["id"] for entry in stats["recent_selection_trace"]], [5])
+        self.assertEqual([entry["id"] for entry in stats["prompt_history_trace"]][-2:], [4, 5])
+        self.assertEqual(stats["continuity_guard_status"], "applied")
+        self.assertEqual(stats["continuity_guard_anchor"]["id"], 4)
+        self.assertEqual(stats["continuity_guard_user"]["id"], 5)
+        self.assertEqual([message["role"] for message in visible_history[-2:]], ["assistant", "user"])
+        self.assertIn("Hangisini seçiyorsunuz?", visible_history[-2]["content"])
+        self.assertEqual(visible_history[-1]["content"], "1")
+
+    def test_budgeted_prompt_messages_keep_short_confirmation_with_previous_assistant(self):
+        canonical_messages = normalize_chat_messages(
+            [
+                {"id": 1, "position": 1, "role": "user", "content": "Önceki uzun talep " * 90},
+                {"id": 2, "position": 2, "role": "assistant", "content": "Önceki uzun cevap " * 70},
+                {
+                    "id": 3,
+                    "position": 3,
+                    "role": "assistant",
+                    "content": "Mevcut tunnel yapılandırmasını güncelleyip servisi yeniden başlatayım mı?",
+                },
+                {"id": 4, "position": 4, "role": "user", "content": "Evet"},
+            ]
+        )
+        settings = {"user_preferences": "", "scratchpad": ""}
+
+        with patch("routes.chat._select_prefix_prompt_window", return_value=[]), patch(
+            "routes.chat.get_prompt_max_input_tokens", return_value=6000
+        ), patch("routes.chat.get_prompt_response_token_reserve", return_value=1000), patch(
+            "routes.chat.get_prompt_recent_history_max_tokens", return_value=10
+        ), patch("routes.chat.get_prompt_summary_max_tokens", return_value=0), patch(
+            "routes.chat.get_prompt_rag_max_tokens", return_value=0
+        ), patch("routes.chat.get_prompt_tool_trace_max_tokens", return_value=0), patch(
+            "routes.chat.get_prompt_tool_memory_max_tokens", return_value=0
+        ), patch("routes.chat.get_clarification_max_questions", return_value=5):
+            api_messages, _, stats, _ = _build_budgeted_prompt_messages(
+                canonical_messages,
+                settings,
+                active_tool_names=[],
+                clarification_response=None,
+                all_clarification_rounds=None,
+                retrieved_context=None,
+                tool_memory_context=None,
+            )
+
+        visible_history = [message for message in api_messages if message["role"] in {"assistant", "user"}]
+
+        self.assertEqual([entry["id"] for entry in stats["recent_selection_trace"]], [4])
+        self.assertEqual([entry["id"] for entry in stats["prompt_history_trace"]][-2:], [3, 4])
+        self.assertEqual(stats["continuity_guard_status"], "applied")
+        self.assertEqual(stats["continuity_guard_anchor"]["id"], 3)
+        self.assertEqual(stats["continuity_guard_user"]["id"], 4)
+        self.assertEqual([message["role"] for message in visible_history[-2:]], ["assistant", "user"])
+        self.assertIn("yeniden başlatayım mı?", visible_history[-2]["content"])
+        self.assertEqual(visible_history[-1]["content"], "Evet")
+
+    def test_budgeted_prompt_messages_do_not_anchor_arbitrary_single_word_new_request(self):
+        canonical_messages = normalize_chat_messages(
+            [
+                {"id": 1, "position": 1, "role": "user", "content": "Docker kurulumu nasıl yapılır?"},
+                {"id": 2, "position": 2, "role": "assistant", "content": "Docker için apt üzerinden kurulum yapabilirsiniz."},
+                {"id": 3, "position": 3, "role": "user", "content": "Python"},
+            ]
+        )
+        settings = {"user_preferences": "", "scratchpad": ""}
+
+        with patch("routes.chat._select_prefix_prompt_window", return_value=[]), patch(
+            "routes.chat.get_prompt_max_input_tokens", return_value=6000
+        ), patch("routes.chat.get_prompt_response_token_reserve", return_value=1000), patch(
+            "routes.chat.get_prompt_recent_history_max_tokens", return_value=8
+        ), patch("routes.chat.get_prompt_summary_max_tokens", return_value=0), patch(
+            "routes.chat.get_prompt_rag_max_tokens", return_value=0
+        ), patch("routes.chat.get_prompt_tool_trace_max_tokens", return_value=0), patch(
+            "routes.chat.get_prompt_tool_memory_max_tokens", return_value=0
+        ), patch("routes.chat.get_clarification_max_questions", return_value=5):
+            api_messages, _, stats, _ = _build_budgeted_prompt_messages(
+                canonical_messages,
+                settings,
+                active_tool_names=[],
+                clarification_response=None,
+                all_clarification_rounds=None,
+                retrieved_context=None,
+                tool_memory_context=None,
+            )
+
+        visible_history = [message for message in api_messages if message["role"] in {"assistant", "user"}]
+
+        self.assertEqual([entry["id"] for entry in stats["recent_selection_trace"]], [3])
+        self.assertEqual([entry["id"] for entry in stats["prompt_history_trace"]], [3])
+        self.assertEqual(stats["continuity_guard_status"], "not_needed")
+        self.assertIsNone(stats["continuity_guard_anchor"])
+        self.assertEqual([message["content"] for message in visible_history], ["Python"])
+
     def test_budgeted_prompt_messages_reserve_rag_budget_for_entropy_hybrid(self):
         canonical_messages = normalize_chat_messages(
             [

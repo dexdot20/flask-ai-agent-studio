@@ -219,6 +219,25 @@ SUMMARY_MAX_OUTPUT_CHARS = 4_800
 SUMMARY_MAX_BULLETS = 18
 SUMMARY_TOOL_TRACE_LIMIT = 8
 OMITTED_TOOL_OUTPUT_TEXT = "[Tool output omitted from older history to save context budget.]"
+PROMPT_CONTINUITY_REPLY_MAX_TOKENS = 12
+PROMPT_CONTINUITY_REPLY_MAX_CHARS = 80
+PROMPT_CONTINUITY_SELECTION_REPLY_RE = re.compile(r"^\s*(?:(?:option|seçenek|secenek)\s*)?\d{1,2}[.)]?\s*$", re.IGNORECASE)
+PROMPT_CONTINUITY_REPLY_TERM_RE = re.compile(
+    r"^\s*(?:yes|no|ok(?:ay)?|sure|continue|proceed|start|implement|go ahead|evet|hay[ıi]r|tamam|devam|başla|basla|uygula|ilerle)\s*[.!?]?\s*$",
+    re.IGNORECASE,
+)
+PROMPT_CONTINUITY_SELECTION_KEYWORD_RE = re.compile(
+    r"\b(?:option|seçenek|secenek|select|choose|pick|tercih|first|second|ilk|ikinci)\b",
+    re.IGNORECASE,
+)
+PROMPT_CONTINUITY_GRATITUDE_REPLIES = {
+    "thanks",
+    "thank you",
+    "teşekkürler",
+    "tesekkurler",
+    "sağ ol",
+    "sag ol",
+}
 SUMMARY_FOCUS_STOPWORDS = {
     "about",
     "after",
@@ -2001,6 +2020,214 @@ def _message_identity(message: dict) -> tuple[int, int, str, str]:
     )
 
 
+def _normalize_prompt_continuity_reply_text(message: dict) -> str:
+    if not isinstance(message, dict):
+        return ""
+
+    content = str(message.get("content") or "").strip()
+    metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+    clarification_response = extract_clarification_response(metadata)
+    clarification_answers = clarification_response.get("answers") if isinstance(clarification_response, dict) else {}
+    if isinstance(clarification_answers, dict) and clarification_answers:
+        content = extract_freeform_clarification_user_content(content)
+    return re.sub(r"\s+", " ", content).strip()
+
+
+def _is_short_follow_up_user_message(message: dict) -> bool:
+    if _get_message_role(message) != "user":
+        return False
+
+    text = _normalize_prompt_continuity_reply_text(message)
+    if not text or len(text) > PROMPT_CONTINUITY_REPLY_MAX_CHARS:
+        return False
+
+    lowered = text.casefold()
+    if lowered in PROMPT_CONTINUITY_GRATITUDE_REPLIES:
+        return False
+
+    token_count = estimate_text_tokens(text)
+    if token_count > PROMPT_CONTINUITY_REPLY_MAX_TOKENS:
+        return False
+
+    word_count = len(re.findall(r"\S+", text))
+    if PROMPT_CONTINUITY_SELECTION_REPLY_RE.match(text):
+        return True
+    if PROMPT_CONTINUITY_REPLY_TERM_RE.match(text):
+        return True
+    if PROMPT_CONTINUITY_SELECTION_KEYWORD_RE.search(text) and word_count <= 5:
+        return True
+    if text.endswith("?") and word_count <= 5:
+        return True
+    return False
+
+
+def _summarize_prompt_selection_message(message: dict) -> dict:
+    summary = {
+        "id": int(message.get("id") or 0),
+        "position": int(message.get("position") or 0),
+        "role": _get_message_role(message),
+    }
+    tool_call_id = str(message.get("tool_call_id") or "").strip()
+    if tool_call_id:
+        summary["tool_call_id"] = tool_call_id
+    if _is_tool_call_assistant_message(message):
+        summary["tool_call_ids"] = _extract_tool_call_ids(message)
+    return summary
+
+
+def _summarize_prompt_selection_messages(messages: list[dict], *, max_items: int = 48) -> list[dict]:
+    return [
+        _summarize_prompt_selection_message(message)
+        for message in list(messages or [])[:max_items]
+        if isinstance(message, dict)
+    ]
+
+
+def _find_previous_continuity_anchor_message(source_messages: list[dict], target_message: dict) -> dict | None:
+    target_identity = _message_identity(target_message)
+    ordered_messages = sorted(
+        (message for message in source_messages if isinstance(message, dict)),
+        key=_sort_message_key,
+    )
+    target_index = next(
+        (
+            index
+            for index, message in enumerate(ordered_messages)
+            if _message_identity(message) == target_identity
+        ),
+        -1,
+    )
+    if target_index <= 0:
+        return None
+
+    for probe_index in range(target_index - 1, -1, -1):
+        candidate = ordered_messages[probe_index]
+        role = _get_message_role(candidate)
+        if role == "tool" or _is_tool_call_assistant_message(candidate):
+            continue
+        if role == "assistant" and str(candidate.get("content") or "").strip():
+            return candidate
+        if role in {"user", "summary"}:
+            return None
+    return None
+
+
+def _trim_prompt_history_to_token_budget(
+    messages: list[dict],
+    max_tokens: int,
+    required_identities: set[tuple[int, int, str, str]],
+    *,
+    canvas_documents: list[dict] | None = None,
+) -> tuple[list[dict], list[dict]]:
+    trimmed = [message for message in messages if isinstance(message, dict)]
+    dropped: list[dict] = []
+
+    while trimmed and _estimate_prompt_tokens(build_api_messages(trimmed, canvas_documents=canvas_documents)) > max_tokens:
+        drop_index = next(
+            (
+                index
+                for index, message in enumerate(trimmed)
+                if _message_identity(message) not in required_identities
+            ),
+            None,
+        )
+        if drop_index is None:
+            break
+        dropped.append(_summarize_prompt_selection_message(trimmed[drop_index]))
+        trimmed.pop(drop_index)
+
+    return trimmed, dropped
+
+
+def _apply_prompt_history_continuity_guard(
+    prompt_history: list[dict],
+    source_messages: list[dict],
+    max_tokens: int,
+    *,
+    canvas_documents: list[dict] | None = None,
+) -> tuple[list[dict], dict | None]:
+    ordered_history = [message for message in prompt_history if isinstance(message, dict)]
+    latest_user_message = next(
+        (
+            message
+            for message in reversed(ordered_history)
+            if _get_message_role(message) == "user"
+        ),
+        None,
+    )
+    if latest_user_message is None or not _is_short_follow_up_user_message(latest_user_message):
+        return ordered_history, None
+
+    anchor_message = _find_previous_continuity_anchor_message(source_messages, latest_user_message)
+    if anchor_message is None:
+        return ordered_history, None
+
+    selected_identities = {
+        _message_identity(message)
+        for message in ordered_history
+    }
+    if _message_identity(anchor_message) in selected_identities:
+        return ordered_history, {
+            "status": "already_selected",
+            "user": _summarize_prompt_selection_message(latest_user_message),
+            "anchor": _summarize_prompt_selection_message(anchor_message),
+            "dropped": [],
+        }
+
+    augmented_history: list[dict] = []
+    latest_user_identity = _message_identity(latest_user_message)
+    inserted = False
+    for message in ordered_history:
+        if not inserted and _message_identity(message) == latest_user_identity:
+            augmented_history.append(anchor_message)
+            inserted = True
+        augmented_history.append(message)
+
+    if not inserted:
+        return ordered_history, None
+
+    candidate_tokens = _estimate_prompt_tokens(build_api_messages(augmented_history, canvas_documents=canvas_documents))
+    dropped_messages: list[dict] = []
+    final_history = augmented_history
+    status = "applied"
+    if candidate_tokens > max_tokens:
+        final_history, dropped_messages = _trim_prompt_history_to_token_budget(
+            augmented_history,
+            max_tokens,
+            {
+                _message_identity(anchor_message),
+                latest_user_identity,
+            },
+            canvas_documents=canvas_documents,
+        )
+        if _message_identity(anchor_message) not in {
+            _message_identity(message)
+            for message in final_history
+        }:
+            return ordered_history, {
+                "status": "budget_blocked",
+                "user": _summarize_prompt_selection_message(latest_user_message),
+                "anchor": _summarize_prompt_selection_message(anchor_message),
+                "dropped": dropped_messages,
+            }
+
+        final_tokens = _estimate_prompt_tokens(build_api_messages(final_history, canvas_documents=canvas_documents))
+        if final_tokens > max_tokens:
+            return ordered_history, {
+                "status": "budget_blocked",
+                "user": _summarize_prompt_selection_message(latest_user_message),
+                "anchor": _summarize_prompt_selection_message(anchor_message),
+                "dropped": dropped_messages,
+            }
+
+    return final_history, {
+        "status": status,
+        "user": _summarize_prompt_selection_message(latest_user_message),
+        "anchor": _summarize_prompt_selection_message(anchor_message),
+        "dropped": dropped_messages,
+    }
+
+
 def _select_prefix_prompt_window(
     messages: list[dict],
     max_tokens: int,
@@ -2178,6 +2405,12 @@ def _build_budgeted_prompt_messages(
     )
 
     prompt_history = [*selected_prefix, *selected_summaries, *selected_recent]
+    prompt_history, continuity_guard_details = _apply_prompt_history_continuity_guard(
+        prompt_history,
+        recent_messages,
+        history_budget,
+        canvas_documents=canvas_documents,
+    )
     prompt_history_api = build_api_messages(prompt_history, canvas_documents=canvas_documents)
     history_tokens = _estimate_prompt_tokens(prompt_history_api)
     remaining_context_budget = max(0, prompt_budget - base_system_tokens - history_tokens)
@@ -2304,7 +2537,28 @@ def _build_budgeted_prompt_messages(
         "summary_message_count": len(selected_summaries),
         "prefix_message_count": len(selected_prefix),
         "recent_message_count": len(selected_recent),
+        "prefix_selection_trace": _summarize_prompt_selection_messages(selected_prefix),
+        "summary_selection_trace": _summarize_prompt_selection_messages(selected_summaries),
+        "recent_selection_trace": _summarize_prompt_selection_messages(selected_recent),
+        "prompt_history_trace": _summarize_prompt_selection_messages(prompt_history),
+        "continuity_guard_status": str((continuity_guard_details or {}).get("status") or "not_needed"),
+        "continuity_guard_user": (continuity_guard_details or {}).get("user"),
+        "continuity_guard_anchor": (continuity_guard_details or {}).get("anchor"),
+        "continuity_guard_dropped": (continuity_guard_details or {}).get("dropped") or [],
     }
+    if isinstance(continuity_guard_details, dict) and continuity_guard_details.get("status") in {"applied", "budget_blocked"}:
+        LOGGER.info(
+            "prompt_continuity_guard=%s",
+            json.dumps(
+                {
+                    **continuity_guard_details,
+                    "recent_selection_trace": stats["recent_selection_trace"],
+                    "prompt_history_trace": stats["prompt_history_trace"],
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+        )
     return api_messages, request_api_messages, stats, current_context_injection or None
 
 
