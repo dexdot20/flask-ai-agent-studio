@@ -2876,6 +2876,75 @@ def _build_fetch_tool_message_content(tool_args: dict, summary: str, transcript_
     return "\n\n".join(parts).strip()
 
 
+def _format_canvas_scroll_result_as_text(result: dict) -> str:
+    """Format a scroll/range-read canvas result into human-readable text."""
+    title = result.get("title") or result.get("document_path") or "Untitled"
+    total = result.get("total_lines", 0)
+    start = result.get("start_line", 1)
+    end = result.get("end_line_actual", total)
+    lines = result.get("visible_lines") or []
+    parts = [f"### {title} (lines {start}–{end} of {total})"]
+    if lines:
+        parts.append("```")
+        parts.append("\n".join(str(l) for l in lines))
+        parts.append("```")
+    nav = []
+    if result.get("has_more_above"):
+        nav.append(f"↑ More content above line {start}")
+    if result.get("has_more_below"):
+        nav.append(f"↓ More content below line {end}")
+    if nav:
+        parts.append(" | ".join(nav))
+    return "\n".join(parts)
+
+
+def _format_canvas_expand_result_as_text(result: dict) -> str:
+    """Format an expand/full-read canvas result into human-readable text."""
+    title = result.get("title") or result.get("document_path") or "Untitled"
+    fmt = result.get("format") or "text"
+    lang = result.get("language") or ""
+    line_count = result.get("line_count") or 0
+    lines = result.get("visible_lines") or []
+    truncated = result.get("is_truncated", False)
+    header_parts = [fmt]
+    if lang and lang != fmt:
+        header_parts.append(lang)
+    header_parts.append(f"{line_count} lines")
+    parts = [f"### {title} ({', '.join(header_parts)})"]
+    if lines:
+        fence_lang = lang if lang else ""
+        parts.append(f"```{fence_lang}")
+        parts.append("\n".join(str(l) for l in lines))
+        parts.append("```")
+    if truncated:
+        parts.append(f"[Truncated — showing {len(lines)} of {line_count} lines]")
+    return "\n".join(parts)
+
+
+def _format_canvas_read_result_as_text(tool_name: str, result: dict) -> str:
+    """Convert a canvas read tool result from JSON to readable Markdown text."""
+    if tool_name == "batch_read_canvas_documents":
+        results_list = result.get("results") or []
+        total = result.get("requested_count", len(results_list))
+        ok = result.get("success_count", 0)
+        sections = [f"## Batch Read: {ok}/{total} documents"]
+        for item in results_list:
+            if not isinstance(item, dict):
+                continue
+            if item.get("status") == "error":
+                doc_id = item.get("document_id") or item.get("document_path") or "unknown"
+                sections.append(f"### {doc_id}\nError: {item.get('error', 'unknown error')}")
+            elif "start_line" in item and "end_line_actual" in item:
+                sections.append(_format_canvas_scroll_result_as_text(item))
+            else:
+                sections.append(_format_canvas_expand_result_as_text(item))
+        return "\n\n".join(sections)
+    elif tool_name == "scroll_canvas_document":
+        return _format_canvas_scroll_result_as_text(result)
+    else:
+        return _format_canvas_expand_result_as_text(result)
+
+
 def _prepare_tool_result_for_transcript(
     tool_name: str,
     result,
@@ -2889,7 +2958,7 @@ def _prepare_tool_result_for_transcript(
             fetch_url_clip_aggressiveness=fetch_url_clip_aggressiveness,
         )
     if tool_name in CANVAS_CONTEXT_READ_TOOL_NAMES and isinstance(result, dict):
-        return result
+        result = _format_canvas_read_result_as_text(tool_name, result)
     if tool_name in CANVAS_MUTATION_TOOL_NAMES and isinstance(result, dict):
         compact_result: dict[str, object] = {}
         for key in (

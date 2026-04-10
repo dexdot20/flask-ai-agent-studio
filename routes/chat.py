@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import math
 import logging
 import json
@@ -1057,6 +1058,35 @@ def _score_summary_message_priority(message: dict, focus_terms: set[str]) -> flo
     return score
 
 
+def _extract_previous_canvas_content_hash(canonical_messages: list[dict]) -> str | None:
+    """Return the canvas_content_hash stored in the last user message's metadata, if any."""
+    for msg in reversed(canonical_messages):
+        if str(msg.get("role") or "").strip() != "user":
+            continue
+        meta = msg.get("metadata") if isinstance(msg.get("metadata"), dict) else {}
+        h = meta.get("canvas_content_hash")
+        if isinstance(h, str) and h:
+            return h
+    return None
+
+
+def _compute_active_canvas_content_hash(
+    canvas_documents: list[dict] | None,
+    active_document_id: str | None,
+) -> str | None:
+    """Compute a short SHA-256 hash of the active canvas document's content."""
+    if not canvas_documents or not active_document_id:
+        return None
+    for doc in canvas_documents:
+        if not isinstance(doc, dict):
+            continue
+        if str(doc.get("id") or "") == active_document_id:
+            content = str(doc.get("content") or "")
+            if content:
+                return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+    return None
+
+
 def _build_tool_trace_context(canonical_messages: list[dict], max_entries: int = SUMMARY_TOOL_TRACE_LIMIT) -> str | None:
     trace_entries: list[dict] = []
     _clarification_sentinel_added = False
@@ -1083,23 +1113,29 @@ def _build_tool_trace_context(canonical_messages: list[dict], max_entries: int =
     if not trace_entries:
         return None
 
-    lines: list[str] = []
-    for entry in reversed(trace_entries):
+    rows: list[str] = []
+    rows.append("| # | Time | Tool | State | Detail |")
+    rows.append("|---|------|------|-------|--------|")
+    for idx, entry in enumerate(reversed(trace_entries), 1):
         tool_name = str(entry.get("tool_name") or "tool").strip() or "tool"
         state = str(entry.get("state") or "done").strip() or "done"
+        executed_at = str(entry.get("executed_at") or "").strip()
         preview = str(entry.get("preview") or "").strip()
         summary = str(entry.get("summary") or "").strip()
         cached = entry.get("cached") is True
-        line = f"- {tool_name} [{state}]"
+        state_cell = state
         if cached:
-            line += " [cached]"
+            state_cell += " (cached)"
+        detail_parts = []
         if preview:
-            line += f": {preview}"
+            detail_parts.append(preview)
         if summary:
-            line += f" -> {summary}"
-        lines.append(line)
+            detail_parts.append(f"→ {summary}")
+        detail_cell = " ".join(detail_parts).replace("|", "∣") if detail_parts else "—"
+        time_cell = executed_at if executed_at else "—"
+        rows.append(f"| {idx} | {time_cell} | {tool_name} | {state_cell} | {detail_cell} |")
 
-    return "\n".join(lines) if lines else None
+    return "\n".join(rows) if len(rows) > 2 else None
 
 
 def _sort_message_key(message: dict) -> tuple[int, int]:
@@ -2312,6 +2348,7 @@ def _build_budgeted_prompt_messages(
     canvas_prompt_text_line_max_chars: int | None = None,
     workspace_root: str | None = None,
     model_id: str | None = None,
+    previous_canvas_content_hash: str | None = None,
 ) -> tuple[list[dict], list[dict], dict, str | None]:
     ordered_messages = [message for message in canonical_messages if isinstance(message, dict)]
     active_tool_names = active_tool_names or []
@@ -2378,6 +2415,7 @@ def _build_budgeted_prompt_messages(
         summary_count=1 if summary_messages else 0,
         include_time_context=True,
         now=prompt_now,
+        previous_canvas_content_hash=previous_canvas_content_hash,
     )
     if base_context_injection:
         base_runtime_messages.append({"role": "system", "content": base_context_injection})
@@ -2480,6 +2518,7 @@ def _build_budgeted_prompt_messages(
         summary_count=len(selected_summaries),
         include_time_context=True,
         now=prompt_now,
+        previous_canvas_content_hash=previous_canvas_content_hash,
     )
 
     api_messages = prepend_runtime_context(
@@ -2510,6 +2549,7 @@ def _build_budgeted_prompt_messages(
         summary_count=len(selected_summaries),
         runtime_message=stable_runtime_message,
         now=prompt_now,
+        previous_canvas_content_hash=previous_canvas_content_hash,
     )
 
     request_prompt_history_api = build_api_messages(
@@ -2545,6 +2585,7 @@ def _build_budgeted_prompt_messages(
         summary_count=len(selected_summaries),
         runtime_message=stable_runtime_message,
         now=prompt_now,
+        previous_canvas_content_hash=previous_canvas_content_hash,
     )
 
     estimated_total_tokens = _estimate_prompt_tokens(api_messages)
@@ -2635,6 +2676,55 @@ def _build_clarification_rag_query(message_content: str, clarification_response:
         query_parts.append(normalized_display)
 
     return " ".join(query_parts).strip()
+
+
+_RAG_QUERY_ENRICHMENT_ENTRY_TYPES = {"task_context", "topic"}
+_RAG_QUERY_ENRICHMENT_MAX_CHARS = 500
+
+
+def _enrich_rag_query_with_context(
+    raw_query: str,
+    conversation_memory_rows: list[dict] | None,
+    canonical_messages: list[dict] | None,
+) -> str:
+    """Combine the raw user query with conversation memory context and the
+    latest conversation summary so that short/vague user inputs produce
+    meaningful RAG vector searches."""
+    parts: list[str] = []
+
+    # 1. Collect relevant conversation-memory entries (task_context, topic).
+    for row in conversation_memory_rows or []:
+        if not isinstance(row, dict):
+            continue
+        entry_type = str(row.get("entry_type") or "").strip().lower()
+        if entry_type not in _RAG_QUERY_ENRICHMENT_ENTRY_TYPES:
+            continue
+        key = str(row.get("key") or "").strip()
+        value = str(row.get("value") or "").strip()
+        if key and value:
+            parts.append(f"{key}: {value}")
+        elif value:
+            parts.append(value)
+
+    # 2. Extract the latest conversation summary excerpt.
+    if canonical_messages:
+        for message in reversed(canonical_messages):
+            if not isinstance(message, dict):
+                continue
+            if str(message.get("role") or "").strip() == "summary":
+                summary_text = re.sub(r"\s+", " ", str(message.get("content") or "")).strip()
+                if summary_text:
+                    parts.append(summary_text[:300])
+                break
+
+    if not parts:
+        return raw_query
+
+    context_prefix = " ".join(parts)
+    enriched = f"{context_prefix} {raw_query}".strip()
+    if len(enriched) > _RAG_QUERY_ENRICHMENT_MAX_CHARS:
+        enriched = enriched[:_RAG_QUERY_ENRICHMENT_MAX_CHARS].rstrip()
+    return enriched
 
 
 def _filter_clarification_answers_for_questions(
@@ -3616,6 +3706,7 @@ def register_chat_routes(app) -> None:
         entry = {
             "tool_name": tool_name,
             "step": normalized_step,
+            "executed_at": datetime.now().astimezone().strftime("%H:%M:%S"),
         }
 
         preview = str(event.get("preview") or "").strip()
@@ -4123,6 +4214,11 @@ def register_chat_routes(app) -> None:
                 latest_user_message["content"],
                 latest_user_message.get("metadata"),
             )
+        if rag_query_text and conv_id and CONVERSATION_MEMORY_ENABLED:
+            rag_memory_rows = get_conversation_memory(conv_id)
+        else:
+            rag_memory_rows = None
+        rag_query_text = _enrich_rag_query_with_context(rag_query_text, rag_memory_rows, messages)
         persisted_user_message_id = None
         edit_replay_snapshot = None
         canonical_messages = messages
@@ -4336,6 +4432,7 @@ def register_chat_routes(app) -> None:
                 )
         conversation_memory = get_conversation_memory(conv_id) if conv_id and CONVERSATION_MEMORY_ENABLED else []
         clarification_rounds_for_prompt = _collect_answered_clarification_rounds(canonical_messages)
+        previous_canvas_content_hash = _extract_previous_canvas_content_hash(canonical_messages)
         api_messages, request_api_messages, prompt_budget_stats, current_context_injection = _build_budgeted_prompt_messages(
             canonical_messages,
             settings,
@@ -4356,14 +4453,19 @@ def register_chat_routes(app) -> None:
             canvas_prompt_code_line_max_chars=get_canvas_prompt_code_line_max_chars(settings),
             canvas_prompt_text_line_max_chars=get_canvas_prompt_text_line_max_chars(settings),
             workspace_root=workspace_root,
+            previous_canvas_content_hash=previous_canvas_content_hash,
         )
         persisted_context_injection = prepare_context_injection_for_history(current_context_injection or "")
-        if persisted_user_message_id is not None and persisted_context_injection:
+        persisted_meta_update: dict = {}
+        if persisted_context_injection:
+            persisted_meta_update["context_injection"] = persisted_context_injection
+        current_canvas_hash = _compute_active_canvas_content_hash(initial_canvas_documents, initial_canvas_active_document_id)
+        if current_canvas_hash:
+            persisted_meta_update["canvas_content_hash"] = current_canvas_hash
+        if persisted_user_message_id is not None and persisted_meta_update:
             update_message_metadata(
                 persisted_user_message_id,
-                {
-                    "context_injection": persisted_context_injection,
-                },
+                persisted_meta_update,
             )
 
         app_obj = current_app._get_current_object()

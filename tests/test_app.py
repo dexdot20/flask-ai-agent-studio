@@ -14334,9 +14334,12 @@ class AppRoutesTestCase(unittest.TestCase):
         context = _build_tool_trace_context(canonical_messages)
 
         self.assertIn("search_web", context)
-        # clarification is replaced by a single controlled sentinel, not the original trace data
-        self.assertIn("ask_clarifying_question [answered]", context)
+        # clarification is replaced by a single controlled sentinel row, not the original trace data
+        self.assertIn("ask_clarifying_question", context)
+        self.assertIn("answered", context)
         self.assertNotIn("asked 3 questions", context)
+        # table format verification
+        self.assertIn("| # | Time | Tool | State | Detail |", context)
 
     def test_build_api_messages_uses_null_content_for_tool_only_assistant_turns(self):
         api_messages = build_api_messages(
@@ -14940,6 +14943,7 @@ class AppRoutesTestCase(unittest.TestCase):
                 "action": "expanded",
                 "document_id": "canvas-1",
                 "title": "large.txt",
+                "format": "text",
                 "line_count": len(visible_lines),
                 "visible_lines": visible_lines,
                 "visible_line_end": len(visible_lines),
@@ -14947,9 +14951,11 @@ class AppRoutesTestCase(unittest.TestCase):
             },
         )
 
-        self.assertIsInstance(result, dict)
-        self.assertEqual(result["visible_line_end"], len(visible_lines))
-        self.assertEqual(result["visible_lines"], visible_lines)
+        self.assertIsInstance(result, str)
+        self.assertIn("large.txt", result)
+        self.assertIn("699 lines", result)
+        # all visible lines should be present in the formatted output
+        self.assertIn("1: " + "x" * 80, result)
 
     def test_apply_tool_output_budget_compacts_large_results_before_next_turn(self):
         base_messages = [{"role": "user", "content": "Summarize the fetched docs."}]

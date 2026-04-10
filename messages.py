@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import re
@@ -1243,6 +1244,7 @@ def _build_canvas_prompt_payload(
                 break
 
     content = str(active_document.get("content") or "")
+    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
     all_lines = content.split("\n") if content else []
     visible_lines = []
     visible_char_count = 0
@@ -1268,6 +1270,7 @@ def _build_canvas_prompt_payload(
             "visible_line_end": 0,
             "total_lines": int(active_document.get("line_count") or len(all_lines)),
             "viewports": [viewport for viewport in (canvas_viewports or []) if isinstance(viewport, dict)],
+            "content_hash": content_hash,
         }
 
     full_preview_lines = _build_full_canvas_preview_lines_if_fit(
@@ -1338,6 +1341,7 @@ def _build_canvas_prompt_payload(
         "visible_line_end": len(visible_lines),
         "total_lines": int(active_document.get("line_count") or len(all_lines)),
         "viewports": [viewport for viewport in (canvas_viewports or []) if isinstance(viewport, dict)],
+        "content_hash": content_hash,
     }
 
 
@@ -1754,6 +1758,7 @@ def _build_runtime_volatile_parts(
     canvas_payload: dict | None = None,
     summary_count: int = 0,
     include_time_context: bool = True,
+    previous_canvas_content_hash: str | None = None,
 ) -> list[str]:
     volatile_parts: list[str] = []
 
@@ -1871,7 +1876,16 @@ def _build_runtime_volatile_parts(
                 "- Multi-page guidance: if the task refers to a specific PDF-style page, call focus_canvas_page only when the document already exposes explicit '## Page N' markers in its text content."
             )
         if canvas_payload["visible_lines"]:
-            volatile_parts.append("```text\n" + "\n".join(canvas_payload["visible_lines"]) + "\n```\n")
+            _canvas_content_unchanged = (
+                previous_canvas_content_hash
+                and previous_canvas_content_hash == canvas_payload.get("content_hash")
+            )
+            if _canvas_content_unchanged:
+                volatile_parts.append(
+                    f"[Document content unchanged since last turn — cached version is current. Total: {canvas_payload['total_lines']} lines]\n"
+                )
+            else:
+                volatile_parts.append("```text\n" + "\n".join(canvas_payload["visible_lines"]) + "\n```\n")
         elif get_canvas_document_capabilities(active_document)["line_addressable"]:
             volatile_parts.append("(The active canvas document is empty.)\n")
         viewport_payloads = canvas_payload.get("viewports") if isinstance(canvas_payload.get("viewports"), list) else []
@@ -1939,6 +1953,7 @@ def build_runtime_context_injection(
     canvas_payload: dict | None = None,
     summary_count: int = 0,
     include_time_context: bool = True,
+    previous_canvas_content_hash: str | None = None,
 ) -> str:
     normalized_now = (now or datetime.now().astimezone()).astimezone()
     resolved_tool_names = _normalize_tool_name_list(runtime_tool_names)
@@ -1968,6 +1983,7 @@ def build_runtime_context_injection(
             canvas_payload=canvas_payload,
             summary_count=summary_count,
             include_time_context=include_time_context,
+            previous_canvas_content_hash=previous_canvas_content_hash,
         )
     )
 
@@ -2001,6 +2017,7 @@ def build_runtime_system_message(
     runtime_tool_names: list[str] | None = None,
     canvas_payload: dict | None = None,
     summary_count: int = 0,
+    previous_canvas_content_hash: str | None = None,
 ):
     now = (now or datetime.now().astimezone()).astimezone()
     preferences_text = (user_preferences or "").strip()
@@ -2034,7 +2051,13 @@ def build_runtime_system_message(
             text_line_max_chars=canvas_prompt_text_line_max_chars,
         )
     
+    # ── Prompt section ordering ──
+    # Sections are grouped by stability to maximise provider-side prefix
+    # caching (Anthropic / OpenRouter).  Static content that never changes
+    # within a session comes first; dynamic / per-turn content comes last.
+
     parts = [
+        # ─── Block 1: Fully static (never changes within a session) ───
         "## Assistant Role",
         "- You are a tool-using assistant.",
         "- Base decisions on the conversation state, tool results, and runtime context with minimal redundancy.",
@@ -2042,7 +2065,7 @@ def build_runtime_system_message(
         "",
     ]
 
-    # User preferences
+    # User preferences (semi-static — changes only when user edits settings)
     if preferences_text:
         parts.append(
             f"## Core Directives\n"
@@ -2050,25 +2073,39 @@ def build_runtime_system_message(
             f"{preferences_text}\n"
         )
 
-    normalized_user_profile_context = str(user_profile_context or "").strip()
-    if normalized_user_profile_context:
-        parts.append("## User Profile")
+    # Tool contract (conditional-static — stable while the same tools are active)
+    contract = build_tool_call_contract(
+        runtime_tool_names,
+        clarification_max_questions=clarification_max_questions,
+        max_parallel_tools=max_parallel_tools,
+    )
+    if contract:
+        parts.append("## Tool Calling")
         parts.append(
-            "*Use this as durable cross-conversation memory about the user when it is relevant to the current request. Do not treat it as higher priority than the user's latest explicit instruction.*\n"
+            "Native function calling is enabled for this turn. Use the Active Tools section later in this prompt for the exact callable set in this turn. "
+            "Do not restate tool schemas in regular text.\n"
         )
-        parts.append(normalized_user_profile_context)
+        for rule in contract["rules"]:
+            parts.append(f"- {rule}")
         parts.append("")
 
-    conversation_memory_section = build_conversation_memory_section(conversation_memory)
-    if conversation_memory_section:
-        parts.extend(conversation_memory_section)
+        batching_guidance = str(contract.get("batching_guidance") or "").strip()
+        if batching_guidance:
+            parts.append("## Batching Strategy")
+            parts.append(batching_guidance)
+            parts.append("")
 
-    if summary_count and conversation_memory_tools_enabled:
-        parts.append("## Conversation Memory Priority")
-        parts.append(
-            "- Earlier turns in this chat have already been summarized or compacted. Treat Conversation Memory as the durable record for older constraints, decisions, and findings, and save newly confirmed details there before more context is lost."
-        )
-        parts.append("")
+    # Policies (conditional-static)
+    policies = []
+    clarification_policy = _build_clarification_policy_payload(runtime_tool_names, clarification_max_questions)
+    if clarification_policy:
+        policies.append(f"**Clarification**: {clarification_policy['guidance']}")
+    image_policy = _build_image_policy_payload(runtime_tool_names)
+    if image_policy:
+        policies.append(f"**Image Follow-up**: {image_policy['guidance']}")
+
+    if policies:
+        parts.append("## Important Policies\n" + "\n".join(f"- {p}" for p in policies) + "\n")
 
     if conversation_memory_tools_enabled:
         parts.append("## Conversation Memory Write Policy")
@@ -2084,6 +2121,28 @@ def build_runtime_system_message(
             "- **Prefer update over duplication**: Reuse the same key for the same fact. Saving an existing key refreshes that memory instead of creating noisy duplicates.\n"
             "- **Cleanup**: If an entry becomes wrong or obsolete, remove it with delete_conversation_memory_entry."
         )
+        parts.append("")
+
+    canvas_editing_guidance = _build_canvas_editing_guidance(runtime_tool_names, canvas_payload=canvas_payload)
+    if canvas_editing_guidance:
+        parts.extend(canvas_editing_guidance)
+
+    normalized_workspace_root = str(workspace_root or "").strip()
+    if normalized_workspace_root:
+        parts.append("## Workspace Sandbox")
+        parts.append(f"- Root: {normalized_workspace_root}")
+        parts.append("- Scope: All workspace file tools must stay inside this root.")
+        parts.append("- Safety: If a batch write tool returns needs_confirmation, wait for explicit user approval before re-running with confirm=true.\n")
+
+    # ─── Block 2: Semi-static (rarely changes within a conversation) ───
+
+    normalized_user_profile_context = str(user_profile_context or "").strip()
+    if normalized_user_profile_context:
+        parts.append("## User Profile")
+        parts.append(
+            "*Use this as durable cross-conversation memory about the user when it is relevant to the current request. Do not treat it as higher priority than the user's latest explicit instruction.*\n"
+        )
+        parts.append(normalized_user_profile_context)
         parts.append("")
 
     # Scratchpad
@@ -2114,49 +2173,18 @@ def build_runtime_system_message(
             )
         parts.append("")
 
-    contract = build_tool_call_contract(
-        runtime_tool_names,
-        clarification_max_questions=clarification_max_questions,
-        max_parallel_tools=max_parallel_tools,
-    )
-    if contract:
-        parts.append("## Tool Calling")
+    # ─── Block 3: Dynamic (changes frequently per turn) ───
+
+    conversation_memory_section = build_conversation_memory_section(conversation_memory)
+    if conversation_memory_section:
+        parts.extend(conversation_memory_section)
+
+    if summary_count and conversation_memory_tools_enabled:
+        parts.append("## Conversation Memory Priority")
         parts.append(
-            "Native function calling is enabled for this turn. Use the Active Tools section later in this prompt for the exact callable set in this turn. "
-            "Do not restate tool schemas in regular text.\n"
+            "- Earlier turns in this chat have already been summarized or compacted. Treat Conversation Memory as the durable record for older constraints, decisions, and findings, and save newly confirmed details there before more context is lost."
         )
-        for rule in contract["rules"]:
-            parts.append(f"- {rule}")
         parts.append("")
-
-        batching_guidance = str(contract.get("batching_guidance") or "").strip()
-        if batching_guidance:
-            parts.append("## Batching Strategy")
-            parts.append(batching_guidance)
-            parts.append("")
-
-    # Policies
-    policies = []
-    clarification_policy = _build_clarification_policy_payload(runtime_tool_names, clarification_max_questions)
-    if clarification_policy:
-        policies.append(f"**Clarification**: {clarification_policy['guidance']}")
-    image_policy = _build_image_policy_payload(runtime_tool_names)
-    if image_policy:
-        policies.append(f"**Image Follow-up**: {image_policy['guidance']}")
-
-    if policies:
-        parts.append("## Important Policies\n" + "\n".join(f"- {p}" for p in policies) + "\n")
-
-    normalized_workspace_root = str(workspace_root or "").strip()
-    if normalized_workspace_root:
-        parts.append("## Workspace Sandbox")
-        parts.append(f"- Root: {normalized_workspace_root}")
-        parts.append("- Scope: All workspace file tools must stay inside this root.")
-        parts.append("- Safety: If a batch write tool returns needs_confirmation, wait for explicit user approval before re-running with confirm=true.\n")
-
-    canvas_editing_guidance = _build_canvas_editing_guidance(runtime_tool_names, canvas_payload=canvas_payload)
-    if canvas_editing_guidance:
-        parts.extend(canvas_editing_guidance)
 
     if include_volatile_context:
         parts.extend(
@@ -2179,6 +2207,7 @@ def build_runtime_system_message(
                 canvas_payload=canvas_payload,
                 summary_count=summary_count,
                 include_time_context=include_time_context,
+                previous_canvas_content_hash=previous_canvas_content_hash,
             )
         )
     elif include_time_context:
@@ -2219,6 +2248,7 @@ def prepend_runtime_context(
     summary_count: int | None = None,
     runtime_message: dict | None = None,
     now: datetime | None = None,
+    previous_canvas_content_hash: str | None = None,
 ):
     normalized_now = (now or datetime.now().astimezone()).astimezone()
     resolved_runtime_tool_names = _normalize_tool_name_list(runtime_tool_names)
@@ -2312,6 +2342,7 @@ def prepend_runtime_context(
             summary_count=normalized_summary_count,
             include_time_context=True,
             now=normalized_now,
+            previous_canvas_content_hash=previous_canvas_content_hash,
         )
 
     if not injection_content:
