@@ -48,6 +48,12 @@
     <button class="btn-ghost btn-memory" id="memory-toggle-btn" type="button" data-icon="◉" aria-controls="memory-panel" aria-expanded="false" aria-label="Open Conversation Memory" title="Open Conversation Memory">
       <span class="btn-canvas__label">Memory</span>
     </button>
+    <button class="btn-ghost" id="summary-toggle-btn" type="button" aria-controls="summary-panel" aria-expanded="false" aria-label="Open summary panel" title="Open summary panel">
+      Summary
+    </button>
+    <button class="btn-ghost" id="prune-toggle-btn" type="button" aria-controls="prune-panel" aria-expanded="false" aria-label="Open prune panel" title="Open prune panel">
+      Prune
+    </button>
     <button class="btn-ghost mobile-tools-toggle" id="mobile-tools-btn" type="button" aria-controls="mobile-tools-panel" aria-expanded="false" title="More options">
       <span aria-hidden="true">⋯</span>
     </button>
@@ -145,9 +151,16 @@
       <div class="summary-card__header">
         <div>
           <span>Selection</span>
-          <p>Uses Settings first, then the optional message limit.</p>
+          <p>Select messages directly in the conversation, or leave the selection empty to keep the automatic rules.</p>
         </div>
       </div>
+      <div class="summary-selection-actions">
+        <button class="btn-ghost" id="summary-select-eligible-btn" type="button">Select eligible</button>
+        <button class="btn-ghost" id="summary-clear-selection-btn" type="button">Clear selection</button>
+      </div>
+      <p class="summary-support-copy">When this panel is open, eligible messages in the chat show selection toggles.</p>
+      <p id="summary-selection-note" class="summary-support-copy">Eligible messages: —</p>
+      <p id="summary-settings-note" class="summary-support-copy">Current Settings: —</p>
       <label class="summary-field">
         <span>Message count</span>
         <input id="summary-message-count-input" class="summary-input" type="number" min="1" step="1" placeholder="Leave blank to auto-select eligible messages" />
@@ -157,8 +170,6 @@
         <span>Summarize all eligible messages</span>
       </label>
       <p class="summary-support-copy">Preserves the protected message window from Settings, then compresses the rest.</p>
-      <p id="summary-selection-note" class="summary-support-copy">Eligible messages: —</p>
-      <p id="summary-settings-note" class="summary-support-copy">Current Settings: —</p>
     </section>
 
     <section class="summary-card">
@@ -221,6 +232,56 @@
   </div>
 </div>
 <div id="summary-overlay" class="summary-overlay"></div>
+
+<div id="prune-panel" class="summary-panel prune-panel" aria-hidden="true" aria-labelledby="prune-panel-title">
+  <div class="summary-panel__header">
+    <div>
+      <span id="prune-panel-title">Prune Conversation History</span>
+      <p id="prune-panel-subtitle" class="summary-panel__subtitle">Entropy + RAG scores help surface lower-value history first.</p>
+    </div>
+    <button id="prune-close" title="Close" type="button">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>
+  </div>
+  <div class="summary-panel__body">
+    <section class="summary-card">
+      <div class="summary-card__header">
+        <div>
+          <span>Selection</span>
+          <p>Pick exact messages in the conversation, or let the recommended list do the heavy lifting.</p>
+        </div>
+      </div>
+      <div class="summary-selection-actions">
+        <button class="btn-ghost" id="prune-select-recommended-btn" type="button">Select recommended</button>
+        <button class="btn-ghost" id="prune-clear-selection-btn" type="button">Clear selection</button>
+      </div>
+      <p id="prune-selection-count" class="summary-support-copy">No messages selected yet.</p>
+      <p id="prune-status" class="summary-support-copy">Open a conversation to inspect prune candidates. Per-message prune buttons appear while this panel is open.</p>
+    </section>
+
+    <section class="summary-card">
+      <div class="summary-card__header">
+        <div>
+          <span>Entropy + RAG scores</span>
+          <p>Higher scores are stronger prune candidates. Scores load in the background.</p>
+        </div>
+        <button class="btn-ghost" id="prune-refresh-btn" type="button">Refresh</button>
+      </div>
+      <div id="prune-score-loading" class="prune-score-loading" hidden>
+        <span class="summary-spinner" aria-hidden="true"></span>
+        <span>Loading prune scores…</span>
+      </div>
+      <div id="prune-score-list" class="prune-score-list"></div>
+    </section>
+  </div>
+  <div class="summary-panel__actions">
+    <button class="btn-ghost" id="prune-apply-recommended-btn" type="button">Prune recommended</button>
+    <button class="btn-primary" id="prune-apply-selected-btn" type="button">Prune selected</button>
+  </div>
+</div>
+<div id="prune-overlay" class="summary-overlay"></div>
 
 <div id="memory-panel" class="summary-panel memory-panel" aria-hidden="true" aria-labelledby="memory-panel-title">
   <div class="summary-panel__header">
@@ -579,6 +640,16 @@
   </aside>
 
   <div class="chat-area" id="chat-area">
+    <div id="history-selection-bar" class="history-selection-bar" hidden>
+      <div class="history-selection-bar__copy">
+        <strong id="history-selection-label">Selection mode</strong>
+        <span id="history-selection-detail">Choose messages in the conversation.</span>
+      </div>
+      <div class="history-selection-bar__actions">
+        <button class="btn-ghost" id="history-selection-clear" type="button">Clear</button>
+        <button class="btn-ghost" id="history-selection-cancel" type="button">Close</button>
+      </div>
+    </div>
     <div id="messages">
       <div class="empty-state" id="empty-state">
         <div class="empty-state-icon">✦</div>

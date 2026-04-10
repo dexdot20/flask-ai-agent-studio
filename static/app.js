@@ -50,6 +50,8 @@ const summaryInspectorReason = document.getElementById("summary-inspector-reason
 const summaryInspectorLast = document.getElementById("summary-inspector-last");
 const canvasToggleBtn = document.getElementById("canvas-toggle-btn");
 const memoryToggleBtn = document.getElementById("memory-toggle-btn");
+const summaryToggleBtn = document.getElementById("summary-toggle-btn");
+const pruneToggleBtn = document.getElementById("prune-toggle-btn");
 const canvasPanel = document.getElementById("canvas-panel");
 const canvasOverlay = document.getElementById("canvas-overlay");
 const canvasClose = document.getElementById("canvas-close");
@@ -127,6 +129,9 @@ const exportStatus = document.getElementById("export-status");
 const summaryPanel = document.getElementById("summary-panel");
 const summaryOverlay = document.getElementById("summary-overlay");
 const summaryClose = document.getElementById("summary-close");
+const prunePanel = document.getElementById("prune-panel");
+const pruneOverlay = document.getElementById("prune-overlay");
+const pruneClose = document.getElementById("prune-close");
 const memoryPanel = document.getElementById("memory-panel");
 const memoryOverlay = document.getElementById("memory-overlay");
 const memoryClose = document.getElementById("memory-close");
@@ -146,6 +151,8 @@ const summaryMessageCountInput = document.getElementById("summary-message-count-
 const summaryAllMessagesCheckbox = document.getElementById("summary-all-messages-checkbox");
 const summarySelectionNote = document.getElementById("summary-selection-note");
 const summarySettingsNote = document.getElementById("summary-settings-note");
+const summarySelectEligibleBtn = document.getElementById("summary-select-eligible-btn");
+const summaryClearSelectionBtn = document.getElementById("summary-clear-selection-btn");
 const summarySubmitBtn = document.getElementById("summary-submit-btn");
 const summaryPreviewBtn = document.getElementById("summary-preview-btn");
 const summaryProgress = document.getElementById("summary-progress");
@@ -157,11 +164,26 @@ const summaryPreviewCard = document.getElementById("summary-preview-card");
 const summaryPreviewMeta = document.getElementById("summary-preview-meta");
 const summaryPreviewList = document.getElementById("summary-preview-list");
 const summaryHistoryList = document.getElementById("summary-history-list");
+const pruneSubtitle = document.getElementById("prune-panel-subtitle");
+const pruneStatus = document.getElementById("prune-status");
+const pruneSelectionCount = document.getElementById("prune-selection-count");
+const pruneRefreshBtn = document.getElementById("prune-refresh-btn");
+const pruneSelectRecommendedBtn = document.getElementById("prune-select-recommended-btn");
+const pruneClearSelectionBtn = document.getElementById("prune-clear-selection-btn");
+const pruneScoreLoading = document.getElementById("prune-score-loading");
+const pruneScoreList = document.getElementById("prune-score-list");
+const pruneApplyRecommendedBtn = document.getElementById("prune-apply-recommended-btn");
+const pruneApplySelectedBtn = document.getElementById("prune-apply-selected-btn");
 const mobileSummaryBtn = document.getElementById("mobile-summary-btn");
 const conversationExportMdBtn = document.getElementById("conversation-export-md-btn");
 const conversationExportJsonBtn = document.getElementById("conversation-export-json-btn");
 const conversationExportDocxBtn = document.getElementById("conversation-export-docx-btn");
 const conversationExportPdfBtn = document.getElementById("conversation-export-pdf-btn");
+const historySelectionBar = document.getElementById("history-selection-bar");
+const historySelectionLabel = document.getElementById("history-selection-label");
+const historySelectionDetail = document.getElementById("history-selection-detail");
+const historySelectionClear = document.getElementById("history-selection-clear");
+const historySelectionCancel = document.getElementById("history-selection-cancel");
 
 const SUMMARY_FOCUS_PRESETS = [
   {
@@ -315,6 +337,317 @@ function renderSummaryDetailOptions() {
   updateSummaryDetailOptionsState();
 }
 
+function syncSummaryToggleButton() {
+  summaryToggleBtn?.setAttribute("aria-expanded", String(isSummaryPanelOpen()));
+}
+
+function syncPruneToggleButton() {
+  pruneToggleBtn?.setAttribute("aria-expanded", String(isPrunePanelOpen()));
+}
+
+function setPruneBusyState(isBusy) {
+  isPruneOperationInFlight = Boolean(isBusy);
+}
+
+function formatPruneScorePercent(value) {
+  const normalized = Math.max(0, Math.min(1, Number(value) || 0));
+  return `${Math.round(normalized * 100)}%`;
+}
+
+function renderPruneScoreList() {
+  if (!pruneScoreList) {
+    return;
+  }
+
+  if (!currentConvId) {
+    pruneScoreList.innerHTML = '<div class="summary-history-empty">Open a conversation to inspect prune candidates.</div>';
+    return;
+  }
+
+  if (pruneScoresError) {
+    pruneScoreList.innerHTML = `<div class="summary-history-empty">${escHtml(pruneScoresError)}</div>`;
+    return;
+  }
+
+  if (pruneScoresLoading && !pruneScores.length) {
+    pruneScoreList.innerHTML = '<div class="summary-history-empty">Loading prune scores…</div>';
+    return;
+  }
+
+  if (!pruneScores.length) {
+    pruneScoreList.innerHTML = '<div class="summary-history-empty">No prune candidates are currently available.</div>';
+    return;
+  }
+
+  const selectedIds = new Set(getSelectedMessageIds("prune"));
+  const fragment = document.createDocumentFragment();
+  pruneScores.forEach((score, index) => {
+    const messageId = Number(score?.id || 0);
+    const article = document.createElement("article");
+    article.className = "prune-score-item";
+    if (selectedIds.has(messageId)) {
+      article.classList.add("is-selected");
+    }
+
+    const header = document.createElement("div");
+    header.className = "prune-score-item__header";
+
+    const copy = document.createElement("div");
+    copy.className = "prune-score-item__copy";
+
+    const title = document.createElement("div");
+    title.className = "prune-score-item__title";
+    const roleLabel = String(score?.role || "message").trim().toUpperCase() || "MESSAGE";
+    const position = Number(score?.position || 0);
+    title.textContent = position > 0 ? `${roleLabel} #${position}` : roleLabel;
+    copy.appendChild(title);
+
+    const meta = document.createElement("div");
+    meta.className = "prune-score-item__meta";
+    const metaValues = [
+      `${fmt(Number(score?.estimated_tokens || 0))} tok`,
+      `Entropy ${formatPruneScorePercent(1 - Number(score?.entropy_score || 0))}`,
+      `RAG ${formatPruneScorePercent(score?.rag_coverage_score || 0)}`,
+      `Age ${formatPruneScorePercent(score?.recency_score || 0)}`,
+    ];
+    metaValues.forEach((value) => {
+      const chip = document.createElement("span");
+      chip.className = "summary-history-item__chip";
+      chip.textContent = value;
+      meta.appendChild(chip);
+    });
+    copy.appendChild(meta);
+    header.appendChild(copy);
+
+    const scoreChip = document.createElement("span");
+    scoreChip.className = "prune-score-item__score";
+    scoreChip.textContent = formatPruneScorePercent(score?.prune_score || 0);
+    header.appendChild(scoreChip);
+
+    const preview = document.createElement("p");
+    preview.className = "prune-score-item__preview";
+    preview.textContent = String(score?.content_preview || "").trim() || "(empty)";
+
+    const actions = document.createElement("div");
+    actions.className = "prune-score-item__actions";
+
+    const selectButton = document.createElement("button");
+    selectButton.type = "button";
+    selectButton.className = "msg-action-btn msg-action-btn--with-label";
+    selectButton.textContent = selectedIds.has(messageId) ? "Selected" : (index < pruneRecommendedBatchSize ? "Select recommended" : "Select");
+    selectButton.addEventListener("click", () => {
+      toggleHistoryMessageSelection(messageId, "prune");
+    });
+    actions.appendChild(selectButton);
+
+    article.append(header, preview, actions);
+    fragment.appendChild(article);
+  });
+
+  pruneScoreList.replaceChildren(fragment);
+}
+
+function updatePrunePanelUi() {
+  if (!prunePanel) {
+    return;
+  }
+
+  const selectedCount = getSelectedMessageIds("prune").length;
+  const recommendedIds = getRecommendedPruneMessageIds();
+
+  if (pruneSubtitle) {
+    pruneSubtitle.textContent = currentConvId
+      ? `Conversation: ${currentConvTitle || `Chat #${currentConvId}`} · threshold ${fmt(pruneTokenThreshold)} tokens · recommended batch ${fmt(pruneRecommendedBatchSize)}`
+      : "Entropy + RAG scores help surface lower-value history first.";
+  }
+
+  if (pruneSelectionCount) {
+    pruneSelectionCount.textContent = selectedCount
+      ? `${fmt(selectedCount)} message${selectedCount === 1 ? " is" : "s are"} selected for pruning.`
+      : "No messages selected yet.";
+  }
+
+  if (pruneStatus) {
+    if (!currentConvId) {
+      pruneStatus.textContent = "Open a conversation to inspect prune candidates. Per-message prune buttons appear while this panel is open.";
+    } else if (pruneScoresLoading) {
+      pruneStatus.textContent = "Loading prune scores in the background…";
+    } else if (pruneScoresError) {
+      pruneStatus.textContent = pruneScoresError;
+    } else if (pruneScores.length) {
+      pruneStatus.textContent = `${fmt(pruneScores.length)} prunable messages scored. Higher scores are better prune candidates.`;
+    } else {
+      pruneStatus.textContent = "No prune candidates are currently available.";
+    }
+  }
+
+  if (pruneScoreLoading) {
+    pruneScoreLoading.hidden = !pruneScoresLoading;
+  }
+
+  if (pruneRefreshBtn) {
+    pruneRefreshBtn.disabled = !currentConvId || pruneScoresLoading || isPruneOperationInFlight;
+  }
+  if (pruneSelectRecommendedBtn) {
+    pruneSelectRecommendedBtn.disabled = !currentConvId || !recommendedIds.length || pruneScoresLoading || isPruneOperationInFlight;
+  }
+  if (pruneClearSelectionBtn) {
+    pruneClearSelectionBtn.disabled = selectedCount === 0 || isPruneOperationInFlight;
+  }
+  if (pruneApplyRecommendedBtn) {
+    pruneApplyRecommendedBtn.disabled = !currentConvId || !recommendedIds.length || pruneScoresLoading || isPruneOperationInFlight;
+  }
+  if (pruneApplySelectedBtn) {
+    pruneApplySelectedBtn.disabled = !currentConvId || selectedCount === 0 || pruneScoresLoading || isPruneOperationInFlight;
+  }
+  if (mobilePruneBtn) {
+    mobilePruneBtn.disabled = pruneScoresLoading || isPruneOperationInFlight;
+  }
+  if (pruneToggleBtn) {
+    pruneToggleBtn.disabled = isPruneOperationInFlight;
+  }
+
+  renderPruneScoreList();
+}
+
+async function loadPruneScores({ silent = false } = {}) {
+  if (!currentConvId) {
+    pruneScores = [];
+    pruneScoresError = "";
+    pruneScoresLoading = false;
+    pruneRecommendedBatchSize = 5;
+    pruneTokenThreshold = 0;
+    updatePrunePanelUi();
+    return;
+  }
+
+  const requestNonce = ++pruneScoreRequestNonce;
+  pruneScoresLoading = true;
+  pruneScoresError = "";
+  updatePrunePanelUi();
+
+  try {
+    const response = await fetch(`/api/conversations/${currentConvId}/prune-scores`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(data?.error || "Prune scores could not be loaded.");
+    }
+    if (requestNonce !== pruneScoreRequestNonce) {
+      return;
+    }
+    pruneScores = Array.isArray(data?.scores) ? data.scores : [];
+    pruneRecommendedBatchSize = Math.max(1, Math.min(50, Number(data?.batch_size || 5) || 5));
+    pruneTokenThreshold = Math.max(0, Number(data?.threshold || 0) || 0);
+    pruneScoresError = "";
+  } catch (error) {
+    if (requestNonce !== pruneScoreRequestNonce) {
+      return;
+    }
+    pruneScores = [];
+    pruneScoresError = error.message || "Prune scores could not be loaded.";
+    if (!silent) {
+      showError(pruneScoresError);
+    }
+  } finally {
+    if (requestNonce === pruneScoreRequestNonce) {
+      pruneScoresLoading = false;
+      updatePrunePanelUi();
+    }
+  }
+}
+
+async function applyPruneSelection(messageIds, { label = "selected" } = {}) {
+  const normalizedIds = Array.from(new Set((messageIds || []).map((messageId) => Number(messageId)))).filter(
+    (messageId) => Number.isInteger(messageId) && messageId > 0
+  );
+  if (!currentConvId) {
+    showToast("No active conversation.", "warning");
+    return;
+  }
+  if (!normalizedIds.length) {
+    showToast(`Choose at least one message to prune.`, "warning");
+    return;
+  }
+
+  setPruneBusyState(true);
+  updatePrunePanelUi();
+
+  try {
+    const response = await fetch(`/api/conversations/${currentConvId}/prune-selected`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message_ids: normalizedIds }),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(data?.error || "Pruning failed.");
+    }
+
+    if (Array.isArray(data?.messages)) {
+      history = data.messages.map(normalizeHistoryEntry);
+      rebuildTokenStatsFromHistory();
+      renderConversationHistory();
+      renderCanvasPanel();
+    }
+
+    replaceSelectionSet(
+      "prune",
+      getSelectedMessageIds("prune").filter((messageId) => !normalizedIds.includes(messageId))
+    );
+    await loadPruneScores({ silent: true });
+    void loadSidebar();
+
+    const prunedCount = Number(data?.pruned_count || 0);
+    showToast(
+      prunedCount > 0
+        ? `${prunedCount} ${label} message${prunedCount === 1 ? " was" : "s were"} pruned.`
+        : "No eligible messages were pruned.",
+      prunedCount > 0 ? "success" : "warning"
+    );
+  } catch (error) {
+    pruneScoresError = error.message || "Pruning failed.";
+    showError(pruneScoresError);
+  } finally {
+    setPruneBusyState(false);
+    updatePrunePanelUi();
+  }
+}
+
+function openPrunePanel(triggerEl = null) {
+  closeMobileTools();
+  closeStats();
+  closeCanvas();
+  closeExportPanel();
+  closeSummaryPanel({ restoreFocus: false });
+  closeMemoryPanel();
+  prunePanel?.classList.add("open");
+  pruneOverlay?.classList.add("open");
+  prunePanel?.setAttribute("aria-hidden", "false");
+  lastPruneTriggerEl = triggerEl instanceof HTMLElement
+    ? triggerEl
+    : (document.activeElement instanceof HTMLElement ? document.activeElement : (pruneToggleBtn || mobilePruneBtn));
+  syncPruneToggleButton();
+  syncMessageSelectionMode({ render: true });
+  updatePrunePanelUi();
+  void loadPruneScores({ silent: true });
+  window.setTimeout(() => pruneClose?.focus({ preventScroll: true }), 0);
+}
+
+function closePrunePanel({ restoreFocus = true } = {}) {
+  prunePanel?.classList.remove("open");
+  pruneOverlay?.classList.remove("open");
+  prunePanel?.setAttribute("aria-hidden", "true");
+  syncPruneToggleButton();
+  syncMessageSelectionMode({ render: true });
+  if (restoreFocus && lastPruneTriggerEl && typeof lastPruneTriggerEl.focus === "function") {
+    lastPruneTriggerEl.focus();
+  }
+}
+
 function getSummaryDetailLabel(value) {
   const normalizedValue = String(value || "balanced").trim() || "balanced";
   return SUMMARY_DETAIL_LABELS[normalizedValue] || SUMMARY_DETAIL_LABELS.balanced;
@@ -420,12 +753,17 @@ function setSummaryBusyState(isBusy) {
 }
 
 function buildSummaryRequestBody() {
-  const requestedMessageCount = parseSummaryMessageCount();
+  const selectedMessageIds = getSelectedMessageIds("summary");
   const requestBody = {
     force: true,
     summary_focus: String(summaryFocusInput?.value || "").trim(),
     summary_detail_level: String(summaryDetailSelect?.value || "balanced").trim(),
   };
+  if (selectedMessageIds.length) {
+    requestBody.include_message_ids = selectedMessageIds;
+    return requestBody;
+  }
+  const requestedMessageCount = parseSummaryMessageCount();
   if (summaryAllMessagesCheckbox?.checked === true) {
     requestBody.summarize_all_messages = true;
   }
@@ -595,6 +933,7 @@ let lastCanvasTriggerEl = null;
 let lastCanvasConfirmTriggerEl = null;
 let lastExportTriggerEl = null;
 let lastSummaryTriggerEl = null;
+let lastPruneTriggerEl = null;
 let lastMemoryTriggerEl = null;
 let streamingCanvasPreviews = new Map();
 let pendingCanvasPreviewTimer = 0;
@@ -602,9 +941,19 @@ let pendingCanvasEditorPreviewTimer = 0;
 let lastCanvasStructureSignature = "";
 let latestSummaryStatus = null;
 let isSummaryOperationInFlight = false;
+let isPruneOperationInFlight = false;
 let summaryProgressTimer = 0;
 let summaryProgressCurrentValue = 0;
 let summaryPreviewConversationId = null;
+let messageSelectionMode = null;
+let selectedSummaryMessageIds = new Set();
+let selectedPruneMessageIds = new Set();
+let pruneScores = [];
+let pruneScoreRequestNonce = 0;
+let pruneScoresLoading = false;
+let pruneScoresError = "";
+let pruneRecommendedBatchSize = 5;
+let pruneTokenThreshold = 0;
 let conversationRefreshGeneration = 0;
 let pendingConversationRefreshTimers = new Set();
 let lastConversationSignature = "";
@@ -917,6 +1266,7 @@ function openMemoryPanel(triggerEl = null) {
   closeCanvas();
   closeExportPanel();
   closeSummaryPanel();
+  closePrunePanel({ restoreFocus: false });
   memoryPanel?.classList.add("open");
   memoryOverlay?.classList.add("open");
   memoryPanel?.setAttribute("aria-hidden", "false");
@@ -4824,6 +5174,7 @@ function openCanvas(triggerEl = null, options = {}) {
   const shouldFocusPanel = options.focusPanel !== false;
   closeMemoryPanel();
   closeSummaryPanel();
+  closePrunePanel({ restoreFocus: false });
   closeMobileTools();
   closeCanvasConfirmModal("cancel", false);
   closeStats();
@@ -4981,6 +5332,7 @@ function openExportPanel(triggerEl = null) {
   closeStats();
   closeCanvas();
   closeSummaryPanel();
+  closePrunePanel({ restoreFocus: false });
   closeMemoryPanel();
   updateExportPanel();
   exportPanel?.classList.add("open");
@@ -4993,51 +5345,7 @@ function openExportPanel(triggerEl = null) {
 }
 
 async function pruneConversationHistory() {
-  if (!currentConvId) {
-    showToast("No active conversation.", "warning");
-    return;
-  }
-  const raw = window.prompt("How many of the first unpruned messages should be pruned?", "5");
-  if (raw === null) {
-    return;
-  }
-  const count = parseInt(raw, 10);
-  if (!Number.isInteger(count) || count < 1 || count > 50) {
-    showToast("Please enter a number between 1 and 50.", "warning");
-    return;
-  }
-  if (mobilePruneBtn) {
-    mobilePruneBtn.disabled = true;
-  }
-  try {
-    const response = await fetch(`/api/conversations/${currentConvId}/prune-batch`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ count }),
-    });
-    const data = await response.json().catch(() => null);
-    if (!response.ok) {
-      throw new Error(data?.error || "Pruning failed.");
-    }
-    if (Array.isArray(data.messages)) {
-      history = data.messages.map(normalizeHistoryEntry);
-      rebuildTokenStatsFromHistory();
-      renderConversationHistory();
-    }
-    loadSidebar();
-    showToast(
-      data.pruned_count > 0
-        ? `${data.pruned_count} message${data.pruned_count === 1 ? " was" : "s were"} pruned.`
-        : "No eligible messages found.",
-      "success",
-    );
-  } catch (error) {
-    showError(error.message || "Pruning failed.");
-  } finally {
-    if (mobilePruneBtn) {
-      mobilePruneBtn.disabled = false;
-    }
-  }
+  openPrunePanel(pruneToggleBtn || mobilePruneBtn || mobileToolsBtn || null);
 }
 
 function closeExportPanel() {
@@ -5049,6 +5357,249 @@ function closeExportPanel() {
   }
 }
 
+function isPrunePanelOpen() {
+  return Boolean(prunePanel?.classList.contains("open"));
+}
+
+function getHistoryMessageSortValue(message) {
+  const position = Number(message?.position || 0);
+  if (Number.isFinite(position) && position > 0) {
+    return position;
+  }
+  const messageId = Number(message?.id || 0);
+  return Number.isFinite(messageId) ? messageId : 0;
+}
+
+function sortHistoryMessagesByPosition(entries = []) {
+  return [...(Array.isArray(entries) ? entries : [])].sort((left, right) => {
+    const positionDelta = getHistoryMessageSortValue(left) - getHistoryMessageSortValue(right);
+    if (positionDelta !== 0) {
+      return positionDelta;
+    }
+    return Number(left?.id || 0) - Number(right?.id || 0);
+  });
+}
+
+function getPruneEligibleMessages(entries = history) {
+  return sortHistoryMessagesByPosition((entries || []).filter(isPrunableHistoryMessage));
+}
+
+function getSelectionSetForMode(mode = messageSelectionMode) {
+  if (mode === "summary") {
+    return selectedSummaryMessageIds;
+  }
+  if (mode === "prune") {
+    return selectedPruneMessageIds;
+  }
+  return null;
+}
+
+function getSelectableMessagesForMode(mode, entries = history) {
+  if (mode === "summary") {
+    return getSummaryEligibleMessages(entries);
+  }
+  if (mode === "prune") {
+    return getPruneEligibleMessages(entries);
+  }
+  return [];
+}
+
+function getSelectableMessageIdSet(mode, entries = history) {
+  return new Set(
+    getSelectableMessagesForMode(mode, entries)
+      .map((message) => Number(message?.id || 0))
+      .filter((messageId) => Number.isInteger(messageId) && messageId > 0)
+  );
+}
+
+function replaceSelectionSet(mode, messageIds) {
+  const eligibleIds = getSelectableMessageIdSet(mode);
+  const nextSet = new Set(
+    Array.from(messageIds || [])
+      .map((messageId) => Number(messageId))
+      .filter((messageId) => Number.isInteger(messageId) && messageId > 0 && eligibleIds.has(messageId))
+  );
+
+  if (mode === "summary") {
+    selectedSummaryMessageIds = nextSet;
+  } else if (mode === "prune") {
+    selectedPruneMessageIds = nextSet;
+  }
+}
+
+function getSelectedMessageIds(mode = messageSelectionMode) {
+  const selectedIds = Array.from(getSelectionSetForMode(mode) || []);
+  return selectedIds
+    .filter((messageId) => Number.isInteger(Number(messageId)) && Number(messageId) > 0)
+    .sort((left, right) => {
+      const leftMessage = getHistoryMessage(left);
+      const rightMessage = getHistoryMessage(right);
+      const positionDelta = getHistoryMessageSortValue(leftMessage) - getHistoryMessageSortValue(rightMessage);
+      if (positionDelta !== 0) {
+        return positionDelta;
+      }
+      return Number(left) - Number(right);
+    });
+}
+
+function pruneStaleMessageSelections() {
+  const summaryEligibleIds = getSelectableMessageIdSet("summary");
+  const pruneEligibleIds = getSelectableMessageIdSet("prune");
+  const nextSummaryIds = new Set([...selectedSummaryMessageIds].filter((messageId) => summaryEligibleIds.has(messageId)));
+  const nextPruneIds = new Set([...selectedPruneMessageIds].filter((messageId) => pruneEligibleIds.has(messageId)));
+  const changed = nextSummaryIds.size !== selectedSummaryMessageIds.size || nextPruneIds.size !== selectedPruneMessageIds.size;
+  selectedSummaryMessageIds = nextSummaryIds;
+  selectedPruneMessageIds = nextPruneIds;
+  return changed;
+}
+
+function isMessageSelectableForMode(message, mode = messageSelectionMode) {
+  const messageId = Number(message?.id || 0);
+  if (!Number.isInteger(messageId) || messageId <= 0) {
+    return false;
+  }
+  return getSelectableMessageIdSet(mode).has(messageId);
+}
+
+function isMessageSelectedForMode(messageId, mode = messageSelectionMode) {
+  const normalizedMessageId = Number(messageId);
+  if (!Number.isInteger(normalizedMessageId) || normalizedMessageId <= 0) {
+    return false;
+  }
+  return Boolean(getSelectionSetForMode(mode)?.has(normalizedMessageId));
+}
+
+function syncChatSelectionClasses() {
+  const hasSelectionMode = Boolean(messageSelectionMode);
+  chatAreaEl?.classList.toggle("chat-area--selection-mode", hasSelectionMode);
+  messagesEl?.classList.toggle("messages--selection-mode", hasSelectionMode);
+  if (chatAreaEl) {
+    if (hasSelectionMode) {
+      chatAreaEl.dataset.selectionMode = messageSelectionMode;
+    } else {
+      delete chatAreaEl.dataset.selectionMode;
+    }
+  }
+}
+
+function renderHistorySelectionBar() {
+  syncChatSelectionClasses();
+  if (!historySelectionBar || !historySelectionLabel || !historySelectionDetail) {
+    return;
+  }
+
+  if (!messageSelectionMode || !currentConvId) {
+    historySelectionBar.hidden = true;
+    return;
+  }
+
+  const selectedCount = getSelectedMessageIds(messageSelectionMode).length;
+  const modeLabel = messageSelectionMode === "prune" ? "Prune selection" : "Summary selection";
+  historySelectionLabel.textContent = modeLabel;
+  historySelectionDetail.textContent = messageSelectionMode === "prune"
+    ? (
+      selectedCount
+        ? `${fmt(selectedCount)} message${selectedCount === 1 ? " is" : "s are"} selected. Use the panel actions or the per-message prune buttons.`
+        : "Pick messages in the conversation or use the recommended prune list from the panel."
+    )
+    : (
+      selectedCount
+        ? `${fmt(selectedCount)} message${selectedCount === 1 ? " is" : "s are"} selected for summary. Leaving it empty falls back to automatic selection.`
+        : "Click eligible messages in the conversation to build a custom summary selection."
+    );
+
+  if (historySelectionClear) {
+    historySelectionClear.disabled = selectedCount === 0;
+  }
+  if (historySelectionCancel) {
+    historySelectionCancel.textContent = messageSelectionMode === "prune" ? "Close prune" : "Close summary";
+  }
+  historySelectionBar.hidden = false;
+}
+
+function syncMessageSelectionMode({ render = false } = {}) {
+  const nextMode = isPrunePanelOpen() ? "prune" : isSummaryPanelOpen() ? "summary" : null;
+  const changed = nextMode !== messageSelectionMode;
+  messageSelectionMode = nextMode;
+  renderHistorySelectionBar();
+  if (render && changed) {
+    renderConversationHistory({ preserveScroll: true });
+  }
+}
+
+function refreshSelectionUi({ render = true } = {}) {
+  pruneStaleMessageSelections();
+  renderHistorySelectionBar();
+  updateSummarySelectionUi();
+  updatePrunePanelUi();
+  if (render) {
+    renderConversationHistory({ preserveScroll: true });
+  }
+}
+
+function clearMessageSelection(mode = messageSelectionMode, { render = true } = {}) {
+  if (!mode) {
+    selectedSummaryMessageIds = new Set();
+    selectedPruneMessageIds = new Set();
+  } else {
+    replaceSelectionSet(mode, []);
+  }
+  renderHistorySelectionBar();
+  updateSummarySelectionUi();
+  updatePrunePanelUi();
+  if (render) {
+    renderConversationHistory({ preserveScroll: true });
+  }
+}
+
+function toggleHistoryMessageSelection(messageId, mode = messageSelectionMode) {
+  const normalizedMessageId = Number(messageId);
+  if (!Number.isInteger(normalizedMessageId) || normalizedMessageId <= 0 || !mode) {
+    return;
+  }
+  const targetMessage = getHistoryMessage(normalizedMessageId);
+  if (!isMessageSelectableForMode(targetMessage, mode)) {
+    return;
+  }
+  const nextSelection = new Set(getSelectionSetForMode(mode) || []);
+  if (nextSelection.has(normalizedMessageId)) {
+    nextSelection.delete(normalizedMessageId);
+  } else {
+    nextSelection.add(normalizedMessageId);
+  }
+  replaceSelectionSet(mode, nextSelection);
+  renderHistorySelectionBar();
+  updateSummarySelectionUi();
+  updatePrunePanelUi();
+  renderConversationHistory({ preserveScroll: true });
+}
+
+function selectEligibleSummaryMessages() {
+  replaceSelectionSet(
+    "summary",
+    getSelectableMessagesForMode("summary")
+      .map((message) => Number(message?.id || 0))
+      .filter((messageId) => Number.isInteger(messageId) && messageId > 0)
+  );
+  renderHistorySelectionBar();
+  updateSummarySelectionUi();
+  renderConversationHistory({ preserveScroll: true });
+}
+
+function getRecommendedPruneMessageIds(limit = pruneRecommendedBatchSize) {
+  return pruneScores
+    .slice(0, Math.max(1, Number(limit) || 1))
+    .map((score) => Number(score?.id || 0))
+    .filter((messageId) => Number.isInteger(messageId) && messageId > 0);
+}
+
+function selectRecommendedPruneMessages() {
+  replaceSelectionSet("prune", getRecommendedPruneMessageIds());
+  renderHistorySelectionBar();
+  updatePrunePanelUi();
+  renderConversationHistory({ preserveScroll: true });
+}
+
 function isSummaryPanelOpen() {
   return Boolean(summaryPanel?.classList.contains("open"));
 }
@@ -5058,10 +5609,12 @@ function openSummaryPanel(triggerEl = null) {
   closeStats();
   closeCanvas();
   closeExportPanel();
+  closePrunePanel({ restoreFocus: false });
   closeMemoryPanel();
   summaryPanel?.classList.add("open");
   summaryOverlay?.classList.add("open");
   summaryPanel?.setAttribute("aria-hidden", "false");
+  syncSummaryToggleButton();
   lastSummaryTriggerEl = triggerEl instanceof HTMLElement
     ? triggerEl
     : (document.activeElement instanceof HTMLElement ? document.activeElement : mobileSummaryBtn);
@@ -5073,6 +5626,7 @@ function openSummaryPanel(triggerEl = null) {
   }
   renderSummaryInspector();
   setSummaryBusyState(isSummaryOperationInFlight);
+  syncMessageSelectionMode({ render: true });
   void refreshSummarySettingsFromServer();
   if (summaryFocusInput) {
     window.setTimeout(() => summaryFocusInput.focus({ preventScroll: true }), 0);
@@ -5083,6 +5637,8 @@ function closeSummaryPanel({ restoreFocus = true } = {}) {
   summaryPanel?.classList.remove("open");
   summaryOverlay?.classList.remove("open");
   summaryPanel?.setAttribute("aria-hidden", "true");
+  syncSummaryToggleButton();
+  syncMessageSelectionMode({ render: true });
   if (restoreFocus && lastSummaryTriggerEl && typeof lastSummaryTriggerEl.focus === "function") {
     lastSummaryTriggerEl.focus();
   }
@@ -6244,6 +6800,7 @@ function renderTokenStats() {
 function normalizeHistoryEntry(entry) {
   const source = entry && typeof entry === "object" ? entry : {};
   const normalizedId = Number(source.id);
+  const normalizedPosition = Number(source.position);
   const usage = source.usage && typeof source.usage === "object" ? normalizeUsagePayload(source.usage) : null;
   const role = ["assistant", "user", "tool", "system", "summary"].includes(source.role) ? source.role : "user";
   const toolCalls = Array.isArray(source.tool_calls) ? source.tool_calls : [];
@@ -6255,6 +6812,7 @@ function normalizeHistoryEntry(entry) {
     role,
     content: String(source.content || ""),
     metadata: source.metadata && typeof source.metadata === "object" ? source.metadata : null,
+    position: Number.isInteger(normalizedPosition) ? normalizedPosition : null,
     tool_calls: toolCalls,
     tool_call_id: toolCallId,
     usage,
@@ -7042,8 +7600,9 @@ function createMessageActions(message, options = {}) {
   actions.className = "msg-actions msg-actions--footer";
 
   const messageId = message.id;
-    const isDeletingThisMessage = messageId !== null && deletingMessageId !== null && Number(deletingMessageId) === Number(messageId);
-    const isDeleteConfirmationOpen = messageId !== null && pendingDeleteMessageId !== null && Number(pendingDeleteMessageId) === Number(messageId);
+  const isDeletingThisMessage = messageId !== null && deletingMessageId !== null && Number(deletingMessageId) === Number(messageId);
+  const isDeleteConfirmationOpen = messageId !== null && pendingDeleteMessageId !== null && Number(pendingDeleteMessageId) === Number(messageId);
+  const showInlinePruneButton = isPrunePanelOpen() && isPrunableHistoryMessage(message);
   if (message.role === "user" || message.role === "assistant") {
     if (options.editable && isEditableHistoryMessage(message)) {
       const editBtn = createMessageActionButton({
@@ -7068,6 +7627,20 @@ function createMessageActions(message, options = {}) {
       disabled: !String(message.content || "").trim() || isDeletingThisMessage,
     });
     actions.appendChild(copyButton);
+
+    if (showInlinePruneButton) {
+      const pruneButton = createMessageActionButton({
+        label: "Prune",
+        title: "Prune this message now",
+        icon: MESSAGE_ACTION_ICONS.prune,
+        showLabel: true,
+        onClick: () => {
+          void pruneMessage(messageId);
+        },
+        disabled: !isPersistedMessageId(messageId) || isDeletingThisMessage || isStreaming || isFixing || isPruneOperationInFlight,
+      });
+      actions.appendChild(pruneButton);
+    }
 
     const deleteButton = createMessageActionButton({
       label: isDeleteConfirmationOpen ? "Cancel delete" : "Delete",
@@ -7178,6 +7751,15 @@ const MESSAGE_ACTION_ICONS = {
       <path d="M17 4h4v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
       <path d="M21 12a9 9 0 0 1-15.3 6.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
       <path d="M7 20H3v-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
+  `,
+  prune: `
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
+      <path d="M5 7h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+      <path d="M8 7V5.8A1.8 1.8 0 0 1 9.8 4h4.4A1.8 1.8 0 0 1 16 5.8V7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M8 11.5h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+      <path d="M10 15h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+      <path d="M7 7l1 11a2 2 0 0 0 2 1.8h4a2 2 0 0 0 2-1.8L17 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
     </svg>
   `,
   delete: `
@@ -7437,6 +8019,39 @@ function createAssistantMessageActions(message) {
   return createMessageActions(message, { editable: true });
 }
 
+function createHistorySelectionToggle(message, mode) {
+  const messageId = Number(message?.id || 0);
+  if (!Number.isInteger(messageId) || messageId <= 0 || !mode) {
+    return null;
+  }
+
+  const isSelected = isMessageSelectedForMode(messageId, mode);
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "msg-selection-toggle";
+  button.dataset.selectionMode = mode;
+  button.setAttribute("aria-pressed", String(isSelected));
+  button.title = mode === "prune"
+    ? (isSelected ? "Remove from prune selection" : "Select for pruning")
+    : (isSelected ? "Remove from summary selection" : "Select for summary");
+
+  const box = document.createElement("span");
+  box.className = "msg-selection-toggle__box";
+  box.setAttribute("aria-hidden", "true");
+
+  const label = document.createElement("span");
+  label.className = "msg-selection-toggle__label";
+  label.textContent = isSelected ? "Selected" : "Select";
+
+  button.append(box, label);
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleHistoryMessageSelection(messageId, mode);
+  });
+  return button;
+}
+
 function createInlineMessageEditor(message) {
   const form = document.createElement("form");
   form.className = "message-inline-editor";
@@ -7552,6 +8167,7 @@ async function pruneMessage(messageId) {
 }
 
 function renderConversationHistory(options = {}) {
+  pruneStaleMessageSelections();
   const activeInlineMessage = getHistoryMessage(inlineEditingMessageId);
   if (inlineEditingMessageId !== null && !isEditableHistoryMessage(activeInlineMessage)) {
     clearInlineEditingTarget();
@@ -7568,18 +8184,25 @@ function renderConversationHistory(options = {}) {
     emptyState.style.display = "";
     messagesEl.replaceChildren(fragment);
     scrollToBottom();
+    renderHistorySelectionBar();
     renderSummaryInspector();
+    updatePrunePanelUi();
     return;
   }
 
   emptyState.style.display = "none";
   const visibleEntries = getVisibleHistoryEntries();
+  const selectionModeForRender = messageSelectionMode;
+  const selectableMessageIdSetForRender = selectionModeForRender ? getSelectableMessageIdSet(selectionModeForRender) : null;
   visibleEntries.forEach((message, index) => {
     if (!isRenderableHistoryEntry(message)) {
       return;
     }
     fragment.appendChild(createMessageGroup(message.role, message.content, message.metadata || null, {
       messageId: message.id,
+      position: message.position,
+      selectionMode: selectionModeForRender,
+      selectableMessageIdSet: selectableMessageIdSetForRender,
       editable: message.role === "user" || message.role === "assistant",
       isEditingTarget: isPersistedMessageId(message.id)
         && isPersistedMessageId(editingMessageId)
@@ -7599,7 +8222,9 @@ function renderConversationHistory(options = {}) {
   } else {
     scrollToBottom();
   }
+  renderHistorySelectionBar();
   renderSummaryInspector();
+  updatePrunePanelUi();
 }
 
 async function refreshConversationFromServer() {
@@ -7640,6 +8265,9 @@ async function refreshConversationFromServer() {
     renderCanvasPanel();
     updateExportPanel();
     rebuildTokenStatsFromHistory();
+    if (isPrunePanelOpen()) {
+      void loadPruneScores({ silent: true });
+    }
   }
 
   if (memoryChanged) {
@@ -8081,6 +8709,7 @@ function describeSummaryFailure(status) {
 }
 
 function updateSummarySelectionUi() {
+  pruneStaleMessageSelections();
   const eligibleMessages = getSummaryEligibleMessages(history);
   const eligibleCount = eligibleMessages.length;
   const allMessagesEligibleCount = eligibleCount;
@@ -8089,12 +8718,13 @@ function updateSummarySelectionUi() {
   const mode = SUMMARY_MODE_LABELS[getSummaryModeValue()] || SUMMARY_MODE_LABELS.auto;
   const detailLabel = getSummaryDetailLabel(appSettings.chat_summary_detail_level || "balanced");
   const summarizeAllMessages = summaryAllMessagesCheckbox?.checked === true;
+  const selectedMessageCount = getSelectedMessageIds("summary").length;
 
   if (summaryMessageCountInput) {
     const requestedCount = parseSummaryMessageCount();
     summaryMessageCountInput.max = String(Math.max(eligibleCount, 1));
-    summaryMessageCountInput.disabled = isSummaryOperationInFlight || !currentConvId || eligibleCount === 0 || summarizeAllMessages;
-    if (eligibleCount === 0 || summarizeAllMessages) {
+    summaryMessageCountInput.disabled = isSummaryOperationInFlight || !currentConvId || eligibleCount === 0 || summarizeAllMessages || selectedMessageCount > 0;
+    if (eligibleCount === 0 || summarizeAllMessages || selectedMessageCount > 0) {
       summaryMessageCountInput.value = "";
     } else if (requestedCount !== null && requestedCount > eligibleCount) {
       summaryMessageCountInput.value = String(eligibleCount);
@@ -8102,12 +8732,23 @@ function updateSummarySelectionUi() {
   }
 
   if (summaryAllMessagesCheckbox) {
-    summaryAllMessagesCheckbox.disabled = isSummaryOperationInFlight || !currentConvId || allMessagesEligibleCount === 0;
+    summaryAllMessagesCheckbox.disabled = isSummaryOperationInFlight || !currentConvId || allMessagesEligibleCount === 0 || selectedMessageCount > 0;
+  }
+
+  if (summarySelectEligibleBtn) {
+    summarySelectEligibleBtn.disabled = isSummaryOperationInFlight || !currentConvId || eligibleCount === 0;
+    summarySelectEligibleBtn.textContent = eligibleCount > 0 ? `Select eligible (${fmt(eligibleCount)})` : "Select eligible";
+  }
+
+  if (summaryClearSelectionBtn) {
+    summaryClearSelectionBtn.disabled = isSummaryOperationInFlight || selectedMessageCount === 0;
   }
 
   if (summarySelectionNote) {
     if (!currentConvId) {
       summarySelectionNote.textContent = "Open a conversation to see which messages are currently eligible for summary.";
+    } else if (selectedMessageCount > 0) {
+      summarySelectionNote.textContent = `${fmt(selectedMessageCount)} selected message${selectedMessageCount === 1 ? " will" : "s will"} be summarized in conversation order. Clear the selection to return to automatic rules.`;
     } else if (summarizeAllMessages) {
       summarySelectionNote.textContent = allMessagesEligibleCount > 0
         ? `All ${fmt(allMessagesEligibleCount)} eligible messages will be summarized. The protected messages from Settings stay in place.`
@@ -8115,7 +8756,7 @@ function updateSummarySelectionUi() {
     } else if (!eligibleCount) {
       summarySelectionNote.textContent = "No messages are currently eligible after the protected first/last message window from Settings is applied.";
     } else {
-      summarySelectionNote.textContent = `Eligible after Settings protection: ${eligibleCount} messages. Leave the field blank for automatic selection or choose any value from 1 to ${eligibleCount}.`;
+      summarySelectionNote.textContent = `Eligible after Settings protection: ${eligibleCount} messages. Click messages in the conversation for a custom selection, or leave it blank for automatic selection.`;
     }
   }
 
@@ -8343,6 +8984,7 @@ function openStats() {
   closeCanvas();
   closeExportPanel();
   closeSummaryPanel();
+  closePrunePanel({ restoreFocus: false });
   closeMemoryPanel();
   statsPanel.classList.add("open");
   statsOverlay.classList.add("open");
@@ -8358,6 +9000,7 @@ function openMobileTools() {
   closeCanvas();
   closeExportPanel();
   closeSummaryPanel();
+  closePrunePanel({ restoreFocus: false });
   closeMemoryPanel();
   mobileToolsPanel?.classList.add("open");
   mobileToolsOverlay?.classList.add("open");
@@ -8675,6 +9318,20 @@ if (memoryToggleBtn) {
     }
   });
 }
+if (summaryToggleBtn) {
+  summaryToggleBtn.addEventListener("click", () => {
+    if (isSummaryPanelOpen()) {
+      closeSummaryPanel();
+    } else {
+      openSummaryPanel(summaryToggleBtn);
+    }
+  });
+}
+if (pruneToggleBtn) {
+  pruneToggleBtn.addEventListener("click", () => {
+    void pruneConversationHistory();
+  });
+}
 if (mobileExportBtn) {
   mobileExportBtn.addEventListener("click", () => openExportPanel(mobileToolsBtn || mobileExportBtn));
 }
@@ -8927,13 +9584,38 @@ if (mobilePersonaSel) {
 }
 summaryClose?.addEventListener("click", closeSummaryPanel);
 summaryOverlay?.addEventListener("click", closeSummaryPanel);
+pruneClose?.addEventListener("click", closePrunePanel);
+pruneOverlay?.addEventListener("click", closePrunePanel);
 memoryClose?.addEventListener("click", closeMemoryPanel);
 memoryOverlay?.addEventListener("click", closeMemoryPanel);
+summarySelectEligibleBtn?.addEventListener("click", selectEligibleSummaryMessages);
+summaryClearSelectionBtn?.addEventListener("click", () => clearMessageSelection("summary"));
 summarySubmitBtn?.addEventListener("click", () => {
   void runConversationSummary({ triggerButton: summarySubmitBtn, closePanel: false });
 });
 summaryPreviewBtn?.addEventListener("click", () => {
   void previewConversationSummary({ triggerButton: summaryPreviewBtn });
+});
+pruneRefreshBtn?.addEventListener("click", () => {
+  void loadPruneScores();
+});
+pruneSelectRecommendedBtn?.addEventListener("click", selectRecommendedPruneMessages);
+pruneClearSelectionBtn?.addEventListener("click", () => clearMessageSelection("prune"));
+pruneApplyRecommendedBtn?.addEventListener("click", () => {
+  void applyPruneSelection(getRecommendedPruneMessageIds(), { label: "recommended" });
+});
+pruneApplySelectedBtn?.addEventListener("click", () => {
+  void applyPruneSelection(getSelectedMessageIds("prune"), { label: "selected" });
+});
+historySelectionClear?.addEventListener("click", () => clearMessageSelection(messageSelectionMode));
+historySelectionCancel?.addEventListener("click", () => {
+  if (messageSelectionMode === "prune") {
+    closePrunePanel();
+    return;
+  }
+  if (messageSelectionMode === "summary") {
+    closeSummaryPanel();
+  }
 });
 summaryMessageCountInput?.addEventListener("input", updateSummarySelectionUi);
 summaryAllMessagesCheckbox?.addEventListener("change", () => {
@@ -8987,6 +9669,10 @@ if (canvasResizeHandle) {
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && isMemoryPanelOpen()) {
     closeMemoryPanel();
+    return;
+  }
+  if (event.key === "Escape" && isPrunePanelOpen()) {
+    closePrunePanel();
     return;
   }
   if (event.key === "Escape" && isSummaryPanelOpen()) {
@@ -9340,6 +10026,13 @@ async function openConversation(id) {
   }
   clearEditTarget();
   clearInlineEditingTarget();
+  selectedSummaryMessageIds = new Set();
+  selectedPruneMessageIds = new Set();
+  pruneScores = [];
+  pruneScoresError = "";
+  pruneScoresLoading = false;
+  pruneRecommendedBatchSize = 5;
+  pruneTokenThreshold = 0;
   resetCanvasWorkspaceState();
 
   history = Array.isArray(data.messages) ? data.messages.map(normalizeHistoryEntry) : [];
@@ -9352,6 +10045,11 @@ async function openConversation(id) {
   renderCanvasPanel();
   updateExportPanel();
   rebuildTokenStatsFromHistory();
+  if (isPrunePanelOpen()) {
+    void loadPruneScores({ silent: true });
+  } else {
+    updatePrunePanelUi();
+  }
 
   loadSidebar();
   scrollToBottom();
@@ -9384,6 +10082,13 @@ function startNewChat() {
   conversationMemoryEntries = [];
   conversationMemoryEnabled = featureFlags.conversation_memory_enabled !== false;
   latestSummaryStatus = null;
+  selectedSummaryMessageIds = new Set();
+  selectedPruneMessageIds = new Set();
+  pruneScores = [];
+  pruneScoresError = "";
+  pruneScoresLoading = false;
+  pruneRecommendedBatchSize = 5;
+  pruneTokenThreshold = 0;
   streamingCanvasDocuments = [];
   resetStreamingCanvasPreview();
   activeCanvasDocumentId = null;
@@ -11303,8 +12008,32 @@ function createMessageGroup(role, text, metadata = null, options = {}) {
   metaRow.className = "msg-meta-row";
 
   const normalizedMetadata = metadata && typeof metadata === "object" ? metadata : null;
+  const historyMessage = {
+    id: options.messageId,
+    role,
+    content: text,
+    metadata: normalizedMetadata,
+    position: options.position ?? null,
+    tool_calls: Array.isArray(options.toolCalls) ? options.toolCalls : [],
+  };
+  const selectionMode = options.selectionMode || messageSelectionMode;
+  const selectableMessageIdSet = options.selectableMessageIdSet || (selectionMode ? getSelectableMessageIdSet(selectionMode) : null);
+  const activeSelectionMode = selectionMode && selectableMessageIdSet?.has(Number(historyMessage.id || 0))
+    ? selectionMode
+    : null;
   const labelGroup = document.createElement("div");
   labelGroup.className = "msg-meta-label-group";
+
+  if (activeSelectionMode) {
+    const selectionToggle = createHistorySelectionToggle(historyMessage, activeSelectionMode);
+    if (selectionToggle) {
+      labelGroup.appendChild(selectionToggle);
+      group.classList.add("msg-group--selectable", `msg-group--selectable-${activeSelectionMode}`);
+      if (isMessageSelectedForMode(options.messageId, activeSelectionMode)) {
+        group.classList.add("is-selected");
+      }
+    }
+  }
 
   const label = document.createElement("div");
   label.className = "msg-label";
@@ -11376,16 +12105,7 @@ function createMessageGroup(role, text, metadata = null, options = {}) {
   const hasDocument = attachments.some((attachment) => attachment.kind === "document");
   const displayText = text || (attachments.length ? "Attachments uploaded." : hasImage ? "Image uploaded." : hasDocument ? "Document uploaded." : "");
   const pendingClarification = role === "assistant" ? getPendingClarification(normalizedMetadata) : null;
-  const footerActions = createMessageActions(
-    {
-      id: options.messageId,
-      role,
-      content: text,
-      metadata: normalizedMetadata,
-      tool_calls: Array.isArray(options.toolCalls) ? options.toolCalls : [],
-    },
-    options,
-  );
+  const footerActions = createMessageActions(historyMessage, options);
 
   group.appendChild(metaRow);
   if (role === "assistant") {
@@ -12360,6 +13080,11 @@ clearEditTarget();
 updateHeaderOffset();
 applyCanvasPanelWidth(readCanvasWidthPreference(), false);
 syncCanvasToggleButton();
+syncSummaryToggleButton();
+syncPruneToggleButton();
+renderHistorySelectionBar();
+updateSummarySelectionUi();
+updatePrunePanelUi();
 const initialSidebarPref = readSidebarPreference();
 setSidebarOpen(initialSidebarPref === null ? !isMobileViewport() : initialSidebarPref, false);
 const initialModelId = resolvePreferredModelSelection(modelSel ? modelSel.value : "");

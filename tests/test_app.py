@@ -3466,7 +3466,15 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertGreaterEqual(target_tokens, 1)
         self.assertLessEqual(target_tokens, estimate_text_tokens(short_message))
 
-    def test_prune_conversation_batch_prioritizes_largest_messages(self):
+    def test_prune_score_weights_redistribute_rag_weight_when_disabled(self):
+        weights = prune_service._resolve_prune_score_weights(rag_enabled=False)
+
+        self.assertEqual(weights["rag_coverage"], 0.0)
+        self.assertAlmostEqual(sum(weights.values()), 1.0)
+        self.assertGreater(weights["entropy_prunability"], prune_service.PRUNE_SCORE_WEIGHTS["entropy_prunability"])
+        self.assertGreater(weights["recency"], prune_service.PRUNE_SCORE_WEIGHTS["recency"])
+
+    def test_prune_conversation_batch_uses_scored_candidate_order(self):
         conversation_id = self._create_conversation()
         with get_db() as conn:
             small_id = insert_message(conn, conversation_id, "user", "Kısa mesaj")
@@ -3479,12 +3487,19 @@ class AppRoutesTestCase(unittest.TestCase):
             pruned_ids.append(message_id)
             return {"id": message_id}
 
-        with patch("prune_service.prune_message", side_effect=fake_prune_message):
+        with patch(
+            "prune_service.score_conversation_messages_for_prune",
+            return_value=[
+                {"id": medium_id, "prune_score": 0.91},
+                {"id": small_id, "prune_score": 0.88},
+                {"id": large_id, "prune_score": 0.33},
+            ],
+        ), patch("prune_service.prune_message", side_effect=fake_prune_message):
             pruned_count = prune_service.prune_conversation_batch(conversation_id, 2)
 
         self.assertEqual(pruned_count, 2)
-        self.assertEqual(pruned_ids, [large_id, medium_id])
-        self.assertNotIn(small_id, pruned_ids)
+        self.assertEqual(pruned_ids, [medium_id, small_id])
+        self.assertNotIn(large_id, pruned_ids)
 
     def test_prune_conversation_batch_skips_failed_messages(self):
         conversation_id = self._create_conversation()
@@ -3500,11 +3515,80 @@ class AppRoutesTestCase(unittest.TestCase):
                 raise RuntimeError("temporary failure")
             return {"id": message_id}
 
-        with patch("prune_service.prune_message", side_effect=fake_prune_message):
+        with patch(
+            "prune_service.score_conversation_messages_for_prune",
+            return_value=[
+                {"id": first_id, "prune_score": 0.95},
+                {"id": second_id, "prune_score": 0.81},
+            ],
+        ), patch("prune_service.prune_message", side_effect=fake_prune_message):
             pruned_count = prune_service.prune_conversation_batch(conversation_id, 2)
 
         self.assertEqual(pruned_count, 1)
         self.assertEqual(set(seen_ids), {first_id, second_id})
+
+    def test_prune_scores_endpoint_returns_scored_candidates(self):
+        conversation_id = self._create_conversation()
+
+        with patch(
+            "routes.conversations.score_conversation_messages_for_prune",
+            return_value=[
+                {
+                    "id": 11,
+                    "position": 2,
+                    "role": "assistant",
+                    "content_preview": "Örnek içerik",
+                    "estimated_tokens": 42,
+                    "entropy_score": 0.21,
+                    "rag_coverage_score": 0.66,
+                    "recency_score": 0.75,
+                    "token_weight": 0.8,
+                    "prune_score": 0.79,
+                }
+            ],
+        ):
+            response = self.client.post(f"/api/conversations/{conversation_id}/prune-scores", json={})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["prunable_message_count"], 1)
+        self.assertEqual(payload["prunable_token_count"], 42)
+        self.assertEqual(payload["scores"][0]["id"], 11)
+        self.assertIn("batch_size", payload)
+        self.assertIn("threshold", payload)
+
+    def test_prune_selected_endpoint_prunes_selected_messages_in_position_order(self):
+        conversation_id = self._create_conversation()
+        with get_db() as conn:
+            first_id = insert_message(conn, conversation_id, "user", "İlk mesaj")
+            second_id = insert_message(conn, conversation_id, "assistant", "İkinci mesaj")
+            third_id = insert_message(conn, conversation_id, "user", "Üçüncü mesaj")
+
+        seen_ids = []
+
+        def fake_prune_message(message_id):
+            seen_ids.append(message_id)
+            return {"id": message_id, "content": f"pruned-{message_id}"}
+
+        with patch(
+            "routes.conversations.score_conversation_messages_for_prune",
+            return_value=[
+                {"id": third_id, "position": 3, "prune_score": 0.92},
+                {"id": first_id, "position": 1, "prune_score": 0.89},
+            ],
+        ), patch("routes.conversations.prune_message", side_effect=fake_prune_message), patch(
+            "routes.conversations.sync_conversations_to_rag_safe"
+        ):
+            response = self.client.post(
+                f"/api/conversations/{conversation_id}/prune-selected",
+                json={"message_ids": [third_id, first_id]},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["pruned_count"], 2)
+        self.assertEqual(seen_ids, [first_id, third_id])
+        self.assertEqual([result["id"] for result in payload["results"]], [first_id, third_id])
 
     def test_is_prunable_message_allows_plain_assistant_messages(self):
         self.assertTrue(prune_service.is_prunable_message({"role": "assistant", "content": "Detaylı ama araçsız yanıt"}))
@@ -19268,6 +19352,53 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(data["prompt_message_count"], 2)
         self.assertEqual([entry["id"] for entry in data["messages_preview"]], [2, 3])
         mocked_collect.assert_not_called()
+
+    def test_manual_summarize_endpoint_honors_include_message_ids(self):
+        conversation_id = self._create_conversation()
+        save_app_settings(
+            {
+                "user_preferences": "",
+                "max_steps": "1",
+                "active_tools": "[]",
+                "rag_auto_inject": "false",
+                "chat_summary_mode": "never",
+                "chat_summary_trigger_token_count": "1000",
+                "summary_skip_first": "0",
+                "summary_skip_last": "0",
+            }
+        )
+
+        with get_db() as conn:
+            for index in range(6):
+                conn.execute(
+                    "INSERT INTO messages (conversation_id, role, content, metadata, position) VALUES (?, 'user', ?, ?, ?)",
+                    (conversation_id, f"Message {index + 1}", None, index + 1),
+                )
+
+        fake_summary = {
+            "content": "Selected-message summary with enough retained detail to satisfy the summary validation threshold and preserve chronology.",
+            "reasoning_content": "",
+            "usage": None,
+            "tool_results": [],
+            "errors": [],
+        }
+
+        with patch("routes.chat.collect_agent_response", return_value=fake_summary), patch(
+            "routes.chat.sync_conversations_to_rag_safe"
+        ):
+            response = self.client.post(
+                f"/api/conversations/{conversation_id}/summarize",
+                json={"force": True, "include_message_ids": [2, 4]},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data["applied"])
+        self.assertEqual(data["requested_message_count"], 2)
+        self.assertEqual(data["covered_message_count"], 2)
+
+        summary_message = next(message for message in data["messages"] if message["role"] == "summary")
+        self.assertEqual(summary_message["metadata"]["covered_message_ids"], [2, 4])
 
     def test_manual_summarize_endpoint_threads_summary_preferences_into_prompt(self):
         conversation_id = self._create_conversation()

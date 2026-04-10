@@ -3195,6 +3195,19 @@ def _parse_manual_summary_request_options(data: dict, settings: dict) -> tuple[d
             except (TypeError, ValueError):
                 continue
 
+    include_ids = set()
+    raw_include = data.get("include_message_ids")
+    if raw_include not in (None, "") and not isinstance(raw_include, list):
+        return None, ("include_message_ids must be a list of message ids.", 400)
+    if isinstance(raw_include, list):
+        for raw_id in raw_include:
+            try:
+                include_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            if include_id > 0:
+                include_ids.add(include_id)
+
     return {
         "force": force,
         "message_count": message_count,
@@ -3202,6 +3215,7 @@ def _parse_manual_summary_request_options(data: dict, settings: dict) -> tuple[d
         "summary_focus": summary_focus,
         "effective_settings": effective_settings,
         "exclude_ids": exclude_ids,
+        "include_ids": include_ids,
         "fetch_url_token_threshold": get_fetch_url_token_threshold(effective_settings),
         "fetch_url_clip_aggressiveness": get_fetch_url_clip_aggressiveness(effective_settings),
         "model": normalize_model_id(data.get("model"), default=get_default_chat_model_id(effective_settings)),
@@ -3215,6 +3229,7 @@ def maybe_create_conversation_summary(
     fetch_url_token_threshold: int,
     fetch_url_clip_aggressiveness: int,
     exclude_message_ids: set[int] | None = None,
+    include_message_ids: set[int] | None = None,
     force: bool = False,
     bypass_mode: bool = False,
     continuation_focus: str = "",
@@ -3304,12 +3319,32 @@ def maybe_create_conversation_summary(
         eligible_message_count = len(all_candidates)
         manual_source_messages: list[dict] | None = None
         manual_excluded_message_count = 0
+        normalized_include_message_ids = {
+            int(message_id)
+            for message_id in (include_message_ids or set())
+            if isinstance(message_id, int) or str(message_id).strip().isdigit()
+        }
         if message_count is not None:
             try:
                 requested_message_count = max(1, int(message_count))
             except (TypeError, ValueError):
                 requested_message_count = None
-        if requested_message_count is not None:
+        if normalized_include_message_ids:
+            manual_candidate_pool = [
+                message
+                for message in all_candidates
+                if int(message.get("id") or 0) in normalized_include_message_ids
+            ]
+            if exclude_message_ids:
+                manual_candidate_pool = [
+                    message
+                    for message in manual_candidate_pool
+                    if int(message.get("id") or 0) not in exclude_message_ids
+                ]
+            manual_excluded_message_count = max(0, len(all_candidates) - len(manual_candidate_pool))
+            manual_source_messages = list(manual_candidate_pool)
+            requested_message_count = len(manual_source_messages)
+        elif requested_message_count is not None:
             manual_candidate_pool = all_candidates
             if exclude_message_ids:
                 manual_candidate_pool = [
@@ -5240,6 +5275,7 @@ def register_chat_routes(app) -> None:
             parsed_options["fetch_url_token_threshold"],
             parsed_options["fetch_url_clip_aggressiveness"],
             exclude_message_ids=parsed_options["exclude_ids"] or None,
+            include_message_ids=parsed_options["include_ids"] or None,
             force=parsed_options["force"],
             bypass_mode=parsed_options["force"],
             continuation_focus=parsed_options["summary_focus"],
@@ -5292,6 +5328,7 @@ def register_chat_routes(app) -> None:
             parsed_options["fetch_url_token_threshold"],
             parsed_options["fetch_url_clip_aggressiveness"],
             exclude_message_ids=parsed_options["exclude_ids"] or None,
+            include_message_ids=parsed_options["include_ids"] or None,
             force=parsed_options["force"],
             bypass_mode=parsed_options["force"],
             continuation_focus=parsed_options["summary_focus"],
