@@ -1381,6 +1381,7 @@ def _strip_private_message_metadata_fields(
     cleaned = dict(metadata)
     if not include_private_fields:
         cleaned.pop("reasoning_content", None)
+        cleaned.pop("_edit_replay_deleted", None)
     return cleaned
 
 
@@ -4086,6 +4087,34 @@ def soft_delete_messages(
         f"UPDATE messages SET deleted_at = ? WHERE conversation_id = ? AND id IN ({placeholders}) AND deleted_at IS NULL",
         (deleted_at, conversation_id, *normalized_ids),
     )
+
+
+def mark_messages_deleted_by_edit_replay(
+    conn: sqlite3.Connection,
+    conversation_id: int,
+    message_ids: Iterable[int],
+) -> None:
+    """Stamp soft-deleted edit-replay messages so RAG sync skips archiving them."""
+    normalized_ids = [int(mid) for mid in message_ids if int(mid) > 0]
+    if not normalized_ids:
+        return
+    placeholders = ", ".join("?" for _ in normalized_ids)
+    rows = conn.execute(
+        f"SELECT id, metadata FROM messages WHERE conversation_id = ? AND id IN ({placeholders})",
+        (conversation_id, *normalized_ids),
+    ).fetchall()
+    for row in rows:
+        try:
+            meta = json.loads(row["metadata"]) if row["metadata"] else {}
+            if not isinstance(meta, dict):
+                meta = {}
+        except Exception:
+            meta = {}
+        meta["_edit_replay_deleted"] = True
+        conn.execute(
+            "UPDATE messages SET metadata = ? WHERE id = ?",
+            (json.dumps(meta, ensure_ascii=False), row["id"]),
+        )
 
 
 def restore_soft_deleted_messages(

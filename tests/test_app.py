@@ -8816,21 +8816,35 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("If work remains unfinished, say so explicitly", instruction["content"])
         self.assertIn("Do not include stray JSON objects", instruction["content"])
 
-    def test_run_agent_stream_does_not_retry_missing_canvas_mutation_tool_call(self):
-        responses = [
-            SimpleNamespace(
-                choices=[
-                    SimpleNamespace(
-                        message=SimpleNamespace(
-                            reasoning_content="",
-                            content="Canvas'ı İngilizceye çevirdim.",
-                            tool_calls=[],
-                        )
+    def test_run_agent_stream_retries_when_user_requests_canvas_write_but_no_tool_called(self):
+        # User explicitly requests canvas write; model hallucinates success without calling any
+        # canvas tool. The retry hook must fire exactly once. On the retry turn the model still
+        # produces no tool call (guard prevents a third attempt via _has_canvas_mutation_retry_instruction).
+        hallucinated_response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        reasoning_content="",
+                        content="Canvas'ı İngilizceye çevirdim.",
+                        tool_calls=[],
                     )
-                ],
-                usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2),
-            ),
-        ]
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        )
+        retry_response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        reasoning_content="",
+                        content="Tamamlandı.",
+                        tool_calls=[],
+                    )
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        )
+        responses = [hallucinated_response, retry_response]
 
         with patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create:
             events = list(
@@ -8842,9 +8856,12 @@ class AppRoutesTestCase(unittest.TestCase):
                 )
             )
 
-        self.assertEqual(mocked_create.call_count, 1)
-        self.assertIn({"type": "answer_delta", "text": "Canvas'ı İngilizceye çevirdim."}, events)
-        self.assertFalse(any(event["type"] == "tool_result" and event.get("tool") == "create_canvas_document" for event in events))
+        # Retry fires once: first hallucinated turn + one retry turn = 2 model calls.
+        self.assertEqual(mocked_create.call_count, 2)
+        # The hallucinated text must NOT be emitted to the client; only the retry-turn answer is.
+        answer_deltas = [e["text"] for e in events if e["type"] == "answer_delta"]
+        self.assertNotIn("Canvas'ı İngilizceye çevirdim.", answer_deltas)
+        self.assertIn("Tamamlandı.", answer_deltas)
         self.assertFalse(any(event["type"] == "clarification_request" for event in events))
 
     def test_build_reasoning_replay_instruction_marks_reasoning_as_non_execution_evidence(self):

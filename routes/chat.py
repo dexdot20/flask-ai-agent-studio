@@ -113,6 +113,7 @@ from db import (
     insert_message,
     insert_model_invocation,
     parse_message_metadata,
+    mark_messages_deleted_by_edit_replay,
     restore_soft_deleted_messages,
     sanitize_edited_user_message_metadata,
     serialize_message_metadata,
@@ -4383,6 +4384,7 @@ def register_chat_routes(app) -> None:
                             later_message_ids,
                             datetime.now().astimezone().isoformat(timespec="seconds"),
                         )
+                        mark_messages_deleted_by_edit_replay(conn, conv_id, later_message_ids)
                     conn.execute(
                         "UPDATE conversations SET model = ?, updated_at = datetime('now') WHERE id = ?",
                         (model, conv_id),

@@ -1314,10 +1314,12 @@ def get_conversation_records_for_rag(
             archived_messages = []
             for msg in messages:
                 role = str(msg["role"] or "").strip()
-                metadata = parse_message_metadata(msg["metadata"])
+                metadata = parse_message_metadata(msg["metadata"], include_private_fields=True)
                 content = str(msg["content"] or "").strip()
                 deleted_at = str(msg["deleted_at"] or "").strip()
                 if deleted_at:
+                    if metadata.get("_edit_replay_deleted"):
+                        continue
                     archived_record = _build_archived_conversation_record(role, content, metadata, deleted_at)
                     if archived_record is not None:
                         archived_messages.append(archived_record)
