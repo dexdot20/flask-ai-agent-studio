@@ -102,6 +102,7 @@ from db import (
     build_persona_preferences,
     build_user_profile_system_context,
     count_visible_message_tokens,
+    create_file_asset,
     create_image_asset,
     create_video_asset,
     delete_conversation_memory_entry,
@@ -7063,9 +7064,11 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn('const editedMessageId = isEditing ? Number(editingEntry.id) : null;', script_text)
         self.assertIn('edited_message_id: editedMessageId', script_text)
         self.assertIn('formData.append("edited_message_id", String(editedMessageId));', script_text)
+        self.assertIn('document_canvas_action: documentCanvasAction,', script_text)
         self.assertIn("clearEditTarget();", script_text)
         self.assertIn("function isEditableHistoryMessage(message)", script_text)
         self.assertIn("function createInlineMessageEditor(message)", script_text)
+        self.assertIn("function getExistingDocumentAttachmentsForCanvasPrompt(message)", script_text)
         self.assertIn("function saveEditedHistoryMessage(messageId, nextContent, options = {})", script_text)
         self.assertIn("function createMessageActions(message, options = {})", script_text)
         self.assertIn("Save and Send", script_text)
@@ -10546,6 +10549,78 @@ class AppRoutesTestCase(unittest.TestCase):
         canvas_event = next((event for event in events if event["type"] == "canvas_sync"), None)
         self.assertIsNotNone(canvas_event)
         self.assertTrue(canvas_event.get("auto_open"))
+
+    def test_edit_replay_with_existing_document_attachment_can_reopen_canvas(self):
+        conversation_id = self._create_conversation()
+        extracted_text = "Project notes\n\nDetails"
+        context_block, text_truncated = build_document_context_block("notes.txt", extracted_text)
+        file_asset = create_file_asset(
+            conversation_id,
+            "notes.txt",
+            "text/plain",
+            extracted_text.encode("utf-8"),
+            extracted_text,
+        )
+        attachment = {
+            "kind": "document",
+            "file_id": file_asset["file_id"],
+            "file_name": "notes.txt",
+            "file_mime_type": "text/plain",
+            "submission_mode": "text",
+            "canvas_mode": "editable",
+            "file_text_truncated": text_truncated,
+            "file_context_block": context_block,
+        }
+
+        with get_db() as conn:
+            edited_user_id = insert_message(
+                conn,
+                conversation_id,
+                "user",
+                "Please review this file",
+                metadata=serialize_message_metadata({"attachments": [attachment]}),
+            )
+            insert_message(conn, conversation_id, "assistant", "Original answer")
+
+        with patch("routes.chat.run_agent_stream", return_value=iter([{"type": "done"}])):
+            response = self.client.post(
+                "/chat",
+                json={
+                    "conversation_id": conversation_id,
+                    "edited_message_id": edited_user_id,
+                    "document_canvas_action": "open",
+                    "model": "deepseek-chat",
+                    "user_content": "Please review this file again",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Please review this file again",
+                            "metadata": {"attachments": [attachment]},
+                        }
+                    ],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        events = [json.loads(line) for line in response.get_data(as_text=True).strip().splitlines()]
+        document_event = next((event for event in events if event["type"] == "document_processed"), None)
+        self.assertIsNotNone(document_event)
+        self.assertEqual(document_event["file_id"], file_asset["file_id"])
+        self.assertEqual(document_event["attachment"]["file_id"], file_asset["file_id"])
+        self.assertEqual(document_event["canvas_document"]["content"], "# notes.txt\n\nProject notes\n\nDetails")
+
+        canvas_event = next((event for event in events if event["type"] == "canvas_sync"), None)
+        self.assertIsNotNone(canvas_event)
+        self.assertTrue(canvas_event.get("auto_open"))
+        self.assertEqual(canvas_event["documents"][0]["source_file_id"], file_asset["file_id"])
+        self.assertEqual(canvas_event["documents"][0]["content"], "# notes.txt\n\nProject notes\n\nDetails")
+
+        conversation_response = self.client.get(f"/api/conversations/{conversation_id}")
+        self.assertEqual(conversation_response.status_code, 200)
+        latest_canvas_state = find_latest_canvas_state(conversation_response.get_json()["messages"])
+        self.assertEqual(len(latest_canvas_state["documents"]), 1)
+        self.assertEqual(latest_canvas_state["documents"][0]["source_file_id"], file_asset["file_id"])
+        self.assertEqual(latest_canvas_state["documents"][0]["content"], "# notes.txt\n\nProject notes\n\nDetails")
 
     def test_render_pdf_pages_for_vision_limits_output_to_first_pages(self):
         fake_pdf = SimpleNamespace(pages=[object(), object(), object(), object()])

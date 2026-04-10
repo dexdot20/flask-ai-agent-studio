@@ -85,6 +85,7 @@ from db import (
     get_entropy_reference_boost_enabled,
     get_fetch_url_clip_aggressiveness,
     get_fetch_url_token_threshold,
+    get_file_asset,
     get_max_parallel_tools,
     get_model_temperature,
     get_pruning_batch_size,
@@ -304,6 +305,91 @@ def _schedule_rag_conversation_sync(conversation_id: int | None, *, force: bool 
         sync_conversations_to_rag_safe(conversation_id=conversation_id, force=force)
         return
     sync_conversations_to_rag_background(current_app._get_current_object(), conversation_id=conversation_id, force=force)
+
+
+def _extract_document_context_body(context_block: str | None) -> str:
+    normalized = str(context_block or "").strip()
+    if not normalized:
+        return ""
+
+    lines = normalized.splitlines()
+    if lines and lines[0].startswith("[Uploaded document:"):
+        lines = lines[1:]
+        while lines and not lines[0].strip():
+            lines = lines[1:]
+    return "\n".join(lines).strip()
+
+
+def _build_processed_document_upload_from_attachment(attachment: dict, *, conversation_id: int) -> dict | None:
+    if not isinstance(attachment, dict):
+        return None
+
+    if str(attachment.get("kind") or "").strip().lower() != "document":
+        return None
+
+    submission_mode = str(attachment.get("submission_mode") or "text").strip().lower()
+    file_id = str(attachment.get("file_id") or "").strip()
+    asset = get_file_asset(file_id, conversation_id=conversation_id) if file_id else None
+    doc_name = os.path.basename(
+        str(attachment.get("file_name") or (asset or {}).get("filename") or "document").strip()
+    ) or "document"
+    doc_mime_type = str(attachment.get("file_mime_type") or (asset or {}).get("mime_type") or "").strip().lower()
+
+    if submission_mode == "visual":
+        visual_page_image_ids = [
+            str(image_id or "").strip()
+            for image_id in (attachment.get("visual_page_image_ids") if isinstance(attachment.get("visual_page_image_ids"), list) else [])
+            if str(image_id or "").strip()
+        ]
+        visual_page_count = max(
+            len(visual_page_image_ids),
+            int(attachment.get("visual_page_count") or 0),
+            1,
+        )
+        visual_total_page_count = max(
+            visual_page_count,
+            int(attachment.get("visual_total_page_count") or 0),
+        )
+        return {
+            "attachment": attachment,
+            "doc_name": doc_name,
+            "doc_mime_type": doc_mime_type,
+            "text_truncated": False,
+            "canvas_md": build_visual_canvas_markdown(
+                doc_name,
+                visual_page_count,
+                total_pages=visual_total_page_count,
+            ),
+            "canvas_format": "markdown",
+            "canvas_language": None,
+            "content_mode": "visual",
+            "canvas_mode": "preview_only",
+            "source_file_id": file_id or None,
+            "source_mime_type": doc_mime_type or None,
+            "visual_page_image_ids": visual_page_image_ids,
+            "visual_only": True,
+        }
+
+    extracted_text = str((asset or {}).get("extracted_text") or "").strip()
+    context_body = _extract_document_context_body(attachment.get("file_context_block"))
+    if not extracted_text and not context_body:
+        return None
+
+    canvas_md = build_canvas_markdown(doc_name, extracted_text) if extracted_text else context_body
+    return {
+        "attachment": attachment,
+        "doc_name": doc_name,
+        "doc_mime_type": doc_mime_type,
+        "text_truncated": attachment.get("file_text_truncated") is True,
+        "canvas_md": canvas_md,
+        "canvas_format": infer_canvas_format(doc_name),
+        "canvas_language": infer_canvas_language(doc_name),
+        "content_mode": "text",
+        "canvas_mode": "editable",
+        "source_file_id": file_id or None,
+        "source_mime_type": doc_mime_type or None,
+        "visual_only": False,
+    }
 
 
 def _snapshot_workspace_tree(conversation_id: int | None) -> dict | None:
@@ -4188,6 +4274,28 @@ def register_chat_routes(app) -> None:
                 latest_user_message.get("metadata"),
                 processed_attachments,
             )
+
+        if edited_message_id is not None and latest_user_message is not None and document_canvas_action == "open":
+            processed_file_ids = {
+                str(upload.get("source_file_id") or "").strip()
+                for upload in processed_document_uploads
+                if str(upload.get("source_file_id") or "").strip()
+            }
+            for attachment in extract_message_attachments(latest_user_message.get("metadata")):
+                if str(attachment.get("kind") or "").strip().lower() != "document":
+                    continue
+                file_id = str(attachment.get("file_id") or "").strip()
+                if file_id and file_id in processed_file_ids:
+                    continue
+                replayed_upload = _build_processed_document_upload_from_attachment(
+                    attachment,
+                    conversation_id=conv_id,
+                )
+                if not replayed_upload:
+                    continue
+                processed_document_uploads.append(replayed_upload)
+                if file_id:
+                    processed_file_ids.add(file_id)
 
         max_steps = max(1, min(50, int(settings.get("max_steps", 5))))
         temperature = get_model_temperature(settings)

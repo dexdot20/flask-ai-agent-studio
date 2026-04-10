@@ -3125,7 +3125,7 @@ async function createCanvasDocumentFromData({ title, content, format, language =
     pendingCanvasDiff = null;
     activeCanvasDocumentId = String(payload.active_document_id || payload.document?.id || "").trim() || null;
     isCanvasEditing = true;
-    editingCanvasDocumentId = activeCanvasDocumentId;
+    editingCanvasDocumentId = null;
     renderConversationHistory();
     renderCanvasPanel();
     scheduleCanvasAutoRefreshAfterUpload();
@@ -3208,7 +3208,7 @@ async function createCanvasDocumentFromFile(file) {
     pendingCanvasDiff = null;
     activeCanvasDocumentId = String(payload.active_document_id || payload.document?.id || "").trim() || null;
     isCanvasEditing = true;
-    editingCanvasDocumentId = activeCanvasDocumentId;
+    editingCanvasDocumentId = null;
     renderConversationHistory();
     renderCanvasPanel();
     setCanvasStatus("Canvas file created.", "success");
@@ -3982,14 +3982,15 @@ function scheduleCanvasEditingPreviewRender() {
 }
 
 function setPendingDocumentCanvasOpen(files) {
-  if (!files || !files.length) {
+  const documentItems = getDocumentCanvasPromptItems(files);
+  if (!documentItems.length) {
     pendingDocumentCanvasOpen = null;
     return;
   }
 
   pendingDocumentCanvasOpen = {
-    fileCount: files.length,
-    fileName: String(files[0]?.name || "Document").trim() || "Document",
+    fileCount: documentItems.length,
+    fileName: String(documentItems[0]?.name || "Document").trim() || "Document",
   };
 }
 
@@ -4333,13 +4334,45 @@ function promptPdfSubmissionMode(files) {
   });
 }
 
+function normalizeDocumentCanvasPromptItem(item) {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+
+  if (typeof File !== "undefined" && item instanceof File) {
+    if (!isDocumentFile(item)) {
+      return null;
+    }
+    const fileName = String(item.name || "document").trim() || "document";
+    return { name: fileName };
+  }
+
+  const kind = String(item.kind || "").trim().toLowerCase();
+  if (kind && kind !== "document") {
+    return null;
+  }
+
+  const fileName = String(item.file_name || item.name || "document").trim() || "document";
+  return { name: fileName };
+}
+
+function getDocumentCanvasPromptItems(items) {
+  return (items || [])
+    .map((item) => normalizeDocumentCanvasPromptItem(item))
+    .filter(Boolean);
+}
+
+function getExistingDocumentAttachmentsForCanvasPrompt(message) {
+  return getMessageAttachments(message?.metadata).filter((attachment) => String(attachment.kind || "").trim().toLowerCase() === "document");
+}
+
 function escapeRegExp(text) {
   return String(text || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function promptDocumentCanvasAction(files) {
-  const documentFiles = (files || []).filter((file) => isDocumentFile(file));
-  if (!documentFiles.length) {
+  const documentItems = getDocumentCanvasPromptItems(files);
+  if (!documentItems.length) {
     return Promise.resolve("prompt");
   }
 
@@ -4347,8 +4380,8 @@ function promptDocumentCanvasAction(files) {
     return Promise.resolve("prompt");
   }
 
-  const fileCount = documentFiles.length;
-  const fileName = String(documentFiles[0]?.name || "document").trim() || "document";
+  const fileCount = documentItems.length;
+  const fileName = String(documentItems[0]?.name || "document").trim() || "document";
   const requestLabel = fileCount > 1 ? `${fileCount} documents` : fileName;
   const pronoun = fileCount > 1 ? "them" : "it";
 
@@ -11247,6 +11280,10 @@ async function sendMessage(options = {}) {
     return { ok: false, errorCode: "" };
   }
 
+  const editingEntry = getHistoryMessage(editingMessageId);
+  const isEditing = Boolean(editingEntry && editingEntry.role === "user");
+  const editedMessageId = isEditing ? Number(editingEntry.id) : null;
+
   if (pendingDeleteMessageId !== null) {
     clearPendingDeleteMessage({ preserveScroll: true });
   }
@@ -11263,22 +11300,23 @@ async function sendMessage(options = {}) {
     }
   }
 
+  const existingDocumentAttachments = !pendingDocuments.length && isEditing
+    ? getExistingDocumentAttachmentsForCanvasPrompt(editingEntry)
+    : [];
+  const documentCanvasPromptItems = pendingDocuments.length ? pendingDocuments : existingDocumentAttachments;
+
   let documentCanvasAction = "prompt";
-  if (pendingDocuments.length) {
-    documentCanvasAction = await promptDocumentCanvasAction(pendingDocuments);
+  if (documentCanvasPromptItems.length) {
+    documentCanvasAction = await promptDocumentCanvasAction(documentCanvasPromptItems);
   }
 
-  setPendingDocumentCanvasOpen(documentCanvasAction === "open" ? pendingDocuments : null);
+  setPendingDocumentCanvasOpen(documentCanvasAction === "open" ? documentCanvasPromptItems : null);
 
   if (pendingImages.length && !Boolean(featureFlags.image_uploads_enabled)) {
     clearSelectedImage();
     showError("Image uploads are disabled in .env.");
     return { ok: false, errorCode: "" };
   }
-
-  const editingEntry = getHistoryMessage(editingMessageId);
-  const isEditing = Boolean(editingEntry && editingEntry.role === "user");
-  const editedMessageId = isEditing ? Number(editingEntry.id) : null;
   if (!isEditing) {
     clearEditTarget();
   }
@@ -11514,6 +11552,7 @@ async function sendMessage(options = {}) {
           conversation_id: currentConvId,
           edited_message_id: editedMessageId,
           user_content: text,
+          document_canvas_action: documentCanvasAction,
           youtube_url: pendingYouTubeUrl,
         }),
       });
