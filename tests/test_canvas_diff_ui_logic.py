@@ -12,6 +12,8 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 APP_JS_PATH = REPO_ROOT / "static" / "app.js"
 CANVAS_DIFF_START_MARKER = "const CANVAS_DIFF_CONTEXT_LINE_COUNT"
 CANVAS_DIFF_END_MARKER = "function renderCanvasDiffPreview"
+STREAMING_CANVAS_PREVIEW_START_MARKER = "const STREAMING_CANVAS_MARKDOWN_PLAIN_TEXT_CHAR_LIMIT"
+STREAMING_CANVAS_PREVIEW_END_MARKER = "function renderCanvasDocumentBody"
 
 
 def _load_canvas_diff_helper_source() -> str:
@@ -19,6 +21,14 @@ def _load_canvas_diff_helper_source() -> str:
     start = source.find(CANVAS_DIFF_START_MARKER)
     end = source.find(CANVAS_DIFF_END_MARKER, start)
     assert start != -1 and end != -1, "Canvas diff helpers were not found in static/app.js"
+    return source[start:end]
+
+
+def _load_streaming_canvas_preview_source() -> str:
+    source = APP_JS_PATH.read_text(encoding="utf-8")
+    start = source.find(STREAMING_CANVAS_PREVIEW_START_MARKER)
+    end = source.find(STREAMING_CANVAS_PREVIEW_END_MARKER, start)
+    assert start != -1 and end != -1, "Streaming canvas preview helpers were not found in static/app.js"
     return source[start:end]
 
 
@@ -58,6 +68,47 @@ def _run_canvas_diff_assertions(script_body: str) -> None:
             f"STDOUT:\n{result.stdout}\n"
             f"STDERR:\n{result.stderr}"
         )
+
+
+def _run_streaming_canvas_preview_assertions(script_body: str) -> None:
+        node_path = shutil.which("node")
+        if not node_path:
+                pytest.skip("node is not installed")
+
+        helper_source = _load_streaming_canvas_preview_source()
+        node_script = textwrap.dedent(
+                f"""
+                const escHtml = (value) => String(value || "")
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/\"/g, "&quot;");
+                const renderStreamingMarkdown = (text) => `<div class="rendered-stream">${{escHtml(String(text || ""))}}</div>`;
+
+                {helper_source}
+
+                const assert = (condition, message) => {{
+                    if (!condition) {{
+                        throw new Error(message);
+                    }}
+                }};
+
+                {script_body}
+                """
+        )
+        result = subprocess.run(
+                [node_path, "-e", node_script],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+        )
+        if result.returncode != 0:
+                raise AssertionError(
+                        "Node streaming canvas preview assertions failed.\n"
+                        f"STDOUT:\n{result.stdout}\n"
+                        f"STDERR:\n{result.stderr}"
+                )
 
 
 def test_build_canvas_diff_preserves_separate_hunks() -> None:
@@ -116,6 +167,52 @@ def test_build_canvas_diff_tracks_context_and_line_numbers() -> None:
         assert(firstHunk.lines.some((line) => line.kind === "added" && line.previousLineNumber === null && line.nextLineNumber === 5 && line.text === "five"), "Trailing inserted line metadata is incorrect");
         """
     )
+
+
+def test_streaming_canvas_preview_keeps_markdown_rendering_for_small_drafts() -> None:
+    _run_streaming_canvas_preview_assertions(
+        """
+        const document = {
+          format: "markdown",
+          content: "# Draft\\n\\nShort preview",
+          line_count: 3,
+        };
+
+        assert(getStreamingCanvasPreviewRenderMode(document) === "markdown", "Small markdown drafts should keep rendered preview mode");
+        const html = renderStreamingCanvasPreviewBody(document);
+        assert(html.includes("rendered-stream"), "Small markdown drafts should still use rendered markdown previews");
+        assert(!html.includes("canvas-stream-markdown-block"), "Small markdown drafts should not use plaintext fallback");
+        """
+    )
+
+
+def test_streaming_canvas_preview_uses_plaintext_fallback_for_large_markdown() -> None:
+    _run_streaming_canvas_preview_assertions(
+        """
+        const longText = Array.from({ length: 120 }, (_, index) => `line ${index + 1}`).join("\\n");
+        const document = {
+          format: "markdown",
+          content: longText,
+          line_count: 120,
+        };
+
+        assert(getStreamingCanvasPreviewRenderMode(document) === "markdown-plain", "Large markdown drafts should switch to plaintext fallback mode");
+        const html = renderStreamingCanvasPreviewBody(document);
+        assert(html.includes("canvas-stream-markdown-block"), "Large markdown drafts should render with the plaintext preview shell");
+        assert(!html.includes("rendered-stream"), "Large markdown drafts should skip expensive live markdown rendering");
+        """
+    )
+
+
+def test_update_streaming_canvas_preview_element_uses_text_content_fast_paths() -> None:
+    source = _load_app_js_source()
+    update_match = re.search(r"function updateStreamingCanvasPreviewElement\(containerEl, document\) \{(?P<body>.*?)\n\}", source, re.S)
+    assert update_match, "updateStreamingCanvasPreviewElement function was not found in static/app.js"
+    update_body = update_match.group("body")
+
+    assert 'previewBody.setAttribute("data-canvas-streaming-preview-mode", renderMode);' in update_body
+    assert "codeEl.textContent = previewText;" in update_body
+    assert "previewTextEl.textContent = previewText;" in update_body
 
 
 def test_canvas_sync_no_longer_suppresses_diff_after_live_preview() -> None:

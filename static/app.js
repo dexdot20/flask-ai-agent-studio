@@ -3072,8 +3072,20 @@ function renderCanvasMarkdownSheet(contentHtml, options = {}) {
   );
 }
 
+const STREAMING_CANVAS_MARKDOWN_PLAIN_TEXT_CHAR_LIMIT = 1800;
+const STREAMING_CANVAS_MARKDOWN_PLAIN_TEXT_LINE_LIMIT = 80;
+
 function getStreamingCanvasPreviewFormat(document) {
   return document?.format === "code" ? "code" : "markdown";
+}
+
+function getStreamingCanvasPreviewLanguage(document) {
+  return String(document?.language || "").trim().toLowerCase();
+}
+
+function getStreamingCanvasCodePreviewClassName(document) {
+  const language = getStreamingCanvasPreviewLanguage(document);
+  return `canvas-stream-code${language ? ` language-${language}` : ""}`;
 }
 
 function getStreamingCanvasPreviewLabel(document) {
@@ -3094,6 +3106,10 @@ function getStreamingCanvasPreviewPlaceholder(document) {
     : "Streaming draft will appear here...";
 }
 
+function getStreamingCanvasPreviewDisplayText(document) {
+  return getStreamingCanvasPreviewText(document) || getStreamingCanvasPreviewPlaceholder(document);
+}
+
 function countCanvasLines(text) {
   const normalizedText = String(text || "");
   return normalizedText ? normalizedText.split("\n").length : 0;
@@ -3104,19 +3120,45 @@ function countCanvasNewlines(text) {
   return matches ? matches.length : 0;
 }
 
-function renderStreamingCanvasPreviewBody(document) {
+function getStreamingCanvasPreviewRenderMode(document) {
   const format = getStreamingCanvasPreviewFormat(document);
   if (format === "code") {
-    const language = String(document?.language || "").trim().toLowerCase();
-    const languageClass = language ? ` language-${escHtml(language)}` : "";
-    return `<pre class="canvas-stream-code-block"><code class="canvas-stream-code${languageClass}">${escHtml(getStreamingCanvasPreviewText(document) || getStreamingCanvasPreviewPlaceholder(document))}</code></pre>`;
+    return "code";
   }
-  return renderStreamingMarkdown(getStreamingCanvasPreviewText(document) || getStreamingCanvasPreviewPlaceholder(document));
+
+  const previewText = getStreamingCanvasPreviewDisplayText(document);
+  const storedLineCount = Number(document?.line_count);
+  const lineCount = Number.isFinite(storedLineCount) && storedLineCount > 0
+    ? storedLineCount
+    : countCanvasLines(previewText);
+
+  if (
+    previewText.length > STREAMING_CANVAS_MARKDOWN_PLAIN_TEXT_CHAR_LIMIT
+    || lineCount > STREAMING_CANVAS_MARKDOWN_PLAIN_TEXT_LINE_LIMIT
+  ) {
+    return "markdown-plain";
+  }
+
+  return "markdown";
+}
+
+function renderStreamingCanvasPreviewBody(document) {
+  const previewText = getStreamingCanvasPreviewDisplayText(document);
+  const renderMode = getStreamingCanvasPreviewRenderMode(document);
+  if (renderMode === "code") {
+    const codeClassName = getStreamingCanvasCodePreviewClassName(document);
+    return `<pre class="canvas-stream-code-block"><code class="${escHtml(codeClassName)}">${escHtml(previewText)}</code></pre>`;
+  }
+  if (renderMode === "markdown-plain") {
+    return `<pre class="canvas-stream-markdown-block"><code class="canvas-stream-markdown-text">${escHtml(previewText)}</code></pre>`;
+  }
+  return renderStreamingMarkdown(previewText);
 }
 
 function renderStreamingCanvasPreviewContent(document) {
   const format = getStreamingCanvasPreviewFormat(document);
-  return `<div class="canvas-stream-preview canvas-stream-preview--${format}" data-canvas-streaming-preview-body="true">${renderStreamingCanvasPreviewBody(document)}</div>`;
+  const renderMode = getStreamingCanvasPreviewRenderMode(document);
+  return `<div class="canvas-stream-preview canvas-stream-preview--${format} canvas-stream-preview--${renderMode}" data-canvas-streaming-preview-body="true" data-canvas-streaming-preview-mode="${renderMode}">${renderStreamingCanvasPreviewBody(document)}</div>`;
 }
 
 function updateStreamingCanvasPreviewElement(containerEl, document) {
@@ -3131,7 +3173,30 @@ function updateStreamingCanvasPreviewElement(containerEl, document) {
   }
 
   const format = getStreamingCanvasPreviewFormat(document);
-  previewBody.className = `canvas-stream-preview canvas-stream-preview--${format}`;
+  const renderMode = getStreamingCanvasPreviewRenderMode(document);
+  const previewText = getStreamingCanvasPreviewDisplayText(document);
+  const previousRenderMode = String(previewBody.getAttribute("data-canvas-streaming-preview-mode") || "").trim();
+
+  previewBody.className = `canvas-stream-preview canvas-stream-preview--${format} canvas-stream-preview--${renderMode}`;
+  previewBody.setAttribute("data-canvas-streaming-preview-mode", renderMode);
+
+  if (renderMode === "code" && previousRenderMode === renderMode) {
+    const codeEl = previewBody.querySelector(".canvas-stream-code");
+    if (codeEl) {
+      codeEl.className = getStreamingCanvasCodePreviewClassName(document);
+      codeEl.textContent = previewText;
+      return;
+    }
+  }
+
+  if (renderMode === "markdown-plain" && previousRenderMode === renderMode) {
+    const previewTextEl = previewBody.querySelector(".canvas-stream-markdown-text");
+    if (previewTextEl) {
+      previewTextEl.textContent = previewText;
+      return;
+    }
+  }
+
   previewBody.innerHTML = renderStreamingCanvasPreviewBody(document);
 }
 

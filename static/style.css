@@ -4612,6 +4612,10 @@ kbd {
   display: block;
 }
 
+.canvas-stream-preview--markdown-plain {
+  display: block;
+}
+
 .canvas-stream-code-block {
   margin: 0;
   padding: 18px 20px;
@@ -4627,6 +4631,25 @@ kbd {
   white-space: pre;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.9rem;
+  line-height: 1.68;
+}
+
+.canvas-stream-markdown-block {
+  margin: 0;
+  padding: 18px 20px;
+  border: 1px solid var(--canvas-panel-border);
+  border-radius: 14px;
+  background: rgba(8, 10, 18, 0.46);
+  overflow: auto;
+}
+
+.canvas-stream-markdown-text {
+  display: block;
+  color: rgba(232, 232, 239, 0.94);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font);
+  font-size: 0.95rem;
   line-height: 1.68;
 }
 
