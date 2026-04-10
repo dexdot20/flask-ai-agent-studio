@@ -18,11 +18,13 @@ except ImportError:  # pragma: no cover
 import re
 import string
 from logging.handlers import RotatingFileHandler
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from canvas_service import (
     batch_read_canvas_documents,
     batch_canvas_edits,
+    build_canvas_document_result_snapshot,
     build_canvas_document_context_result,
     build_canvas_tool_result,
     clear_canvas_viewport,
@@ -94,7 +96,12 @@ from db import (
     get_context_compaction_keep_recent_rounds,
     get_context_compaction_threshold,
     get_fetch_url_clip_aggressiveness,
+    get_fetch_url_summarized_max_input_chars,
+    get_fetch_url_summarized_max_output_tokens,
     get_fetch_url_token_threshold,
+    get_fetch_url_to_canvas_chunk_chars,
+    get_fetch_url_to_canvas_chunk_threshold,
+    get_fetch_url_to_canvas_max_chunks,
     get_all_scratchpad_sections,
     get_app_settings,
     get_clarification_max_questions,
@@ -159,6 +166,7 @@ CANVAS_TOOL_NAMES = {
     "scroll_canvas_document",
     "search_canvas_document",
     "validate_canvas_document",
+    "fetch_url_to_canvas",
     "create_canvas_document",
     "rewrite_canvas_document",
     "preview_canvas_changes",
@@ -175,6 +183,7 @@ CANVAS_TOOL_NAMES = {
     "clear_canvas",
 }
 CANVAS_MUTATION_TOOL_NAMES = {
+    "fetch_url_to_canvas",
     "create_canvas_document",
     "rewrite_canvas_document",
     "batch_canvas_edits",
@@ -232,6 +241,7 @@ WEB_TOOL_NAMES = {
     "search_web",
     "fetch_url",
     "fetch_url_summarized",
+    "fetch_url_to_canvas",
     "search_news_ddgs",
     "search_news_google",
 }
@@ -250,7 +260,7 @@ SEARCH_QUERY_ARGUMENT_ALIASES = (
 SEARCH_TOOL_QUERY_BATCH_SIZE = 5
 SEARCH_MEMORY_PROMOTION_MATCH_LIMIT = 2
 SEARCH_MEMORY_PROMOTION_EXCERPT_LIMIT = 180
-PARALLEL_SAFE_TOOL_NAMES = WEB_TOOL_NAMES | {
+PARALLEL_SAFE_TOOL_NAMES = (WEB_TOOL_NAMES - {"fetch_url_to_canvas"}) | {
     "image_explain",
     # RAG / memory reads
     "search_knowledge_base",
@@ -2474,9 +2484,13 @@ def _infer_fetch_summary_profile(result: dict) -> dict:
     }
 
 
-def _estimate_fetch_summary_max_tokens(source_text: str) -> int:
+def _estimate_fetch_summary_max_tokens(
+    source_text: str,
+    configured_max_tokens: int = FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS,
+) -> int:
     source_char_count = len(_clean_tool_text(source_text))
-    dynamic_target = max(FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS, source_char_count // 32)
+    configured_cap = max(200, min(4_000, int(configured_max_tokens or FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS)))
+    dynamic_target = max(configured_cap, source_char_count // 32)
     return max(200, min(4_000, dynamic_target))
 
 
@@ -2588,7 +2602,10 @@ def _append_model_invocation_log(
     )
 
 
-def _build_fetch_summary_source_text(result: dict) -> str:
+def _build_fetch_summary_source_text(
+    result: dict,
+    max_input_chars: int = FETCH_SUMMARIZE_MAX_INPUT_CHARS,
+) -> str:
     parts: list[str] = []
     title = _clean_tool_text(result.get("title") or "", limit=200)
     url = _clean_tool_text(result.get("url") or "", limit=240)
@@ -2596,7 +2613,8 @@ def _build_fetch_summary_source_text(result: dict) -> str:
     meta_description = _clean_tool_text(result.get("meta_description") or "", limit=600)
     structured_data = _clean_tool_text(result.get("structured_data") or "", limit=2_000)
     outline = result.get("outline") if isinstance(result.get("outline"), list) else []
-    content = _clean_tool_text(result.get("content") or "", limit=FETCH_SUMMARIZE_MAX_INPUT_CHARS)
+    normalized_max_input_chars = max(4_000, min(1_000_000, int(max_input_chars or FETCH_SUMMARIZE_MAX_INPUT_CHARS)))
+    content = _clean_tool_text(result.get("content") or "", limit=normalized_max_input_chars)
     if title:
         parts.append(f"Title: {title}")
     if url:
@@ -2627,7 +2645,9 @@ def _summarize_fetched_page_result(
     settings = get_app_settings()
     summarizer_model = get_operation_model("fetch_summarize", settings, fallback_model_id=parent_model)
     target = resolve_model_target(summarizer_model, settings)
-    source_text = _build_fetch_summary_source_text(result)
+    summary_max_input_chars = get_fetch_url_summarized_max_input_chars(settings)
+    summary_max_output_tokens = get_fetch_url_summarized_max_output_tokens(settings)
+    source_text = _build_fetch_summary_source_text(result, max_input_chars=summary_max_input_chars)
     if not source_text:
         raise ValueError("Fetched page did not contain enough text to summarize.")
 
@@ -2646,7 +2666,10 @@ def _summarize_fetched_page_result(
     if focus_text:
         user_parts.append(f"Focus:\n{focus_text}")
     user_parts.append(source_text)
-    max_output_tokens = _estimate_fetch_summary_max_tokens(source_text)
+    max_output_tokens = _estimate_fetch_summary_max_tokens(
+        source_text,
+        configured_max_tokens=summary_max_output_tokens,
+    )
     request_kwargs = apply_model_target_request_options(
         {
             "model": target["api_model"],
@@ -2964,6 +2987,7 @@ def _prepare_tool_result_for_transcript(
         for key in (
             "status",
             "action",
+            "url",
             "document_id",
             "document_path",
             "title",
@@ -2974,6 +2998,12 @@ def _prepare_tool_result_for_transcript(
             "role",
             "summary",
             "expected_start_line",
+            "document_count",
+            "import_group_id",
+            "chunked",
+            "truncated",
+            "content_format",
+            "fetch_summary",
         ):
             value = result.get(key)
             if value not in (None, "", [], {}):
@@ -2996,6 +3026,39 @@ def _prepare_tool_result_for_transcript(
                     compact_document[key] = value
             if compact_document:
                 compact_result["document"] = compact_document
+
+        documents = result.get("documents") if isinstance(result.get("documents"), list) else []
+        if documents:
+            compact_documents = []
+            for entry in documents[:12]:
+                if not isinstance(entry, dict):
+                    continue
+                compact_entry = {}
+                document_id = entry.get("document_id") or entry.get("id")
+                document_path = entry.get("document_path") or entry.get("path")
+                if document_id not in (None, ""):
+                    compact_entry["document_id"] = document_id
+                if document_path not in (None, ""):
+                    compact_entry["document_path"] = document_path
+                for key in (
+                    "title",
+                    "format",
+                    "language",
+                    "line_count",
+                    "source_url",
+                    "source_title",
+                    "source_kind",
+                    "import_group_id",
+                    "chunk_index",
+                    "chunk_count",
+                ):
+                    value = entry.get(key)
+                    if value not in (None, "", [], {}):
+                        compact_entry[key] = value
+                if compact_entry:
+                    compact_documents.append(compact_entry)
+            if compact_documents:
+                compact_result["documents"] = compact_documents
 
         content_preview = _clean_tool_text(str(result.get("content") or ""), limit=400)
         if content_preview:
@@ -5199,6 +5262,221 @@ def _run_fetch_url(tool_args: dict, runtime_state: dict):
     return result, _summarize_fetch_result(result, tool_args.get("url", ""))
 
 
+def _slugify_canvas_import_label(value: str, fallback: str = "web-page") -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
+    return slug[:64] or fallback
+
+
+def _build_fetch_canvas_base_title(result: dict, url: str) -> str:
+    title = _clean_tool_text(result.get("title") or "", limit=120)
+    if title:
+        return title
+    parsed = urlparse(url)
+    fallback = (parsed.path.rstrip("/").split("/")[-1] or parsed.netloc or url or "Fetched page").strip()
+    return _clean_tool_text(fallback, limit=120) or "Fetched page"
+
+
+def _build_fetch_canvas_path(base_title: str, url: str, import_group_id: str, chunk_index: int, chunk_count: int) -> str:
+    parsed = urlparse(url)
+    label_source = parsed.netloc or parsed.path or base_title
+    base_slug = _slugify_canvas_import_label(label_source)
+    suffix = import_group_id[:8]
+    if chunk_count > 1:
+        return f"web/{base_slug}-{suffix}/part-{chunk_index:02d}.md"
+    return f"web/{base_slug}-{suffix}.md"
+
+
+def _build_fetch_to_canvas_content_budget(settings: dict) -> int:
+    chunk_threshold = get_fetch_url_to_canvas_chunk_threshold(settings)
+    chunk_chars = get_fetch_url_to_canvas_chunk_chars(settings)
+    max_chunks = get_fetch_url_to_canvas_max_chunks(settings)
+    requested_budget = max(chunk_threshold, chunk_chars * max_chunks + 8_000)
+    return max(2_000, min(1_000_000, requested_budget))
+
+
+def _split_fetched_content_for_canvas(
+    text: str,
+    *,
+    chunk_threshold: int,
+    chunk_chars: int,
+    max_chunks: int,
+) -> tuple[list[str], bool]:
+    normalized_text = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not normalized_text:
+        return [], False
+
+    normalized_chunk_threshold = max(2_000, int(chunk_threshold or 0))
+    normalized_chunk_chars = max(4_000, int(chunk_chars or 0))
+    normalized_max_chunks = max(1, int(max_chunks or 0))
+
+    if len(normalized_text) <= normalized_chunk_threshold:
+        return [normalized_text], False
+
+    pieces: list[str] = []
+    for paragraph in re.split(r"\n{2,}", normalized_text):
+        remaining = paragraph.strip()
+        if not remaining:
+            continue
+        while len(remaining) > normalized_chunk_chars:
+            split_at = remaining.rfind("\n", 0, normalized_chunk_chars)
+            if split_at < normalized_chunk_chars // 2:
+                split_at = remaining.rfind(" ", 0, normalized_chunk_chars)
+            if split_at < normalized_chunk_chars // 2:
+                split_at = normalized_chunk_chars
+            piece = remaining[:split_at].strip()
+            if piece:
+                pieces.append(piece)
+            remaining = remaining[split_at:].lstrip()
+        if remaining:
+            pieces.append(remaining)
+
+    if not pieces:
+        pieces = [normalized_text]
+
+    chunks: list[str] = []
+    current_chunk = ""
+    for piece in pieces:
+        candidate = piece if not current_chunk else f"{current_chunk}\n\n{piece}"
+        if current_chunk and len(candidate) > normalized_chunk_chars:
+            chunks.append(current_chunk)
+            current_chunk = piece
+        else:
+            current_chunk = candidate
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    was_truncated = len(chunks) > normalized_max_chunks
+    if was_truncated:
+        chunks = chunks[:normalized_max_chunks]
+        chunks[-1] = chunks[-1].rstrip() + (
+            f"\n\n[Import truncated after {normalized_max_chunks} Canvas documents. Remaining fetched content was omitted.]"
+        )
+    return chunks, was_truncated
+
+
+def _run_fetch_url_to_canvas(tool_args: dict, runtime_state: dict):
+    url = str(tool_args.get("url") or "").strip()
+    settings = get_app_settings()
+    chunk_threshold = get_fetch_url_to_canvas_chunk_threshold(settings)
+    chunk_chars = get_fetch_url_to_canvas_chunk_chars(settings)
+    max_chunks = get_fetch_url_to_canvas_max_chunks(settings)
+    fetch_budget = _build_fetch_to_canvas_content_budget(settings)
+    cache_namespace = f"fetch_canvas:{chunk_chars}:{max_chunks}"
+    result = fetch_url_tool(url, content_max_chars=fetch_budget, cache_namespace=cache_namespace)
+
+    cleaned_content = str(result.get("content") or "").strip()
+    if result.get("error") or not cleaned_content:
+        error_result = {
+            "status": "error",
+            "action": "url_import_failed",
+            "url": str(result.get("url") or url).strip(),
+            "title": _clean_tool_text(result.get("title") or "", limit=120),
+            "summary": _summarize_fetch_result(result, url),
+        }
+        if result.get("error"):
+            error_result["error"] = _clean_tool_text(result.get("error") or "", limit=400)
+        return error_result, _summarize_fetch_result(result, url)
+
+    chunks, was_truncated = _split_fetched_content_for_canvas(
+        cleaned_content,
+        chunk_threshold=chunk_threshold,
+        chunk_chars=chunk_chars,
+        max_chunks=max_chunks,
+    )
+    if not chunks:
+        return {
+            "status": "error",
+            "action": "url_import_failed",
+            "url": str(result.get("url") or url).strip(),
+            "error": "Fetched page did not contain importable text.",
+        }, "fetch_url_to_canvas failed: no importable text"
+
+    canvas_state = _get_canvas_runtime_state(runtime_state)
+    source_url = str(result.get("url") or url).strip()
+    base_title = _build_fetch_canvas_base_title(result, source_url)
+    source_title = _clean_tool_text(result.get("title") or base_title, limit=160) or base_title
+    import_group_id = f"fetch-{uuid4().hex[:12]}"
+    meta_description = _clean_tool_text(result.get("meta_description") or "", limit=180)
+    created_documents: list[dict] = []
+
+    for index, chunk_text in enumerate(chunks, start=1):
+        chunk_count = len(chunks)
+        title = base_title if chunk_count == 1 else f"{base_title} (Part {index}/{chunk_count})"
+        summary = meta_description
+        if chunk_count > 1:
+            summary_prefix = f"Imported web page chunk {index}/{chunk_count}"
+            summary = f"{summary_prefix}: {meta_description}" if meta_description else summary_prefix
+        elif not summary:
+            summary = "Imported web page"
+        content_parts = [f"# {title}"]
+        if source_url:
+            source_line = f"Source: {source_url}"
+            if chunk_count > 1:
+                source_line += f" · Part {index} of {chunk_count}"
+            content_parts.append(f"_{source_line}_")
+        content_parts.append(chunk_text.strip())
+        document = create_canvas_document(
+            canvas_state,
+            title=title,
+            content="\n\n".join(part for part in content_parts if part).strip(),
+            format_name="markdown",
+            path=_build_fetch_canvas_path(base_title, source_url, import_group_id, index, chunk_count),
+            role="reference",
+            summary=summary,
+            source_url=source_url,
+            source_title=source_title,
+            source_kind="fetched_url",
+            import_group_id=import_group_id,
+            chunk_index=index,
+            chunk_count=chunk_count,
+        )
+        created_documents.append(document)
+
+    if created_documents:
+        canvas_state["active_document_id"] = created_documents[0].get("id")
+
+    document_snapshots = []
+    for document in created_documents:
+        snapshot = build_canvas_document_result_snapshot(document) or {}
+        snapshot_entry = dict(snapshot)
+        if snapshot_entry.get("id"):
+            snapshot_entry["document_id"] = snapshot_entry.get("id")
+        if snapshot_entry.get("path"):
+            snapshot_entry["document_path"] = snapshot_entry.get("path")
+        document_snapshots.append(snapshot_entry)
+
+    first_snapshot = document_snapshots[0]
+    tool_result = {
+        "status": "ok",
+        "action": "url_imported_to_canvas",
+        "url": source_url,
+        "title": base_title,
+        "document_id": first_snapshot.get("document_id"),
+        "document_path": first_snapshot.get("document_path"),
+        "document_count": len(document_snapshots),
+        "documents": document_snapshots,
+        "document": first_snapshot,
+        "primary_locator": {
+            "document_id": first_snapshot.get("document_id"),
+            "document_path": first_snapshot.get("document_path"),
+        },
+        "import_group_id": import_group_id,
+        "chunked": len(document_snapshots) > 1,
+        "truncated": was_truncated,
+        "content_format": result.get("content_format"),
+        "fetch_summary": _summarize_fetch_result(result, source_url),
+    }
+    if meta_description:
+        tool_result["summary"] = meta_description
+    if result.get("fetch_warning"):
+        tool_result["fetch_warning"] = _clean_tool_text(result.get("fetch_warning") or "", limit=240)
+
+    summary = f"Fetched URL imported to Canvas: {len(document_snapshots)} document(s)"
+    if was_truncated:
+        summary += " (truncated to import limit)"
+    return tool_result, summary
+
+
 def _run_fetch_url_summarized(tool_args: dict, runtime_state: dict):
     url = str(tool_args.get("url") or "").strip()
     focus = str(tool_args.get("focus") or "").strip()
@@ -5769,6 +6047,7 @@ _TOOL_EXECUTORS = {
     "search_news_google": _run_search_news_google,
     "fetch_url": _run_fetch_url,
     "fetch_url_summarized": _run_fetch_url_summarized,
+    "fetch_url_to_canvas": _run_fetch_url_to_canvas,
     "grep_fetched_content": _run_grep_fetched_content,
     "expand_canvas_document": _run_expand_canvas_document,
     "batch_read_canvas_documents": _run_batch_read_canvas_documents,
@@ -5947,7 +6226,7 @@ def _tool_input_preview(tool_name: str, tool_args: dict) -> str:
                 return f"{query} | {suffix}"[:300]
             return suffix[:300]
         return query[:300]
-    if tool_name == "fetch_url":
+    if tool_name in {"fetch_url", "fetch_url_to_canvas"}:
         return str(tool_args.get("url") or "").strip()[:300]
     if tool_name == "fetch_url_summarized":
         url = str(tool_args.get("url") or "").strip()

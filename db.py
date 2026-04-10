@@ -43,7 +43,12 @@ from config import (
     SCRATCHPAD_SECTION_SETTING_KEYS,
     DOCUMENT_STORAGE_DIR,
     FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS,
+    FETCH_SUMMARIZE_MAX_INPUT_CHARS,
+    FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS,
     FETCH_SUMMARY_TOKEN_THRESHOLD,
+    FETCH_URL_TO_CANVAS_CHUNK_CHARS,
+    FETCH_URL_TO_CANVAS_CHUNK_THRESHOLD,
+    FETCH_URL_TO_CANVAS_MAX_CHUNKS,
     IMAGE_STORAGE_DIR,
     DEFAULT_MAX_PARALLEL_TOOLS,
     ENTROPY_PROFILE_PRESETS,
@@ -3924,6 +3929,61 @@ def get_fetch_url_clip_aggressiveness(settings: dict | None = None) -> int:
     except (TypeError, ValueError):
         aggressiveness = 50
     return max(0, min(100, aggressiveness))
+
+
+def get_fetch_url_summarized_max_input_chars(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(
+        source,
+        "fetch_url_summarized_max_input_chars",
+        FETCH_SUMMARIZE_MAX_INPUT_CHARS,
+        4_000,
+        CONTENT_MAX_CHARS,
+    )
+
+
+def get_fetch_url_summarized_max_output_tokens(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(
+        source,
+        "fetch_url_summarized_max_output_tokens",
+        FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS,
+        200,
+        4_000,
+    )
+
+
+def get_fetch_url_to_canvas_chunk_threshold(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(
+        source,
+        "fetch_url_to_canvas_chunk_threshold",
+        FETCH_URL_TO_CANVAS_CHUNK_THRESHOLD,
+        2_000,
+        CONTENT_MAX_CHARS,
+    )
+
+
+def get_fetch_url_to_canvas_chunk_chars(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(
+        source,
+        "fetch_url_to_canvas_chunk_chars",
+        FETCH_URL_TO_CANVAS_CHUNK_CHARS,
+        4_000,
+        CONTENT_MAX_CHARS,
+    )
+
+
+def get_fetch_url_to_canvas_max_chunks(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(
+        source,
+        "fetch_url_to_canvas_max_chunks",
+        FETCH_URL_TO_CANVAS_MAX_CHUNKS,
+        1,
+        20,
+    )
 
 
 def get_pruning_enabled(settings: dict | None = None) -> bool:

@@ -332,10 +332,19 @@ def _clean_extracted_text(text: str) -> str:
     return cleaned.strip()
 
 
-def _truncate_content(text: str) -> str:
-    if len(text) <= CONTENT_MAX_CHARS:
+def _normalize_fetch_content_max_chars(value) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = CONTENT_MAX_CHARS
+    return max(2_000, min(1_000_000, parsed))
+
+
+def _truncate_content(text: str, max_chars: int = CONTENT_MAX_CHARS) -> str:
+    normalized_max_chars = _normalize_fetch_content_max_chars(max_chars)
+    if len(text) <= normalized_max_chars:
         return text
-    return text[:CONTENT_MAX_CHARS].rstrip() + "\n[Content truncated]"
+    return text[:normalized_max_chars].rstrip() + "\n[Content truncated]"
 
 
 def _extract_meta_content(soup: BeautifulSoup, *selectors: tuple[str, str]) -> str:
@@ -828,7 +837,7 @@ def _coerce_bool(value, default: bool = False) -> bool:
     return bool(value)
 
 
-def _extract_html(html: str, url: str) -> dict:
+def _extract_html(html: str, url: str, *, content_max_chars: int = CONTENT_MAX_CHARS) -> dict:
     soup = BeautifulSoup(html, "html.parser")
     title = soup.find("title") or ""
     title = title.get_text(strip=True) if title else ""
@@ -868,8 +877,8 @@ def _extract_html(html: str, url: str) -> dict:
     result = {
         "url": url,
         "title": title,
-        "content": _truncate_content(markdown_content or text),
-        "raw_content": _truncate_content(text),
+        "content": _truncate_content(markdown_content or text, content_max_chars),
+        "raw_content": _truncate_content(text, content_max_chars),
         "content_format": "html",
         "content_source_element": content_source_element,
     }
@@ -882,7 +891,7 @@ def _extract_html(html: str, url: str) -> dict:
     return result
 
 
-def _extract_pdf(data: bytes, url: str) -> dict:
+def _extract_pdf(data: bytes, url: str, *, content_max_chars: int = CONTENT_MAX_CHARS) -> dict:
     try:
         from doc_service import _extract_text_from_pdf
 
@@ -899,7 +908,7 @@ def _extract_pdf(data: bytes, url: str) -> dict:
         result = {
             "url": url,
             "title": f"PDF: {url.rstrip('/').split('/')[-1]}",
-            "content": _truncate_content(text),
+            "content": _truncate_content(text, content_max_chars),
             "content_format": "pdf",
         }
         if total_pages is not None:
@@ -910,16 +919,21 @@ def _extract_pdf(data: bytes, url: str) -> dict:
         return {"url": url, "title": "", "content": "", "error": f"Could not read PDF: {exc}"}
 
 
-def _extract_json_text(resp, raw: bytes, url: str) -> dict:
+def _extract_json_text(resp, raw: bytes, url: str, *, content_max_chars: int = CONTENT_MAX_CHARS) -> dict:
     try:
         parsed = resp.json()
         text = json.dumps(parsed, ensure_ascii=False, indent=2)
     except Exception:
         text = raw.decode("utf-8", errors="replace")
-    return {"url": url, "title": "", "content": _truncate_content(_clean_extracted_text(text)), "content_format": "json"}
+    return {
+        "url": url,
+        "title": "",
+        "content": _truncate_content(_clean_extracted_text(text), content_max_chars),
+        "content_format": "json",
+    }
 
 
-def _extract_xml_text(raw: bytes, url: str) -> dict:
+def _extract_xml_text(raw: bytes, url: str, *, content_max_chars: int = CONTENT_MAX_CHARS) -> dict:
     decoded = raw.decode("utf-8", errors="replace")
     try:
         root = ET.fromstring(decoded)
@@ -934,34 +948,46 @@ def _extract_xml_text(raw: bytes, url: str) -> dict:
             label = re.sub(r"\s+", " ", str(element.tag or "")).strip()
             text_fragments.append(f"{label}: {value}" if label else value)
         text = "\n".join(text_fragments) or decoded
-    return {"url": url, "title": "", "content": _truncate_content(_clean_extracted_text(text)), "content_format": "xml"}
+    return {
+        "url": url,
+        "title": "",
+        "content": _truncate_content(_clean_extracted_text(text), content_max_chars),
+        "content_format": "xml",
+    }
 
 
-def _extract_plain_text(raw: bytes, url: str, content_format: str = "text") -> dict:
+def _extract_plain_text(raw: bytes, url: str, content_format: str = "text", *, content_max_chars: int = CONTENT_MAX_CHARS) -> dict:
     text = raw.decode("utf-8", errors="replace")
     return {
         "url": url,
         "title": "",
-        "content": _truncate_content(_clean_extracted_text(text)),
+        "content": _truncate_content(_clean_extracted_text(text), content_max_chars),
         "content_format": content_format,
     }
 
 
-def _build_fetch_result_from_response(resp, raw: bytes, url: str, partial_error: str | None = None) -> dict:
+def _build_fetch_result_from_response(
+    resp,
+    raw: bytes,
+    url: str,
+    partial_error: str | None = None,
+    *,
+    content_max_chars: int = CONTENT_MAX_CHARS,
+) -> dict:
     ct = resp.headers.get("Content-Type", "").lower()
     final_url = resp.url
 
     if "pdf" in ct or url.lower().endswith(".pdf"):
-        result = _extract_pdf(raw, final_url)
+        result = _extract_pdf(raw, final_url, content_max_chars=content_max_chars)
     elif "json" in ct:
-        result = _extract_json_text(resp, raw, final_url)
+        result = _extract_json_text(resp, raw, final_url, content_max_chars=content_max_chars)
     elif "xml" in ct and "html" not in ct:
-        result = _extract_xml_text(raw, final_url)
+        result = _extract_xml_text(raw, final_url, content_max_chars=content_max_chars)
     elif "text/plain" in ct:
-        result = _extract_plain_text(raw, final_url)
+        result = _extract_plain_text(raw, final_url, content_max_chars=content_max_chars)
     else:
         enc = resp.encoding or "utf-8"
-        result = _extract_html(raw.decode(enc, errors="replace"), final_url)
+        result = _extract_html(raw.decode(enc, errors="replace"), final_url, content_max_chars=content_max_chars)
 
     result["cleanup_applied"] = True
     result["status"] = resp.status_code
@@ -990,13 +1016,28 @@ def _should_retry_without_ssl_verification(exc: Exception) -> bool:
     return "certificate verify failed" in text or "sslcertverificationerror" in text
 
 
-def fetch_url_tool(url: str) -> dict:
+def fetch_url_tool(
+    url: str,
+    *,
+    content_max_chars: int = CONTENT_MAX_CHARS,
+    cache_namespace: str = "fetch",
+) -> dict:
     safe, reason = _is_safe_url(url)
     if not safe:
         return {"url": url, "error": reason, "content": ""}
 
-    cache_key = f"fetch:{hashlib.md5(url.encode()).hexdigest()}"
-    cached = cache_get(cache_key)
+    normalized_content_max_chars = _normalize_fetch_content_max_chars(content_max_chars)
+    normalized_cache_namespace = str(cache_namespace or "").strip()
+
+    if normalized_cache_namespace == "fetch" and normalized_content_max_chars == CONTENT_MAX_CHARS:
+        cache_key = f"fetch:{hashlib.md5(url.encode()).hexdigest()}"
+    elif normalized_cache_namespace:
+        digest = hashlib.md5(f"{url}|{normalized_content_max_chars}".encode()).hexdigest()
+        cache_key = f"{normalized_cache_namespace}:{digest}"
+    else:
+        cache_key = None
+
+    cached = cache_get(cache_key) if cache_key else None
     if cached is not None:
         return cached
 
@@ -1050,7 +1091,13 @@ def fetch_url_tool(url: str) -> dict:
                     else:
                         raise
 
-                result = _build_fetch_result_from_response(resp, raw, url, partial_error=partial_error)
+                result = _build_fetch_result_from_response(
+                    resp,
+                    raw,
+                    url,
+                    partial_error=partial_error,
+                    content_max_chars=normalized_content_max_chars,
+                )
                 if bypassed_ssl_verification:
                     result["ssl_verification_bypassed"] = True
                     _append_fetch_warning(
@@ -1078,7 +1125,8 @@ def fetch_url_tool(url: str) -> dict:
                     break
 
                 if result.get("partial_content"):
-                    cache_set(cache_key, result)
+                    if cache_key:
+                        cache_set(cache_key, result)
                     return result
 
                 if not _has_useful_fetch_content(result):
@@ -1086,10 +1134,12 @@ def fetch_url_tool(url: str) -> dict:
                     best_result = result
                     if result.get("content_format") == "html" and index + 1 < len(header_variants):
                         continue
-                    cache_set(cache_key, result)
+                    if cache_key:
+                        cache_set(cache_key, result)
                     return result
 
-                cache_set(cache_key, result)
+                if cache_key:
+                    cache_set(cache_key, result)
                 return result
             except http_requests.exceptions.TooManyRedirects:
                 last_error = "Too many redirects"

@@ -155,6 +155,14 @@ def build_canvas_decision_matrix(
                 "notes": "Create one file per document. For source code, use format='code'. Prefer line edits for later partial changes.",
             }
         )
+    if enabled("fetch_url_to_canvas"):
+        rows.append(
+            {
+                "situation": "A fetched web page is long enough that you want to inspect it across later turns with canvas search, scroll, or expand tools.",
+                "tool": "fetch_url_to_canvas",
+                "notes": "Imports the page into one or more linked canvas documents so large sources stay searchable. Prefer this over raw fetch when you plan multi-step exploration inside Canvas.",
+            }
+        )
     if enabled("rewrite_canvas_document"):
         rows.append(
             {
@@ -787,6 +795,7 @@ TOOL_SPECS = [
                 "The tool also tries to preserve a middle excerpt so important details are not biased toward only the start or end of the page. "
                 "Do not fetch a page unless you actually need its exact content or source wording. "
                 "Do not repeat the same URL in the same turn. "
+                "If you expect a long page to remain useful across later turns, prefer fetch_url_to_canvas so the content becomes searchable and scrollable inside Canvas. "
                 "To locate specific text in a clipped page use grep_fetched_content. "
                 "To recall content from a previously fetched URL across turns use search_tool_memory."
             ),
@@ -820,7 +829,34 @@ TOOL_SPECS = [
                 "Use this when you want the page distilled before it reaches you, such as long articles where only the key points matter. "
                 "If focus is given, the summary should prioritize that question or angle. "
                 "Expect short labeled sections with key facts, constraints, and any unresolved uncertainty the source still leaves open. "
-                "Use fetch_url instead when you need raw extracted text, metadata, page outline details, or exact wording from the source page."
+                "Use fetch_url instead when you need raw extracted text, metadata, page outline details, or exact wording from the source page. "
+                "Use fetch_url_to_canvas instead when you want the full page preserved in searchable Canvas documents for deeper multi-turn inspection."
+            ),
+        },
+    },
+    {
+        "name": "fetch_url_to_canvas",
+        "description": (
+            "Fetch a specific web page and import the cleaned page content into one or more linked Canvas documents. "
+            "Use this when a long source page should stay searchable, scrollable, and inspectable across later turns instead of being squeezed into one prompt-sized fetch result."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "Full URL of the page (must start with http:// or https://).",
+                }
+            },
+            "required": ["url"],
+        },
+        "prompt": {
+            "purpose": "Reads a URL and saves the cleaned content into searchable Canvas documents.",
+            "inputs": {"url": "full http/https URL"},
+            "guidance": (
+                "Use this when you expect the fetched page to be explored in depth across multiple turns with Canvas tools such as search_canvas_document, scroll_canvas_document, or expand_canvas_document. "
+                "The runtime may split long pages into multiple linked Canvas documents automatically, so you can inspect them incrementally instead of relying on one clipped fetch result. "
+                "Prefer fetch_url when you only need a one-off raw page read, and prefer fetch_url_summarized when only a distilled page summary is needed."
             ),
         },
     },

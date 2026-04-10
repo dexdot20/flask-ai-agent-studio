@@ -32,6 +32,7 @@ CANVAS_MAX_CONTENT_LENGTH = 120_000
 CANVAS_MAX_LANGUAGE_LENGTH = 48
 CANVAS_MAX_PATH_LENGTH = 240
 CANVAS_MAX_SUMMARY_LENGTH = 280
+CANVAS_MAX_SOURCE_URL_LENGTH = 500
 CANVAS_MAX_SCOPE_ID_LENGTH = 80
 CANVAS_MAX_RELATION_COUNT = 24
 CANVAS_MAX_RELATION_ITEM_LENGTH = 120
@@ -252,6 +253,21 @@ def _normalize_canvas_path(value) -> str | None:
 
     normalized_path = "/".join(normalized_parts)[:CANVAS_MAX_PATH_LENGTH]
     return normalized_path or None
+
+
+def _normalize_canvas_source_url(value) -> str | None:
+    source_url = _normalize_line_endings(str(value or "")).strip()[:CANVAS_MAX_SOURCE_URL_LENGTH]
+    return source_url or None
+
+
+def _normalize_canvas_chunk_position(value) -> int | None:
+    try:
+        normalized_value = int(value)
+    except (TypeError, ValueError):
+        return None
+    if normalized_value < 1:
+        return None
+    return min(999, normalized_value)
 
 
 def _normalize_canvas_role(value) -> str | None:
@@ -730,6 +746,13 @@ def build_canvas_project_manifest(documents: list[dict] | None, active_document_
         for key in ("path", "role", "language", "project_id", "workspace_id"):
             if document.get(key):
                 entry[key] = document[key]
+        for key in ("source_url", "source_title", "source_kind", "import_group_id"):
+            if document.get(key):
+                entry[key] = document[key]
+        for key in ("chunk_index", "chunk_count"):
+            normalized_chunk_position = _normalize_canvas_chunk_position(document.get(key))
+            if normalized_chunk_position is not None:
+                entry[key] = normalized_chunk_position
         for key in ("imports", "exports", "symbols", "dependencies"):
             values = document.get(key) if isinstance(document.get(key), list) else []
             if values:
@@ -833,6 +856,12 @@ def normalize_canvas_document(value, *, fallback_title: str = "Canvas") -> dict 
     canvas_mode = _normalize_canvas_document_mode(value.get("canvas_mode"), content_mode=content_mode)
     source_file_id = _normalize_canvas_identifier(value.get("source_file_id"))
     source_mime_type = str(value.get("source_mime_type") or "").strip().lower()[:120]
+    source_url = _normalize_canvas_source_url(value.get("source_url"))
+    source_title = _normalize_canvas_short_text(value.get("source_title"), CANVAS_MAX_TITLE_LENGTH)
+    source_kind = _normalize_canvas_identifier(value.get("source_kind"))
+    import_group_id = _normalize_canvas_identifier(value.get("import_group_id"))
+    chunk_index = _normalize_canvas_chunk_position(value.get("chunk_index"))
+    chunk_count = _normalize_canvas_chunk_position(value.get("chunk_count"))
     visual_page_image_ids = _normalize_canvas_asset_ids(value.get("visual_page_image_ids"), limit=8)
 
     cleaned = {
@@ -883,6 +912,18 @@ def normalize_canvas_document(value, *, fallback_title: str = "Canvas") -> dict 
         cleaned["source_file_id"] = source_file_id
     if source_mime_type:
         cleaned["source_mime_type"] = source_mime_type
+    if source_url:
+        cleaned["source_url"] = source_url
+    if source_title:
+        cleaned["source_title"] = source_title
+    if source_kind:
+        cleaned["source_kind"] = source_kind
+    if import_group_id:
+        cleaned["import_group_id"] = import_group_id
+    if chunk_index:
+        cleaned["chunk_index"] = chunk_index
+    if chunk_count:
+        cleaned["chunk_count"] = max(chunk_index or 1, chunk_count)
     if visual_page_image_ids:
         cleaned["visual_page_image_ids"] = visual_page_image_ids
 
@@ -1153,6 +1194,12 @@ def create_canvas_document(
     canvas_mode: str | None = None,
     source_file_id: str | None = None,
     source_mime_type: str | None = None,
+    source_url: str | None = None,
+    source_title: str | None = None,
+    source_kind: str | None = None,
+    import_group_id: str | None = None,
+    chunk_index: int | None = None,
+    chunk_count: int | None = None,
     visual_page_image_ids: list[str] | None = None,
 ) -> dict:
     documents = runtime_state.get("documents") if isinstance(runtime_state, dict) else None
@@ -1181,6 +1228,12 @@ def create_canvas_document(
             "canvas_mode": canvas_mode,
             "source_file_id": source_file_id,
             "source_mime_type": source_mime_type,
+            "source_url": source_url,
+            "source_title": source_title,
+            "source_kind": source_kind,
+            "import_group_id": import_group_id,
+            "chunk_index": chunk_index,
+            "chunk_count": chunk_count,
             "visual_page_image_ids": visual_page_image_ids,
         }
     )
@@ -2858,9 +2911,24 @@ def build_canvas_document_result_snapshot(document: dict | None) -> dict | None:
         snapshot["page_count"] = int(normalized["page_count"])
     if normalized.get("language"):
         snapshot["language"] = normalized["language"]
-    for key in ("path", "role", "summary", "project_id", "workspace_id", "source_file_id", "source_mime_type"):
+    for key in (
+        "path",
+        "role",
+        "summary",
+        "project_id",
+        "workspace_id",
+        "source_file_id",
+        "source_mime_type",
+        "source_url",
+        "source_title",
+        "source_kind",
+        "import_group_id",
+    ):
         if normalized.get(key):
             snapshot[key] = normalized[key]
+    for key in ("chunk_index", "chunk_count"):
+        if int(normalized.get(key) or 0) > 0:
+            snapshot[key] = int(normalized[key])
     for key in ("imports", "exports", "symbols", "dependencies"):
         values = normalized.get(key) if isinstance(normalized.get(key), list) else []
         if values:
@@ -2922,9 +2990,22 @@ def build_canvas_tool_result(
         result["language"] = normalized["language"]
     if int(normalized.get("page_count") or 0) > 0:
         result["page_count"] = int(normalized["page_count"])
-    for key in ("path", "role", "summary", "project_id", "workspace_id"):
+    for key in (
+        "path",
+        "role",
+        "summary",
+        "project_id",
+        "workspace_id",
+        "source_url",
+        "source_title",
+        "source_kind",
+        "import_group_id",
+    ):
         if normalized.get(key):
             result[key] = normalized[key]
+    for key in ("chunk_index", "chunk_count"):
+        if int(normalized.get(key) or 0) > 0:
+            result[key] = int(normalized[key])
     for key in ("imports", "exports", "symbols", "dependencies"):
         values = normalized.get(key) if isinstance(normalized.get(key), list) else []
         if values:

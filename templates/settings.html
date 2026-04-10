@@ -1054,6 +1054,49 @@
                     </div>
                   </div>
                 </section>
+
+                <section class="settings-subsection settings-subsection--full">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Summarized fetch budget</span>
+                    <h4 class="settings-subsection__title">How much page text reaches the summary model</h4>
+                  </div>
+                  <div class="settings-page-grid settings-page-grid--two settings-page-grid--compact">
+                    <div>
+                      <label class="settings-label" for="fetch-summarize-max-input-chars-input">Summary source max chars (4000-100000)</label>
+                      <input type="number" class="settings-number" id="fetch-summarize-max-input-chars-input" min="4000" max="100000" value="80000" />
+                      <p class="settings-copy">Caps how much cleaned page content is forwarded to <code>fetch_url_summarized</code> before the helper model sees it.</p>
+                    </div>
+                    <div>
+                      <label class="settings-label" for="fetch-summarize-max-output-tokens-input">Summary output token budget (200-4000)</label>
+                      <input type="number" class="settings-number" id="fetch-summarize-max-output-tokens-input" min="200" max="4000" value="2400" />
+                      <p class="settings-copy">Sets the default output-token budget for fetched URL summaries. Increase it for denser source summaries; lower it for tighter cost control.</p>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="settings-subsection settings-subsection--full">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">URL to Canvas import</span>
+                    <h4 class="settings-subsection__title">Chunking for long fetched pages</h4>
+                  </div>
+                  <div class="settings-page-grid settings-page-grid--three settings-page-grid--compact">
+                    <div>
+                      <label class="settings-label" for="fetch-to-canvas-threshold-input">Chunk when page exceeds N chars (2000-100000)</label>
+                      <input type="number" class="settings-number" id="fetch-to-canvas-threshold-input" min="2000" max="100000" value="20000" />
+                      <p class="settings-copy">Shorter pages stay in one Canvas document. Longer pages are split into linked chunks automatically.</p>
+                    </div>
+                    <div>
+                      <label class="settings-label" for="fetch-to-canvas-chunk-chars-input">Per-document chunk size (4000-100000)</label>
+                      <input type="number" class="settings-number" id="fetch-to-canvas-chunk-chars-input" min="4000" max="100000" value="30000" />
+                      <p class="settings-copy">Controls the approximate character budget for each imported Canvas document created from one fetched page.</p>
+                    </div>
+                    <div>
+                      <label class="settings-label" for="fetch-to-canvas-max-chunks-input">Max Canvas documents per import (1-20)</label>
+                      <input type="number" class="settings-number" id="fetch-to-canvas-max-chunks-input" min="1" max="20" value="10" />
+                      <p class="settings-copy">Keeps one web import from flooding the Canvas document list. Large pages are truncated to this import budget.</p>
+                    </div>
+                  </div>
+                </section>
               </div>
             </div>
 

@@ -65,6 +65,7 @@ from agent import (
     _lookup_cross_turn_tool_memory,
     _parse_tool_call_arguments,
     _prepare_tool_result_for_transcript,
+    _run_fetch_url_to_canvas,
     _run_fetch_url_summarized,
     _run_sub_agent_stream,
     _summarize_model_call_usage,
@@ -376,6 +377,11 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["pruning_min_target_tokens"], PRUNING_MIN_TARGET_TOKENS)
         self.assertEqual(payload["fetch_url_token_threshold"], 3500)
         self.assertEqual(payload["fetch_url_clip_aggressiveness"], 50)
+        self.assertEqual(payload["fetch_url_summarized_max_input_chars"], 80000)
+        self.assertEqual(payload["fetch_url_summarized_max_output_tokens"], 2400)
+        self.assertEqual(payload["fetch_url_to_canvas_chunk_threshold"], 20000)
+        self.assertEqual(payload["fetch_url_to_canvas_chunk_chars"], 30000)
+        self.assertEqual(payload["fetch_url_to_canvas_max_chunks"], 10)
         self.assertEqual(payload["custom_models"], [])
         self.assertEqual(payload["visible_model_order"], ["deepseek-chat", "deepseek-reasoner"])
         self.assertEqual(payload["proxy_enabled_operations"], DEFAULT_PROXY_ENABLED_OPERATIONS)
@@ -459,6 +465,11 @@ class AppRoutesTestCase(unittest.TestCase):
                 "pruning_min_target_tokens": 220,
                 "fetch_url_token_threshold": 4200,
                 "fetch_url_clip_aggressiveness": 70,
+                "fetch_url_summarized_max_input_chars": 62000,
+                "fetch_url_summarized_max_output_tokens": 3100,
+                "fetch_url_to_canvas_chunk_threshold": 18000,
+                "fetch_url_to_canvas_chunk_chars": 24000,
+                "fetch_url_to_canvas_max_chunks": 7,
                 "canvas_prompt_max_lines": 1200,
                 "canvas_prompt_max_tokens": 3200,
                 "canvas_prompt_max_chars": 36000,
@@ -561,6 +572,11 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["pruning_min_target_tokens"], 220)
         self.assertEqual(payload["fetch_url_token_threshold"], 4200)
         self.assertEqual(payload["fetch_url_clip_aggressiveness"], 70)
+        self.assertEqual(payload["fetch_url_summarized_max_input_chars"], 62000)
+        self.assertEqual(payload["fetch_url_summarized_max_output_tokens"], 3100)
+        self.assertEqual(payload["fetch_url_to_canvas_chunk_threshold"], 18000)
+        self.assertEqual(payload["fetch_url_to_canvas_chunk_chars"], 24000)
+        self.assertEqual(payload["fetch_url_to_canvas_max_chunks"], 7)
         self.assertEqual(payload["canvas_prompt_max_lines"], 1200)
         self.assertEqual(payload["canvas_prompt_max_tokens"], 3200)
         self.assertEqual(payload["canvas_prompt_max_chars"], 36000)
@@ -7244,6 +7260,7 @@ class AppRoutesTestCase(unittest.TestCase):
                 "append_scratchpad",
                 "search_web",
                 "fetch_url",
+                "fetch_url_to_canvas",
                 "search_news_ddgs",
                 "read_file",
                 "create_canvas_document",
@@ -7253,7 +7270,7 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertEqual(
             runtime_names,
-            ["append_scratchpad", "search_web", "fetch_url", "search_news_ddgs", "read_file", "create_canvas_document"],
+            ["append_scratchpad", "search_web", "fetch_url", "fetch_url_to_canvas", "search_news_ddgs", "read_file", "create_canvas_document"],
         )
 
     def test_resolve_runtime_tool_names_without_user_message_excludes_workspace_tools_when_no_root(self):
@@ -8902,7 +8919,13 @@ class AppRoutesTestCase(unittest.TestCase):
                 "content_source_element": "main",
                 "outline": ["Pricing", "Limits"],
             },
-        ), patch("agent.get_app_settings", return_value={}), patch(
+        ), patch(
+            "agent.get_app_settings",
+            return_value={
+                "fetch_url_summarized_max_input_chars": "6000",
+                "fetch_url_summarized_max_output_tokens": "3100",
+            },
+        ), patch(
             "agent.get_operation_model",
             return_value="openrouter:summary-model",
         ), patch("agent.resolve_model_target", return_value=fake_target), patch(
@@ -8920,10 +8943,50 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(result["summary_profile"], "general_web_page")
         self.assertIn("Page summarized:", summary)
         request_kwargs = fake_create.call_args.kwargs
-        self.assertEqual(request_kwargs["max_tokens"], 2400)
+        self.assertEqual(request_kwargs["max_tokens"], 3100)
         self.assertIn("Focus:\npricing limits", request_kwargs["messages"][1]["content"])
         self.assertIn("Focus answer:", request_kwargs["messages"][0]["content"])
         self.assertIn("section headers and flat bullet lists", request_kwargs["messages"][0]["content"])
+
+    def test_run_fetch_url_to_canvas_imports_chunked_documents(self):
+        fetched_content = "alpha " * 2700
+
+        with patch(
+            "agent.fetch_url_tool",
+            return_value={
+                "url": "https://example.com/guide",
+                "title": "Example Guide",
+                "content": fetched_content,
+                "meta_description": "Reference guide",
+                "content_format": "html",
+            },
+        ) as mocked_fetch, patch(
+            "agent.get_app_settings",
+            return_value={
+                "fetch_url_to_canvas_chunk_threshold": "2000",
+                "fetch_url_to_canvas_chunk_chars": "6000",
+                "fetch_url_to_canvas_max_chunks": "5",
+            },
+        ):
+            runtime_state = {}
+            result, summary = _run_fetch_url_to_canvas({"url": "https://example.com/guide"}, runtime_state)
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["action"], "url_imported_to_canvas")
+        self.assertEqual(result["url"], "https://example.com/guide")
+        self.assertEqual(result["title"], "Example Guide")
+        self.assertGreater(result["document_count"], 1)
+        self.assertTrue(result["chunked"])
+        self.assertEqual(len(result["documents"]), result["document_count"])
+        self.assertEqual(result["documents"][0]["source_url"], "https://example.com/guide")
+        self.assertEqual(result["documents"][0]["source_kind"], "fetched_url")
+        self.assertEqual(result["documents"][0]["chunk_index"], 1)
+        self.assertEqual(result["documents"][0]["chunk_count"], result["document_count"])
+        self.assertIn("Fetched URL imported to Canvas", summary)
+        self.assertEqual(result["document_id"], get_canvas_runtime_active_document_id(runtime_state["canvas"]))
+        self.assertEqual(len(get_canvas_runtime_documents(runtime_state["canvas"])), result["document_count"])
+        self.assertEqual(mocked_fetch.call_args.kwargs["cache_namespace"], "fetch_canvas:6000:5")
+        self.assertGreaterEqual(mocked_fetch.call_args.kwargs["content_max_chars"], 38000)
 
     def test_sub_agent_tool_spec_mentions_exposed_web_search_tools(self):
         spec = TOOL_SPEC_BY_NAME["sub_agent"]
@@ -15128,6 +15191,58 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(result["document_id"], "canvas-1")
         self.assertEqual(result["expected_start_line"], 18)
         self.assertEqual(result["expected_lines"], ["def main():", "    return 1"])
+
+    def test_prepare_tool_result_for_transcript_preserves_fetch_url_to_canvas_document_list(self):
+        result = _prepare_tool_result_for_transcript(
+            "fetch_url_to_canvas",
+            {
+                "status": "ok",
+                "action": "url_imported_to_canvas",
+                "url": "https://example.com/guide",
+                "document_id": "canvas-1",
+                "document_path": "web/example/part-01.md",
+                "document_count": 2,
+                "import_group_id": "fetch-abc123",
+                "chunked": True,
+                "truncated": False,
+                "content_format": "html",
+                "fetch_summary": "Page content extracted: Example Guide",
+                "documents": [
+                    {
+                        "document_id": "canvas-1",
+                        "document_path": "web/example/part-01.md",
+                        "title": "Example Guide (Part 1/2)",
+                        "line_count": 120,
+                        "source_url": "https://example.com/guide",
+                        "source_title": "Example Guide",
+                        "source_kind": "fetched_url",
+                        "import_group_id": "fetch-abc123",
+                        "chunk_index": 1,
+                        "chunk_count": 2,
+                    },
+                    {
+                        "document_id": "canvas-2",
+                        "document_path": "web/example/part-02.md",
+                        "title": "Example Guide (Part 2/2)",
+                        "line_count": 80,
+                        "source_url": "https://example.com/guide",
+                        "source_title": "Example Guide",
+                        "source_kind": "fetched_url",
+                        "import_group_id": "fetch-abc123",
+                        "chunk_index": 2,
+                        "chunk_count": 2,
+                    },
+                ],
+            },
+        )
+
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result["document_count"], 2)
+        self.assertEqual(result["import_group_id"], "fetch-abc123")
+        self.assertEqual(len(result["documents"]), 2)
+        self.assertEqual(result["documents"][0]["chunk_index"], 1)
+        self.assertEqual(result["documents"][1]["chunk_count"], 2)
+        self.assertEqual(result["fetch_summary"], "Page content extracted: Example Guide")
 
     def test_prepare_tool_result_for_transcript_preserves_canvas_expand_payloads(self):
         visible_lines = [f"{index}: {'x' * 80}" for index in range(1, 700)]

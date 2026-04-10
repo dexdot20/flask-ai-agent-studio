@@ -146,6 +146,15 @@ FETCH_SUMMARY_TOKEN_THRESHOLD = max(400, _parse_int_env("FETCH_SUMMARY_TOKEN_THR
 FETCH_SUMMARY_MAX_CHARS = max(2000, min(CONTENT_MAX_CHARS, _parse_int_env("FETCH_SUMMARY_MAX_CHARS", 8000)))
 FETCH_SUMMARIZE_MAX_INPUT_CHARS = max(4_000, min(CONTENT_MAX_CHARS, _parse_int_env("FETCH_SUMMARIZE_MAX_INPUT_CHARS", 80_000)))
 FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS = max(200, min(4_000, _parse_int_env("FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS", 2400)))
+FETCH_URL_TO_CANVAS_CHUNK_THRESHOLD = max(
+    2_000,
+    min(CONTENT_MAX_CHARS, _parse_int_env("FETCH_URL_TO_CANVAS_CHUNK_THRESHOLD", 20_000)),
+)
+FETCH_URL_TO_CANVAS_CHUNK_CHARS = max(
+    4_000,
+    min(CONTENT_MAX_CHARS, _parse_int_env("FETCH_URL_TO_CANVAS_CHUNK_CHARS", 30_000)),
+)
+FETCH_URL_TO_CANVAS_MAX_CHUNKS = max(1, min(20, _parse_int_env("FETCH_URL_TO_CANVAS_MAX_CHUNKS", 10)))
 FETCH_SUMMARY_GENERAL_TOP_K = max(1, min(6, _parse_int_env("FETCH_SUMMARY_GENERAL_TOP_K", 3)))
 FETCH_SUMMARY_QUERY_TOP_K = max(1, min(8, _parse_int_env("FETCH_SUMMARY_QUERY_TOP_K", 4)))
 FETCH_SUMMARY_EXCERPT_MAX_CHARS = max(200, min(1200, _parse_int_env("FETCH_SUMMARY_EXCERPT_MAX_CHARS", 500)))
@@ -200,6 +209,7 @@ DEFAULT_ACTIVE_TOOL_NAMES = [
     "search_web",
     "fetch_url",
     "fetch_url_summarized",
+    "fetch_url_to_canvas",
     "grep_fetched_content",
     "search_news_ddgs",
     "search_news_google",
@@ -419,6 +429,11 @@ DEFAULT_SETTINGS = {
     "tool_memory_auto_inject": "false",
     "fetch_url_token_threshold": str(FETCH_SUMMARY_TOKEN_THRESHOLD),
     "fetch_url_clip_aggressiveness": "50",
+    "fetch_url_summarized_max_input_chars": str(FETCH_SUMMARIZE_MAX_INPUT_CHARS),
+    "fetch_url_summarized_max_output_tokens": str(FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS),
+    "fetch_url_to_canvas_chunk_threshold": str(FETCH_URL_TO_CANVAS_CHUNK_THRESHOLD),
+    "fetch_url_to_canvas_chunk_chars": str(FETCH_URL_TO_CANVAS_CHUNK_CHARS),
+    "fetch_url_to_canvas_max_chunks": str(FETCH_URL_TO_CANVAS_MAX_CHUNKS),
     "prompt_max_input_tokens": str(PROMPT_MAX_INPUT_TOKENS),
     "prompt_response_token_reserve": str(PROMPT_RESPONSE_TOKEN_RESERVE),
     "prompt_recent_history_max_tokens": str(PROMPT_RECENT_HISTORY_MAX_TOKENS),
