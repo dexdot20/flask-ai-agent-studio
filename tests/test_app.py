@@ -37,6 +37,7 @@ from config import (
 from proxy_settings import DEFAULT_PROXY_ENABLED_OPERATIONS, PROXY_OPERATION_FETCH_URL
 from agent import (
     CANVAS_MUTATION_TOOL_NAMES,
+    CANVAS_MUTATION_RETRY_MARKER,
     CANVAS_TOOL_NAMES,
     CONTEXT_OVERFLOW_RECOVERY_ERROR_TEXT,
     FINAL_ANSWER_ERROR_TEXT,
@@ -14676,6 +14677,80 @@ class AppRoutesTestCase(unittest.TestCase):
         retry_content = second_call_messages[-1]["content"]
         self.assertIn("MISSING FINAL ANSWER", retry_content)
         self.assertIn("assistant content only", retry_content)
+
+    def test_run_agent_stream_retries_hallucinated_canvas_update_before_emitting_answer(self):
+        responses = [
+            iter(
+                [
+                    self._stream_chunk(content="Belgeyi güncelledim ve önemli noktaları ekledim."),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=3, total_tokens=5)),
+                ]
+            ),
+            iter(
+                [
+                    self._tool_call_chunk(
+                        "rewrite_canvas_document",
+                        {
+                            "document_id": "canvas-1",
+                            "content": "# Yeni Taslak\n\n- Güncellendi",
+                            "format": "markdown",
+                            "language": "markdown",
+                        },
+                        call_id="tool-call-1",
+                    ),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=3, total_tokens=5)),
+                ]
+            ),
+            iter(
+                [
+                    self._stream_chunk(content="Canvas gerçekten güncellendi."),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=4, total_tokens=6)),
+                ]
+            ),
+        ]
+
+        initial_canvas_documents = [
+            {
+                "id": "canvas-1",
+                "title": "Taslak.md",
+                "format": "markdown",
+                "language": "markdown",
+                "content": "# Eski Taslak\n\n- Bekliyor",
+            }
+        ]
+
+        with patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create:
+            events = list(
+                run_agent_stream(
+                    [{"role": "user", "content": "Canvas üzerindeki aktif belgeyi güncelle."}],
+                    "deepseek-chat",
+                    3,
+                    ["rewrite_canvas_document"],
+                    initial_canvas_documents=initial_canvas_documents,
+                    initial_canvas_active_document_id="canvas-1",
+                )
+            )
+
+        answer_deltas = [event["text"] for event in events if event["type"] == "answer_delta"]
+        self.assertEqual(answer_deltas, ["Canvas gerçekten güncellendi."])
+        self.assertTrue(any(event["type"] == "tool_result" and event["tool"] == "rewrite_canvas_document" for event in events))
+
+        usage_event = next(event for event in events if event["type"] == "usage")
+        self.assertEqual(usage_event["model_call_count"], 3)
+        self.assertTrue(usage_event["model_calls"][1]["is_retry"])
+        self.assertEqual(usage_event["model_calls"][1]["retry_reason"], "canvas_mutation_skipped")
+
+        second_call_messages = mocked_create.call_args_list[1].kwargs["messages"]
+        retry_messages = [
+            message
+            for message in second_call_messages
+            if CANVAS_MUTATION_RETRY_MARKER in str(message.get("content") or "")
+        ]
+        self.assertEqual(len(retry_messages), 1)
+
+        tool_capture_event = next(event for event in events if event["type"] == "tool_capture")
+        self.assertTrue(tool_capture_event["successful_canvas_mutation"])
+        self.assertEqual(tool_capture_event["canvas_documents"][0]["content"], "# Yeni Taslak\n\n- Güncellendi")
 
     def test_run_agent_stream_accepts_python_literal_tool_call_arguments(self):
         responses = [

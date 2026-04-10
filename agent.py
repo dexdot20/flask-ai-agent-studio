@@ -7534,6 +7534,10 @@ def run_agent_stream(
             extra_messages.append(working_memory_instruction)
         turn_messages, _ = apply_context_compaction(extra_messages, reason="pre_model_turn")
         turn_messages = _strip_intermediate_tool_call_content(turn_messages)
+        buffer_canvas_mutation_answer = (
+            step_retry_reason == "canvas_mutation_skipped"
+            or _should_retry_for_skipped_canvas_mutation(messages, normalized_prompt_tool_names)
+        )
 
         try:
             turn_result = yield from stream_model_turn(
@@ -7541,7 +7545,8 @@ def run_agent_stream(
                 buffer_answer=(
                     buffer_clarification_answers
                     and "ask_clarifying_question" in set(normalized_prompt_tool_names)
-                ),
+                )
+                or buffer_canvas_mutation_answer,
                 call_type="agent_step",
                 retry_reason=step_retry_reason,
             )
@@ -7616,6 +7621,17 @@ def run_agent_stream(
 
         if not tool_calls:
             if content_text:
+                if _should_retry_for_skipped_canvas_mutation(messages, normalized_prompt_tool_names, content_text):
+                    messages.append(_build_canvas_mutation_retry_instruction())
+                    _trace_agent_event(
+                        "canvas_mutation_retry_requested",
+                        trace_id=trace_id,
+                        step=step,
+                        content_excerpt=content_text,
+                    )
+                    pending_step_retry_reason = "canvas_mutation_skipped"
+                    step -= 1
+                    continue
                 _trace_agent_event("final_answer_received", trace_id=trace_id, step=step, content_excerpt=content_text)
                 if not answer_started:
                     for event in emit_answer(content_text):
