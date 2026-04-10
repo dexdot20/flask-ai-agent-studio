@@ -50,6 +50,8 @@ from db import (
     get_chat_summary_detail_level,
     get_chat_summary_trigger_token_count,
     get_clarification_max_questions,
+    get_context_compaction_keep_recent_rounds,
+    get_context_compaction_threshold,
     get_context_selection_strategy,
     get_default_persona,
     get_default_persona_id,
@@ -63,9 +65,18 @@ from db import (
     get_max_parallel_tools,
     get_model_temperature,
     get_openrouter_prompt_cache_enabled,
+    get_prompt_max_input_tokens,
+    get_prompt_rag_max_tokens,
+    get_prompt_recent_history_max_tokens,
+    get_prompt_response_token_reserve,
+    get_prompt_summary_max_tokens,
+    get_prompt_tool_memory_max_tokens,
+    get_prompt_tool_trace_max_tokens,
     get_proxy_enabled_operations,
     get_pruning_batch_size,
     get_pruning_enabled,
+    get_pruning_min_target_tokens,
+    get_pruning_target_reduction_ratio,
     get_pruning_token_threshold,
     get_reasoning_auto_collapse,
     get_rag_auto_inject_enabled,
@@ -410,6 +421,15 @@ def build_settings_payload() -> dict:
         "chat_summary_trigger_token_count": get_chat_summary_trigger_token_count(raw),
         "summary_skip_first": get_summary_skip_first(raw),
         "summary_skip_last": get_summary_skip_last(raw),
+        "prompt_max_input_tokens": get_prompt_max_input_tokens(raw),
+        "prompt_response_token_reserve": get_prompt_response_token_reserve(raw),
+        "prompt_recent_history_max_tokens": get_prompt_recent_history_max_tokens(raw),
+        "prompt_summary_max_tokens": get_prompt_summary_max_tokens(raw),
+        "prompt_rag_max_tokens": get_prompt_rag_max_tokens(raw),
+        "prompt_tool_memory_max_tokens": get_prompt_tool_memory_max_tokens(raw),
+        "prompt_tool_trace_max_tokens": get_prompt_tool_trace_max_tokens(raw),
+        "context_compaction_threshold": get_context_compaction_threshold(raw),
+        "context_compaction_keep_recent_rounds": get_context_compaction_keep_recent_rounds(raw),
         "context_selection_strategy": get_context_selection_strategy(raw),
         "entropy_profile": get_entropy_profile(raw),
         "entropy_rag_budget_ratio": get_entropy_rag_budget_ratio(raw),
@@ -420,6 +440,8 @@ def build_settings_payload() -> dict:
         "pruning_enabled": get_pruning_enabled(raw),
         "pruning_token_threshold": get_pruning_token_threshold(raw),
         "pruning_batch_size": get_pruning_batch_size(raw),
+        "pruning_target_reduction_ratio": get_pruning_target_reduction_ratio(raw),
+        "pruning_min_target_tokens": get_pruning_min_target_tokens(raw),
         "fetch_url_token_threshold": get_fetch_url_token_threshold(raw),
         "fetch_url_clip_aggressiveness": get_fetch_url_clip_aggressiveness(raw),
         "features": get_feature_flags(),
@@ -522,10 +544,21 @@ def register_page_routes(app) -> None:
         entropy_protect_code_blocks_raw = data.get("entropy_protect_code_blocks")
         entropy_protect_tool_results_raw = data.get("entropy_protect_tool_results")
         entropy_reference_boost_raw = data.get("entropy_reference_boost")
+        prompt_max_input_tokens_raw = data.get("prompt_max_input_tokens")
+        prompt_response_token_reserve_raw = data.get("prompt_response_token_reserve")
+        prompt_recent_history_max_tokens_raw = data.get("prompt_recent_history_max_tokens")
+        prompt_summary_max_tokens_raw = data.get("prompt_summary_max_tokens")
+        prompt_rag_max_tokens_raw = data.get("prompt_rag_max_tokens")
+        prompt_tool_memory_max_tokens_raw = data.get("prompt_tool_memory_max_tokens")
+        prompt_tool_trace_max_tokens_raw = data.get("prompt_tool_trace_max_tokens")
+        context_compaction_threshold_raw = data.get("context_compaction_threshold")
+        context_compaction_keep_recent_rounds_raw = data.get("context_compaction_keep_recent_rounds")
         reasoning_auto_collapse_raw = data.get("reasoning_auto_collapse")
         pruning_enabled_raw = data.get("pruning_enabled")
         pruning_token_threshold_raw = data.get("pruning_token_threshold")
         pruning_batch_size_raw = data.get("pruning_batch_size")
+        pruning_target_reduction_ratio_raw = data.get("pruning_target_reduction_ratio")
+        pruning_min_target_tokens_raw = data.get("pruning_min_target_tokens")
         fetch_url_token_threshold_raw = data.get("fetch_url_token_threshold")
         fetch_url_clip_aggressiveness_raw = data.get("fetch_url_clip_aggressiveness")
         canvas_prompt_max_lines_raw = data.get("canvas_prompt_max_lines")
@@ -575,6 +608,15 @@ def register_page_routes(app) -> None:
             and chat_summary_trigger_raw is None
             and summary_skip_first_raw is None
             and summary_skip_last_raw is None
+            and prompt_max_input_tokens_raw is None
+            and prompt_response_token_reserve_raw is None
+            and prompt_recent_history_max_tokens_raw is None
+            and prompt_summary_max_tokens_raw is None
+            and prompt_rag_max_tokens_raw is None
+            and prompt_tool_memory_max_tokens_raw is None
+            and prompt_tool_trace_max_tokens_raw is None
+            and context_compaction_threshold_raw is None
+            and context_compaction_keep_recent_rounds_raw is None
             and context_selection_strategy_raw is None
             and entropy_profile_raw is None
             and entropy_rag_budget_ratio_raw is None
@@ -585,6 +627,8 @@ def register_page_routes(app) -> None:
             and pruning_enabled_raw is None
             and pruning_token_threshold_raw is None
             and pruning_batch_size_raw is None
+            and pruning_target_reduction_ratio_raw is None
+            and pruning_min_target_tokens_raw is None
             and fetch_url_token_threshold_raw is None
             and fetch_url_clip_aggressiveness_raw is None
             and canvas_prompt_max_lines_raw is None
@@ -946,6 +990,87 @@ def register_page_routes(app) -> None:
                 return jsonify({"error": "summary_skip_last must be between 0 and 20."}), 400
             settings["summary_skip_last"] = str(summary_skip_last)
 
+        if prompt_max_input_tokens_raw is not None:
+            try:
+                prompt_max_input_tokens = int(prompt_max_input_tokens_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "prompt_max_input_tokens must be an integer."}), 400
+            if not (8_000 <= prompt_max_input_tokens <= 120_000):
+                return jsonify({"error": "prompt_max_input_tokens must be between 8000 and 120000."}), 400
+            settings["prompt_max_input_tokens"] = str(prompt_max_input_tokens)
+
+        if prompt_response_token_reserve_raw is not None:
+            try:
+                prompt_response_token_reserve = int(prompt_response_token_reserve_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "prompt_response_token_reserve must be an integer."}), 400
+            if not (1_000 <= prompt_response_token_reserve <= 32_000):
+                return jsonify({"error": "prompt_response_token_reserve must be between 1000 and 32000."}), 400
+            settings["prompt_response_token_reserve"] = str(prompt_response_token_reserve)
+
+        if prompt_recent_history_max_tokens_raw is not None:
+            try:
+                prompt_recent_history_max_tokens = int(prompt_recent_history_max_tokens_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "prompt_recent_history_max_tokens must be an integer."}), 400
+            if not (1_000 <= prompt_recent_history_max_tokens <= 120_000):
+                return jsonify({"error": "prompt_recent_history_max_tokens must be between 1000 and 120000."}), 400
+            settings["prompt_recent_history_max_tokens"] = str(prompt_recent_history_max_tokens)
+
+        if prompt_summary_max_tokens_raw is not None:
+            try:
+                prompt_summary_max_tokens = int(prompt_summary_max_tokens_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "prompt_summary_max_tokens must be an integer."}), 400
+            if not (500 <= prompt_summary_max_tokens <= 120_000):
+                return jsonify({"error": "prompt_summary_max_tokens must be between 500 and 120000."}), 400
+            settings["prompt_summary_max_tokens"] = str(prompt_summary_max_tokens)
+
+        if prompt_rag_max_tokens_raw is not None:
+            try:
+                prompt_rag_max_tokens = int(prompt_rag_max_tokens_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "prompt_rag_max_tokens must be an integer."}), 400
+            if not (0 <= prompt_rag_max_tokens <= 120_000):
+                return jsonify({"error": "prompt_rag_max_tokens must be between 0 and 120000."}), 400
+            settings["prompt_rag_max_tokens"] = str(prompt_rag_max_tokens)
+
+        if prompt_tool_memory_max_tokens_raw is not None:
+            try:
+                prompt_tool_memory_max_tokens = int(prompt_tool_memory_max_tokens_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "prompt_tool_memory_max_tokens must be an integer."}), 400
+            if not (0 <= prompt_tool_memory_max_tokens <= 120_000):
+                return jsonify({"error": "prompt_tool_memory_max_tokens must be between 0 and 120000."}), 400
+            settings["prompt_tool_memory_max_tokens"] = str(prompt_tool_memory_max_tokens)
+
+        if prompt_tool_trace_max_tokens_raw is not None:
+            try:
+                prompt_tool_trace_max_tokens = int(prompt_tool_trace_max_tokens_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "prompt_tool_trace_max_tokens must be an integer."}), 400
+            if not (0 <= prompt_tool_trace_max_tokens <= 120_000):
+                return jsonify({"error": "prompt_tool_trace_max_tokens must be between 0 and 120000."}), 400
+            settings["prompt_tool_trace_max_tokens"] = str(prompt_tool_trace_max_tokens)
+
+        if context_compaction_threshold_raw is not None:
+            try:
+                context_compaction_threshold = float(context_compaction_threshold_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "context_compaction_threshold must be a number."}), 400
+            if not (0.5 <= context_compaction_threshold <= 0.98):
+                return jsonify({"error": "context_compaction_threshold must be between 0.5 and 0.98."}), 400
+            settings["context_compaction_threshold"] = str(context_compaction_threshold)
+
+        if context_compaction_keep_recent_rounds_raw is not None:
+            try:
+                context_compaction_keep_recent_rounds = int(context_compaction_keep_recent_rounds_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "context_compaction_keep_recent_rounds must be an integer."}), 400
+            if not (0 <= context_compaction_keep_recent_rounds <= 6):
+                return jsonify({"error": "context_compaction_keep_recent_rounds must be between 0 and 6."}), 400
+            settings["context_compaction_keep_recent_rounds"] = str(context_compaction_keep_recent_rounds)
+
         if context_selection_strategy_raw is not None:
             normalized_context_selection_strategy = str(context_selection_strategy_raw or "").strip().lower()
             if normalized_context_selection_strategy not in CONTEXT_SELECTION_ALLOWED_STRATEGIES:
@@ -1024,6 +1149,49 @@ def register_page_routes(app) -> None:
             if not (1 <= pruning_batch_size <= 50):
                 return jsonify({"error": "pruning_batch_size must be between 1 and 50."}), 400
             settings["pruning_batch_size"] = str(pruning_batch_size)
+
+        if pruning_target_reduction_ratio_raw is not None:
+            try:
+                pruning_target_reduction_ratio = float(pruning_target_reduction_ratio_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "pruning_target_reduction_ratio must be a number."}), 400
+            if not (0.1 <= pruning_target_reduction_ratio <= 0.9):
+                return jsonify({"error": "pruning_target_reduction_ratio must be between 0.1 and 0.9."}), 400
+            settings["pruning_target_reduction_ratio"] = str(pruning_target_reduction_ratio)
+
+        if pruning_min_target_tokens_raw is not None:
+            try:
+                pruning_min_target_tokens = int(pruning_min_target_tokens_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "pruning_min_target_tokens must be an integer."}), 400
+            if not (50 <= pruning_min_target_tokens <= 5_000):
+                return jsonify({"error": "pruning_min_target_tokens must be between 50 and 5000."}), 400
+            settings["pruning_min_target_tokens"] = str(pruning_min_target_tokens)
+
+        effective_prompt_max_input_tokens = get_prompt_max_input_tokens(settings)
+        configured_prompt_response_token_reserve = int(
+            settings.get("prompt_response_token_reserve", get_prompt_response_token_reserve(settings))
+        )
+        if configured_prompt_response_token_reserve > effective_prompt_max_input_tokens - 2_000:
+            return jsonify(
+                {
+                    "error": (
+                        "prompt_response_token_reserve must leave at least 2000 tokens for prompt input. "
+                        "Lower the reserve or increase prompt_max_input_tokens."
+                    )
+                }
+            ), 400
+
+        for setting_key, label in (
+            ("prompt_recent_history_max_tokens", "prompt_recent_history_max_tokens"),
+            ("prompt_summary_max_tokens", "prompt_summary_max_tokens"),
+            ("prompt_rag_max_tokens", "prompt_rag_max_tokens"),
+            ("prompt_tool_memory_max_tokens", "prompt_tool_memory_max_tokens"),
+            ("prompt_tool_trace_max_tokens", "prompt_tool_trace_max_tokens"),
+        ):
+            configured_value = int(settings.get(setting_key, effective_prompt_max_input_tokens))
+            if configured_value > effective_prompt_max_input_tokens:
+                return jsonify({"error": f"{label} cannot exceed prompt_max_input_tokens."}), 400
 
         if fetch_url_token_threshold_raw is not None:
             try:

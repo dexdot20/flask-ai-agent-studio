@@ -68,6 +68,7 @@ from config import (
     AGENT_TOOL_RESULT_TRANSCRIPT_MAX_CHARS,
     AGENT_TRACE_LOG_PATH,
     CONVERSATION_MEMORY_ENABLED,
+    DEFAULT_SETTINGS,
     DEFAULT_MAX_PARALLEL_TOOLS,
     FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS,
     FETCH_SUMMARIZE_MAX_INPUT_CHARS,
@@ -90,12 +91,15 @@ from db import (
     append_to_scratchpad,
     count_scratchpad_notes,
     delete_conversation_memory_entry,
+    get_context_compaction_keep_recent_rounds,
+    get_context_compaction_threshold,
     get_fetch_url_clip_aggressiveness,
     get_fetch_url_token_threshold,
     get_all_scratchpad_sections,
     get_app_settings,
     get_clarification_max_questions,
     get_model_temperature,
+    get_prompt_max_input_tokens,
     get_rag_source_types,
     get_sub_agent_allowed_tool_names,
     get_sub_agent_max_steps,
@@ -6288,13 +6292,20 @@ def _render_tool_output_entries(tool_output_entries: list[dict]) -> tuple[list[d
 def _apply_tool_output_budget(
     base_messages: list[dict],
     tool_output_entries: list[dict],
+    prompt_max_input_tokens: int | None = None,
+    context_compaction_threshold: float | None = None,
     fetch_url_token_threshold: int | None = None,
     fetch_url_clip_aggressiveness: int | None = None,
 ) -> tuple[list[dict], list[dict], dict | None, bool]:
     if not tool_output_entries:
         return [], [], None, False
 
-    soft_limit = max(1, int(PROMPT_MAX_INPUT_TOKENS * AGENT_CONTEXT_COMPACTION_THRESHOLD))
+    if prompt_max_input_tokens is None:
+        prompt_max_input_tokens = PROMPT_MAX_INPUT_TOKENS
+    if context_compaction_threshold is None:
+        context_compaction_threshold = AGENT_CONTEXT_COMPACTION_THRESHOLD
+
+    soft_limit = max(1, int(prompt_max_input_tokens * context_compaction_threshold))
 
     def _estimate_total_tokens(tool_messages: list[dict], tool_execution_result_message: dict | None) -> int:
         candidate_messages = [*base_messages, *tool_messages]
@@ -6740,6 +6751,28 @@ def run_agent_stream(
         "max_entries": reasoning_replay_entry_limit,
     }
     model_settings = get_app_settings()
+
+    def _uses_default_runtime_setting(key: str) -> bool:
+        raw_value = model_settings.get(key)
+        if raw_value in (None, ""):
+            return True
+        return str(raw_value).strip() == str(DEFAULT_SETTINGS.get(key, "")).strip()
+
+    configured_prompt_max_input_tokens = (
+        PROMPT_MAX_INPUT_TOKENS
+        if _uses_default_runtime_setting("prompt_max_input_tokens")
+        else get_prompt_max_input_tokens(model_settings)
+    )
+    configured_context_compaction_threshold = (
+        AGENT_CONTEXT_COMPACTION_THRESHOLD
+        if _uses_default_runtime_setting("context_compaction_threshold")
+        else get_context_compaction_threshold(model_settings)
+    )
+    configured_context_compaction_keep_recent_rounds = (
+        AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS
+        if _uses_default_runtime_setting("context_compaction_keep_recent_rounds")
+        else get_context_compaction_keep_recent_rounds(model_settings)
+    )
     model_target = resolve_model_target(model, model_settings)
     native_reasoning_continuation = str(model_target["record"].get("provider") or "").strip() == OPENROUTER_PROVIDER
     pricing = get_model_pricing(model, model_settings)
@@ -6848,15 +6881,15 @@ def run_agent_stream(
         nonlocal messages
         extra_messages = list(extra_messages or [])
         turn_messages = [*messages, *extra_messages]
-        threshold = max(1, int(PROMPT_MAX_INPUT_TOKENS * AGENT_CONTEXT_COMPACTION_THRESHOLD))
+        threshold = max(1, int(configured_prompt_max_input_tokens * configured_context_compaction_threshold))
         before_tokens = _estimate_messages_tokens(turn_messages)
         before_message_count = len(turn_messages)
         before_exchange_count = _count_exchange_blocks(messages)
         if not force and before_tokens <= threshold:
             return turn_messages, False
 
-        target_budget = max(1, int(PROMPT_MAX_INPUT_TOKENS * 0.75))
-        configured_keep_recent = max(0, int(AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS))
+        target_budget = max(1, int(configured_prompt_max_input_tokens * 0.75))
+        configured_keep_recent = max(0, int(configured_context_compaction_keep_recent_rounds))
         if force:
             keep_recent_candidates = list(range(max(0, configured_keep_recent - 1), -1, -1)) or [0]
         else:
@@ -6948,7 +6981,7 @@ def run_agent_stream(
             "model_call_count": usage_totals["model_call_count"],
             "model_calls": list(usage_totals["model_calls"]),
             "max_input_tokens_per_call": call_usage_summary["max_input_tokens_per_call"],
-            "configured_prompt_max_input_tokens": PROMPT_MAX_INPUT_TOKENS,
+            "configured_prompt_max_input_tokens": configured_prompt_max_input_tokens,
             "cost": total_cost,
             "cost_available": pricing_known,
             "currency": "USD",
@@ -8107,6 +8140,8 @@ def run_agent_stream(
             tool_messages, transcript_results, tool_execution_result_message, tool_results_budget_compacted = _apply_tool_output_budget(
                 messages,
                 tool_output_entries,
+                prompt_max_input_tokens=configured_prompt_max_input_tokens,
+                context_compaction_threshold=configured_context_compaction_threshold,
                 fetch_url_token_threshold=fetch_url_token_threshold,
                 fetch_url_clip_aggressiveness=fetch_url_clip_aggressiveness,
             )

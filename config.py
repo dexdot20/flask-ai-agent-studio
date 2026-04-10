@@ -177,6 +177,8 @@ AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS = max(
     0,
     min(6, _parse_int_env("AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS", 2)),
 )
+PRUNING_TARGET_REDUCTION_RATIO = max(0.1, min(0.9, _parse_float_env("PRUNING_TARGET_REDUCTION_RATIO", 0.65)))
+PRUNING_MIN_TARGET_TOKENS = max(50, min(5_000, _parse_int_env("PRUNING_MIN_TARGET_TOKENS", 160)))
 AGENT_TOOL_RESULT_TRANSCRIPT_MAX_CHARS = max(
     8_000,
     min(CONTENT_MAX_CHARS, _parse_int_env("AGENT_TOOL_RESULT_TRANSCRIPT_MAX_CHARS", 16_000)),
@@ -417,6 +419,13 @@ DEFAULT_SETTINGS = {
     "tool_memory_auto_inject": "false",
     "fetch_url_token_threshold": str(FETCH_SUMMARY_TOKEN_THRESHOLD),
     "fetch_url_clip_aggressiveness": "50",
+    "prompt_max_input_tokens": str(PROMPT_MAX_INPUT_TOKENS),
+    "prompt_response_token_reserve": str(PROMPT_RESPONSE_TOKEN_RESERVE),
+    "prompt_recent_history_max_tokens": str(PROMPT_RECENT_HISTORY_MAX_TOKENS),
+    "prompt_summary_max_tokens": str(PROMPT_SUMMARY_MAX_TOKENS),
+    "prompt_rag_max_tokens": str(PROMPT_RAG_MAX_TOKENS),
+    "prompt_tool_memory_max_tokens": str(PROMPT_TOOL_MEMORY_MAX_TOKENS),
+    "prompt_tool_trace_max_tokens": str(PROMPT_TOOL_TRACE_MAX_TOKENS),
     "canvas_prompt_max_lines": str(CANVAS_PROMPT_DEFAULT_MAX_LINES),
     "canvas_prompt_max_tokens": str(CANVAS_PROMPT_DEFAULT_MAX_TOKENS),
     "canvas_prompt_max_chars": str(CANVAS_PROMPT_DEFAULT_MAX_CHARS),
@@ -429,6 +438,8 @@ DEFAULT_SETTINGS = {
     "chat_summary_detail_level": CHAT_SUMMARY_DEFAULT_DETAIL_LEVEL,
     "summary_skip_first": "2",
     "summary_skip_last": "1",
+    "context_compaction_threshold": str(AGENT_CONTEXT_COMPACTION_THRESHOLD),
+    "context_compaction_keep_recent_rounds": str(AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS),
     "context_selection_strategy": "classic",
     "entropy_profile": "balanced",
     "entropy_rag_budget_ratio": "35",
@@ -439,6 +450,8 @@ DEFAULT_SETTINGS = {
     "pruning_enabled": "false",
     "pruning_token_threshold": str(CHAT_SUMMARY_TRIGGER_TOKEN_COUNT),
     "pruning_batch_size": "10",
+    "pruning_target_reduction_ratio": str(PRUNING_TARGET_REDUCTION_RATIO),
+    "pruning_min_target_tokens": str(PRUNING_MIN_TARGET_TOKENS),
 }
 
 

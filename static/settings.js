@@ -48,16 +48,32 @@ const summaryDetailLevelEl = document.getElementById("summary-detail-level-selec
 const summaryTriggerEl = document.getElementById("summary-trigger-input");
 const summarySkipFirstEl = document.getElementById("summary-skip-first-input");
 const summarySkipLastEl = document.getElementById("summary-skip-last-input");
+const promptMaxInputTokensEl = document.getElementById("prompt-max-input-tokens-input");
+const promptResponseTokenReserveEl = document.getElementById("prompt-response-token-reserve-input");
+const promptRecentHistoryMaxTokensEl = document.getElementById("prompt-recent-history-max-tokens-input");
+const promptSummaryMaxTokensEl = document.getElementById("prompt-summary-max-tokens-input");
+const promptRagMaxTokensEl = document.getElementById("prompt-rag-max-tokens-input");
+const promptToolMemoryMaxTokensEl = document.getElementById("prompt-tool-memory-max-tokens-input");
+const promptToolTraceMaxTokensEl = document.getElementById("prompt-tool-trace-max-tokens-input");
+const contextCompactionThresholdEl = document.getElementById("context-compaction-threshold-input");
+const contextCompactionKeepRecentRoundsEl = document.getElementById("context-compaction-keep-recent-rounds-input");
 const contextSelectionStrategyEl = document.getElementById("context-selection-strategy-select");
+const entropyControlsFieldsetEl = document.getElementById("entropy-controls-fieldset");
+const entropyRagBudgetClusterEl = document.getElementById("entropy-rag-budget-cluster");
 const entropyProfileEl = document.getElementById("entropy-profile-select");
 const entropyRagBudgetRatioEl = document.getElementById("entropy-rag-budget-ratio-input");
 const entropyProtectCodeBlocksEl = document.getElementById("entropy-protect-code-blocks-toggle");
 const entropyProtectToolResultsEl = document.getElementById("entropy-protect-tool-results-toggle");
 const entropyReferenceBoostEl = document.getElementById("entropy-reference-boost-toggle");
 const reasoningAutoCollapseEl = document.getElementById("reasoning-auto-collapse-toggle");
+const toolMemoryAutoInjectEl = document.getElementById("tool-memory-auto-inject-toggle");
+const toolMemoryLanePanelEl = document.getElementById("tool-memory-lane-panel");
 const pruningEnabledEl = document.getElementById("pruning-enabled-toggle");
+const pruningControlsFieldsetEl = document.getElementById("pruning-controls-fieldset");
 const pruningTokenThresholdEl = document.getElementById("pruning-token-threshold-input");
 const pruningBatchSizeEl = document.getElementById("pruning-batch-size-input");
+const pruningTargetReductionRatioEl = document.getElementById("pruning-target-reduction-ratio-input");
+const pruningMinTargetTokensEl = document.getElementById("pruning-min-target-tokens-input");
 const fetchThresholdEl = document.getElementById("fetch-threshold-input");
 const fetchAggressivenessEl = document.getElementById("fetch-aggressiveness-input");
 const canvasPromptLinesEl = document.getElementById("canvas-prompt-lines-input");
@@ -772,7 +788,7 @@ function getScratchpadSectionsFromSettings() {
   return sections;
 }
 
-function readNumericSetting(element, defaultValue, { allowZero = true } = {}) {
+function readNumericSetting(element, defaultValue, { allowZero = true, min = null, max = null } = {}) {
   if (!element) {
     return defaultValue;
   }
@@ -787,7 +803,20 @@ function readNumericSetting(element, defaultValue, { allowZero = true } = {}) {
   if (!allowZero && parsed === 0) {
     return defaultValue;
   }
-  return parsed;
+  const resolvedMin = Number.isFinite(min)
+    ? min
+    : (String(element.min || "").trim() ? Number.parseInt(element.min, 10) : null);
+  const resolvedMax = Number.isFinite(max)
+    ? max
+    : (String(element.max || "").trim() ? Number.parseInt(element.max, 10) : null);
+  let value = parsed;
+  if (Number.isFinite(resolvedMin)) {
+    value = Math.max(Number(resolvedMin), value);
+  }
+  if (Number.isFinite(resolvedMax)) {
+    value = Math.min(Number(resolvedMax), value);
+  }
+  return value;
 }
 
 function readFloatSetting(element, defaultValue, { min = -Infinity, max = Infinity } = {}) {
@@ -799,10 +828,10 @@ function readFloatSetting(element, defaultValue, { min = -Infinity, max = Infini
     return defaultValue;
   }
   const parsed = Number.parseFloat(rawValue);
-  if (Number.isNaN(parsed) || parsed < min || parsed > max) {
+  if (Number.isNaN(parsed)) {
     return defaultValue;
   }
-  return parsed;
+  return Math.min(max, Math.max(min, parsed));
 }
 
 function setCustomModelStatus(message, tone = "muted") {
@@ -1974,6 +2003,39 @@ function syncRagAutoInjectSourceAvailability() {
   syncOverviewStats();
 }
 
+function applyConditionalSectionState(element, { disabled = false, hidden = null } = {}) {
+  if (!element) {
+    return;
+  }
+
+  if ("disabled" in element) {
+    element.disabled = disabled;
+  }
+  element.classList.toggle("is-disabled", disabled);
+  element.setAttribute("aria-disabled", disabled ? "true" : "false");
+
+  if (typeof hidden === "boolean") {
+    element.hidden = hidden;
+    element.setAttribute("aria-hidden", hidden ? "true" : "false");
+  }
+}
+
+function syncContextStrategyAvailability() {
+  const strategy = contextSelectionStrategyEl?.value || "classic";
+  const entropyEnabled = strategy === "entropy" || strategy === "entropy_rag_hybrid";
+  const hybridEnabled = strategy === "entropy_rag_hybrid";
+
+  applyConditionalSectionState(entropyControlsFieldsetEl, { disabled: !entropyEnabled, hidden: !entropyEnabled });
+  if (entropyRagBudgetRatioEl) {
+    entropyRagBudgetRatioEl.disabled = !hybridEnabled;
+  }
+  applyConditionalSectionState(entropyRagBudgetClusterEl, { disabled: !hybridEnabled, hidden: !hybridEnabled });
+}
+
+function syncPruningSettingsAvailability() {
+  applyConditionalSectionState(pruningControlsFieldsetEl, { disabled: !Boolean(pruningEnabledEl?.checked) });
+}
+
 function syncOverviewStats() {
   if (statScratchpadEl) {
     const noteCount = getVisibleScratchpadNotes().length;
@@ -2020,6 +2082,15 @@ function applySettingsToForm() {
   if (summaryTriggerEl) summaryTriggerEl.value = String(appSettings.chat_summary_trigger_token_count || 80000);
   if (summarySkipFirstEl) summarySkipFirstEl.value = String(appSettings.summary_skip_first ?? 2);
   if (summarySkipLastEl) summarySkipLastEl.value = String(appSettings.summary_skip_last ?? 1);
+  if (promptMaxInputTokensEl) promptMaxInputTokensEl.value = String(appSettings.prompt_max_input_tokens ?? 80000);
+  if (promptResponseTokenReserveEl) promptResponseTokenReserveEl.value = String(appSettings.prompt_response_token_reserve ?? 8000);
+  if (promptRecentHistoryMaxTokensEl) promptRecentHistoryMaxTokensEl.value = String(appSettings.prompt_recent_history_max_tokens ?? 32000);
+  if (promptSummaryMaxTokensEl) promptSummaryMaxTokensEl.value = String(appSettings.prompt_summary_max_tokens ?? 12000);
+  if (promptRagMaxTokensEl) promptRagMaxTokensEl.value = String(appSettings.prompt_rag_max_tokens ?? 18000);
+  if (promptToolMemoryMaxTokensEl) promptToolMemoryMaxTokensEl.value = String(appSettings.prompt_tool_memory_max_tokens ?? 10000);
+  if (promptToolTraceMaxTokensEl) promptToolTraceMaxTokensEl.value = String(appSettings.prompt_tool_trace_max_tokens ?? 9000);
+  if (contextCompactionThresholdEl) contextCompactionThresholdEl.value = String(appSettings.context_compaction_threshold ?? 0.85);
+  if (contextCompactionKeepRecentRoundsEl) contextCompactionKeepRecentRoundsEl.value = String(appSettings.context_compaction_keep_recent_rounds ?? 2);
   if (contextSelectionStrategyEl) contextSelectionStrategyEl.value = appSettings.context_selection_strategy || "classic";
   if (entropyProfileEl) entropyProfileEl.value = appSettings.entropy_profile || "balanced";
   if (entropyRagBudgetRatioEl) entropyRagBudgetRatioEl.value = String(appSettings.entropy_rag_budget_ratio ?? 35);
@@ -2027,9 +2098,12 @@ function applySettingsToForm() {
   if (entropyProtectToolResultsEl) entropyProtectToolResultsEl.checked = Boolean(appSettings.entropy_protect_tool_results ?? true);
   if (entropyReferenceBoostEl) entropyReferenceBoostEl.checked = Boolean(appSettings.entropy_reference_boost ?? true);
   if (reasoningAutoCollapseEl) reasoningAutoCollapseEl.checked = Boolean(appSettings.reasoning_auto_collapse);
+  if (toolMemoryAutoInjectEl) toolMemoryAutoInjectEl.checked = Boolean(appSettings.tool_memory_auto_inject);
   if (pruningEnabledEl) pruningEnabledEl.checked = Boolean(appSettings.pruning_enabled);
   if (pruningTokenThresholdEl) pruningTokenThresholdEl.value = String(appSettings.pruning_token_threshold || 80000);
   if (pruningBatchSizeEl) pruningBatchSizeEl.value = String(appSettings.pruning_batch_size || 10);
+  if (pruningTargetReductionRatioEl) pruningTargetReductionRatioEl.value = String(appSettings.pruning_target_reduction_ratio ?? 0.65);
+  if (pruningMinTargetTokensEl) pruningMinTargetTokensEl.value = String(appSettings.pruning_min_target_tokens ?? 160);
   if (fetchThresholdEl) fetchThresholdEl.value = String(appSettings.fetch_url_token_threshold || 3500);
   if (fetchAggressivenessEl) fetchAggressivenessEl.value = String(appSettings.fetch_url_clip_aggressiveness || 50);
   if (canvasPromptLinesEl) canvasPromptLinesEl.value = String(appSettings.canvas_prompt_max_lines || 250);
@@ -2068,6 +2142,8 @@ function applySettingsToForm() {
   syncCustomModelReasoningControls();
   syncCustomModelProviderControls();
   updateRagSensitivityHint();
+  syncContextStrategyAvailability();
+  syncPruningSettingsAvailability();
   if (scratchpadListEl || scratchpadAddBtn || scratchpadCountEl) {
     renderScratchpad(true);
   }
@@ -2093,7 +2169,12 @@ function applyFeatureAvailability() {
   if (kbUploadBtn) kbUploadBtn.disabled = !ragEnabled;
   if (ragInjectOptionsEl) {
     ragInjectOptionsEl.classList.toggle("is-disabled", !ragEnabled);
+    ragInjectOptionsEl.setAttribute("aria-disabled", !ragEnabled ? "true" : "false");
   }
+  if (toolMemoryAutoInjectEl) {
+    toolMemoryAutoInjectEl.disabled = !ragEnabled;
+  }
+  applyConditionalSectionState(toolMemoryLanePanelEl, { disabled: !ragEnabled });
   if (ragDisabledNoteEl) {
     ragDisabledNoteEl.hidden = ragEnabled;
   }
@@ -2110,6 +2191,8 @@ function applyFeatureAvailability() {
     setKbUploadStatus("Ready to upload", "muted");
   }
   syncRagAutoInjectSourceAvailability();
+  syncContextStrategyAvailability();
+  syncPruningSettingsAvailability();
   updateRagSourceSummary();
   syncOverviewStats();
 }
@@ -2153,6 +2236,15 @@ function applyServerSettingsData(data) {
   appSettings.chat_summary_trigger_token_count = data.chat_summary_trigger_token_count || 80000;
   appSettings.summary_skip_first = data.summary_skip_first ?? 2;
   appSettings.summary_skip_last = data.summary_skip_last ?? 1;
+  appSettings.prompt_max_input_tokens = data.prompt_max_input_tokens ?? 80000;
+  appSettings.prompt_response_token_reserve = data.prompt_response_token_reserve ?? 8000;
+  appSettings.prompt_recent_history_max_tokens = data.prompt_recent_history_max_tokens ?? 32000;
+  appSettings.prompt_summary_max_tokens = data.prompt_summary_max_tokens ?? 12000;
+  appSettings.prompt_rag_max_tokens = data.prompt_rag_max_tokens ?? 18000;
+  appSettings.prompt_tool_memory_max_tokens = data.prompt_tool_memory_max_tokens ?? 10000;
+  appSettings.prompt_tool_trace_max_tokens = data.prompt_tool_trace_max_tokens ?? 9000;
+  appSettings.context_compaction_threshold = data.context_compaction_threshold ?? 0.85;
+  appSettings.context_compaction_keep_recent_rounds = data.context_compaction_keep_recent_rounds ?? 2;
   appSettings.context_selection_strategy = data.context_selection_strategy || "classic";
   appSettings.entropy_profile = data.entropy_profile || "balanced";
   appSettings.entropy_rag_budget_ratio = data.entropy_rag_budget_ratio ?? 35;
@@ -2160,9 +2252,12 @@ function applyServerSettingsData(data) {
   appSettings.entropy_protect_tool_results = Boolean(data.entropy_protect_tool_results ?? true);
   appSettings.entropy_reference_boost = Boolean(data.entropy_reference_boost ?? true);
   appSettings.reasoning_auto_collapse = Boolean(data.reasoning_auto_collapse);
+  appSettings.tool_memory_auto_inject = Boolean(data.tool_memory_auto_inject);
   appSettings.pruning_enabled = Boolean(data.pruning_enabled);
   appSettings.pruning_token_threshold = data.pruning_token_threshold || 80000;
   appSettings.pruning_batch_size = data.pruning_batch_size || 10;
+  appSettings.pruning_target_reduction_ratio = data.pruning_target_reduction_ratio ?? 0.65;
+  appSettings.pruning_min_target_tokens = data.pruning_min_target_tokens ?? 160;
   appSettings.fetch_url_token_threshold = data.fetch_url_token_threshold || 3500;
   appSettings.fetch_url_clip_aggressiveness = data.fetch_url_clip_aggressiveness ?? 50;
   appSettings.canvas_prompt_max_lines = data.canvas_prompt_max_lines || 250;
@@ -2230,16 +2325,28 @@ async function saveSettings() {
     chat_summary_trigger_token_count: readNumericSetting(summaryTriggerEl, 80000, { allowZero: false }),
     summary_skip_first: readNumericSetting(summarySkipFirstEl, 0),
     summary_skip_last: readNumericSetting(summarySkipLastEl, 1),
+    prompt_max_input_tokens: readNumericSetting(promptMaxInputTokensEl, 80000, { allowZero: false, min: 8000, max: 120000 }),
+    prompt_response_token_reserve: readNumericSetting(promptResponseTokenReserveEl, 8000, { allowZero: false, min: 1000, max: 32000 }),
+    prompt_recent_history_max_tokens: readNumericSetting(promptRecentHistoryMaxTokensEl, 32000, { allowZero: false, min: 1000, max: 120000 }),
+    prompt_summary_max_tokens: readNumericSetting(promptSummaryMaxTokensEl, 12000, { allowZero: false, min: 500, max: 120000 }),
+    prompt_rag_max_tokens: readNumericSetting(promptRagMaxTokensEl, 18000, { min: 0, max: 120000 }),
+    prompt_tool_memory_max_tokens: readNumericSetting(promptToolMemoryMaxTokensEl, 10000, { min: 0, max: 120000 }),
+    prompt_tool_trace_max_tokens: readNumericSetting(promptToolTraceMaxTokensEl, 9000, { min: 0, max: 120000 }),
+    context_compaction_threshold: readFloatSetting(contextCompactionThresholdEl, 0.85, { min: 0.5, max: 0.98 }),
+    context_compaction_keep_recent_rounds: readNumericSetting(contextCompactionKeepRecentRoundsEl, 2, { min: 0, max: 6 }),
     context_selection_strategy: contextSelectionStrategyEl?.value || "classic",
     entropy_profile: entropyProfileEl?.value || "balanced",
-    entropy_rag_budget_ratio: readNumericSetting(entropyRagBudgetRatioEl, 35),
+    entropy_rag_budget_ratio: readNumericSetting(entropyRagBudgetRatioEl, 35, { min: 0, max: 80 }),
     entropy_protect_code_blocks: Boolean(entropyProtectCodeBlocksEl?.checked),
     entropy_protect_tool_results: Boolean(entropyProtectToolResultsEl?.checked),
     entropy_reference_boost: Boolean(entropyReferenceBoostEl?.checked),
     reasoning_auto_collapse: Boolean(reasoningAutoCollapseEl?.checked),
+    tool_memory_auto_inject: featureFlags.rag_enabled ? Boolean(toolMemoryAutoInjectEl?.checked) : false,
     pruning_enabled: Boolean(pruningEnabledEl?.checked),
     pruning_token_threshold: readNumericSetting(pruningTokenThresholdEl, 80000, { allowZero: false }),
     pruning_batch_size: readNumericSetting(pruningBatchSizeEl, 10, { allowZero: false }),
+    pruning_target_reduction_ratio: readFloatSetting(pruningTargetReductionRatioEl, 0.65, { min: 0.1, max: 0.9 }),
+    pruning_min_target_tokens: readNumericSetting(pruningMinTargetTokensEl, 160, { allowZero: false, min: 50, max: 5000 }),
     fetch_url_token_threshold: readNumericSetting(fetchThresholdEl, 3500, { allowZero: false }),
     fetch_url_clip_aggressiveness: readNumericSetting(fetchAggressivenessEl, 50),
     canvas_prompt_max_lines: readNumericSetting(canvasPromptLinesEl, 250, { allowZero: false }),
@@ -2263,7 +2370,6 @@ async function saveSettings() {
     rag_context_size: ragContextSizeEl?.value || "medium",
     rag_source_types: featureFlags.rag_enabled ? getSelectedRagSourceTypes() : [],
     rag_auto_inject_source_types: featureFlags.rag_enabled ? getSelectedRagAutoInjectSourceTypes() : [],
-    tool_memory_auto_inject: false,
     scratchpad: (scratchpadSections[DEFAULT_SCRATCHPAD_SECTION_ID] || []).join("\n"),
     scratchpad_sections: DEFAULT_SCRATCHPAD_SECTION_ORDER.reduce((acc, sectionId) => {
       acc[sectionId] = (scratchpadSections[sectionId] || []).join("\n");
@@ -2650,15 +2756,34 @@ function registerDirtyListeners() {
   summaryTriggerEl?.addEventListener("input", markDirty);
   summarySkipFirstEl?.addEventListener("input", markDirty);
   summarySkipLastEl?.addEventListener("input", markDirty);
-  contextSelectionStrategyEl?.addEventListener("change", markDirty);
+  promptMaxInputTokensEl?.addEventListener("input", markDirty);
+  promptResponseTokenReserveEl?.addEventListener("input", markDirty);
+  promptRecentHistoryMaxTokensEl?.addEventListener("input", markDirty);
+  promptSummaryMaxTokensEl?.addEventListener("input", markDirty);
+  promptRagMaxTokensEl?.addEventListener("input", markDirty);
+  promptToolMemoryMaxTokensEl?.addEventListener("input", markDirty);
+  promptToolTraceMaxTokensEl?.addEventListener("input", markDirty);
+  contextCompactionThresholdEl?.addEventListener("input", markDirty);
+  contextCompactionKeepRecentRoundsEl?.addEventListener("input", markDirty);
+  contextSelectionStrategyEl?.addEventListener("change", () => {
+    syncContextStrategyAvailability();
+    markDirty();
+  });
   entropyProfileEl?.addEventListener("change", markDirty);
   entropyRagBudgetRatioEl?.addEventListener("input", markDirty);
   entropyProtectCodeBlocksEl?.addEventListener("change", markDirty);
   entropyProtectToolResultsEl?.addEventListener("change", markDirty);
   entropyReferenceBoostEl?.addEventListener("change", markDirty);
-  pruningEnabledEl?.addEventListener("change", markDirty);
+  reasoningAutoCollapseEl?.addEventListener("change", markDirty);
+  toolMemoryAutoInjectEl?.addEventListener("change", markDirty);
+  pruningEnabledEl?.addEventListener("change", () => {
+    syncPruningSettingsAvailability();
+    markDirty();
+  });
   pruningTokenThresholdEl?.addEventListener("input", markDirty);
   pruningBatchSizeEl?.addEventListener("input", markDirty);
+  pruningTargetReductionRatioEl?.addEventListener("input", markDirty);
+  pruningMinTargetTokensEl?.addEventListener("input", markDirty);
   fetchThresholdEl?.addEventListener("input", markDirty);
   fetchAggressivenessEl?.addEventListener("input", markDirty);
   canvasPromptLinesEl?.addEventListener("input", markDirty);

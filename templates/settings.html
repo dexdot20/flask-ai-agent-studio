@@ -172,7 +172,7 @@
                 <button class="btn-primary" id="persona-new-btn" type="button">New persona</button>
                 <span id="persona-status" class="settings-status" data-tone="muted">Ready to create a persona</span>
               </div>
-              <div id="persona-list" class="model-management-list" style="margin-top: 1rem;"></div>
+              <div id="persona-list" class="model-management-list model-management-list--spaced"></div>
             </div>
 
             <div class="settings-page-section-card">
@@ -400,7 +400,7 @@
                   <p>Structured durable memory injected into the runtime system prompt.</p>
                 </div>
                 <div class="settings-label">Scratchpad sections</div>
-                <p id="scratchpad-readonly-note" class="settings-copy">Reserve the scratchpad for durable cross-conversation lessons, profile clues, recurring problems, long-running workstreams, preferences, domain facts, and a few general notes.</p>
+                <p id="scratchpad-readonly-note" class="settings-callout" data-tone="info">Reserve the scratchpad for durable cross-conversation lessons, profile clues, recurring problems, long-running workstreams, preferences, domain facts, and a few general notes.</p>
                 <div id="scratchpad-list" class="scratchpad-list" aria-label="Stored notes list"></div>
                 <div class="scratchpad-toolbar">
                   <button class="btn-ghost" id="scratchpad-add-btn" type="button">Quick add to General Notes</button>
@@ -416,35 +416,49 @@
                   </div>
                   <p>Define when long conversations get summarized, how detailed the summary should be, and which messages must stay untouched.</p>
                 </div>
-                <div class="settings-page-grid settings-page-grid--two settings-page-grid--compact">
-                  <div class="settings-form-cluster">
-                    <label class="settings-label" for="summary-mode-select">Conversation summary mode</label>
-                    <select id="summary-mode-select">
-                      <option value="auto">Auto</option>
-                      <option value="conservative">Conservative</option>
-                      <option value="aggressive">Aggressive</option>
-                      <option value="never">Never</option>
-                    </select>
-                    <p class="settings-copy">Auto balances cost and continuity, Conservative waits longer before compressing, Aggressive summarizes earlier and more often, and Never disables background summarization.</p>
-                  </div>
-                  <div class="settings-form-cluster">
-                    <label class="settings-label" for="summary-detail-level-select">Summary detail level</label>
-                    <select id="summary-detail-level-select">
-                      <option value="very_concise">Very concise</option>
-                      <option value="concise">Concise</option>
-                      <option value="balanced">Balanced</option>
-                      <option value="detailed">Detailed</option>
-                      <option value="comprehensive">Comprehensive</option>
-                    </select>
-                    <p class="settings-copy">Lower detail trims harder for speed and cost, while higher detail preserves more nuance, decisions, and task history.</p>
-                  </div>
-                  <div class="settings-form-cluster">
-                    <label class="settings-label" for="summary-trigger-input">Summary trigger in visible tokens (1000-200000)</label>
-                    <input type="number" class="settings-number" id="summary-trigger-input" min="1000" max="200000" value="80000" />
-                    <p class="settings-copy">Once the visible conversation exceeds this threshold, automatic summarization becomes eligible.</p>
-                  </div>
-                  <div class="settings-form-cluster settings-form-cluster--split">
-                    <div class="settings-label">Protected message window</div>
+                <div class="settings-subsection-grid settings-subsection-grid--two">
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Compression thresholds</span>
+                      <h4 class="settings-subsection__title">When summaries happen</h4>
+                      <p class="settings-subsection__copy">Choose how soon summarization kicks in and how much detail survives once older turns are condensed.</p>
+                    </div>
+                    <div class="settings-page-grid settings-page-grid--two settings-page-grid--compact">
+                      <div class="settings-form-cluster">
+                        <label class="settings-label" for="summary-mode-select">Conversation summary mode</label>
+                        <select id="summary-mode-select">
+                          <option value="auto">Auto</option>
+                          <option value="conservative">Conservative</option>
+                          <option value="aggressive">Aggressive</option>
+                          <option value="never">Never</option>
+                        </select>
+                        <p class="settings-copy">Auto balances cost and continuity, Conservative waits longer before compressing, Aggressive summarizes earlier and more often, and Never disables background summarization.</p>
+                      </div>
+                      <div class="settings-form-cluster">
+                        <label class="settings-label" for="summary-detail-level-select">Summary detail level</label>
+                        <select id="summary-detail-level-select">
+                          <option value="very_concise">Very concise</option>
+                          <option value="concise">Concise</option>
+                          <option value="balanced">Balanced</option>
+                          <option value="detailed">Detailed</option>
+                          <option value="comprehensive">Comprehensive</option>
+                        </select>
+                        <p class="settings-copy">Lower detail trims harder for speed and cost, while higher detail preserves more nuance, decisions, and task history.</p>
+                      </div>
+                      <div class="settings-form-cluster settings-form-cluster--split">
+                        <label class="settings-label" for="summary-trigger-input">Summary trigger in visible tokens (1000-200000)</label>
+                        <input type="number" class="settings-number" id="summary-trigger-input" min="1000" max="200000" value="80000" />
+                        <p class="settings-copy">Once the visible conversation exceeds this threshold, automatic summarization becomes eligible.</p>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Protected context</span>
+                      <h4 class="settings-subsection__title">Message safety window</h4>
+                      <p class="settings-subsection__copy">Keep the conversation opening and latest turn intact even when automatic summarization is active.</p>
+                    </div>
                     <div class="settings-inline-grid">
                       <div>
                         <label class="settings-mini-label" for="summary-skip-first-input">Protect first N messages (0-20)</label>
@@ -456,50 +470,173 @@
                       </div>
                     </div>
                     <p class="settings-copy">These messages are excluded from automatic summarization so the assistant keeps your opening context and latest turn intact.</p>
-                  </div>
-                </div>
-                <div class="settings-page-grid settings-page-grid--two settings-page-grid--compact" style="margin-top: 1rem;">
-                  <div class="settings-form-cluster">
-                    <label class="settings-label" for="context-selection-strategy-select">Context selection strategy</label>
-                    <select id="context-selection-strategy-select">
-                      <option value="classic">Classic history window</option>
-                      <option value="entropy">Entropy only</option>
-                      <option value="entropy_rag_hybrid">Entropy + RAG hybrid</option>
-                    </select>
-                    <p class="settings-copy">Classic keeps the current recency-first prompt window. Entropy scores older blocks by information density. Hybrid also reserves prompt budget so RAG can restore dropped context.</p>
-                  </div>
-                  <div class="settings-form-cluster">
-                    <label class="settings-label" for="entropy-profile-select">Entropy profile</label>
-                    <select id="entropy-profile-select">
-                      <option value="conservative">Conservative</option>
-                      <option value="balanced">Balanced</option>
-                      <option value="aggressive">Aggressive</option>
-                    </select>
-                    <p class="settings-copy">Conservative keeps more conversational continuity. Aggressive trims harder and favors dense technical context over filler.</p>
-                  </div>
-                  <div class="settings-form-cluster">
-                    <label class="settings-label" for="entropy-rag-budget-ratio-input">Hybrid RAG reserve (0-80%)</label>
-                    <input type="number" class="settings-number" id="entropy-rag-budget-ratio-input" min="0" max="80" value="35" />
-                    <p class="settings-copy">Only used in Entropy + RAG hybrid mode. Higher values reserve more prompt budget for retrieved context instead of raw history.</p>
-                  </div>
-                  <div class="settings-form-cluster settings-form-cluster--split">
-                    <div class="settings-label">Entropy protection rules</div>
-                    <div class="settings-inline-grid">
-                      <label class="tool-toggle" for="entropy-protect-code-blocks-toggle">
-                        <input type="checkbox" id="entropy-protect-code-blocks-toggle" />
-                        <span>Protect code-heavy blocks</span>
-                      </label>
-                      <label class="tool-toggle" for="entropy-protect-tool-results-toggle">
-                        <input type="checkbox" id="entropy-protect-tool-results-toggle" />
-                        <span>Protect tool results</span>
-                      </label>
-                      <label class="tool-toggle" for="entropy-reference-boost-toggle">
-                        <input type="checkbox" id="entropy-reference-boost-toggle" />
-                        <span>Boost later-referenced context</span>
-                      </label>
+                  </section>
+
+                  <section class="settings-subsection settings-subsection--full">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Selection strategy</span>
+                      <h4 class="settings-subsection__title">How raw history is chosen</h4>
+                      <p class="settings-subsection__copy">Classic keeps a recency-first window. Entropy scores older blocks by information density. Hybrid also reserves space so retrieval can refill dropped context.</p>
                     </div>
-                    <p class="settings-copy">These rules bias entropy scoring so structured data, tool traces, and context reused later in the thread survive trimming more reliably.</p>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="context-selection-strategy-select">Context selection strategy</label>
+                      <select id="context-selection-strategy-select">
+                        <option value="classic">Classic history window</option>
+                        <option value="entropy">Entropy only</option>
+                        <option value="entropy_rag_hybrid">Entropy + RAG hybrid</option>
+                      </select>
+                    </div>
+                    <fieldset id="entropy-controls-fieldset" class="settings-conditional-group settings-page-grid settings-page-grid--two settings-page-grid--compact">
+                      <div class="settings-form-cluster">
+                        <label class="settings-label" for="entropy-profile-select">Entropy profile</label>
+                        <select id="entropy-profile-select">
+                          <option value="conservative">Conservative</option>
+                          <option value="balanced">Balanced</option>
+                          <option value="aggressive">Aggressive</option>
+                        </select>
+                        <p class="settings-copy">Conservative keeps more conversational continuity. Aggressive trims harder and favors dense technical context over filler.</p>
+                      </div>
+                      <div class="settings-form-cluster" id="entropy-rag-budget-cluster">
+                        <label class="settings-label" for="entropy-rag-budget-ratio-input">Hybrid RAG reserve (0-80%)</label>
+                        <input type="number" class="settings-number" id="entropy-rag-budget-ratio-input" min="0" max="80" value="35" />
+                        <p class="settings-copy">Only used in Entropy + RAG hybrid mode. Higher values reserve more prompt budget for retrieved context instead of raw history.</p>
+                      </div>
+                      <div class="settings-form-cluster settings-form-cluster--split">
+                        <div class="settings-label">Entropy protection rules</div>
+                        <div class="settings-inline-grid">
+                          <label class="tool-toggle" for="entropy-protect-code-blocks-toggle">
+                            <input type="checkbox" id="entropy-protect-code-blocks-toggle" />
+                            <span>Protect code-heavy blocks</span>
+                          </label>
+                          <label class="tool-toggle" for="entropy-protect-tool-results-toggle">
+                            <input type="checkbox" id="entropy-protect-tool-results-toggle" />
+                            <span>Protect tool results</span>
+                          </label>
+                          <label class="tool-toggle" for="entropy-reference-boost-toggle">
+                            <input type="checkbox" id="entropy-reference-boost-toggle" />
+                            <span>Boost later-referenced context</span>
+                          </label>
+                        </div>
+                        <p class="settings-copy">These rules bias entropy scoring so structured data, tool traces, and context reused later in the thread survive trimming more reliably.</p>
+                      </div>
+                    </fieldset>
+                  </section>
+                </div>
+              </div>
+
+              <div class="settings-page-section-card">
+                <div class="settings-page-section-card__header">
+                  <div>
+                    <span class="settings-section-kicker">Prompt allocation</span>
+                    <h3>Context budgets</h3>
                   </div>
+                  <p>Fine-tune how much of the prompt window is reserved for raw history, summaries, retrieved context, remembered web results, and tool traces.</p>
+                </div>
+                <div class="settings-subsection-grid settings-subsection-grid--two">
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Prompt window</span>
+                      <h4 class="settings-subsection__title">Global ceiling</h4>
+                      <p class="settings-subsection__copy">Set the effective input ceiling first, then keep enough room for the model to answer without crowding the prompt.</p>
+                    </div>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="prompt-max-input-tokens-input">Prompt max input tokens (8000-120000)</label>
+                      <input type="number" class="settings-number" id="prompt-max-input-tokens-input" min="8000" max="120000" value="80000" />
+                      <p class="settings-copy">Main upper bound used when the app decides how much total context can be sent into a model call.</p>
+                    </div>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="prompt-response-token-reserve-input">Response reserve (1000-32000)</label>
+                      <input type="number" class="settings-number" id="prompt-response-token-reserve-input" min="1000" max="32000" value="8000" />
+                      <p class="settings-copy">Held back for the model's answer. It must still leave at least 2000 tokens available for prompt input.</p>
+                    </div>
+                  </section>
+
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Conversation lanes</span>
+                      <h4 class="settings-subsection__title">History and summaries</h4>
+                      <p class="settings-subsection__copy">Control how much near-term raw chat history stays visible before older turns move into condensed form.</p>
+                    </div>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="prompt-recent-history-max-tokens-input">Recent history budget (1000-120000)</label>
+                      <input type="number" class="settings-number" id="prompt-recent-history-max-tokens-input" min="1000" max="120000" value="32000" />
+                      <p class="settings-copy">Caps how much near-term chat history can be preserved before older material is summarized or trimmed.</p>
+                    </div>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="prompt-summary-max-tokens-input">Summary budget (500-120000)</label>
+                      <input type="number" class="settings-number" id="prompt-summary-max-tokens-input" min="500" max="120000" value="12000" />
+                      <p class="settings-copy">Maximum prompt space reserved for background summaries when long threads are compressed.</p>
+                    </div>
+                  </section>
+
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Retrieved context</span>
+                      <h4 class="settings-subsection__title">RAG and saved memory lanes</h4>
+                      <p class="settings-subsection__copy">Keep generic retrieval and the dedicated saved web/fetch lane separate so each source uses a predictable share of prompt space.</p>
+                    </div>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="prompt-rag-max-tokens-input">RAG budget (0-120000)</label>
+                      <input type="number" class="settings-number" id="prompt-rag-max-tokens-input" min="0" max="120000" value="18000" />
+                      <p class="settings-copy">Upper bound for generic retrieved context coming from chats, tool outputs, saved web/fetches, and uploaded documents.</p>
+                    </div>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="prompt-tool-memory-max-tokens-input">Dedicated tool-memory budget (0-120000)</label>
+                      <input type="number" class="settings-number" id="prompt-tool-memory-max-tokens-input" min="0" max="120000" value="10000" />
+                      <p class="settings-copy">Separate budget for the dedicated saved web/fetch memory lane when that feature is enabled below.</p>
+                    </div>
+                  </section>
+
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Tool transcript</span>
+                      <h4 class="settings-subsection__title">Trace retention</h4>
+                      <p class="settings-subsection__copy">Decide how much tool-call detail survives into the next turn before the runtime starts compressing it aggressively.</p>
+                    </div>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="prompt-tool-trace-max-tokens-input">Tool trace budget (0-120000)</label>
+                      <input type="number" class="settings-number" id="prompt-tool-trace-max-tokens-input" min="0" max="120000" value="9000" />
+                      <p class="settings-copy">Controls how much tool-call transcript detail can survive into the next model turn before aggressive compaction begins.</p>
+                    </div>
+                  </section>
+                </div>
+              </div>
+
+              <div class="settings-page-section-card">
+                <div class="settings-page-section-card__header">
+                  <div>
+                    <span class="settings-section-kicker">Runtime safeguards</span>
+                    <h3>Context compaction</h3>
+                  </div>
+                  <p>These controls decide when the agent starts aggressively compressing older runtime history to recover from budget pressure.</p>
+                </div>
+                <div class="settings-callout" data-tone="info">
+                  Compaction is a pressure-release valve, not a primary context strategy. Tune it only after the summary, entropy, and prompt budget settings above feel stable.
+                </div>
+                <div class="settings-subsection-grid settings-subsection-grid--two">
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Trigger</span>
+                      <h4 class="settings-subsection__title">When compaction begins</h4>
+                    </div>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="context-compaction-threshold-input">Compaction trigger ratio (0.50-0.98)</label>
+                      <input type="number" class="settings-number" id="context-compaction-threshold-input" min="0.5" max="0.98" step="0.01" value="0.85" />
+                      <p class="settings-copy">The agent starts compacting when the current turn approaches this fraction of the configured prompt max input token budget.</p>
+                    </div>
+                  </section>
+
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Protected recency</span>
+                      <h4 class="settings-subsection__title">Verbatim rounds to keep</h4>
+                    </div>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="context-compaction-keep-recent-rounds-input">Keep recent rounds (0-6)</label>
+                      <input type="number" class="settings-number" id="context-compaction-keep-recent-rounds-input" min="0" max="6" value="2" />
+                      <p class="settings-copy">During compaction, this many latest conversation rounds stay verbatim before older history is merged harder.</p>
+                    </div>
+                  </section>
                 </div>
               </div>
 
@@ -560,7 +697,7 @@
                   </div>
                   <p>Control which memory pools can be searched and which ones may be inserted automatically. Automatic injection is configured per source, so there is no separate global toggle here.</p>
                 </div>
-                <p id="rag-disabled-note" class="settings-copy" hidden>RAG is disabled in the environment, so sync and auto-injection are unavailable.</p>
+                <p id="rag-disabled-note" class="settings-callout" data-tone="warning" hidden>RAG is disabled in the environment, so sync and auto-injection are unavailable.</p>
                 <div id="rag-inject-options" class="rag-settings-grid">
                   <div class="rag-setting-group">
                     <label class="settings-label" for="rag-sensitivity-select">Injection sensitivity</label>
@@ -660,6 +797,14 @@
                     <p id="rag-source-summary" class="settings-copy">Search is enabled for the selected pools only; unselected pools will not participate in generic RAG retrieval.</p>
                     <p id="rag-auto-inject-source-summary" class="settings-copy">Auto inject applies only to the selected pools.</p>
                   </div>
+                  <div id="tool-memory-lane-panel" class="settings-toggle-panel settings-toggle-panel--accent settings-form-cluster settings-form-cluster--split settings-block-start">
+                    <div class="settings-label">Dedicated saved web/fetch memory</div>
+                    <label class="tool-toggle" for="tool-memory-auto-inject-toggle">
+                      <input type="checkbox" id="tool-memory-auto-inject-toggle" />
+                      <span>Auto inject saved web/fetch memory through the dedicated tool-memory lane</span>
+                    </label>
+                    <p class="settings-copy">When enabled, saved web/fetch memory gets its own prompt budget and is removed from the generic RAG auto-inject pool so retrieved context stays cleaner and easier to control.</p>
+                  </div>
                 </div>
               </div>
 
@@ -671,20 +816,45 @@
                   </div>
                   <p>Shorten older visible history when the conversation gets noisy, while keeping the underlying meaning intact.</p>
                 </div>
-                <label class="tool-toggle"><input type="checkbox" id="pruning-enabled-toggle" /> <span>Enable automatic pruning after the visible token threshold is exceeded</span></label>
-                <div class="settings-page-grid settings-page-grid--two settings-page-grid--compact">
-                  <div class="settings-form-cluster">
-                    <label class="settings-label" for="pruning-token-threshold-input">Pruning trigger in visible tokens (1000-200000)</label>
-                    <input type="number" class="settings-number" id="pruning-token-threshold-input" min="1000" max="200000" value="80000" />
-                    <p class="settings-copy">Pruning becomes eligible once the visible conversation crosses this size threshold.</p>
-                  </div>
-                  <div class="settings-form-cluster">
-                    <label class="settings-label" for="pruning-batch-size-input">Prune first N eligible messages (1-50)</label>
-                    <input type="number" class="settings-number" id="pruning-batch-size-input" min="1" max="50" value="10" />
-                    <p class="settings-copy">Controls how many older messages are shortened in one automatic pruning pass.</p>
-                  </div>
+                <div class="settings-toggle-panel">
+                  <label class="tool-toggle"><input type="checkbox" id="pruning-enabled-toggle" /> <span>Enable automatic pruning after the visible token threshold is exceeded</span></label>
+                  <p class="settings-copy">Manual pruning stays available from message actions even if automatic pruning is turned off.</p>
                 </div>
-                <p class="settings-copy">Manual pruning stays available from message actions even if automatic pruning is turned off.</p>
+                <fieldset id="pruning-controls-fieldset" class="settings-conditional-group settings-subsection-grid settings-subsection-grid--two">
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Activation</span>
+                      <h4 class="settings-subsection__title">When pruning runs</h4>
+                    </div>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="pruning-token-threshold-input">Pruning trigger in visible tokens (1000-200000)</label>
+                      <input type="number" class="settings-number" id="pruning-token-threshold-input" min="1000" max="200000" value="80000" />
+                      <p class="settings-copy">Pruning becomes eligible once the visible conversation crosses this size threshold.</p>
+                    </div>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="pruning-batch-size-input">Prune first N eligible messages (1-50)</label>
+                      <input type="number" class="settings-number" id="pruning-batch-size-input" min="1" max="50" value="10" />
+                      <p class="settings-copy">Controls how many older messages are shortened in one automatic pruning pass.</p>
+                    </div>
+                  </section>
+
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Compression floor</span>
+                      <h4 class="settings-subsection__title">How aggressive pruning is</h4>
+                    </div>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="pruning-target-reduction-ratio-input">Target reduction ratio (0.10-0.90)</label>
+                      <input type="number" class="settings-number" id="pruning-target-reduction-ratio-input" min="0.1" max="0.9" step="0.01" value="0.65" />
+                      <p class="settings-copy">Roughly how aggressively each candidate message should be shortened relative to its estimated token count.</p>
+                    </div>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="pruning-min-target-tokens-input">Minimum target tokens (50-5000)</label>
+                      <input type="number" class="settings-number" id="pruning-min-target-tokens-input" min="50" max="5000" value="160" />
+                      <p class="settings-copy">Prevents very informative technical messages from being compressed below this floor during automatic pruning.</p>
+                    </div>
+                  </section>
+                </fieldset>
               </div>
             </div>
           </div>

@@ -3,10 +3,13 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from config import PRUNING_MIN_TARGET_TOKENS, PRUNING_TARGET_REDUCTION_RATIO
 from db import (
     get_app_settings,
     get_conversation_message_rows,
     get_db,
+    get_pruning_min_target_tokens,
+    get_pruning_target_reduction_ratio,
     message_row_to_dict,
     parse_message_metadata,
     serialize_message_metadata,
@@ -31,8 +34,6 @@ PRUNING_SYSTEM_PROMPT = (
     "When you encounter those sections, keep those sections verbatim and only trim truly redundant surrounding prose.\n"
     "Return only the refined message text without conversational filler or markdown artifacts."
 )
-PRUNING_TARGET_REDUCTION_RATIO = 0.65
-PRUNING_MIN_TARGET_TOKENS = 160
 PRUNING_CONTEXT_MESSAGE_MAX_CHARS = 700
 PRUNING_CONTEXT_NEIGHBOR_COUNT = 2
 PRUNING_MAX_ATTEMPTS = 2
@@ -56,15 +57,19 @@ def _extract_response_text(response: Any) -> str:
     return str(content or "").strip()
 
 
-def _estimate_pruning_target_tokens(content: str) -> int:
+def _estimate_pruning_target_tokens(
+    content: str,
+    reduction_ratio: float = PRUNING_TARGET_REDUCTION_RATIO,
+    min_target_tokens: int = PRUNING_MIN_TARGET_TOKENS,
+) -> int:
     estimated_tokens = estimate_text_tokens(content)
     if estimated_tokens <= 0:
         return 1
 
-    target_tokens = max(1, int(estimated_tokens * PRUNING_TARGET_REDUCTION_RATIO))
-    if estimated_tokens < PRUNING_MIN_TARGET_TOKENS:
+    target_tokens = max(1, int(estimated_tokens * float(reduction_ratio)))
+    if estimated_tokens < min_target_tokens:
         return min(estimated_tokens, target_tokens)
-    return max(PRUNING_MIN_TARGET_TOKENS, target_tokens)
+    return max(min_target_tokens, target_tokens)
 
 
 def _build_pruning_context_hint(conversation_id: int, message_id: int) -> str:
@@ -135,7 +140,7 @@ def _build_pruning_messages(
     role: str = "",
     retry_instruction: str = "",
 ) -> list[dict[str, str]]:
-    normalized_target_tokens = max(1, int(target_tokens or _estimate_pruning_target_tokens(content)))
+    normalized_target_tokens = max(1, int(target_tokens or estimate_text_tokens(content) or 1))
     normalized_context_hint = str(context_hint or "").strip()
     normalized_role = str(role or "").strip() or "message"
     normalized_retry_instruction = str(retry_instruction or "").strip()
@@ -213,10 +218,16 @@ def prune_message(message_id: int) -> dict:
 
     original_content = str(message.get("content") or "")
     metadata = parse_message_metadata(message.get("metadata"))
-    target_tokens = _estimate_pruning_target_tokens(original_content)
-    context_hint = _build_pruning_context_hint(int(row["conversation_id"] or 0), int(row["id"] or 0))
 
     settings = get_app_settings()
+    pruning_target_reduction_ratio = get_pruning_target_reduction_ratio(settings)
+    pruning_min_target_tokens = get_pruning_min_target_tokens(settings)
+    target_tokens = _estimate_pruning_target_tokens(
+        original_content,
+        pruning_target_reduction_ratio,
+        pruning_min_target_tokens,
+    )
+    context_hint = _build_pruning_context_hint(int(row["conversation_id"] or 0), int(row["id"] or 0))
     pruning_model = get_operation_model("prune", settings, fallback_model_id=PRUNING_MODEL)
     target = resolve_model_target(pruning_model, settings)
 

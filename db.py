@@ -12,6 +12,8 @@ from flask import current_app, has_app_context
 
 from canvas_service import extract_canvas_active_document_id, extract_canvas_documents, extract_canvas_viewports
 from config import (
+    AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS,
+    AGENT_CONTEXT_COMPACTION_THRESHOLD,
     CACHE_TTL_HOURS,
     CANVAS_EXPAND_DEFAULT_MAX_LINES,
     CANVAS_PROMPT_CODE_LINE_MAX_CHARS,
@@ -34,6 +36,8 @@ from config import (
     DEFAULT_WEB_CACHE_TTL_HOURS,
     DEFAULT_SETTINGS,
     OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED,
+    PRUNING_MIN_TARGET_TOKENS,
+    PRUNING_TARGET_REDUCTION_RATIO,
     SCRATCHPAD_DEFAULT_SECTION,
     SCRATCHPAD_SECTION_ORDER,
     SCRATCHPAD_SECTION_SETTING_KEYS,
@@ -3751,39 +3755,139 @@ def get_sub_agent_max_parallel_tools(settings: dict | None = None) -> int:
     return max(MAX_PARALLEL_TOOLS_MIN, min(MAX_PARALLEL_TOOLS_MAX, value))
 
 
+def _get_int_setting_value(
+    source: dict,
+    key: str,
+    default_value: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    raw_value = source.get(key, default_value)
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        value = int(default_value)
+    return max(minimum, min(maximum, value))
+
+
+def _get_float_setting_value(
+    source: dict,
+    key: str,
+    default_value: float,
+    minimum: float,
+    maximum: float,
+) -> float:
+    raw_value = source.get(key, default_value)
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        value = float(default_value)
+    return max(minimum, min(maximum, value))
+
+
 def get_prompt_max_input_tokens(settings: dict | None = None) -> int:
-    del settings
-    return PROMPT_MAX_INPUT_TOKENS
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(
+        source,
+        "prompt_max_input_tokens",
+        PROMPT_MAX_INPUT_TOKENS,
+        8_000,
+        120_000,
+    )
 
 
 def get_prompt_response_token_reserve(settings: dict | None = None) -> int:
-    del settings
-    return PROMPT_RESPONSE_TOKEN_RESERVE
+    source = settings if settings is not None else get_app_settings()
+    prompt_max_input_tokens = get_prompt_max_input_tokens(source)
+    return _get_int_setting_value(
+        source,
+        "prompt_response_token_reserve",
+        PROMPT_RESPONSE_TOKEN_RESERVE,
+        1_000,
+        max(1_000, prompt_max_input_tokens - 2_000),
+    )
 
 
 def get_prompt_recent_history_max_tokens(settings: dict | None = None) -> int:
-    del settings
-    return PROMPT_RECENT_HISTORY_MAX_TOKENS
+    source = settings if settings is not None else get_app_settings()
+    prompt_max_input_tokens = get_prompt_max_input_tokens(source)
+    return _get_int_setting_value(
+        source,
+        "prompt_recent_history_max_tokens",
+        PROMPT_RECENT_HISTORY_MAX_TOKENS,
+        1_000,
+        prompt_max_input_tokens,
+    )
 
 
 def get_prompt_summary_max_tokens(settings: dict | None = None) -> int:
-    del settings
-    return PROMPT_SUMMARY_MAX_TOKENS
+    source = settings if settings is not None else get_app_settings()
+    prompt_max_input_tokens = get_prompt_max_input_tokens(source)
+    return _get_int_setting_value(
+        source,
+        "prompt_summary_max_tokens",
+        PROMPT_SUMMARY_MAX_TOKENS,
+        500,
+        prompt_max_input_tokens,
+    )
 
 
 def get_prompt_rag_max_tokens(settings: dict | None = None) -> int:
-    del settings
-    return PROMPT_RAG_MAX_TOKENS
+    source = settings if settings is not None else get_app_settings()
+    prompt_max_input_tokens = get_prompt_max_input_tokens(source)
+    return _get_int_setting_value(
+        source,
+        "prompt_rag_max_tokens",
+        PROMPT_RAG_MAX_TOKENS,
+        0,
+        prompt_max_input_tokens,
+    )
 
 
 def get_prompt_tool_memory_max_tokens(settings: dict | None = None) -> int:
-    del settings
-    return PROMPT_TOOL_MEMORY_MAX_TOKENS
+    source = settings if settings is not None else get_app_settings()
+    prompt_max_input_tokens = get_prompt_max_input_tokens(source)
+    return _get_int_setting_value(
+        source,
+        "prompt_tool_memory_max_tokens",
+        PROMPT_TOOL_MEMORY_MAX_TOKENS,
+        0,
+        prompt_max_input_tokens,
+    )
 
 
 def get_prompt_tool_trace_max_tokens(settings: dict | None = None) -> int:
-    del settings
-    return PROMPT_TOOL_TRACE_MAX_TOKENS
+    source = settings if settings is not None else get_app_settings()
+    prompt_max_input_tokens = get_prompt_max_input_tokens(source)
+    return _get_int_setting_value(
+        source,
+        "prompt_tool_trace_max_tokens",
+        PROMPT_TOOL_TRACE_MAX_TOKENS,
+        0,
+        prompt_max_input_tokens,
+    )
+
+
+def get_context_compaction_threshold(settings: dict | None = None) -> float:
+    source = settings if settings is not None else get_app_settings()
+    return _get_float_setting_value(
+        source,
+        "context_compaction_threshold",
+        AGENT_CONTEXT_COMPACTION_THRESHOLD,
+        0.5,
+        0.98,
+    )
+
+
+def get_context_compaction_keep_recent_rounds(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(
+        source,
+        "context_compaction_keep_recent_rounds",
+        AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS,
+        0,
+        6,
+    )
 
 
 def get_prompt_preflight_summary_token_count(settings: dict | None = None) -> int:
@@ -3851,6 +3955,28 @@ def get_pruning_batch_size(settings: dict | None = None) -> int:
     except (TypeError, ValueError):
         batch_size = 10
     return max(1, min(50, batch_size))
+
+
+def get_pruning_target_reduction_ratio(settings: dict | None = None) -> float:
+    source = settings if settings is not None else get_app_settings()
+    return _get_float_setting_value(
+        source,
+        "pruning_target_reduction_ratio",
+        PRUNING_TARGET_REDUCTION_RATIO,
+        0.1,
+        0.9,
+    )
+
+
+def get_pruning_min_target_tokens(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(
+        source,
+        "pruning_min_target_tokens",
+        PRUNING_MIN_TARGET_TOKENS,
+        50,
+        5_000,
+    )
 
 
 def get_next_message_position(conn: sqlite3.Connection, conversation_id: int) -> int:

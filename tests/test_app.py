@@ -21,6 +21,19 @@ import ocr_service
 import model_registry
 import prune_service
 from docx import Document
+from config import (
+    AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS,
+    AGENT_CONTEXT_COMPACTION_THRESHOLD,
+    PROMPT_MAX_INPUT_TOKENS,
+    PROMPT_RAG_MAX_TOKENS,
+    PROMPT_RECENT_HISTORY_MAX_TOKENS,
+    PROMPT_RESPONSE_TOKEN_RESERVE,
+    PROMPT_SUMMARY_MAX_TOKENS,
+    PROMPT_TOOL_MEMORY_MAX_TOKENS,
+    PROMPT_TOOL_TRACE_MAX_TOKENS,
+    PRUNING_MIN_TARGET_TOKENS,
+    PRUNING_TARGET_REDUCTION_RATIO,
+)
 from proxy_settings import DEFAULT_PROXY_ENABLED_OPERATIONS, PROXY_OPERATION_FETCH_URL
 from agent import (
     CANVAS_MUTATION_TOOL_NAMES,
@@ -337,6 +350,15 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["rag_auto_inject"], bool(payload["features"]["rag_enabled"]))
         self.assertEqual(payload["chat_summary_mode"], "auto")
         self.assertEqual(payload["chat_summary_trigger_token_count"], 80000)
+        self.assertEqual(payload["prompt_max_input_tokens"], PROMPT_MAX_INPUT_TOKENS)
+        self.assertEqual(payload["prompt_response_token_reserve"], PROMPT_RESPONSE_TOKEN_RESERVE)
+        self.assertEqual(payload["prompt_recent_history_max_tokens"], PROMPT_RECENT_HISTORY_MAX_TOKENS)
+        self.assertEqual(payload["prompt_summary_max_tokens"], PROMPT_SUMMARY_MAX_TOKENS)
+        self.assertEqual(payload["prompt_rag_max_tokens"], PROMPT_RAG_MAX_TOKENS)
+        self.assertEqual(payload["prompt_tool_memory_max_tokens"], PROMPT_TOOL_MEMORY_MAX_TOKENS)
+        self.assertEqual(payload["prompt_tool_trace_max_tokens"], PROMPT_TOOL_TRACE_MAX_TOKENS)
+        self.assertAlmostEqual(payload["context_compaction_threshold"], AGENT_CONTEXT_COMPACTION_THRESHOLD)
+        self.assertEqual(payload["context_compaction_keep_recent_rounds"], AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS)
         self.assertEqual(payload["context_selection_strategy"], "classic")
         self.assertEqual(payload["entropy_profile"], "balanced")
         self.assertEqual(payload["entropy_rag_budget_ratio"], 35)
@@ -347,6 +369,8 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertFalse(payload["pruning_enabled"])
         self.assertEqual(payload["pruning_token_threshold"], 80000)
         self.assertEqual(payload["pruning_batch_size"], 10)
+        self.assertAlmostEqual(payload["pruning_target_reduction_ratio"], PRUNING_TARGET_REDUCTION_RATIO)
+        self.assertEqual(payload["pruning_min_target_tokens"], PRUNING_MIN_TARGET_TOKENS)
         self.assertEqual(payload["fetch_url_token_threshold"], 3500)
         self.assertEqual(payload["fetch_url_clip_aggressiveness"], 50)
         self.assertEqual(payload["custom_models"], [])
@@ -409,6 +433,15 @@ class AppRoutesTestCase(unittest.TestCase):
                 "chat_summary_mode": "aggressive",
                 "chat_summary_detail_level": "detailed",
                 "chat_summary_trigger_token_count": 9000,
+                "prompt_max_input_tokens": 90000,
+                "prompt_response_token_reserve": 10000,
+                "prompt_recent_history_max_tokens": 28000,
+                "prompt_summary_max_tokens": 14000,
+                "prompt_rag_max_tokens": 16000,
+                "prompt_tool_memory_max_tokens": 8000,
+                "prompt_tool_trace_max_tokens": 7000,
+                "context_compaction_threshold": 0.9,
+                "context_compaction_keep_recent_rounds": 3,
                 "context_selection_strategy": "entropy_rag_hybrid",
                 "entropy_profile": "aggressive",
                 "entropy_rag_budget_ratio": 55,
@@ -419,6 +452,8 @@ class AppRoutesTestCase(unittest.TestCase):
                 "pruning_enabled": True,
                 "pruning_token_threshold": 12000,
                 "pruning_batch_size": 4,
+                "pruning_target_reduction_ratio": 0.5,
+                "pruning_min_target_tokens": 220,
                 "fetch_url_token_threshold": 4200,
                 "fetch_url_clip_aggressiveness": 70,
                 "canvas_prompt_max_lines": 1200,
@@ -500,6 +535,15 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["chat_summary_mode"], "aggressive")
         self.assertEqual(payload["chat_summary_detail_level"], "detailed")
         self.assertEqual(payload["chat_summary_trigger_token_count"], 9000)
+        self.assertEqual(payload["prompt_max_input_tokens"], 90000)
+        self.assertEqual(payload["prompt_response_token_reserve"], 10000)
+        self.assertEqual(payload["prompt_recent_history_max_tokens"], 28000)
+        self.assertEqual(payload["prompt_summary_max_tokens"], 14000)
+        self.assertEqual(payload["prompt_rag_max_tokens"], 16000)
+        self.assertEqual(payload["prompt_tool_memory_max_tokens"], 8000)
+        self.assertEqual(payload["prompt_tool_trace_max_tokens"], 7000)
+        self.assertAlmostEqual(payload["context_compaction_threshold"], 0.9)
+        self.assertEqual(payload["context_compaction_keep_recent_rounds"], 3)
         self.assertEqual(payload["context_selection_strategy"], "entropy_rag_hybrid")
         self.assertEqual(payload["entropy_profile"], "aggressive")
         self.assertEqual(payload["entropy_rag_budget_ratio"], 55)
@@ -510,6 +554,8 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertTrue(payload["pruning_enabled"])
         self.assertEqual(payload["pruning_token_threshold"], 12000)
         self.assertEqual(payload["pruning_batch_size"], 4)
+        self.assertAlmostEqual(payload["pruning_target_reduction_ratio"], 0.5)
+        self.assertEqual(payload["pruning_min_target_tokens"], 220)
         self.assertEqual(payload["fetch_url_token_threshold"], 4200)
         self.assertEqual(payload["fetch_url_clip_aggressiveness"], 70)
         self.assertEqual(payload["canvas_prompt_max_lines"], 1200)
@@ -1573,6 +1619,53 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("pruning_batch_size", response.get_json()["error"])
+
+        response = self.client.patch(
+            "/api/settings",
+            json={"pruning_target_reduction_ratio": 0.05},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("pruning_target_reduction_ratio", response.get_json()["error"])
+
+        response = self.client.patch(
+            "/api/settings",
+            json={"pruning_min_target_tokens": 10},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("pruning_min_target_tokens", response.get_json()["error"])
+
+    def test_settings_patch_rejects_invalid_prompt_budget_relationships(self):
+        response = self.client.patch(
+            "/api/settings",
+            json={
+                "prompt_max_input_tokens": 10000,
+                "prompt_response_token_reserve": 8500,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("prompt_response_token_reserve", response.get_json()["error"])
+
+        response = self.client.patch(
+            "/api/settings",
+            json={
+                "prompt_max_input_tokens": 12000,
+                "prompt_recent_history_max_tokens": 13000,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("prompt_recent_history_max_tokens", response.get_json()["error"])
+
+        response = self.client.patch(
+            "/api/settings",
+            json={"context_compaction_threshold": 0.49},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("context_compaction_threshold", response.get_json()["error"])
 
     def test_settings_patch_rejects_invalid_canvas_values(self):
         response = self.client.patch(
@@ -5458,6 +5551,10 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn('id="kb-sync-btn"', html)
         self.assertIn("Proxy scope", html)
         self.assertIn("proxy-enabled-operation", html)
+        self.assertIn("settings-subsection-grid", html)
+        self.assertIn("settings-callout", html)
+        self.assertIn('id="tool-memory-lane-panel"', html)
+        self.assertNotIn('style="', html)
 
     def test_settings_tools_cover_all_defined_tool_specs(self):
         option_names = [option["name"] for option in build_tool_permission_options()]
@@ -6992,6 +7089,7 @@ class AppRoutesTestCase(unittest.TestCase):
         script_text = script_path.read_text(encoding="utf-8")
         self.assertIn('document.getElementById("app-bootstrap")', script_text)
         self.assertIn("function activateTab", script_text)
+        self.assertIn("function applyConditionalSectionState", script_text)
         self.assertIn("void loadKnowledgeBaseDocuments();", script_text)
         self.assertIn("void refreshSettings();", script_text)
         self.assertIn("window.addEventListener(\"beforeunload\"", script_text)
@@ -7537,6 +7635,18 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn('Reserve the scratchpad for durable cross-conversation lessons, profile clues, recurring problems, long-running workstreams, preferences, domain facts, and a few general notes.', html)
         self.assertIn('id="summary-mode-select"', html)
         self.assertIn('id="summary-trigger-input"', html)
+        self.assertIn('id="prompt-max-input-tokens-input"', html)
+        self.assertIn('id="prompt-response-token-reserve-input"', html)
+        self.assertIn('id="prompt-recent-history-max-tokens-input"', html)
+        self.assertIn('id="prompt-summary-max-tokens-input"', html)
+        self.assertIn('id="prompt-rag-max-tokens-input"', html)
+        self.assertIn('id="prompt-tool-memory-max-tokens-input"', html)
+        self.assertIn('id="prompt-tool-trace-max-tokens-input"', html)
+        self.assertIn('id="context-compaction-threshold-input"', html)
+        self.assertIn('id="context-compaction-keep-recent-rounds-input"', html)
+        self.assertIn('id="tool-memory-auto-inject-toggle"', html)
+        self.assertIn('id="pruning-target-reduction-ratio-input"', html)
+        self.assertIn('id="pruning-min-target-tokens-input"', html)
         self.assertIn('id="fetch-threshold-input"', html)
         self.assertIn('id="fetch-aggressiveness-input"', html)
         self.assertIn('id="rag-sensitivity-select"', html)
