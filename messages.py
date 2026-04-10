@@ -16,6 +16,11 @@ from canvas_service import (
     scale_canvas_char_limit,
 )
 from config import (
+    CANVAS_PROMPT_CODE_LINE_MAX_CHARS as CANVAS_PROMPT_DEFAULT_CODE_LINE_MAX_CHARS,
+    CANVAS_PROMPT_DEFAULT_MAX_CHARS,
+    CANVAS_PROMPT_DEFAULT_MAX_LINES,
+    CANVAS_PROMPT_DEFAULT_MAX_TOKENS,
+    CANVAS_PROMPT_TEXT_LINE_MAX_CHARS as CANVAS_PROMPT_DEFAULT_TEXT_LINE_MAX_CHARS,
     CLARIFICATION_DEFAULT_MAX_QUESTIONS,
     CLARIFICATION_QUESTION_LIMIT_MAX,
     CLARIFICATION_QUESTION_LIMIT_MIN,
@@ -40,11 +45,11 @@ from tool_registry import resolve_runtime_tool_names
 
 SUMMARY_LABEL = "Conversation summary (generated from deleted messages):"
 MODEL_SUMMARY_LABEL = "Conversation summary:"
-CANVAS_PROMPT_MAX_CHARS = 20_000
-CANVAS_PROMPT_MAX_LINES = 250
-CANVAS_PROMPT_MAX_TOKENS = 2_000
-CANVAS_PROMPT_CODE_LINE_MAX_CHARS = 180
-CANVAS_PROMPT_TEXT_LINE_MAX_CHARS = 100
+CANVAS_PROMPT_MAX_CHARS = CANVAS_PROMPT_DEFAULT_MAX_CHARS
+CANVAS_PROMPT_MAX_LINES = CANVAS_PROMPT_DEFAULT_MAX_LINES
+CANVAS_PROMPT_MAX_TOKENS = CANVAS_PROMPT_DEFAULT_MAX_TOKENS
+CANVAS_PROMPT_CODE_LINE_MAX_CHARS = CANVAS_PROMPT_DEFAULT_CODE_LINE_MAX_CHARS
+CANVAS_PROMPT_TEXT_LINE_MAX_CHARS = CANVAS_PROMPT_DEFAULT_TEXT_LINE_MAX_CHARS
 PARALLEL_SAFE_READ_ONLY_TOOL_NAMES = (
     # Web / fetch
     "search_web",
@@ -607,9 +612,17 @@ def _build_canvas_document_lookup(canvas_documents) -> dict[str, list[str]]:
     return lookup
 
 
-def _clip_canvas_preview_line(line: str, *, format_name: str | None = None) -> tuple[str, bool]:
+def _clip_canvas_preview_line(
+    line: str,
+    *,
+    format_name: str | None = None,
+    code_line_max_chars: int | None = None,
+    text_line_max_chars: int | None = None,
+) -> tuple[str, bool]:
     normalized_format = str(format_name or "").strip().lower()
-    max_chars = CANVAS_PROMPT_CODE_LINE_MAX_CHARS if normalized_format == "code" else CANVAS_PROMPT_TEXT_LINE_MAX_CHARS
+    code_limit = max(40, int(code_line_max_chars or CANVAS_PROMPT_CODE_LINE_MAX_CHARS))
+    text_limit = max(40, int(text_line_max_chars or CANVAS_PROMPT_TEXT_LINE_MAX_CHARS))
+    max_chars = code_limit if normalized_format == "code" else text_limit
     if len(line) <= max_chars:
         return line, False
     return line[: max_chars - 2].rstrip() + "..", True
@@ -690,12 +703,24 @@ def build_user_message_for_model(
         if attachment.get("kind") == "document":
             if str(attachment.get("submission_mode") or "").strip().lower() == "visual":
                 file_name = str(attachment.get("file_name") or "PDF").strip() or "PDF"
-                page_count = max(1, int(attachment.get("visual_page_count") or len(attachment.get("visual_page_image_ids") or []) or 1))
+                page_image_ids = attachment.get("visual_page_image_ids") if isinstance(attachment.get("visual_page_image_ids"), list) else []
+                try:
+                    page_count = max(0, int(attachment.get("visual_page_count") or len(page_image_ids) or 0))
+                except (TypeError, ValueError):
+                    page_count = len(page_image_ids)
                 try:
                     total_page_count = max(page_count, int(attachment.get("visual_total_page_count") or 0))
                 except (TypeError, ValueError):
                     total_page_count = page_count
-                if total_page_count > page_count:
+                if page_count <= 0 and total_page_count > 0:
+                    visual_document_notices.append(
+                        f"Uploaded PDF for visual analysis: {file_name}. PDF has {total_page_count} pages, but no rendered page images are currently attached below."
+                    )
+                elif page_count <= 0:
+                    visual_document_notices.append(
+                        f"Uploaded PDF for visual analysis: {file_name}. No rendered page images are currently attached below."
+                    )
+                elif total_page_count > page_count:
                     visual_document_notices.append(
                         f"Uploaded PDF for visual analysis: {file_name}. PDF has {total_page_count} pages; only the first {page_count} page{'s are' if page_count != 1 else ' is'} attached as image input below."
                     )
@@ -1194,6 +1219,8 @@ def _build_canvas_prompt_payload(
     max_lines: int = CANVAS_PROMPT_MAX_LINES,
     max_chars: int | None = None,
     max_tokens: int = CANVAS_PROMPT_MAX_TOKENS,
+    code_line_max_chars: int | None = None,
+    text_line_max_chars: int | None = None,
 ) -> dict | None:
     documents = extract_canvas_documents({"canvas_documents": canvas_documents or []})
     if not documents:
@@ -1253,7 +1280,12 @@ def _build_canvas_prompt_payload(
         visible_lines = full_preview_lines
     else:
         for index, line in enumerate(all_lines, start=1):
-            preview_line, line_was_clipped = _clip_canvas_preview_line(line, format_name=line_format)
+            preview_line, line_was_clipped = _clip_canvas_preview_line(
+                line,
+                format_name=line_format,
+                code_line_max_chars=code_line_max_chars,
+                text_line_max_chars=text_line_max_chars,
+            )
             numbered_line = f"{index}: {preview_line}"
             extra_chars = len(numbered_line) + (1 if visible_lines else 0)
             if visible_lines and (len(visible_lines) >= max_lines or visible_char_count + extra_chars > max_chars):
@@ -1713,7 +1745,10 @@ def _build_runtime_volatile_parts(
     canvas_active_document_id: str | None = None,
     canvas_viewports: list[dict] | None = None,
     canvas_prompt_max_lines: int | None = None,
+    canvas_prompt_max_chars: int | None = None,
     canvas_prompt_max_tokens: int | None = None,
+    canvas_prompt_code_line_max_chars: int | None = None,
+    canvas_prompt_text_line_max_chars: int | None = None,
     canvas_payload: dict | None = None,
     summary_count: int = 0,
     include_time_context: bool = True,
@@ -1761,7 +1796,10 @@ def _build_runtime_volatile_parts(
             active_document_id=canvas_active_document_id,
             canvas_viewports=canvas_viewports,
             max_lines=canvas_prompt_max_lines or CANVAS_PROMPT_MAX_LINES,
+            max_chars=canvas_prompt_max_chars,
             max_tokens=canvas_prompt_max_tokens if canvas_prompt_max_tokens is not None else CANVAS_PROMPT_MAX_TOKENS,
+            code_line_max_chars=canvas_prompt_code_line_max_chars,
+            text_line_max_chars=canvas_prompt_text_line_max_chars,
         )
     if canvas_payload:
         workspace_summary_lines = _build_canvas_workspace_summary(canvas_payload)
@@ -1823,9 +1861,9 @@ def _build_runtime_volatile_parts(
             volatile_parts.append(
                 "- Auto-update rule: If your response generates content that directly replaces or substantially transforms this document, call rewrite_canvas_document immediately — do not ask the user for permission to save."
             )
-        if int(active_document.get("page_count") or 0) > 1:
+        if int(active_document.get("page_count") or 0) > 1 and get_canvas_document_capabilities(active_document)["line_addressable"]:
             volatile_parts.append(
-                "- Multi-page guidance: if the task refers to a specific PDF-style page, call focus_canvas_page to pin that whole page before quoting or editing it."
+                "- Multi-page guidance: if the task refers to a specific PDF-style page, call focus_canvas_page only when the document already exposes explicit '## Page N' markers in its text content."
             )
         if canvas_payload["visible_lines"]:
             volatile_parts.append("```text\n" + "\n".join(canvas_payload["visible_lines"]) + "\n```\n")
@@ -1848,9 +1886,7 @@ def _build_runtime_volatile_parts(
                 )
                 visible_lines = viewport.get("visible_lines") if isinstance(viewport.get("visible_lines"), list) else []
                 if visible_lines:
-                        runtime_tool_names: list[str] | None = None,
-                        current_context_injection: str | None = None,
-                        summary_count: int | None = None,
+                    volatile_parts.append("```text\n" + "\n".join(str(line) for line in visible_lines) + "\n```")
             volatile_parts.append("")
 
     if summary_count:
@@ -1892,7 +1928,10 @@ def build_runtime_context_injection(
     canvas_active_document_id: str | None = None,
     canvas_viewports: list[dict] | None = None,
     canvas_prompt_max_lines: int | None = None,
+    canvas_prompt_max_chars: int | None = None,
     canvas_prompt_max_tokens: int | None = None,
+    canvas_prompt_code_line_max_chars: int | None = None,
+    canvas_prompt_text_line_max_chars: int | None = None,
     workspace_root: str | None = None,
     runtime_tool_names: list[str] | None = None,
     canvas_payload: dict | None = None,
@@ -1920,7 +1959,10 @@ def build_runtime_context_injection(
             canvas_active_document_id=canvas_active_document_id,
             canvas_viewports=canvas_viewports,
             canvas_prompt_max_lines=canvas_prompt_max_lines,
+            canvas_prompt_max_chars=canvas_prompt_max_chars,
             canvas_prompt_max_tokens=canvas_prompt_max_tokens,
+            canvas_prompt_code_line_max_chars=canvas_prompt_code_line_max_chars,
+            canvas_prompt_text_line_max_chars=canvas_prompt_text_line_max_chars,
             canvas_payload=canvas_payload,
             summary_count=summary_count,
             include_time_context=include_time_context,
@@ -1945,7 +1987,10 @@ def build_runtime_system_message(
     canvas_active_document_id: str | None = None,
     canvas_viewports: list[dict] | None = None,
     canvas_prompt_max_lines: int | None = None,
+    canvas_prompt_max_chars: int | None = None,
     canvas_prompt_max_tokens: int | None = None,
+    canvas_prompt_code_line_max_chars: int | None = None,
+    canvas_prompt_text_line_max_chars: int | None = None,
     workspace_root: str | None = None,
     clarification_max_questions: int | None = None,
     max_parallel_tools: int | None = None,
@@ -1981,7 +2026,10 @@ def build_runtime_system_message(
             active_document_id=canvas_active_document_id,
             canvas_viewports=canvas_viewports,
             max_lines=canvas_prompt_max_lines or CANVAS_PROMPT_MAX_LINES,
+            max_chars=canvas_prompt_max_chars,
             max_tokens=canvas_prompt_max_tokens if canvas_prompt_max_tokens is not None else CANVAS_PROMPT_MAX_TOKENS,
+            code_line_max_chars=canvas_prompt_code_line_max_chars,
+            text_line_max_chars=canvas_prompt_text_line_max_chars,
         )
     
     parts = [
@@ -2122,7 +2170,10 @@ def build_runtime_system_message(
                 canvas_active_document_id=canvas_active_document_id,
                 canvas_viewports=canvas_viewports,
                 canvas_prompt_max_lines=canvas_prompt_max_lines,
+                canvas_prompt_max_chars=canvas_prompt_max_chars,
                 canvas_prompt_max_tokens=canvas_prompt_max_tokens,
+                canvas_prompt_code_line_max_chars=canvas_prompt_code_line_max_chars,
+                canvas_prompt_text_line_max_chars=canvas_prompt_text_line_max_chars,
                 canvas_payload=canvas_payload,
                 summary_count=summary_count,
                 include_time_context=include_time_context,
@@ -2154,7 +2205,10 @@ def prepend_runtime_context(
     canvas_active_document_id: str | None = None,
     canvas_viewports: list[dict] | None = None,
     canvas_prompt_max_lines: int | None = None,
+    canvas_prompt_max_chars: int | None = None,
     canvas_prompt_max_tokens: int | None = None,
+    canvas_prompt_code_line_max_chars: int | None = None,
+    canvas_prompt_text_line_max_chars: int | None = None,
     workspace_root: str | None = None,
     clarification_max_questions: int | None = None,
     max_parallel_tools: int | None = None,
@@ -2180,7 +2234,10 @@ def prepend_runtime_context(
             active_document_id=canvas_active_document_id,
             canvas_viewports=canvas_viewports,
             max_lines=canvas_prompt_max_lines or CANVAS_PROMPT_MAX_LINES,
+            max_chars=canvas_prompt_max_chars,
             max_tokens=canvas_prompt_max_tokens if canvas_prompt_max_tokens is not None else CANVAS_PROMPT_MAX_TOKENS,
+            code_line_max_chars=canvas_prompt_code_line_max_chars,
+            text_line_max_chars=canvas_prompt_text_line_max_chars,
         )
 
     if isinstance(runtime_message, dict):
@@ -2205,7 +2262,10 @@ def prepend_runtime_context(
             canvas_active_document_id=canvas_active_document_id,
             canvas_viewports=canvas_viewports,
             canvas_prompt_max_lines=canvas_prompt_max_lines,
+            canvas_prompt_max_chars=canvas_prompt_max_chars,
             canvas_prompt_max_tokens=canvas_prompt_max_tokens,
+            canvas_prompt_code_line_max_chars=canvas_prompt_code_line_max_chars,
+            canvas_prompt_text_line_max_chars=canvas_prompt_text_line_max_chars,
             workspace_root=workspace_root,
             clarification_max_questions=clarification_max_questions,
             max_parallel_tools=max_parallel_tools,
@@ -2224,7 +2284,10 @@ def prepend_runtime_context(
                 active_document_id=canvas_active_document_id,
                 canvas_viewports=canvas_viewports,
                 max_lines=canvas_prompt_max_lines or CANVAS_PROMPT_MAX_LINES,
+                max_chars=canvas_prompt_max_chars,
                 max_tokens=canvas_prompt_max_tokens if canvas_prompt_max_tokens is not None else CANVAS_PROMPT_MAX_TOKENS,
+                code_line_max_chars=canvas_prompt_code_line_max_chars,
+                text_line_max_chars=canvas_prompt_text_line_max_chars,
             )
         injection_content = build_runtime_context_injection(
             active_tool_names=active_tool_names or [],
@@ -2237,7 +2300,10 @@ def prepend_runtime_context(
             canvas_active_document_id=canvas_active_document_id,
             canvas_viewports=canvas_viewports,
             canvas_prompt_max_lines=canvas_prompt_max_lines,
+            canvas_prompt_max_chars=canvas_prompt_max_chars,
             canvas_prompt_max_tokens=canvas_prompt_max_tokens,
+            canvas_prompt_code_line_max_chars=canvas_prompt_code_line_max_chars,
+            canvas_prompt_text_line_max_chars=canvas_prompt_text_line_max_chars,
             workspace_root=workspace_root,
             runtime_tool_names=resolved_runtime_tool_names,
             canvas_payload=canvas_payload,

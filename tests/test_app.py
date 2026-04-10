@@ -100,8 +100,11 @@ from db import (
     get_conversation_messages,
     get_all_scratchpad_sections,
     get_canvas_expand_max_lines,
+    get_canvas_prompt_code_line_max_chars,
+    get_canvas_prompt_max_chars,
     get_canvas_prompt_max_tokens,
     get_canvas_prompt_max_lines,
+    get_canvas_prompt_text_line_max_chars,
     get_canvas_scroll_window_lines,
     get_db,
     get_file_asset,
@@ -317,6 +320,9 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertAlmostEqual(payload["temperature"], 0.7)
         self.assertEqual(payload["canvas_prompt_max_lines"], 250)
         self.assertEqual(payload["canvas_prompt_max_tokens"], 4000)
+        self.assertEqual(payload["canvas_prompt_max_chars"], 20000)
+        self.assertEqual(payload["canvas_prompt_code_line_max_chars"], 180)
+        self.assertEqual(payload["canvas_prompt_text_line_max_chars"], 100)
         self.assertEqual(payload["canvas_expand_max_lines"], 1600)
         self.assertEqual(payload["canvas_scroll_window_lines"], 200)
         self.assertEqual(payload["sub_agent_max_steps"], 6)
@@ -417,6 +423,9 @@ class AppRoutesTestCase(unittest.TestCase):
                 "fetch_url_clip_aggressiveness": 70,
                 "canvas_prompt_max_lines": 1200,
                 "canvas_prompt_max_tokens": 3200,
+                "canvas_prompt_max_chars": 36000,
+                "canvas_prompt_code_line_max_chars": 240,
+                "canvas_prompt_text_line_max_chars": 140,
                 "canvas_expand_max_lines": 2200,
                 "canvas_scroll_window_lines": 150,
                 "sub_agent_max_steps": 9,
@@ -505,6 +514,9 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(payload["fetch_url_clip_aggressiveness"], 70)
         self.assertEqual(payload["canvas_prompt_max_lines"], 1200)
         self.assertEqual(payload["canvas_prompt_max_tokens"], 3200)
+        self.assertEqual(payload["canvas_prompt_max_chars"], 36000)
+        self.assertEqual(payload["canvas_prompt_code_line_max_chars"], 240)
+        self.assertEqual(payload["canvas_prompt_text_line_max_chars"], 140)
         self.assertEqual(payload["canvas_expand_max_lines"], 2200)
         self.assertEqual(payload["canvas_scroll_window_lines"], 150)
         self.assertEqual(payload["sub_agent_max_steps"], 9)
@@ -1587,6 +1599,30 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("canvas_scroll_window_lines", response.get_json()["error"])
 
+        response = self.client.patch(
+            "/api/settings",
+            json={"canvas_prompt_max_chars": 999},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("canvas_prompt_max_chars", response.get_json()["error"])
+
+        response = self.client.patch(
+            "/api/settings",
+            json={"canvas_prompt_code_line_max_chars": 39},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("canvas_prompt_code_line_max_chars", response.get_json()["error"])
+
+        response = self.client.patch(
+            "/api/settings",
+            json={"canvas_prompt_text_line_max_chars": 1001},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("canvas_prompt_text_line_max_chars", response.get_json()["error"])
+
     def test_login_pin_protects_page_and_api_routes(self):
         with patch("config.LOGIN_PIN", "2468"):
             response = self.client.get("/login")
@@ -1678,11 +1714,17 @@ class AppRoutesTestCase(unittest.TestCase):
         settings = get_app_settings()
         settings["canvas_prompt_max_lines"] = "50000"
         settings["canvas_prompt_max_tokens"] = "60000"
+        settings["canvas_prompt_max_chars"] = "999999"
+        settings["canvas_prompt_code_line_max_chars"] = "0"
+        settings["canvas_prompt_text_line_max_chars"] = "5000"
         settings["canvas_expand_max_lines"] = "-1"
         settings["canvas_scroll_window_lines"] = "nope"
 
         self.assertEqual(get_canvas_prompt_max_lines(settings), 3000)
         self.assertEqual(get_canvas_prompt_max_tokens(settings), 50000)
+        self.assertEqual(get_canvas_prompt_max_chars(settings), 200000)
+        self.assertEqual(get_canvas_prompt_code_line_max_chars(settings), 40)
+        self.assertEqual(get_canvas_prompt_text_line_max_chars(settings), 1000)
         self.assertEqual(get_canvas_expand_max_lines(settings), 100)
         self.assertEqual(get_canvas_scroll_window_lines(settings), 200)
 
@@ -1760,6 +1802,48 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertTrue(payload["visible_lines"][0].startswith("1: "))
         self.assertTrue(payload["visible_lines"][0].endswith(".."))
         self.assertLess(len(payload["visible_lines"][0]), len(f"1: {long_line}"))
+
+    def test_build_canvas_prompt_payload_uses_custom_line_clip_limits(self):
+        code_line = "x" * 220
+        markdown_line = "A" * 220
+        code_document = normalize_canvas_document(
+            {
+                "id": "doc-code",
+                "title": "app.py",
+                "format": "code",
+                "language": "python",
+                "content": f"{code_line}\nprint('done')",
+            }
+        )
+        markdown_document = normalize_canvas_document(
+            {
+                "id": "doc-md",
+                "title": "notes.md",
+                "format": "markdown",
+                "language": "markdown",
+                "content": f"{markdown_line}\nshort line",
+            }
+        )
+
+        code_payload = _build_canvas_prompt_payload(
+            [code_document],
+            max_lines=10,
+            max_chars=120,
+            code_line_max_chars=60,
+        )
+        markdown_payload = _build_canvas_prompt_payload(
+            [markdown_document],
+            max_lines=10,
+            max_chars=120,
+            text_line_max_chars=55,
+        )
+
+        self.assertIsNotNone(code_payload)
+        self.assertIsNotNone(markdown_payload)
+        self.assertTrue(code_payload["visible_lines"][0].endswith(".."))
+        self.assertTrue(markdown_payload["visible_lines"][0].endswith(".."))
+        self.assertLessEqual(len(code_payload["visible_lines"][0]), len("1: ") + 60)
+        self.assertLessEqual(len(markdown_payload["visible_lines"][0]), len("1: ") + 55)
 
     def test_normalize_canvas_document_detects_page_count_from_markers(self):
         document = normalize_canvas_document(
@@ -1965,6 +2049,25 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertFalse(result["pinned"]["auto_unpin_on_edit"])
         self.assertEqual(result["pinned"]["ttl_turns"], 0)
 
+    def test_set_canvas_viewport_rejects_visual_canvas_documents(self):
+        runtime_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "doc-visual",
+                    "title": "scan.pdf",
+                    "path": "docs/scan.pdf",
+                    "format": "markdown",
+                    "content": "# scan.pdf",
+                    "content_mode": "visual",
+                    "canvas_mode": "preview_only",
+                    "page_count": 2,
+                }
+            ]
+        )
+
+        with self.assertRaisesRegex(ValueError, "text-addressable lines"):
+            set_canvas_viewport(runtime_state, document_path="docs/scan.pdf", start_line=1, end_line=2)
+
     def test_validate_canvas_document_detects_python_and_markdown_issues(self):
         runtime_state = create_canvas_runtime_state(
             [
@@ -1995,6 +2098,28 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(python_result["issues"][0]["severity"], "error")
         self.assertEqual(markdown_result["validator_used"], "markdown")
         self.assertTrue(any(issue["message"] == "Unclosed fenced code block." for issue in markdown_result["issues"]))
+
+    def test_validate_canvas_document_marks_visual_canvas_documents_invalid_for_text_validation(self):
+        runtime_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "doc-visual",
+                    "title": "scan.pdf",
+                    "path": "docs/scan.pdf",
+                    "format": "markdown",
+                    "content": "# scan.pdf",
+                    "content_mode": "visual",
+                    "canvas_mode": "preview_only",
+                    "page_count": 2,
+                }
+            ]
+        )
+
+        result = validate_canvas_document(runtime_state, document_path="docs/scan.pdf")
+
+        self.assertFalse(result["is_valid"])
+        self.assertEqual(result["validator_used"], "none")
+        self.assertIn("image-backed previews", result["issues"][0]["message"])
 
     def test_focus_canvas_page_pins_detected_page_range(self):
         runtime_state = create_canvas_runtime_state(
@@ -5465,6 +5590,26 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertIn("PDF has 6 pages; only the first 3 pages are attached", content)
 
+    def test_build_user_message_for_model_warns_when_visual_pdf_has_no_rendered_pages(self):
+        content = build_user_message_for_model(
+            "Analyze this PDF.",
+            {
+                "attachments": [
+                    {
+                        "kind": "document",
+                        "file_name": "scan.pdf",
+                        "submission_mode": "visual",
+                        "visual_page_count": 0,
+                        "visual_total_page_count": 4,
+                        "visual_page_image_ids": [],
+                    }
+                ]
+            },
+        )
+
+        self.assertIn("PDF has 4 pages, but no rendered page images are currently attached", content)
+        self.assertNotIn("1 page is attached", content)
+
     def test_build_user_message_for_model_omits_document_context_already_in_canvas(self):
         content = build_user_message_for_model(
             "Use the document in canvas.",
@@ -7061,7 +7206,7 @@ class AppRoutesTestCase(unittest.TestCase):
 
         self.assertEqual(
             runtime_names,
-            ["create_canvas_document", "set_canvas_viewport", "update_canvas_metadata", "focus_canvas_page", "delete_canvas_document"],
+            ["create_canvas_document", "delete_canvas_document"],
         )
 
     def test_extract_message_usage_maps_legacy_system_prompt_breakdown(self):
@@ -8544,7 +8689,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("If work remains unfinished, say so explicitly", instruction["content"])
         self.assertIn("Do not include stray JSON objects", instruction["content"])
 
-    def test_run_agent_stream_retries_when_canvas_update_requested_without_canvas_tool(self):
+    def test_run_agent_stream_does_not_retry_missing_canvas_mutation_tool_call(self):
         responses = [
             SimpleNamespace(
                 choices=[
@@ -8558,32 +8703,6 @@ class AppRoutesTestCase(unittest.TestCase):
                 ],
                 usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2),
             ),
-            SimpleNamespace(
-                choices=[
-                    SimpleNamespace(
-                        message=SimpleNamespace(
-                            reasoning_content="",
-                            content="",
-                            tool_calls=[
-                                {
-                                    "id": "call-1",
-                                    "function": {
-                                        "name": "create_canvas_document",
-                                        "arguments": json.dumps({"title": "English Prompt", "content": "# English version"}),
-                                    },
-                                }
-                            ],
-                        )
-                    )
-                ],
-                usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2),
-            ),
-            iter(
-                [
-                    self._stream_chunk(content="Canvas güncellendi."),
-                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2)),
-                ]
-            ),
         ]
 
         with patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create:
@@ -8596,19 +8715,10 @@ class AppRoutesTestCase(unittest.TestCase):
                 )
             )
 
-        leaked_claim = [event for event in events if event["type"] == "answer_delta" and "İngilizceye çevirdim" in event["text"]]
-        self.assertEqual(leaked_claim, [])
-        self.assertIn({"type": "answer_delta", "text": "Canvas güncellendi."}, events)
-
-        tool_capture_event = next(event for event in events if event["type"] == "tool_capture")
-        self.assertTrue(tool_capture_event["successful_canvas_mutation"])
-        self.assertEqual([doc["title"] for doc in tool_capture_event["canvas_documents"]], ["English Prompt"])
-
-        second_call_messages = mocked_create.call_args_list[1].kwargs["messages"]
-        retry_markers = [
-            message for message in second_call_messages if "CANVAS MUTATION TOOL REQUIRED" in str(message.get("content") or "")
-        ]
-        self.assertEqual(len(retry_markers), 1)
+        self.assertEqual(mocked_create.call_count, 1)
+        self.assertIn({"type": "answer_delta", "text": "Canvas'ı İngilizceye çevirdim."}, events)
+        self.assertFalse(any(event["type"] == "tool_result" and event.get("tool") == "create_canvas_document" for event in events))
+        self.assertFalse(any(event["type"] == "clarification_request" for event in events))
 
     def test_build_reasoning_replay_instruction_marks_reasoning_as_non_execution_evidence(self):
         instruction = _build_reasoning_replay_instruction(
@@ -8728,28 +8838,13 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertFalse(any(event["type"] == "answer_delta" for event in events))
         self.assertEqual(events[-1]["type"], "done")
 
-    def test_run_agent_stream_retries_when_clarification_tool_is_skipped_in_plain_text(self):
+    def test_run_agent_stream_does_not_retry_skipped_clarification_plain_text(self):
         responses = [
             iter(
                 [
                     self._stream_chunk(reasoning="Önce birkaç soru sormalıyım."),
                     self._stream_chunk(content="Soruları hazırladım."),
                     self._stream_chunk(usage=SimpleNamespace(prompt_tokens=5, completion_tokens=3, total_tokens=8)),
-                ]
-            ),
-            iter(
-                [
-                    self._tool_call_chunk(
-                        "ask_clarifying_question",
-                        {
-                            "intro": "Before I answer, I need two details.",
-                            "questions": [
-                                {"id": "goal", "label": "What is the main goal?", "input_type": "text"},
-                                {"id": "constraints", "label": "Any constraints I should respect?", "input_type": "text", "required": False},
-                            ],
-                        },
-                    ),
-                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=4, completion_tokens=4, total_tokens=8)),
                 ]
             ),
         ]
@@ -8764,18 +8859,12 @@ class AppRoutesTestCase(unittest.TestCase):
                 )
             )
 
-        clarification_event = next(event for event in events if event["type"] == "clarification_request")
         usage_event = next(event for event in events if event["type"] == "usage")
-        self.assertEqual(clarification_event["clarification"]["questions"][0]["id"], "goal")
-        self.assertFalse(any(event["type"] == "answer_delta" and "Soruları hazırladım." in event["text"] for event in events))
-        self.assertEqual(usage_event["model_call_count"], 2)
-        self.assertEqual(usage_event["model_calls"][1]["retry_reason"], "clarification_tool_retry")
+        self.assertEqual(mocked_create.call_count, 1)
+        self.assertIn({"type": "answer_delta", "text": "Soruları hazırladım."}, events)
+        self.assertFalse(any(event["type"] == "clarification_request" for event in events))
+        self.assertEqual(usage_event["model_call_count"], 1)
         self.assertEqual(mocked_create.call_args_list[0].kwargs["tool_choice"], "auto")
-        self.assertEqual(
-            mocked_create.call_args_list[1].kwargs["tool_choice"],
-            {"type": "function", "function": {"name": "ask_clarifying_question"}},
-        )
-        self.assertFalse(mocked_create.call_args_list[1].kwargs["parallel_tool_calls"])
         self.assertEqual(events[-1]["type"], "done")
 
     def test_run_agent_stream_repairs_invalid_clarification_tool_payload_once(self):
@@ -8841,12 +8930,18 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertFalse(mocked_create.call_args_list[1].kwargs["parallel_tool_calls"])
         self.assertEqual(events[-1]["type"], "done")
 
-    def test_run_agent_stream_falls_back_when_openrouter_provider_rejects_forced_tool_choice(self):
+    def test_run_agent_stream_falls_back_when_openrouter_provider_rejects_clarification_repair_tool_choice(self):
         responses = [
             iter(
                 [
-                    self._stream_chunk_openrouter(reasoning="Önce birkaç soru sormalıyım."),
-                    self._stream_chunk_openrouter(content="Soruları hazırladım."),
+                    self._tool_call_chunk(
+                        "ask_clarifying_question",
+                        {
+                            "questions": [
+                                {"id": "scope", "label": "Which scope?", "input_type": "single_select"},
+                            ],
+                        },
+                    ),
                     self._stream_chunk_openrouter(usage=SimpleNamespace(prompt_tokens=5, completion_tokens=3, total_tokens=8)),
                 ]
             ),
@@ -8898,6 +8993,8 @@ class AppRoutesTestCase(unittest.TestCase):
             )
 
         clarification_event = next(event for event in events if event["type"] == "clarification_request")
+        tool_errors = [event for event in events if event["type"] == "tool_error" and event["tool"] == "ask_clarifying_question"]
+        self.assertTrue(tool_errors)
         self.assertEqual(clarification_event["clarification"]["questions"][0]["id"], "goal")
         self.assertEqual(mock_create.call_args_list[1].kwargs["tool_choice"], {"type": "function", "function": {"name": "ask_clarifying_question"}})
         self.assertFalse(mock_create.call_args_list[1].kwargs["parallel_tool_calls"])
@@ -16715,7 +16812,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("tool_result", [event["type"] for event in events])
         self.assertIn({"type": "answer_delta", "text": "Recovered answer"}, events)
 
-    def test_run_agent_stream_streams_native_pre_tool_text_live_and_preserves_history(self):
+    def test_run_agent_stream_streams_native_pre_tool_text_live_and_strips_intermediate_history(self):
         captured_calls = []
 
         def fake_create(model, messages, stream, stream_options=None, tools=None, tool_choice=None, temperature=None):
@@ -16755,10 +16852,11 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertGreaterEqual(len(captured_calls), 2, "Expected at least 2 model calls")
         second_call_messages = captured_calls[1]
         assistant_messages = [m for m in second_call_messages if m.get("role") == "assistant"]
-        pre_tool_contents = [m["content"] for m in assistant_messages if "Okay, I will check now" in m.get("content", "")]
-        self.assertTrue(
-            len(pre_tool_contents) > 0,
-            "Pre-tool narrative text must be injected as an assistant message for the next turn",
+        pre_tool_contents = [m["content"] for m in assistant_messages if "Okay, I will check now" in (m.get("content") or "")]
+        self.assertEqual(
+            pre_tool_contents,
+            [],
+            "Pre-tool narrative text should stream live but be stripped from intermediate tool-call history to prevent self-echoing.",
         )
 
     def test_run_agent_stream_emits_short_pre_tool_text_without_waiting_for_threshold(self):

@@ -1876,7 +1876,7 @@ def _build_retry_tool_choice(retry_reason: str | None, prompt_tool_names: list[s
         return None
 
     normalized_reason = str(retry_reason or "").strip().lower()
-    if normalized_reason not in {"clarification_tool_retry", "clarification_tool_repair"}:
+    if normalized_reason != "clarification_tool_repair":
         return None
 
     return {
@@ -4751,6 +4751,11 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
                     fetch_url_clip_aggressiveness=get_fetch_url_clip_aggressiveness(settings),
                     initial_canvas_documents=get_canvas_runtime_documents(runtime_state.get("canvas")),
                     initial_canvas_active_document_id=get_canvas_runtime_active_document_id(runtime_state.get("canvas")),
+                    canvas_prompt_max_lines=((runtime_state.get("canvas_prompt") or {}).get("max_lines") if isinstance(runtime_state.get("canvas_prompt"), dict) else None),
+                    canvas_prompt_max_chars=((runtime_state.get("canvas_prompt") or {}).get("max_chars") if isinstance(runtime_state.get("canvas_prompt"), dict) else None),
+                    canvas_prompt_max_tokens=((runtime_state.get("canvas_prompt") or {}).get("max_tokens") if isinstance(runtime_state.get("canvas_prompt"), dict) else None),
+                    canvas_prompt_code_line_max_chars=((runtime_state.get("canvas_prompt") or {}).get("code_line_max_chars") if isinstance(runtime_state.get("canvas_prompt"), dict) else None),
+                    canvas_prompt_text_line_max_chars=((runtime_state.get("canvas_prompt") or {}).get("text_line_max_chars") if isinstance(runtime_state.get("canvas_prompt"), dict) else None),
                     canvas_expand_max_lines=((runtime_state.get("canvas_limits") or {}).get("expand_max_lines") if isinstance(runtime_state.get("canvas_limits"), dict) else None),
                     canvas_scroll_window_lines=((runtime_state.get("canvas_limits") or {}).get("scroll_window_lines") if isinstance(runtime_state.get("canvas_limits"), dict) else None),
                     workspace_runtime_state=runtime_state.get("workspace"),
@@ -5736,8 +5741,11 @@ def _build_active_canvas_prompt_payload(runtime_state: dict) -> dict | None:
         return None
     prompt_state = runtime_state.get("canvas_prompt") if isinstance(runtime_state.get("canvas_prompt"), dict) else {}
     max_lines = _coerce_int_range(prompt_state.get("max_lines"), 0, 0, 10_000)
+    max_chars = _coerce_int_range(prompt_state.get("max_chars"), 0, 0, 1_000_000)
     max_tokens = _coerce_int_range(prompt_state.get("max_tokens"), 0, 0, 1_000_000)
-    if max_lines <= 0 and max_tokens <= 0:
+    code_line_max_chars = _coerce_int_range(prompt_state.get("code_line_max_chars"), 0, 0, 10_000)
+    text_line_max_chars = _coerce_int_range(prompt_state.get("text_line_max_chars"), 0, 0, 10_000)
+    if max_lines <= 0 and max_chars <= 0 and max_tokens <= 0:
         return None
 
     canvas_state = _get_canvas_runtime_state(runtime_state)
@@ -5749,7 +5757,10 @@ def _build_active_canvas_prompt_payload(runtime_state: dict) -> dict | None:
         documents,
         active_document_id=get_canvas_runtime_active_document_id(canvas_state),
         max_lines=max_lines or 250,
+        max_chars=max_chars or None,
         max_tokens=max_tokens or 0,
+        code_line_max_chars=code_line_max_chars or None,
+        text_line_max_chars=text_line_max_chars or None,
     )
 
 
@@ -6628,7 +6639,10 @@ def run_agent_stream(
     initial_canvas_documents: list[dict] | None = None,
     initial_canvas_active_document_id: str | None = None,
     canvas_prompt_max_lines: int | None = None,
+    canvas_prompt_max_chars: int | None = None,
     canvas_prompt_max_tokens: int | None = None,
+    canvas_prompt_code_line_max_chars: int | None = None,
+    canvas_prompt_text_line_max_chars: int | None = None,
     canvas_expand_max_lines: int | None = None,
     canvas_scroll_window_lines: int | None = None,
     workspace_runtime_state: dict | None = None,
@@ -6649,6 +6663,7 @@ def run_agent_stream(
     fetch_attempt_counts: dict[str, int] = {}
     tool_call_counts: dict[str, int] = defaultdict(int)
     canvas_modified = False
+    attempted_canvas_mutation = False
     successful_canvas_mutation = False
     usage_totals = {
         "prompt_tokens": 0,
@@ -6694,7 +6709,10 @@ def run_agent_stream(
         },
         "canvas_prompt": {
             "max_lines": int(canvas_prompt_max_lines or 0),
+            "max_chars": int(canvas_prompt_max_chars or 0),
             "max_tokens": int(canvas_prompt_max_tokens or 0),
+            "code_line_max_chars": int(canvas_prompt_code_line_max_chars or 0),
+            "text_line_max_chars": int(canvas_prompt_text_line_max_chars or 0),
         },
         "workspace": workspace_runtime_state if isinstance(workspace_runtime_state, dict) else create_workspace_runtime_state(),
         "invocation_log_sink": invocation_log_sink if isinstance(invocation_log_sink, list) else None,
@@ -7495,53 +7513,8 @@ def run_agent_stream(
         )
 
         if not tool_calls:
-            if content_text and _should_retry_for_skipped_clarification(
-                messages,
-                content_text,
-                reasoning_text,
-                normalized_prompt_tool_names,
-            ):
-                _trace_agent_event(
-                    "clarification_tool_retry_requested",
-                    trace_id=trace_id,
-                    step=step,
-                    content_excerpt=content_text,
-                    reasoning_excerpt=reasoning_text,
-                )
-                messages.append(_build_clarification_retry_instruction())
-                pending_step_retry_reason = "clarification_tool_retry"
-                step -= 1
-                continue
-            if _should_retry_for_skipped_canvas_mutation(messages, normalized_prompt_tool_names, content_text):
-                _trace_agent_event(
-                    "canvas_mutation_tool_retry_requested",
-                    trace_id=trace_id,
-                    step=step,
-                    content_excerpt=content_text,
-                )
-                messages.append(_build_canvas_mutation_retry_instruction())
-                pending_step_retry_reason = "canvas_mutation_tool_retry"
-                step -= 1
-                continue
             if content_text:
                 _trace_agent_event("final_answer_received", trace_id=trace_id, step=step, content_excerpt=content_text)
-                if (
-                    not answer_started
-                    and "ask_clarifying_question" in set(normalized_prompt_tool_names)
-                    and _has_clarification_retry_instruction(messages)
-                    and _assistant_text_suggests_skipped_clarification(content_text, reasoning_text)
-                    and not _has_missing_final_answer_instruction(messages)
-                ):
-                    _trace_agent_event(
-                        "clarification_retry_failed_missing_answer",
-                        trace_id=trace_id,
-                        step=step,
-                        content_excerpt=content_text,
-                    )
-                    messages.append(_build_missing_final_answer_instruction())
-                    pending_step_retry_reason = "missing_final_answer"
-                    step -= 1
-                    continue
                 if not answer_started:
                     for event in emit_answer(content_text):
                         yield event
@@ -7624,6 +7597,8 @@ def run_agent_stream(
             tool_name = _normalize_tool_name(tool_call["name"])
             tool_args = tool_call["arguments"]
             call_id = str(tool_call.get("id") or f"step-{step}-call-{call_index}-{tool_name}")
+            if tool_name in CANVAS_MUTATION_TOOL_NAMES:
+                attempted_canvas_mutation = True
             slot = {
                 "call_index": call_index,
                 "tool_name": tool_name,
@@ -8190,10 +8165,7 @@ def run_agent_stream(
             pending_final_retry_reason = None
             working_memory_instruction = _build_working_state_instruction(working_state)
             final_extra_messages = [working_memory_instruction] if working_memory_instruction is not None else []
-            if not successful_canvas_mutation and (
-                _user_requested_canvas_mutation(messages, normalized_prompt_tool_names)
-                or _canvas_mutation_skipped_structurally(total_clean_content, messages, normalized_prompt_tool_names)
-            ):
+            if attempted_canvas_mutation and not successful_canvas_mutation:
                 final_extra_messages.append(_build_unfulfilled_canvas_request_instruction())
             final_messages, _ = apply_context_compaction(final_extra_messages, reason="pre_final_answer")
             final_messages = [*final_messages, final_instruction_builder()]

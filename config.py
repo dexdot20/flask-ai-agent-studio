@@ -167,6 +167,9 @@ PROMPT_TOOL_MEMORY_MAX_TOKENS = max(0, min(PROMPT_MAX_INPUT_TOKENS, _parse_int_e
 PROMPT_PREFLIGHT_SUMMARY_TOKEN_COUNT = max(2_000, min(200_000, _parse_int_env("PROMPT_PREFLIGHT_SUMMARY_TOKEN_COUNT", 90_000)))
 CANVAS_PROMPT_DEFAULT_MAX_LINES = max(100, min(3_000, _parse_int_env("CANVAS_PROMPT_DEFAULT_MAX_LINES", 250)))
 CANVAS_PROMPT_DEFAULT_MAX_TOKENS = max(500, min(50_000, _parse_int_env("CANVAS_PROMPT_DEFAULT_MAX_TOKENS", 4_000)))
+CANVAS_PROMPT_DEFAULT_MAX_CHARS = max(1_000, min(200_000, _parse_int_env("CANVAS_PROMPT_DEFAULT_MAX_CHARS", 20_000)))
+CANVAS_PROMPT_CODE_LINE_MAX_CHARS = max(40, min(1_000, _parse_int_env("CANVAS_PROMPT_CODE_LINE_MAX_CHARS", 180)))
+CANVAS_PROMPT_TEXT_LINE_MAX_CHARS = max(40, min(1_000, _parse_int_env("CANVAS_PROMPT_TEXT_LINE_MAX_CHARS", 100)))
 CANVAS_EXPAND_DEFAULT_MAX_LINES = max(100, min(4_000, _parse_int_env("CANVAS_EXPAND_DEFAULT_MAX_LINES", 1_600)))
 CANVAS_SCROLL_WINDOW_LINES = max(50, min(800, _parse_int_env("CANVAS_SCROLL_WINDOW_LINES", 200)))
 AGENT_CONTEXT_COMPACTION_THRESHOLD = max(0.5, min(0.98, _parse_float_env("AGENT_CONTEXT_COMPACTION_THRESHOLD", 0.85)))
@@ -416,6 +419,9 @@ DEFAULT_SETTINGS = {
     "fetch_url_clip_aggressiveness": "50",
     "canvas_prompt_max_lines": str(CANVAS_PROMPT_DEFAULT_MAX_LINES),
     "canvas_prompt_max_tokens": str(CANVAS_PROMPT_DEFAULT_MAX_TOKENS),
+    "canvas_prompt_max_chars": str(CANVAS_PROMPT_DEFAULT_MAX_CHARS),
+    "canvas_prompt_code_line_max_chars": str(CANVAS_PROMPT_CODE_LINE_MAX_CHARS),
+    "canvas_prompt_text_line_max_chars": str(CANVAS_PROMPT_TEXT_LINE_MAX_CHARS),
     "canvas_expand_max_lines": str(CANVAS_EXPAND_DEFAULT_MAX_LINES),
     "canvas_scroll_window_lines": str(CANVAS_SCROLL_WINDOW_LINES),
     "chat_summary_trigger_token_count": str(CHAT_SUMMARY_TRIGGER_TOKEN_COUNT),

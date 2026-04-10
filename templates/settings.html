@@ -519,8 +519,23 @@
                   </div>
                   <div>
                     <label class="settings-label" for="canvas-prompt-tokens-input">Prompt token budget (500-50000)</label>
-                    <input type="number" class="settings-number" id="canvas-prompt-tokens-input" min="500" max="50000" value="2000" />
+                    <input type="number" class="settings-number" id="canvas-prompt-tokens-input" min="500" max="50000" value="4000" />
                     <p class="settings-copy">Hard cap on canvas visible-content tokens per turn. Reduce for Unicode-heavy documents (Turkish, Arabic, CJK) that tokenise at a higher rate than ASCII.</p>
+                  </div>
+                  <div>
+                    <label class="settings-label" for="canvas-prompt-chars-input">Prompt max chars (1000-200000)</label>
+                    <input type="number" class="settings-number" id="canvas-prompt-chars-input" min="1000" max="200000" value="20000" />
+                    <p class="settings-copy">Hard ceiling on the raw character budget for the active canvas excerpt before token-based trimming kicks in.</p>
+                  </div>
+                  <div>
+                    <label class="settings-label" for="canvas-code-line-chars-input">Code line clip length (40-1000)</label>
+                    <input type="number" class="settings-number" id="canvas-code-line-chars-input" min="40" max="1000" value="180" />
+                    <p class="settings-copy">Long code lines are clipped to this width unless the full active document preview already fits inside the current prompt budget.</p>
+                  </div>
+                  <div>
+                    <label class="settings-label" for="canvas-text-line-chars-input">Text line clip length (40-1000)</label>
+                    <input type="number" class="settings-number" id="canvas-text-line-chars-input" min="40" max="1000" value="100" />
+                    <p class="settings-copy">Long prose or markdown lines are clipped to this width unless the full preview already fits inside the current prompt budget.</p>
                   </div>
                   <div>
                     <label class="settings-label" for="canvas-expand-lines-input">Expand max lines (100-4000)</label>

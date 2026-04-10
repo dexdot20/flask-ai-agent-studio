@@ -45,6 +45,19 @@ CANVAS_TEXT_ADDRESSABLE_TOOL_NAMES = {
     "preview_canvas_changes",
     "batch_canvas_edits",
     "transform_canvas_lines",
+    "set_canvas_viewport",
+    "focus_canvas_page",
+    "replace_canvas_lines",
+    "insert_canvas_lines",
+    "delete_canvas_lines",
+}
+
+CANVAS_EDITABLE_TOOL_NAMES = {
+    "rewrite_canvas_document",
+    "preview_canvas_changes",
+    "batch_canvas_edits",
+    "transform_canvas_lines",
+    "update_canvas_metadata",
     "replace_canvas_lines",
     "insert_canvas_lines",
     "delete_canvas_lines",
@@ -195,7 +208,7 @@ def build_canvas_decision_matrix(
             {
                 "situation": "You will keep working in the same region for several turns or want to stop injecting a pinned region.",
                 "tool": "set_canvas_viewport / clear_canvas_viewport",
-                "notes": "Pinned viewport lines are auto-injected in later prompts until they expire or are cleared.",
+                "notes": "Use set_canvas_viewport only on text-addressable documents with known line ranges. Pinned viewport lines are auto-injected in later prompts until they expire or are cleared.",
             }
         )
     if enabled("focus_canvas_page"):
@@ -203,7 +216,7 @@ def build_canvas_decision_matrix(
             {
                 "situation": "The active canvas document is multi-page and you need one specific page pinned into future prompts.",
                 "tool": "focus_canvas_page",
-                "notes": "Prefer this over manually estimating page line ranges when the document exposes '## Page N' markers.",
+                "notes": "Prefer this over manual page-range estimates only when the document exposes explicit '## Page N' markers in text content.",
             }
         )
     if enabled("scroll_canvas_document"):
@@ -1728,7 +1741,7 @@ TOOL_SPECS = [
     },
     {
         "name": "set_canvas_viewport",
-        "description": "Pin a document line range so it is automatically injected into later prompts for a limited number of turns.",
+        "description": "Pin a text line range from a text-addressable canvas document so it is automatically injected into later prompts for a limited number of turns.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -1745,12 +1758,12 @@ TOOL_SPECS = [
         "prompt": {
             "purpose": "Pins a canvas range for automatic reuse in subsequent prompts.",
             "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "start_line": "viewport start", "end_line": "viewport end", "ttl_turns": "number of future turns to keep it pinned", "permanent": "pin until explicitly cleared", "auto_unpin_on_edit": "whether overlapping edits clear it automatically"},
-            "guidance": "Use this when you expect to keep working in the same region for multiple turns and want to avoid repeated scroll or expand calls. Use permanent=true when the range should stay pinned until you explicitly clear it.",
+            "guidance": "Use this only for text-addressable canvas documents when you expect to keep working in the same known line range for multiple turns and want to avoid repeated scroll or expand calls. Use permanent=true when the range should stay pinned until you explicitly clear it.",
         },
     },
     {
         "name": "focus_canvas_page",
-        "description": "Pin one specific page from a page-aware canvas document so it is automatically injected into later prompts.",
+        "description": "Pin one specific page from a page-marker-aware canvas document so it is automatically injected into later prompts.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -1765,7 +1778,7 @@ TOOL_SPECS = [
         "prompt": {
             "purpose": "Pins one full page from a multi-page canvas document for automatic reuse in subsequent prompts.",
             "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "page_number": "page to focus", "ttl_turns": "number of future turns to keep it pinned", "auto_unpin_on_edit": "whether overlapping edits clear it automatically"},
-            "guidance": "Use this for uploaded PDFs or other page-aware documents with visible page markers. Prefer it over set_canvas_viewport when the user refers to a specific page or when page-scoped reasoning is clearer than raw line ranges.",
+            "guidance": "Use this only when the canvas content exposes explicit page markers such as '## Page N'. Prefer it over set_canvas_viewport when the user refers to a specific page and those markers already exist in the text content.",
         },
     },
     {
@@ -2031,6 +2044,7 @@ def resolve_runtime_tool_names(
     Only hard precondition gates apply:
     - Canvas document editing tools require an existing canvas document.
     - Text-addressable canvas tools are hidden when every canvas document is visual-only.
+    - Editable canvas tools are hidden when no canvas document is editable.
     - Workspace file tools require a configured workspace_root.
     Everything else (web search, canvas creation, etc.) is always included.
     """
@@ -2044,11 +2058,18 @@ def resolve_runtime_tool_names(
         for document in (canvas_documents or [])
         if isinstance(document, dict)
     )
+    has_editable_canvas_documents = any(
+        get_canvas_document_capabilities(document)["editable"]
+        for document in (canvas_documents or [])
+        if isinstance(document, dict)
+    )
     runtime_names: list[str] = []
     for name in names:
         if name in CANVAS_DOCUMENT_TOOL_NAMES and not has_canvas_documents:
             continue
         if name in CANVAS_TEXT_ADDRESSABLE_TOOL_NAMES and not has_text_addressable_canvas_documents:
+            continue
+        if name in CANVAS_EDITABLE_TOOL_NAMES and not has_editable_canvas_documents:
             continue
         if name in WORKSPACE_TOOL_NAMES and not workspace_root:
             continue

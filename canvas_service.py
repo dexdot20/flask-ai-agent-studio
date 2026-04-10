@@ -2218,6 +2218,7 @@ def set_canvas_viewport(
     page_number: int | None = None,
 ) -> dict:
     _, document = _find_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
+    _require_canvas_document_text_addressable(document, "set_canvas_viewport")
     total_lines = int(document.get("line_count") or 0)
     if start_line < 1 or end_line < start_line:
         raise ValueError("set_canvas_viewport requires a valid 1-based inclusive range.")
@@ -2265,7 +2266,7 @@ def focus_canvas_page(
     page_sections = _extract_canvas_page_sections(document.get("content") or "")
     if not page_sections:
         raise ValueError(
-            "This canvas document does not expose page markers yet. focus_canvas_page currently works with page-aware documents such as uploaded PDFs."
+            "This canvas document does not expose explicit '## Page N' markers yet. focus_canvas_page only works when page markers already exist in the text content."
         )
 
     page_range = _get_canvas_page_range(document.get("content") or "", int(page_number))
@@ -2781,12 +2782,12 @@ def validate_canvas_document(
             "document_path": document.get("path"),
             "title": document.get("title"),
             "validator_used": "none",
-            "is_valid": True,
+            "is_valid": False,
             "issue_count": 1,
             "issues": [
                 _build_canvas_validation_issue(
                     "info",
-                    "Validation is not available for visual canvas documents because they are image-backed previews.",
+                    "Validation is not available for visual canvas documents because they are image-backed previews rather than editable text files.",
                 )
             ],
         }

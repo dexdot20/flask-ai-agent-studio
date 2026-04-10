@@ -62,6 +62,9 @@ const fetchThresholdEl = document.getElementById("fetch-threshold-input");
 const fetchAggressivenessEl = document.getElementById("fetch-aggressiveness-input");
 const canvasPromptLinesEl = document.getElementById("canvas-prompt-lines-input");
 const canvasPromptTokensEl = document.getElementById("canvas-prompt-tokens-input");
+const canvasPromptCharsEl = document.getElementById("canvas-prompt-chars-input");
+const canvasCodeLineCharsEl = document.getElementById("canvas-code-line-chars-input");
+const canvasTextLineCharsEl = document.getElementById("canvas-text-line-chars-input");
 const canvasExpandLinesEl = document.getElementById("canvas-expand-lines-input");
 const canvasScrollLinesEl = document.getElementById("canvas-scroll-lines-input");
 const customModelNameEl = document.getElementById("custom-model-name-input");
@@ -2030,7 +2033,10 @@ function applySettingsToForm() {
   if (fetchThresholdEl) fetchThresholdEl.value = String(appSettings.fetch_url_token_threshold || 3500);
   if (fetchAggressivenessEl) fetchAggressivenessEl.value = String(appSettings.fetch_url_clip_aggressiveness || 50);
   if (canvasPromptLinesEl) canvasPromptLinesEl.value = String(appSettings.canvas_prompt_max_lines || 250);
-  if (canvasPromptTokensEl) canvasPromptTokensEl.value = String(appSettings.canvas_prompt_max_tokens || 2000);
+  if (canvasPromptTokensEl) canvasPromptTokensEl.value = String(appSettings.canvas_prompt_max_tokens || 4000);
+  if (canvasPromptCharsEl) canvasPromptCharsEl.value = String(appSettings.canvas_prompt_max_chars || 20000);
+  if (canvasCodeLineCharsEl) canvasCodeLineCharsEl.value = String(appSettings.canvas_prompt_code_line_max_chars || 180);
+  if (canvasTextLineCharsEl) canvasTextLineCharsEl.value = String(appSettings.canvas_prompt_text_line_max_chars || 100);
   if (canvasExpandLinesEl) canvasExpandLinesEl.value = String(appSettings.canvas_expand_max_lines || 1600);
   if (canvasScrollLinesEl) canvasScrollLinesEl.value = String(appSettings.canvas_scroll_window_lines || 200);
   applySelectedTools(appSettings.active_tools || []);
@@ -2160,7 +2166,10 @@ function applyServerSettingsData(data) {
   appSettings.fetch_url_token_threshold = data.fetch_url_token_threshold || 3500;
   appSettings.fetch_url_clip_aggressiveness = data.fetch_url_clip_aggressiveness ?? 50;
   appSettings.canvas_prompt_max_lines = data.canvas_prompt_max_lines || 250;
-  appSettings.canvas_prompt_max_tokens = data.canvas_prompt_max_tokens || 2000;
+  appSettings.canvas_prompt_max_tokens = data.canvas_prompt_max_tokens || 4000;
+  appSettings.canvas_prompt_max_chars = data.canvas_prompt_max_chars || 20000;
+  appSettings.canvas_prompt_code_line_max_chars = data.canvas_prompt_code_line_max_chars || 180;
+  appSettings.canvas_prompt_text_line_max_chars = data.canvas_prompt_text_line_max_chars || 100;
   appSettings.canvas_expand_max_lines = data.canvas_expand_max_lines || 1600;
   appSettings.canvas_scroll_window_lines = data.canvas_scroll_window_lines || 200;
   appSettings.sub_agent_allowed_tool_names = Array.isArray(data.sub_agent_allowed_tool_names) ? data.sub_agent_allowed_tool_names : [];
@@ -2234,7 +2243,10 @@ async function saveSettings() {
     fetch_url_token_threshold: readNumericSetting(fetchThresholdEl, 3500, { allowZero: false }),
     fetch_url_clip_aggressiveness: readNumericSetting(fetchAggressivenessEl, 50),
     canvas_prompt_max_lines: readNumericSetting(canvasPromptLinesEl, 250, { allowZero: false }),
-    canvas_prompt_max_tokens: readNumericSetting(canvasPromptTokensEl, 2000, { allowZero: false }),
+    canvas_prompt_max_tokens: readNumericSetting(canvasPromptTokensEl, 4000, { allowZero: false }),
+    canvas_prompt_max_chars: readNumericSetting(canvasPromptCharsEl, 20000, { allowZero: false }),
+    canvas_prompt_code_line_max_chars: readNumericSetting(canvasCodeLineCharsEl, 180, { allowZero: false }),
+    canvas_prompt_text_line_max_chars: readNumericSetting(canvasTextLineCharsEl, 100, { allowZero: false }),
     canvas_expand_max_lines: readNumericSetting(canvasExpandLinesEl, 1600, { allowZero: false }),
     canvas_scroll_window_lines: readNumericSetting(canvasScrollLinesEl, 200, { allowZero: false }),
     custom_models: draftCustomModels.map((model) => ({ ...model })),
@@ -2651,6 +2663,9 @@ function registerDirtyListeners() {
   fetchAggressivenessEl?.addEventListener("input", markDirty);
   canvasPromptLinesEl?.addEventListener("input", markDirty);
   canvasPromptTokensEl?.addEventListener("input", markDirty);
+  canvasPromptCharsEl?.addEventListener("input", markDirty);
+  canvasCodeLineCharsEl?.addEventListener("input", markDirty);
+  canvasTextLineCharsEl?.addEventListener("input", markDirty);
   canvasExpandLinesEl?.addEventListener("input", markDirty);
   canvasScrollLinesEl?.addEventListener("input", markDirty);
   summaryModelPreferenceEl?.addEventListener("change", markDirty);

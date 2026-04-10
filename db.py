@@ -14,7 +14,10 @@ from canvas_service import extract_canvas_active_document_id, extract_canvas_doc
 from config import (
     CACHE_TTL_HOURS,
     CANVAS_EXPAND_DEFAULT_MAX_LINES,
+    CANVAS_PROMPT_CODE_LINE_MAX_CHARS,
+    CANVAS_PROMPT_DEFAULT_MAX_CHARS,
     CANVAS_PROMPT_DEFAULT_MAX_LINES,
+    CANVAS_PROMPT_TEXT_LINE_MAX_CHARS,
     CANVAS_PROMPT_DEFAULT_MAX_TOKENS,
     CANVAS_SCROLL_WINDOW_LINES,
     CHAT_SUMMARY_ALLOWED_MODES,
@@ -3605,6 +3608,42 @@ def get_canvas_prompt_max_tokens(settings: dict | None = None) -> int:
     except (TypeError, ValueError):
         value = CANVAS_PROMPT_DEFAULT_MAX_TOKENS
     return max(500, min(50_000, value))
+
+
+def get_canvas_prompt_max_chars(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get("canvas_prompt_max_chars", DEFAULT_SETTINGS["canvas_prompt_max_chars"])
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        value = CANVAS_PROMPT_DEFAULT_MAX_CHARS
+    return max(1_000, min(200_000, value))
+
+
+def get_canvas_prompt_code_line_max_chars(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get(
+        "canvas_prompt_code_line_max_chars",
+        DEFAULT_SETTINGS["canvas_prompt_code_line_max_chars"],
+    )
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        value = CANVAS_PROMPT_CODE_LINE_MAX_CHARS
+    return max(40, min(1_000, value))
+
+
+def get_canvas_prompt_text_line_max_chars(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get(
+        "canvas_prompt_text_line_max_chars",
+        DEFAULT_SETTINGS["canvas_prompt_text_line_max_chars"],
+    )
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        value = CANVAS_PROMPT_TEXT_LINE_MAX_CHARS
+    return max(40, min(1_000, value))
 
 
 def get_canvas_expand_max_lines(settings: dict | None = None) -> int:

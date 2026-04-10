@@ -40,8 +40,11 @@ from db import (
     get_all_scratchpad_sections,
     get_app_settings,
     get_canvas_expand_max_lines,
+    get_canvas_prompt_code_line_max_chars,
+    get_canvas_prompt_max_chars,
     get_canvas_prompt_max_lines,
     get_canvas_prompt_max_tokens,
+    get_canvas_prompt_text_line_max_chars,
     get_canvas_scroll_window_lines,
     get_chat_summary_mode,
     get_chat_summary_detail_level,
@@ -389,6 +392,9 @@ def build_settings_payload() -> dict:
         "tool_memory_auto_inject": get_tool_memory_auto_inject_enabled(raw),
         "canvas_prompt_max_lines": get_canvas_prompt_max_lines(raw),
         "canvas_prompt_max_tokens": get_canvas_prompt_max_tokens(raw),
+        "canvas_prompt_max_chars": get_canvas_prompt_max_chars(raw),
+        "canvas_prompt_code_line_max_chars": get_canvas_prompt_code_line_max_chars(raw),
+        "canvas_prompt_text_line_max_chars": get_canvas_prompt_text_line_max_chars(raw),
         "canvas_expand_max_lines": get_canvas_expand_max_lines(raw),
         "canvas_scroll_window_lines": get_canvas_scroll_window_lines(raw),
         "sub_agent_max_steps": get_sub_agent_max_steps(raw),
@@ -524,6 +530,9 @@ def register_page_routes(app) -> None:
         fetch_url_clip_aggressiveness_raw = data.get("fetch_url_clip_aggressiveness")
         canvas_prompt_max_lines_raw = data.get("canvas_prompt_max_lines")
         canvas_prompt_max_tokens_raw = data.get("canvas_prompt_max_tokens")
+        canvas_prompt_max_chars_raw = data.get("canvas_prompt_max_chars")
+        canvas_prompt_code_line_max_chars_raw = data.get("canvas_prompt_code_line_max_chars")
+        canvas_prompt_text_line_max_chars_raw = data.get("canvas_prompt_text_line_max_chars")
         canvas_expand_max_lines_raw = data.get("canvas_expand_max_lines")
         canvas_scroll_window_lines_raw = data.get("canvas_scroll_window_lines")
         sub_agent_max_steps_raw = data.get("sub_agent_max_steps")
@@ -580,6 +589,9 @@ def register_page_routes(app) -> None:
             and fetch_url_clip_aggressiveness_raw is None
             and canvas_prompt_max_lines_raw is None
             and canvas_prompt_max_tokens_raw is None
+            and canvas_prompt_max_chars_raw is None
+            and canvas_prompt_code_line_max_chars_raw is None
+            and canvas_prompt_text_line_max_chars_raw is None
             and canvas_expand_max_lines_raw is None
             and canvas_scroll_window_lines_raw is None
             and sub_agent_max_steps_raw is None
@@ -1048,6 +1060,33 @@ def register_page_routes(app) -> None:
             if not (500 <= canvas_prompt_max_tokens <= 50_000):
                 return jsonify({"error": "canvas_prompt_max_tokens must be between 500 and 50000."}), 400
             settings["canvas_prompt_max_tokens"] = str(canvas_prompt_max_tokens)
+
+        if canvas_prompt_max_chars_raw is not None:
+            try:
+                canvas_prompt_max_chars = int(canvas_prompt_max_chars_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "canvas_prompt_max_chars must be an integer."}), 400
+            if not (1_000 <= canvas_prompt_max_chars <= 200_000):
+                return jsonify({"error": "canvas_prompt_max_chars must be between 1000 and 200000."}), 400
+            settings["canvas_prompt_max_chars"] = str(canvas_prompt_max_chars)
+
+        if canvas_prompt_code_line_max_chars_raw is not None:
+            try:
+                canvas_prompt_code_line_max_chars = int(canvas_prompt_code_line_max_chars_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "canvas_prompt_code_line_max_chars must be an integer."}), 400
+            if not (40 <= canvas_prompt_code_line_max_chars <= 1_000):
+                return jsonify({"error": "canvas_prompt_code_line_max_chars must be between 40 and 1000."}), 400
+            settings["canvas_prompt_code_line_max_chars"] = str(canvas_prompt_code_line_max_chars)
+
+        if canvas_prompt_text_line_max_chars_raw is not None:
+            try:
+                canvas_prompt_text_line_max_chars = int(canvas_prompt_text_line_max_chars_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "canvas_prompt_text_line_max_chars must be an integer."}), 400
+            if not (40 <= canvas_prompt_text_line_max_chars <= 1_000):
+                return jsonify({"error": "canvas_prompt_text_line_max_chars must be between 40 and 1000."}), 400
+            settings["canvas_prompt_text_line_max_chars"] = str(canvas_prompt_text_line_max_chars)
 
         if canvas_expand_max_lines_raw is not None:
             try:
