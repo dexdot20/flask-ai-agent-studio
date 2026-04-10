@@ -663,102 +663,6 @@
               <div class="settings-page-section-card">
                 <div class="settings-page-section-card__header">
                   <div>
-                    <span class="settings-section-kicker">Prompt allocation</span>
-                    <h3>Context budgets</h3>
-                  </div>
-                  <p>Fine-tune how much of the prompt window is reserved for raw history, summaries, retrieved context, remembered web results, and tool traces.</p>
-                </div>
-                <div class="settings-subsection-grid settings-subsection-grid--two">
-                  <section class="settings-subsection">
-                    <div class="settings-subsection__header">
-                      <span class="settings-subsection__eyebrow">Prompt window</span>
-                      <h4 class="settings-subsection__title">Global ceiling</h4>
-                      <p class="settings-subsection__copy">Set the effective input ceiling first, then keep enough room for the model to answer without crowding the prompt.</p>
-                    </div>
-                    <div class="settings-form-cluster">
-                      <label class="settings-label" for="prompt-max-input-tokens-input">Prompt max input tokens (8000-120000)</label>
-                      <input type="number" class="settings-number" id="prompt-max-input-tokens-input" min="8000" max="120000" value="80000" />
-                      <p class="settings-copy">Main upper bound used when the app decides how much total context can be sent into a model call.</p>
-                    </div>
-                    <div class="settings-form-cluster">
-                      <label class="settings-label" for="prompt-response-token-reserve-input">Response reserve (1000-32000)</label>
-                      <input type="number" class="settings-number" id="prompt-response-token-reserve-input" min="1000" max="32000" value="8000" />
-                      <p class="settings-copy">Held back for the model's answer. It must still leave at least 2000 tokens available for prompt input.</p>
-                    </div>
-                  </section>
-
-                  <section class="settings-subsection">
-                    <div class="settings-subsection__header">
-                      <span class="settings-subsection__eyebrow">Conversation lanes</span>
-                      <h4 class="settings-subsection__title">History and summaries</h4>
-                      <p class="settings-subsection__copy">Control how much near-term raw chat history stays visible before older turns move into condensed form.</p>
-                    </div>
-                    <div class="settings-form-cluster">
-                      <label class="settings-label" for="prompt-recent-history-max-tokens-input">Recent history budget (1000-120000)</label>
-                      <input type="number" class="settings-number" id="prompt-recent-history-max-tokens-input" min="1000" max="120000" value="32000" />
-                      <p class="settings-copy">Caps how much near-term chat history can be preserved before older material is summarized or trimmed.</p>
-                    </div>
-                    <div class="settings-form-cluster">
-                      <label class="settings-label" for="prompt-summary-max-tokens-input">Summary budget (500-120000)</label>
-                      <input type="number" class="settings-number" id="prompt-summary-max-tokens-input" min="500" max="120000" value="12000" />
-                      <p class="settings-copy">Maximum prompt space reserved for background summaries when long threads are compressed.</p>
-                    </div>
-                  </section>
-
-                  <section class="settings-subsection">
-                    <div class="settings-subsection__header">
-                      <span class="settings-subsection__eyebrow">Retrieved context</span>
-                      <h4 class="settings-subsection__title">RAG lane</h4>
-                      <p class="settings-subsection__copy">Reserve a predictable share of prompt space for retrieved context without letting it crowd out the active conversation.</p>
-                    </div>
-                    <div class="settings-form-cluster">
-                      <label class="settings-label" for="prompt-rag-max-tokens-input">RAG budget (0-120000)</label>
-                      <input type="number" class="settings-number" id="prompt-rag-max-tokens-input" min="0" max="120000" value="18000" />
-                      <p class="settings-copy">Upper bound for generic retrieved context coming from chats, tool outputs, saved web/fetches, and uploaded documents.</p>
-                    </div>
-                  </section>
-                </div>
-                <details class="settings-collapsible settings-collapsible--soft">
-                  <summary class="settings-collapsible__summary">
-                    <div>
-                      <span class="settings-subsection__eyebrow">Advanced lane budgets</span>
-                      <strong>Dedicated tool memory and trace retention</strong>
-                    </div>
-                    <span class="settings-collapsible__meta">Open when you want separate caps for saved fetch memory or verbose tool transcripts.</span>
-                  </summary>
-                  <div class="settings-collapsible__content">
-                    <div class="settings-subsection-grid settings-subsection-grid--two">
-                      <section class="settings-subsection settings-subsection--compact">
-                        <div class="settings-subsection__header">
-                          <span class="settings-subsection__eyebrow">Saved web/fetch memory</span>
-                          <h4 class="settings-subsection__title">Dedicated tool-memory budget</h4>
-                        </div>
-                        <div class="settings-form-cluster">
-                          <label class="settings-label" for="prompt-tool-memory-max-tokens-input">Dedicated tool-memory budget (0-120000)</label>
-                          <input type="number" class="settings-number" id="prompt-tool-memory-max-tokens-input" min="0" max="120000" value="10000" />
-                          <p class="settings-copy">Separate budget for the dedicated saved web/fetch memory lane when that feature is enabled below.</p>
-                        </div>
-                      </section>
-
-                      <section class="settings-subsection settings-subsection--compact">
-                        <div class="settings-subsection__header">
-                          <span class="settings-subsection__eyebrow">Tool transcript</span>
-                          <h4 class="settings-subsection__title">Trace retention</h4>
-                        </div>
-                        <div class="settings-form-cluster">
-                          <label class="settings-label" for="prompt-tool-trace-max-tokens-input">Tool trace budget (0-120000)</label>
-                          <input type="number" class="settings-number" id="prompt-tool-trace-max-tokens-input" min="0" max="120000" value="9000" />
-                          <p class="settings-copy">Controls how much tool-call transcript detail can survive into the next model turn before aggressive compaction begins.</p>
-                        </div>
-                      </section>
-                    </div>
-                  </div>
-                </details>
-              </div>
-
-              <div class="settings-page-section-card">
-                <div class="settings-page-section-card__header">
-                  <div>
                     <span class="settings-section-kicker">Runtime safeguards</span>
                     <h3>Context compaction</h3>
                   </div>
@@ -794,77 +698,6 @@
                 </div>
               </div>
 
-              <div class="settings-page-section-card">
-                <div class="settings-page-section-card__header">
-                  <div>
-                    <span class="settings-section-kicker">Canvas visibility</span>
-                    <h3>Canvas limits</h3>
-                  </div>
-                  <p>Control how much of large canvas files the assistant can see by default and per targeted read.</p>
-                </div>
-                <div class="settings-page-grid settings-page-grid--two">
-                  <div>
-                    <label class="settings-label" for="canvas-prompt-lines-input">Prompt max lines (100-3000)</label>
-                    <input type="number" class="settings-number" id="canvas-prompt-lines-input" min="100" max="3000" value="250" />
-                    <p class="settings-copy">Injected automatically into each turn for the active canvas document. The token budget below can still clip this earlier on very long or Unicode-heavy files.</p>
-                  </div>
-                  <div>
-                    <label class="settings-label" for="canvas-prompt-tokens-input">Prompt token budget (500-50000)</label>
-                    <input type="number" class="settings-number" id="canvas-prompt-tokens-input" min="500" max="50000" value="4000" />
-                    <p class="settings-copy">Hard cap on canvas visible-content tokens per turn. Reduce for Unicode-heavy documents (Turkish, Arabic, CJK) that tokenise at a higher rate than ASCII.</p>
-                  </div>
-                  <div>
-                    <label class="settings-label" for="canvas-prompt-chars-input">Prompt max chars (1000-200000)</label>
-                    <input type="number" class="settings-number" id="canvas-prompt-chars-input" min="1000" max="200000" value="20000" />
-                    <p class="settings-copy">Hard ceiling on the raw character budget for the active canvas excerpt before token-based trimming kicks in.</p>
-                  </div>
-                  <div>
-                    <label class="settings-label" for="canvas-expand-lines-input">Expand max lines (100-4000)</label>
-                    <input type="number" class="settings-number" id="canvas-expand-lines-input" min="100" max="4000" value="1600" />
-                    <p class="settings-copy">Used when the assistant calls the larger canvas expansion tool.</p>
-                  </div>
-                </div>
-                <details class="settings-collapsible settings-collapsible--soft">
-                  <summary class="settings-collapsible__summary">
-                    <div>
-                      <span class="settings-subsection__eyebrow">Advanced canvas reads</span>
-                      <strong>Line clipping and targeted scroll limits</strong>
-                    </div>
-                    <span class="settings-collapsible__meta">Open when very long code or prose lines still crowd the prompt.</span>
-                  </summary>
-                  <div class="settings-collapsible__content">
-                    <div class="settings-subsection-grid settings-subsection-grid--three">
-                      <section class="settings-subsection settings-subsection--compact">
-                        <div class="settings-subsection__header">
-                          <span class="settings-subsection__eyebrow">Long code lines</span>
-                          <h4 class="settings-subsection__title">Code line clip length</h4>
-                        </div>
-                        <label class="settings-label" for="canvas-code-line-chars-input">Code line clip length (40-1000)</label>
-                        <input type="number" class="settings-number" id="canvas-code-line-chars-input" min="40" max="1000" value="180" />
-                        <p class="settings-copy">Long code lines are clipped to this width unless the full active document preview already fits inside the current prompt budget.</p>
-                      </section>
-                      <section class="settings-subsection settings-subsection--compact">
-                        <div class="settings-subsection__header">
-                          <span class="settings-subsection__eyebrow">Long text lines</span>
-                          <h4 class="settings-subsection__title">Text line clip length</h4>
-                        </div>
-                        <label class="settings-label" for="canvas-text-line-chars-input">Text line clip length (40-1000)</label>
-                        <input type="number" class="settings-number" id="canvas-text-line-chars-input" min="40" max="1000" value="100" />
-                        <p class="settings-copy">Long prose or markdown lines are clipped to this width unless the full preview already fits inside the current prompt budget.</p>
-                      </section>
-                      <section class="settings-subsection settings-subsection--compact">
-                        <div class="settings-subsection__header">
-                          <span class="settings-subsection__eyebrow">Targeted reads</span>
-                          <h4 class="settings-subsection__title">Scroll window lines</h4>
-                        </div>
-                        <label class="settings-label" for="canvas-scroll-lines-input">Scroll window lines (50-800)</label>
-                        <input type="number" class="settings-number" id="canvas-scroll-lines-input" min="50" max="800" value="200" />
-                        <p class="settings-copy">Caps how many lines a single targeted canvas scroll can return.</p>
-                      </section>
-                    </div>
-                  </div>
-                </details>
-              </div>
             </div>
 
             <div class="settings-page-stack">
@@ -990,6 +823,102 @@
               <div class="settings-page-section-card">
                 <div class="settings-page-section-card__header">
                   <div>
+                    <span class="settings-section-kicker">Prompt allocation</span>
+                    <h3>Context budgets</h3>
+                  </div>
+                  <p>Fine-tune how much of the prompt window is reserved for raw history, summaries, retrieved context, remembered web results, and tool traces.</p>
+                </div>
+                <div class="settings-subsection-grid settings-subsection-grid--two">
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Prompt window</span>
+                      <h4 class="settings-subsection__title">Global ceiling</h4>
+                      <p class="settings-subsection__copy">Set the effective input ceiling first, then keep enough room for the model to answer without crowding the prompt.</p>
+                    </div>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="prompt-max-input-tokens-input">Prompt max input tokens (8000-120000)</label>
+                      <input type="number" class="settings-number" id="prompt-max-input-tokens-input" min="8000" max="120000" value="80000" />
+                      <p class="settings-copy">Main upper bound used when the app decides how much total context can be sent into a model call.</p>
+                    </div>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="prompt-response-token-reserve-input">Response reserve (1000-32000)</label>
+                      <input type="number" class="settings-number" id="prompt-response-token-reserve-input" min="1000" max="32000" value="8000" />
+                      <p class="settings-copy">Held back for the model's answer. It must still leave at least 2000 tokens available for prompt input.</p>
+                    </div>
+                  </section>
+
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Conversation lanes</span>
+                      <h4 class="settings-subsection__title">History and summaries</h4>
+                      <p class="settings-subsection__copy">Control how much near-term raw chat history stays visible before older turns move into condensed form.</p>
+                    </div>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="prompt-recent-history-max-tokens-input">Recent history budget (1000-120000)</label>
+                      <input type="number" class="settings-number" id="prompt-recent-history-max-tokens-input" min="1000" max="120000" value="32000" />
+                      <p class="settings-copy">Caps how much near-term chat history can be preserved before older material is summarized or trimmed.</p>
+                    </div>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="prompt-summary-max-tokens-input">Summary budget (500-120000)</label>
+                      <input type="number" class="settings-number" id="prompt-summary-max-tokens-input" min="500" max="120000" value="12000" />
+                      <p class="settings-copy">Maximum prompt space reserved for background summaries when long threads are compressed.</p>
+                    </div>
+                  </section>
+
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Retrieved context</span>
+                      <h4 class="settings-subsection__title">RAG lane</h4>
+                      <p class="settings-subsection__copy">Reserve a predictable share of prompt space for retrieved context without letting it crowd out the active conversation.</p>
+                    </div>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="prompt-rag-max-tokens-input">RAG budget (0-120000)</label>
+                      <input type="number" class="settings-number" id="prompt-rag-max-tokens-input" min="0" max="120000" value="18000" />
+                      <p class="settings-copy">Upper bound for generic retrieved context coming from chats, tool outputs, saved web/fetches, and uploaded documents.</p>
+                    </div>
+                  </section>
+                </div>
+                <details class="settings-collapsible settings-collapsible--soft">
+                  <summary class="settings-collapsible__summary">
+                    <div>
+                      <span class="settings-subsection__eyebrow">Advanced lane budgets</span>
+                      <strong>Dedicated tool memory and trace retention</strong>
+                    </div>
+                    <span class="settings-collapsible__meta">Open when you want separate caps for saved fetch memory or verbose tool transcripts.</span>
+                  </summary>
+                  <div class="settings-collapsible__content">
+                    <div class="settings-subsection-grid settings-subsection-grid--two">
+                      <section class="settings-subsection settings-subsection--compact">
+                        <div class="settings-subsection__header">
+                          <span class="settings-subsection__eyebrow">Saved web/fetch memory</span>
+                          <h4 class="settings-subsection__title">Dedicated tool-memory budget</h4>
+                        </div>
+                        <div class="settings-form-cluster">
+                          <label class="settings-label" for="prompt-tool-memory-max-tokens-input">Dedicated tool-memory budget (0-120000)</label>
+                          <input type="number" class="settings-number" id="prompt-tool-memory-max-tokens-input" min="0" max="120000" value="10000" />
+                          <p class="settings-copy">Separate budget for the dedicated saved web/fetch memory lane when that feature is enabled below.</p>
+                        </div>
+                      </section>
+
+                      <section class="settings-subsection settings-subsection--compact">
+                        <div class="settings-subsection__header">
+                          <span class="settings-subsection__eyebrow">Tool transcript</span>
+                          <h4 class="settings-subsection__title">Trace retention</h4>
+                        </div>
+                        <div class="settings-form-cluster">
+                          <label class="settings-label" for="prompt-tool-trace-max-tokens-input">Tool trace budget (0-120000)</label>
+                          <input type="number" class="settings-number" id="prompt-tool-trace-max-tokens-input" min="0" max="120000" value="9000" />
+                          <p class="settings-copy">Controls how much tool-call transcript detail can survive into the next model turn before aggressive compaction begins.</p>
+                        </div>
+                      </section>
+                    </div>
+                  </div>
+                </details>
+              </div>
+
+              <div class="settings-page-section-card">
+                <div class="settings-page-section-card__header">
+                  <div>
                     <span class="settings-section-kicker">Message refinement</span>
                     <h3>Pruning mode</h3>
                   </div>
@@ -1034,6 +963,78 @@
                     </div>
                   </section>
                 </fieldset>
+              </div>
+
+              <div class="settings-page-section-card">
+                <div class="settings-page-section-card__header">
+                  <div>
+                    <span class="settings-section-kicker">Canvas visibility</span>
+                    <h3>Canvas limits</h3>
+                  </div>
+                  <p>Control how much of large canvas files the assistant can see by default and per targeted read.</p>
+                </div>
+                <div class="settings-page-grid settings-page-grid--two">
+                  <div>
+                    <label class="settings-label" for="canvas-prompt-lines-input">Prompt max lines (100-3000)</label>
+                    <input type="number" class="settings-number" id="canvas-prompt-lines-input" min="100" max="3000" value="250" />
+                    <p class="settings-copy">Injected automatically into each turn for the active canvas document. The token budget below can still clip this earlier on very long or Unicode-heavy files.</p>
+                  </div>
+                  <div>
+                    <label class="settings-label" for="canvas-prompt-tokens-input">Prompt token budget (500-50000)</label>
+                    <input type="number" class="settings-number" id="canvas-prompt-tokens-input" min="500" max="50000" value="4000" />
+                    <p class="settings-copy">Hard cap on canvas visible-content tokens per turn. Reduce for Unicode-heavy documents (Turkish, Arabic, CJK) that tokenise at a higher rate than ASCII.</p>
+                  </div>
+                  <div>
+                    <label class="settings-label" for="canvas-prompt-chars-input">Prompt max chars (1000-200000)</label>
+                    <input type="number" class="settings-number" id="canvas-prompt-chars-input" min="1000" max="200000" value="20000" />
+                    <p class="settings-copy">Hard ceiling on the raw character budget for the active canvas excerpt before token-based trimming kicks in.</p>
+                  </div>
+                  <div>
+                    <label class="settings-label" for="canvas-expand-lines-input">Expand max lines (100-4000)</label>
+                    <input type="number" class="settings-number" id="canvas-expand-lines-input" min="100" max="4000" value="1600" />
+                    <p class="settings-copy">Used when the assistant calls the larger canvas expansion tool.</p>
+                  </div>
+                </div>
+                <details class="settings-collapsible settings-collapsible--soft">
+                  <summary class="settings-collapsible__summary">
+                    <div>
+                      <span class="settings-subsection__eyebrow">Advanced canvas reads</span>
+                      <strong>Line clipping and targeted scroll limits</strong>
+                    </div>
+                    <span class="settings-collapsible__meta">Open when very long code or prose lines still crowd the prompt.</span>
+                  </summary>
+                  <div class="settings-collapsible__content">
+                    <div class="settings-subsection-grid settings-subsection-grid--three">
+                      <section class="settings-subsection settings-subsection--compact">
+                        <div class="settings-subsection__header">
+                          <span class="settings-subsection__eyebrow">Long code lines</span>
+                          <h4 class="settings-subsection__title">Code line clip length</h4>
+                        </div>
+                        <label class="settings-label" for="canvas-code-line-chars-input">Code line clip length (40-1000)</label>
+                        <input type="number" class="settings-number" id="canvas-code-line-chars-input" min="40" max="1000" value="180" />
+                        <p class="settings-copy">Long code lines are clipped to this width unless the full active document preview already fits inside the current prompt budget.</p>
+                      </section>
+                      <section class="settings-subsection settings-subsection--compact">
+                        <div class="settings-subsection__header">
+                          <span class="settings-subsection__eyebrow">Long text lines</span>
+                          <h4 class="settings-subsection__title">Text line clip length</h4>
+                        </div>
+                        <label class="settings-label" for="canvas-text-line-chars-input">Text line clip length (40-1000)</label>
+                        <input type="number" class="settings-number" id="canvas-text-line-chars-input" min="40" max="1000" value="100" />
+                        <p class="settings-copy">Long prose or markdown lines are clipped to this width unless the full preview already fits inside the current prompt budget.</p>
+                      </section>
+                      <section class="settings-subsection settings-subsection--compact">
+                        <div class="settings-subsection__header">
+                          <span class="settings-subsection__eyebrow">Targeted reads</span>
+                          <h4 class="settings-subsection__title">Scroll window lines</h4>
+                        </div>
+                        <label class="settings-label" for="canvas-scroll-lines-input">Scroll window lines (50-800)</label>
+                        <input type="number" class="settings-number" id="canvas-scroll-lines-input" min="50" max="800" value="200" />
+                        <p class="settings-copy">Caps how many lines a single targeted canvas scroll can return.</p>
+                      </section>
+                    </div>
+                  </div>
+                </details>
               </div>
             </div>
           </div>
