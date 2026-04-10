@@ -260,6 +260,26 @@ def _clean_markdown_inline(text: str, *, preserve_formatting: bool = False) -> s
     return value.strip()
 
 
+def _extract_list_item_texts(raw_items) -> list[str]:
+    items: list[str] = []
+    for item in raw_items or []:
+        if isinstance(item, dict):
+            item_text = str(item.get("text") or "").strip()
+        else:
+            item_text = str(item).strip()
+        if item_text:
+            items.append(item_text)
+    return items
+
+
+def _extract_ordered_list_start(block: dict[str, object]) -> int:
+    try:
+        start_value = int(block.get("start") or 1)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, start_value)
+
+
 def _iter_markdown_blocks(text: str, *, preserve_inline_formatting: bool = False) -> list[dict[str, object]]:
     normalized = _normalize_line_endings(text)
     if not normalized.strip():
@@ -267,8 +287,10 @@ def _iter_markdown_blocks(text: str, *, preserve_inline_formatting: bool = False
 
     blocks: list[dict[str, object]] = []
     paragraph_lines: list[str] = []
-    list_items: list[str] = []
+    list_items: list[dict[str, object]] = []
     list_kind: str | None = None
+    list_start: int | None = None
+    pending_list_break = False
     table_rows: list[list[str]] = []
     code_lines: list[str] = []
     in_code = False
@@ -295,12 +317,32 @@ def _iter_markdown_blocks(text: str, *, preserve_inline_formatting: bool = False
                 blocks.append({"type": "paragraph", "text": paragraph_text})
 
     def flush_list() -> None:
-        nonlocal list_items, list_kind
+        nonlocal list_items, list_kind, list_start, pending_list_break
         if not list_items:
             return
-        blocks.append({"type": "list", "kind": list_kind or "bullet", "items": list_items[:]})
+        list_block: dict[str, object] = {
+            "type": "list",
+            "kind": list_kind or "bullet",
+            "items": list_items[:],
+        }
+        if (list_kind or "bullet") == "ordered" and isinstance(list_start, int) and list_start > 0:
+            list_block["start"] = list_start
+        blocks.append(list_block)
         list_items = []
         list_kind = None
+        list_start = None
+        pending_list_break = False
+
+    def resolve_pending_list_break(line: str) -> None:
+        nonlocal pending_list_break
+        if not pending_list_break:
+            return
+        continues_same_list = (list_kind == "bullet" and _MARKDOWN_BULLET_RE.match(line)) or (
+            list_kind == "ordered" and _MARKDOWN_ORDERED_RE.match(line)
+        )
+        if not continues_same_list:
+            flush_list()
+        pending_list_break = False
 
     def flush_table() -> None:
         nonlocal table_rows
@@ -322,6 +364,7 @@ def _iter_markdown_blocks(text: str, *, preserve_inline_formatting: bool = False
     for line in normalized.split("\n"):
         fence_match = _MARKDOWN_FENCE_RE.match(line)
         if fence_match:
+            resolve_pending_list_break(line)
             if in_code:
                 block_text = "\n".join(code_lines)
                 if code_language in {"markdown", "md", "mkd"}:
@@ -349,9 +392,16 @@ def _iter_markdown_blocks(text: str, *, preserve_inline_formatting: bool = False
         stripped = line.strip()
         if not stripped:
             flush_paragraph()
-            flush_list()
             flush_table()
+            if pending_list_break:
+                flush_list()
+            elif list_items:
+                pending_list_break = True
+            else:
+                flush_list()
             continue
+
+        resolve_pending_list_break(line)
 
         if _MARKDOWN_HORIZONTAL_RULE_RE.match(line):
             flush_paragraph()
@@ -391,7 +441,14 @@ def _iter_markdown_blocks(text: str, *, preserve_inline_formatting: bool = False
             if list_kind not in {None, "bullet"}:
                 flush_list()
             list_kind = "bullet"
-            list_items.append(_clean_markdown_inline(bullet_match.group(1), preserve_formatting=preserve_inline_formatting))
+            list_items.append(
+                {
+                    "text": _clean_markdown_inline(
+                        bullet_match.group(1),
+                        preserve_formatting=preserve_inline_formatting,
+                    )
+                }
+            )
             continue
 
         ordered_match = _MARKDOWN_ORDERED_RE.match(line)
@@ -401,7 +458,18 @@ def _iter_markdown_blocks(text: str, *, preserve_inline_formatting: bool = False
             if list_kind not in {None, "ordered"}:
                 flush_list()
             list_kind = "ordered"
-            list_items.append(_clean_markdown_inline(ordered_match.group(2), preserve_formatting=preserve_inline_formatting))
+            explicit_number = int(ordered_match.group(1)) if ordered_match.group(1) else 1
+            if list_start is None:
+                list_start = max(1, explicit_number)
+            list_items.append(
+                {
+                    "text": _clean_markdown_inline(
+                        ordered_match.group(2),
+                        preserve_formatting=preserve_inline_formatting,
+                    ),
+                    "number": max(1, explicit_number),
+                }
+            )
             continue
 
         quote_match = _MARKDOWN_QUOTE_RE.match(line)
@@ -425,6 +493,8 @@ def _iter_markdown_blocks(text: str, *, preserve_inline_formatting: bool = False
             blocks.append({"type": "code", "text": block_text})
 
     flush_paragraph()
+    if pending_list_break:
+        flush_list()
     flush_list()
     flush_table()
     return blocks
@@ -477,16 +547,40 @@ def append_markdown_pdf_story(
             if math_text:
                 story.append(Paragraph(_escape_pdf_text(math_text), math_style))
         elif block_type == "list":
-            items = [str(item).strip() for item in block.get("items") or [] if str(item).strip()]
+            items = _extract_list_item_texts(block.get("items") or [])
             if items:
-                story.append(
-                    ListFlowable(
-                        [ListItem(Paragraph(_render_pdf_inline_markup(item, mono_font_name=mono_font_name), body_style)) for item in items],
-                        bulletType="1" if str(block.get("kind") or "bullet") == "ordered" else "bullet",
-                        leftIndent=18,
+                is_ordered = str(block.get("kind") or "bullet") == "ordered"
+                if is_ordered:
+                    ordered_style = ParagraphStyle(
+                        f"{getattr(body_style, 'name', 'Body')}OrderedList",
+                        parent=body_style,
+                        leftIndent=max(18, float(getattr(body_style, "leftIndent", 0)) + 18),
+                        firstLineIndent=-14,
+                        spaceAfter=3,
                     )
-                )
-                story.append(Spacer(1, 4))
+                    start_value = _extract_ordered_list_start(block)
+                    for index, item in enumerate(items):
+                        prefix = f"{start_value + index}. "
+                        story.append(
+                            Paragraph(
+                                _render_pdf_inline_markup(f"{prefix}{item}", mono_font_name=mono_font_name),
+                                ordered_style,
+                            )
+                        )
+                    story.append(Spacer(1, 4))
+                else:
+                    story.append(
+                        ListFlowable(
+                            [ListItem(Paragraph(_render_pdf_inline_markup(item, mono_font_name=mono_font_name), body_style)) for item in items],
+                            bulletType="bullet",
+                            leftIndent=20,
+                            bulletFontName=getattr(body_style, "fontName", "Helvetica"),
+                            bulletFontSize=max(8, float(getattr(body_style, "fontSize", 10))),
+                            bulletColor=getattr(body_style, "textColor", colors.black),
+                            bulletDedent=8,
+                        )
+                    )
+                    story.append(Spacer(1, 6))
         elif block_type == "code":
             code_text = str(block.get("text") or "").rstrip()
             if code_text:
@@ -552,16 +646,21 @@ def append_markdown_docx(
             paragraph = document.add_paragraph()
             _append_docx_inline_runs(paragraph, paragraph_text or " ")
         elif block_type == "list":
-            style_name = "List Number" if str(block.get("kind") or "bullet") == "ordered" else "List Bullet"
-            for item in block.get("items") or []:
-                item_text = str(item).strip()
+            items = _extract_list_item_texts(block.get("items") or [])
+            is_ordered = str(block.get("kind") or "bullet") == "ordered"
+            start_value = _extract_ordered_list_start(block)
+            for index, item_text in enumerate(items):
                 if not item_text:
                     continue
                 try:
-                    paragraph = document.add_paragraph(style=style_name)
-                    _append_docx_inline_runs(paragraph, item_text)
+                    if is_ordered:
+                        paragraph = document.add_paragraph(style="List Paragraph")
+                        _append_docx_inline_runs(paragraph, f"{start_value + index}. {item_text}")
+                    else:
+                        paragraph = document.add_paragraph(style="List Bullet")
+                        _append_docx_inline_runs(paragraph, item_text)
                 except Exception:
-                    prefix = "1. " if style_name == "List Number" else "- "
+                    prefix = f"{start_value + index}. " if is_ordered else "- "
                     paragraph = document.add_paragraph()
                     _append_docx_inline_runs(paragraph, f"{prefix}{item_text}")
         elif block_type == "code":

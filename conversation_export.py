@@ -3,44 +3,17 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from io import BytesIO
 import json
+
+from export_styles import MONO_FONT, build_print_pdf_styles
 from markdown_rendering import append_markdown_docx, append_markdown_pdf_story
 
 from docx import Document
-from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
 from canvas_service import extract_canvas_documents
 from db import extract_message_attachments, extract_sub_agent_traces
-
-_FONT_PATHS = {
-    "DejaVuSans": "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "DejaVuSans-Bold": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-    "DejaVuSansMono": "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-}
-
-
-def _try_register_fonts() -> bool:
-    import os
-
-    if not all(os.path.exists(path) for path in _FONT_PATHS.values()):
-        return False
-    try:
-        for name, path in _FONT_PATHS.items():
-            pdfmetrics.registerFont(TTFont(name, path))
-        return True
-    except Exception:
-        return False
-
-
-_UNICODE_FONTS = _try_register_fonts()
-_BODY_FONT = "DejaVuSans" if _UNICODE_FONTS else "Helvetica"
-_BOLD_FONT = "DejaVuSans-Bold" if _UNICODE_FONTS else "Helvetica-Bold"
-_MONO_FONT = "DejaVuSansMono" if _UNICODE_FONTS else "Courier"
 
 
 def _escape_pdf_text(value: str) -> str:
@@ -116,7 +89,9 @@ def _build_canvas_documents_details(canvas_documents: list[dict]) -> str | None:
         lines.append(f"### Canvas: {title}")
         doc_content = _safe_text(document.get("content"))
         if doc_content:
-            lines.extend(["", "```markdown", doc_content, "```", ""])
+            format_name = str(document.get("format") or "").strip().lower()
+            fence_name = _safe_text(document.get("language"), fallback="text") if format_name == "code" else "markdown"
+            lines.extend(["", f"```{fence_name}", doc_content, "```", ""])
     return "\n".join(lines).strip() or None
 
 
@@ -442,43 +417,17 @@ def build_conversation_docx_download(conversation: dict, messages: list[dict]) -
 
 def build_conversation_pdf_download(conversation: dict, messages: list[dict]) -> bytes:
     sections = _iter_message_sections(messages)
-    styles = getSampleStyleSheet()
-    title_style = ParagraphStyle("ConversationTitle", parent=styles["Title"], fontName=_BOLD_FONT)
-    heading_style = ParagraphStyle(
-        "ConversationHeading",
-        parent=styles["Heading2"],
-        fontName=_BOLD_FONT,
-        textColor=colors.HexColor("#1f2a44"),
-        spaceAfter=8,
-        spaceBefore=12,
-    )
-    subheading_style = ParagraphStyle(
-        "ConversationSubheading",
-        parent=styles["Heading3"],
-        fontName=_BOLD_FONT,
-        textColor=colors.HexColor("#33415f"),
-        spaceAfter=6,
-        spaceBefore=8,
-    )
-    body_style = ParagraphStyle(
-        "ConversationBody",
-        parent=styles["BodyText"],
-        fontName=_BODY_FONT,
-        fontSize=10,
-        leading=14,
-        spaceAfter=6,
-    )
-    code_style = ParagraphStyle(
-        "ConversationCode",
-        parent=styles["Code"],
-        fontName=_MONO_FONT,
-        fontSize=8.5,
-        leading=11,
-        leftIndent=10,
-        rightIndent=10,
-        backColor=colors.HexColor("#f3f5f9"),
-        borderPadding=8,
-    )
+    pdf_styles = build_print_pdf_styles("ConversationExport")
+    title_style = pdf_styles["title"]
+    heading_style = pdf_styles["heading"]
+    subheading_style = pdf_styles["subheading"]
+    body_style = pdf_styles["body"]
+    meta_style = pdf_styles["meta"]
+    code_style = pdf_styles["code"]
+    quote_style = pdf_styles["quote"]
+    math_style = pdf_styles["math"]
+    table_header_style = pdf_styles["table_header"]
+    table_body_style = pdf_styles["table_body"]
 
     title = str(conversation.get("title") or "Conversation Export").strip() or "Conversation Export"
     exported_at = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
@@ -490,7 +439,7 @@ def build_conversation_pdf_download(conversation: dict, messages: list[dict]) ->
     model = str(conversation.get("model") or "").strip()
     if model:
         meta_parts.append(f"Model: {model}")
-    story.append(Paragraph(_escape_pdf_text(" | ".join(meta_parts)), body_style))
+    story.append(Paragraph(_escape_pdf_text(" | ".join(meta_parts)), meta_style))
 
     for section in sections:
         story.append(Spacer(1, 6))
@@ -503,7 +452,11 @@ def build_conversation_pdf_download(conversation: dict, messages: list[dict]) ->
             heading_style=subheading_style,
             subheading_style=subheading_style,
             code_style=code_style,
-            mono_font_name=_MONO_FONT,
+            quote_style=quote_style,
+            math_style=math_style,
+            table_header_style=table_header_style,
+            table_body_style=table_body_style,
+            mono_font_name=MONO_FONT,
             heading_level_offset=2,
         )
         for label, value in section["details"]:
@@ -516,7 +469,11 @@ def build_conversation_pdf_download(conversation: dict, messages: list[dict]) ->
                 heading_style=subheading_style,
                 subheading_style=subheading_style,
                 code_style=code_style,
-                mono_font_name=_MONO_FONT,
+                quote_style=quote_style,
+                math_style=math_style,
+                table_header_style=table_header_style,
+                table_body_style=table_body_style,
+                mono_font_name=MONO_FONT,
                 heading_level_offset=2,
             )
 

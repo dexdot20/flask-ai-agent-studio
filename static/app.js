@@ -2860,6 +2860,159 @@ function getCanvasDocumentById(documents, documentId) {
   return documents.find((document) => document.id === targetId) || null;
 }
 
+const CANVAS_DIFF_CONTEXT_LINE_COUNT = 2;
+const CANVAS_DIFF_MAX_VISIBLE_LINES = 160;
+const CANVAS_DIFF_MAX_MATRIX_CELLS = 60000;
+
+function buildCanvasDiffOperations(previousLines, nextLines) {
+  const previousLength = previousLines.length;
+  const nextLength = nextLines.length;
+  if (!previousLength && !nextLength) {
+    return [];
+  }
+
+  if (previousLength && nextLength && previousLength * nextLength <= CANVAS_DIFF_MAX_MATRIX_CELLS) {
+    const lcsMatrix = Array.from({ length: previousLength + 1 }, () => new Uint32Array(nextLength + 1));
+    for (let previousIndex = previousLength - 1; previousIndex >= 0; previousIndex -= 1) {
+      for (let nextIndex = nextLength - 1; nextIndex >= 0; nextIndex -= 1) {
+        lcsMatrix[previousIndex][nextIndex] = previousLines[previousIndex] === nextLines[nextIndex]
+          ? lcsMatrix[previousIndex + 1][nextIndex + 1] + 1
+          : Math.max(lcsMatrix[previousIndex + 1][nextIndex], lcsMatrix[previousIndex][nextIndex + 1]);
+      }
+    }
+
+    const operations = [];
+    let previousIndex = 0;
+    let nextIndex = 0;
+    while (previousIndex < previousLength && nextIndex < nextLength) {
+      if (previousLines[previousIndex] === nextLines[nextIndex]) {
+        operations.push({ kind: "context", text: previousLines[previousIndex] });
+        previousIndex += 1;
+        nextIndex += 1;
+        continue;
+      }
+
+      if (lcsMatrix[previousIndex + 1][nextIndex] >= lcsMatrix[previousIndex][nextIndex + 1]) {
+        operations.push({ kind: "removed", text: previousLines[previousIndex] });
+        previousIndex += 1;
+        continue;
+      }
+
+      operations.push({ kind: "added", text: nextLines[nextIndex] });
+      nextIndex += 1;
+    }
+
+    while (previousIndex < previousLength) {
+      operations.push({ kind: "removed", text: previousLines[previousIndex] });
+      previousIndex += 1;
+    }
+
+    while (nextIndex < nextLength) {
+      operations.push({ kind: "added", text: nextLines[nextIndex] });
+      nextIndex += 1;
+    }
+
+    return operations;
+  }
+
+  return [
+    ...previousLines.map((text) => ({ kind: "removed", text })),
+    ...nextLines.map((text) => ({ kind: "added", text })),
+  ];
+}
+
+function buildCanvasDiffHunkLabel(lines) {
+  const firstChangedLine = lines.find((line) => line.kind !== "context") || lines[0] || null;
+  const oldAnchor = firstChangedLine?.previousLineNumber
+    ?? lines.find((line) => Number.isInteger(line.previousLineNumber))?.previousLineNumber
+    ?? null;
+  const newAnchor = firstChangedLine?.nextLineNumber
+    ?? lines.find((line) => Number.isInteger(line.nextLineNumber))?.nextLineNumber
+    ?? null;
+
+  if (Number.isInteger(oldAnchor) && Number.isInteger(newAnchor)) {
+    return `Around old line ${oldAnchor} · new line ${newAnchor}`;
+  }
+  if (Number.isInteger(oldAnchor)) {
+    return `Around old line ${oldAnchor}`;
+  }
+  if (Number.isInteger(newAnchor)) {
+    return `Around new line ${newAnchor}`;
+  }
+  return "Changed lines";
+}
+
+function buildCanvasDiffHunks(lines, contextLineCount = CANVAS_DIFF_CONTEXT_LINE_COUNT, maxVisibleLines = CANVAS_DIFF_MAX_VISIBLE_LINES) {
+  const changeIndices = [];
+  lines.forEach((line, index) => {
+    if (line.kind !== "context") {
+      changeIndices.push(index);
+    }
+  });
+
+  if (!changeIndices.length) {
+    return {
+      hunks: [],
+      truncated: false,
+      totalHunkCount: 0,
+      visibleLineCount: 0,
+    };
+  }
+
+  const mergedRanges = [];
+  changeIndices.forEach((changeIndex) => {
+    const nextRange = {
+      start: Math.max(0, changeIndex - contextLineCount),
+      end: Math.min(lines.length - 1, changeIndex + contextLineCount),
+    };
+    const previousRange = mergedRanges[mergedRanges.length - 1] || null;
+    if (previousRange && nextRange.start <= previousRange.end + 1) {
+      previousRange.end = Math.max(previousRange.end, nextRange.end);
+      return;
+    }
+    mergedRanges.push(nextRange);
+  });
+
+  const hunks = [];
+  let visibleLineCount = 0;
+  let truncated = false;
+  mergedRanges.forEach((range) => {
+    if (visibleLineCount >= maxVisibleLines) {
+      truncated = true;
+      return;
+    }
+
+    const remainingLineBudget = maxVisibleLines - visibleLineCount;
+    const fullLines = lines.slice(range.start, range.end + 1);
+    const visibleLines = fullLines.slice(0, remainingLineBudget);
+    if (!visibleLines.length) {
+      truncated = true;
+      return;
+    }
+
+    if (visibleLines.length < fullLines.length) {
+      truncated = true;
+    }
+
+    hunks.push({
+      label: buildCanvasDiffHunkLabel(visibleLines),
+      lines: visibleLines,
+    });
+    visibleLineCount += visibleLines.length;
+  });
+
+  if (mergedRanges.length > hunks.length) {
+    truncated = true;
+  }
+
+  return {
+    hunks,
+    truncated,
+    totalHunkCount: mergedRanges.length,
+    visibleLineCount,
+  };
+}
+
 function buildCanvasDiff(previousContent, nextContent) {
   const previousLines = String(previousContent || "").replace(/\r\n?/g, "\n").split("\n");
   const nextLines = String(nextContent || "").replace(/\r\n?/g, "\n").split("\n");
@@ -2881,10 +3034,82 @@ function buildCanvasDiff(previousContent, nextContent) {
     return null;
   }
 
+  const numberedLines = [];
+  const prefixContextStart = Math.max(0, start - CANVAS_DIFF_CONTEXT_LINE_COUNT);
+  for (let index = prefixContextStart; index < start; index += 1) {
+    numberedLines.push({
+      kind: "context",
+      previousLineNumber: index + 1,
+      nextLineNumber: index + 1,
+      text: previousLines[index],
+    });
+  }
+
+  let previousLineNumber = start + 1;
+  let nextLineNumber = start + 1;
+  buildCanvasDiffOperations(removed, added).forEach((operation) => {
+    if (operation.kind === "context") {
+      numberedLines.push({
+        kind: operation.kind,
+        previousLineNumber,
+        nextLineNumber,
+        text: operation.text,
+      });
+      previousLineNumber += 1;
+      nextLineNumber += 1;
+      return;
+    }
+
+    if (operation.kind === "removed") {
+      numberedLines.push({
+        kind: operation.kind,
+        previousLineNumber,
+        nextLineNumber: null,
+        text: operation.text,
+      });
+      previousLineNumber += 1;
+      return;
+    }
+
+    numberedLines.push({
+      kind: operation.kind,
+      previousLineNumber: null,
+      nextLineNumber,
+      text: operation.text,
+    });
+    nextLineNumber += 1;
+  });
+
+  const sharedSuffixCount = Math.min(
+    CANVAS_DIFF_CONTEXT_LINE_COUNT,
+    Math.max(0, previousLines.length - (previousEnd + 1)),
+    Math.max(0, nextLines.length - (nextEnd + 1)),
+  );
+  for (let offset = 0; offset < sharedSuffixCount; offset += 1) {
+    numberedLines.push({
+      kind: "context",
+      previousLineNumber,
+      nextLineNumber,
+      text: previousLines[previousEnd + 1 + offset],
+    });
+    previousLineNumber += 1;
+    nextLineNumber += 1;
+  }
+
+  const addedCount = numberedLines.filter((line) => line.kind === "added").length;
+  const removedCount = numberedLines.filter((line) => line.kind === "removed").length;
+  const { hunks, truncated, totalHunkCount, visibleLineCount } = buildCanvasDiffHunks(numberedLines);
+
   return {
     startLine: start + 1,
     removed,
     added,
+    addedCount,
+    removedCount,
+    hunkCount: totalHunkCount,
+    hunks,
+    truncated,
+    visibleLineCount,
   };
 }
 
@@ -2892,31 +3117,52 @@ function renderCanvasDiffPreview(activeDocument) {
   if (!canvasDiffEl) {
     return;
   }
-  if (!pendingCanvasDiff || pendingCanvasDiff.documentId !== activeDocument?.id || isCanvasEditing || activeDocument?.isStreamingPreview) {
+  if (!pendingCanvasDiff || pendingCanvasDiff.documentId !== activeDocument?.id || activeDocument?.isStreamingPreview) {
     canvasDiffEl.hidden = true;
     canvasDiffEl.innerHTML = "";
     return;
   }
 
   const diff = pendingCanvasDiff.diff;
-  const changedLineCount = diff.removed.length + diff.added.length;
-  const lines = [
-    ...diff.removed.map((line, index) => ({ kind: "removed", lineNumber: diff.startLine + index, text: line })),
-    ...diff.added.map((line, index) => ({ kind: "added", lineNumber: diff.startLine + index, text: line })),
-  ].slice(0, 120);
+  const fileLabel = getCanvasDocumentLabel(activeDocument);
+  const metaParts = [
+    fileLabel,
+    `+${diff.addedCount}`,
+    `-${diff.removedCount}`,
+    `${diff.hunkCount} hunk${diff.hunkCount === 1 ? "" : "s"}`,
+  ];
+  if (diff.truncated) {
+    metaParts.push(`showing first ${diff.visibleLineCount} diff line${diff.visibleLineCount === 1 ? "" : "s"}`);
+  }
+  const sourceBadge = pendingCanvasDiff.source === "live-preview"
+    ? '<span class="canvas-diff__badge">Saved after live preview</span>'
+    : "";
 
   canvasDiffEl.hidden = false;
   canvasDiffEl.innerHTML =
     `<div class="canvas-diff__header">` +
-      `<div>` +
-        `<div class="canvas-diff__title">Recent AI change</div>` +
-        `<div class="canvas-diff__meta">${changedLineCount} changed line${changedLineCount === 1 ? "" : "s"} around line ${diff.startLine}</div>` +
+      `<div class="canvas-diff__summary">` +
+        `<div class="canvas-diff__title-row">` +
+          `<div class="canvas-diff__title">Recent AI change</div>` +
+          sourceBadge +
+        `</div>` +
+        `<div class="canvas-diff__meta">${escHtml(metaParts.join(" · "))}</div>` +
       `</div>` +
-      `<button class="canvas-diff__close" type="button" data-action="dismiss-canvas-diff">Dismiss</button>` +
+      `<div class="canvas-diff__actions">` +
+        `<button class="canvas-diff__close" type="button" data-action="dismiss-canvas-diff">Hide diff</button>` +
+      `</div>` +
     `</div>` +
     `<div class="canvas-diff__body">` +
-      lines.map((line) =>
-        `<div class="canvas-diff__line canvas-diff__line--${line.kind}"><span class="canvas-diff__line-num">${line.kind === "added" ? "+" : "-"}${line.lineNumber}</span><span>${escHtml(line.text || " ")}</span></div>`
+      diff.hunks.map((hunk) =>
+        `<section class="canvas-diff__hunk">` +
+          `<div class="canvas-diff__hunk-header">${escHtml(hunk.label)}</div>` +
+          hunk.lines.map((line) => {
+            const marker = line.kind === "added" ? "+" : line.kind === "removed" ? "-" : "·";
+            const previousLineNumber = Number.isInteger(line.previousLineNumber) ? String(line.previousLineNumber) : "";
+            const nextLineNumber = Number.isInteger(line.nextLineNumber) ? String(line.nextLineNumber) : "";
+            return `<div class="canvas-diff__line canvas-diff__line--${line.kind}"><span class="canvas-diff__line-marker">${marker}</span><span class="canvas-diff__line-num">${previousLineNumber}</span><span class="canvas-diff__line-num">${nextLineNumber}</span><span class="canvas-diff__line-text">${escHtml(line.text || " ")}</span></div>`;
+          }).join("") +
+        `</section>`
       ).join("") +
     `</div>`;
 
@@ -5050,7 +5296,7 @@ async function downloadCanvasDocument(format) {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `${canvasDocument.title}.${format}`;
+    anchor.download = getSuggestedDownloadFilename(response, `${canvasDocument.title}.${format}`);
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
@@ -11879,16 +12125,20 @@ async function sendMessage(options = {}) {
           || null;
         const previousSelectedDocument = getCanvasDocumentById(previousDocuments, previousActiveId);
         const previousVersionOfNextDocument = getCanvasDocumentById(previousDocuments, nextActiveCandidate?.id || previousActiveId);
-        // Skip diff animation when a streaming preview already showed the user the new content
         const hadStreamingPreviewForDoc =
           nextActiveCandidate &&
           [...streamingCanvasPreviews.values()].some((p) => p.id === nextActiveCandidate.id);
-        if (!hadStreamingPreviewForDoc && previousVersionOfNextDocument && nextActiveCandidate && previousVersionOfNextDocument.content !== nextActiveCandidate.content) {
-          pendingCanvasDiff = {
-            documentId: nextActiveCandidate.id,
-            diff: buildCanvasDiff(previousVersionOfNextDocument.content, nextActiveCandidate.content),
-          };
-          if (!pendingCanvasDiff.diff) {
+        if (previousVersionOfNextDocument && nextActiveCandidate) {
+          const nextDiff = previousVersionOfNextDocument.content !== nextActiveCandidate.content
+            ? buildCanvasDiff(previousVersionOfNextDocument.content, nextActiveCandidate.content)
+            : null;
+          if (nextDiff) {
+            pendingCanvasDiff = {
+              documentId: nextActiveCandidate.id,
+              source: hadStreamingPreviewForDoc ? "live-preview" : "direct-sync",
+              diff: nextDiff,
+            };
+          } else if (pendingCanvasDiff?.documentId === nextActiveCandidate.id) {
             pendingCanvasDiff = null;
           }
         }

@@ -19,38 +19,12 @@ except ImportError:  # pragma: no cover - optional dependency fallback
     _repair_json = None
 
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Paragraph, Preformatted, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from export_styles import MONO_FONT, build_print_pdf_styles
 from markdown_rendering import append_markdown_pdf_story
-
-# Unicode font registration for Turkish / non-Latin character support.
-_FONT_PATHS = {
-    "DejaVuSans": "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "DejaVuSans-Bold": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-    "DejaVuSansMono": "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-}
-
-def _try_register_fonts() -> bool:
-    import os
-    if not all(os.path.exists(p) for p in _FONT_PATHS.values()):
-        return False
-    try:
-        for name, path in _FONT_PATHS.items():
-            pdfmetrics.registerFont(TTFont(name, path))
-        return True
-    except Exception:
-        return False
-
-_UNICODE_FONTS = _try_register_fonts()
-_BODY_FONT = "DejaVuSans" if _UNICODE_FONTS else "Helvetica"
-_BOLD_FONT = "DejaVuSans-Bold" if _UNICODE_FONTS else "Helvetica-Bold"
-_MONO_FONT = "DejaVuSansMono" if _UNICODE_FONTS else "Courier"
 
 CANVAS_MAX_DOCUMENTS = 50
 CANVAS_MAX_TITLE_LENGTH = 160
@@ -3203,19 +3177,18 @@ def _build_canvas_pdf_title_card(document: dict, width: float, title_style, meta
         rows.append([Paragraph(meta_text, meta_style)])
 
     table = Table(rows, colWidths=[width], hAlign="LEFT")
-    table.setStyle(
-        TableStyle(
-            [
-                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f6f8ff")),
-                ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#d8e1f2")),
-                ("LINEBEFORE", (0, 0), (0, -1), 4, colors.HexColor("#3157d5")),
-                ("LEFTPADDING", (0, 0), (-1, -1), 18),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 18),
-                ("TOPPADDING", (0, 0), (-1, -1), 14),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 14),
-            ]
-        )
-    )
+    style_commands = [
+        ("BACKGROUND", (0, 0), (-1, -1), colors.white),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#d8e1f0")),
+        ("LINEBEFORE", (0, 0), (0, -1), 4, colors.HexColor("#3157d5")),
+        ("LEFTPADDING", (0, 0), (-1, -1), 18),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 18),
+        ("TOPPADDING", (0, 0), (-1, -1), 16),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+    ]
+    if len(rows) > 1:
+        style_commands.append(("LINEABOVE", (0, 1), (-1, 1), 0.45, colors.HexColor("#e7edf7")))
+    table.setStyle(TableStyle(style_commands))
     return table
 
 
@@ -3238,131 +3211,26 @@ def build_pdf_download(document: dict) -> bytes:
     if not normalized:
         raise ValueError("Canvas document is invalid.")
 
-    styles = getSampleStyleSheet()
-    _heading_color = colors.HexColor("#131d35")
-    _text_color = colors.HexColor("#1a2540")
-    _code_bg = colors.HexColor("#f0f3f9")
-
-    title_style = ParagraphStyle(
-        "CanvasTitle",
-        parent=styles["Title"],
-        fontName=_BOLD_FONT,
-        fontSize=22,
-        leading=28,
-        textColor=_heading_color,
-        spaceAfter=10,
-        spaceBefore=0,
+    pdf_styles = build_print_pdf_styles(
+        "CanvasExport",
+        title_font_size=21,
+        title_leading=26,
+        body_font_size=10.6,
+        body_leading=15.8,
+        heading1_font_size=17.0,
+        heading1_leading=22.0,
     )
-    body_style = ParagraphStyle(
-        "CanvasBody",
-        parent=styles["BodyText"],
-        fontName=_BODY_FONT,
-        fontSize=11,
-        leading=17,
-        textColor=_text_color,
-        spaceAfter=7,
-        firstLineIndent=0,
-    )
-    heading1_style = ParagraphStyle(
-        "CanvasH1",
-        parent=styles["Heading1"],
-        fontName=_BOLD_FONT,
-        fontSize=18,
-        leading=24,
-        textColor=_heading_color,
-        spaceAfter=8,
-        spaceBefore=18,
-    )
-    heading_style = ParagraphStyle(
-        "CanvasH2",
-        parent=styles["Heading2"],
-        fontName=_BOLD_FONT,
-        fontSize=14,
-        leading=19,
-        textColor=_heading_color,
-        spaceAfter=6,
-        spaceBefore=14,
-    )
-    subheading_style = ParagraphStyle(
-        "CanvasH3",
-        parent=styles["Heading3"],
-        fontName=_BOLD_FONT,
-        fontSize=12,
-        leading=16,
-        textColor=_heading_color,
-        spaceAfter=5,
-        spaceBefore=10,
-    )
-    meta_style = ParagraphStyle(
-        "CanvasMeta",
-        parent=styles["BodyText"],
-        fontName=_BODY_FONT,
-        fontSize=9,
-        leading=12,
-        textColor=colors.HexColor("#5b6882"),
-        spaceAfter=0,
-    )
-    code_style = ParagraphStyle(
-        "CanvasCode",
-        parent=styles["Code"],
-        fontName=_MONO_FONT,
-        fontSize=9,
-        leading=13,
-        leftIndent=12,
-        rightIndent=12,
-        backColor=_code_bg,
-        borderPadding=10,
-        spaceAfter=8,
-    )
-    quote_style = ParagraphStyle(
-        "CanvasQuote",
-        parent=body_style,
-        fontName=_BODY_FONT,
-        fontSize=10.5,
-        leading=16,
-        leftIndent=14,
-        rightIndent=4,
-        textColor=colors.HexColor("#33405c"),
-        backColor=colors.HexColor("#f7f9fd"),
-        borderPadding=10,
-        spaceBefore=4,
-        spaceAfter=8,
-    )
-    math_style = ParagraphStyle(
-        "CanvasMath",
-        parent=body_style,
-        fontName=_MONO_FONT,
-        fontSize=10,
-        leading=14,
-        alignment=TA_CENTER,
-        textColor=colors.HexColor("#263553"),
-        backColor=colors.HexColor("#f4f7fd"),
-        borderPadding=10,
-        leftIndent=12,
-        rightIndent=12,
-        spaceBefore=4,
-        spaceAfter=8,
-    )
-    table_header_style = ParagraphStyle(
-        "CanvasTableHeader",
-        parent=body_style,
-        fontName=_BOLD_FONT,
-        fontSize=9.4,
-        leading=12,
-        textColor=_heading_color,
-        spaceAfter=0,
-        spaceBefore=0,
-    )
-    table_body_style = ParagraphStyle(
-        "CanvasTableBody",
-        parent=body_style,
-        fontName=_BODY_FONT,
-        fontSize=9.2,
-        leading=12,
-        textColor=_text_color,
-        spaceAfter=0,
-        spaceBefore=0,
-    )
+    title_style = pdf_styles["title"]
+    body_style = pdf_styles["body"]
+    heading1_style = pdf_styles["heading1"]
+    heading_style = pdf_styles["heading"]
+    subheading_style = pdf_styles["subheading"]
+    meta_style = pdf_styles["meta"]
+    code_style = pdf_styles["code"]
+    quote_style = pdf_styles["quote"]
+    math_style = pdf_styles["math"]
+    table_header_style = pdf_styles["table_header"]
+    table_body_style = pdf_styles["table_body"]
 
     _left_margin = 22 * mm
     _right_margin = 22 * mm
@@ -3390,7 +3258,7 @@ def build_pdf_download(document: dict) -> bytes:
             math_style=math_style,
             table_header_style=table_header_style,
             table_body_style=table_body_style,
-            mono_font_name=_MONO_FONT,
+            mono_font_name=MONO_FONT,
             heading_level_offset=0,
         )
         return story

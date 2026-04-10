@@ -152,6 +152,7 @@ from doc_service import (
     render_pdf_pages_for_vision,
 )
 from image_service import analyze_uploaded_image
+from markdown_rendering import _iter_markdown_blocks
 from messages import (
     SUMMARY_LABEL,
     _build_canvas_prompt_payload,
@@ -10987,6 +10988,20 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertTrue(document_attachment["visual_pages_partial"])
         self.assertEqual(document_attachment["visual_page_count"], 2)
 
+    def test_markdown_block_parser_preserves_ordered_list_start_numbers(self):
+        blocks = _iter_markdown_blocks(
+            "1. First phase\n\n- One\n\n2. Second phase\n\n- Two\n\n3. Third phase",
+            preserve_inline_formatting=True,
+        )
+
+        ordered_starts = [
+            block.get("start")
+            for block in blocks
+            if block.get("type") == "list" and block.get("kind") == "ordered"
+        ]
+
+        self.assertEqual(ordered_starts, [1, 2, 3])
+
     def test_canvas_export_endpoint_returns_markdown_and_pdf(self):
         conversation_id = self._create_conversation()
         metadata = serialize_message_metadata(
@@ -10996,7 +11011,7 @@ class AppRoutesTestCase(unittest.TestCase):
                         "id": "canvas-export",
                         "title": "Draft Export",
                         "format": "markdown",
-                        "content": "# Export\n\n- One\n- Two",
+                        "content": "# Export\n\n1. First phase\n\n- One\n- Two\n\n2. Second phase\n\n- Three\n\n3. Third phase\n\n- Four",
                     }
                 ]
             }
@@ -11030,7 +11045,12 @@ class AppRoutesTestCase(unittest.TestCase):
             pdf_text = "\n".join(page.extract_text() or "" for page in pdf.pages)
         self.assertIn("Export", pdf_text)
         self.assertIn("One", pdf_text)
-        self.assertIn("Two", pdf_text)
+        self.assertIn("Four", pdf_text)
+        self.assertRegex(pdf_text, r"1[.\s]+First phase")
+        self.assertRegex(pdf_text, r"2[.\s]+Second phase")
+        self.assertRegex(pdf_text, r"3[.\s]+Third phase")
+        self.assertNotRegex(pdf_text, r"1[.\s]+Second phase")
+        self.assertNotRegex(pdf_text, r"1[.\s]+Third phase")
         self.assertNotIn("# Export", pdf_text)
         self.assertNotIn("- One", pdf_text)
         self.assertIn("Lines:", pdf_text)
@@ -11048,6 +11068,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(html_response.headers.get("Cache-Control"), "no-store, max-age=0")
         self.assertEqual(html_response.headers.get("Pragma"), "no-cache")
         self.assertEqual(html_response.headers.get("Expires"), "0")
+        self.assertIn("<ol>", html_response.get_data(as_text=True))
         self.assertIn("<ul>", html_response.get_data(as_text=True))
 
     def test_canvas_export_endpoint_renders_code_format(self):
@@ -11999,7 +12020,7 @@ class AppRoutesTestCase(unittest.TestCase):
                 conn,
                 conversation_id,
                 "assistant",
-                "Here is the answer. $A = {0, 1, 2}$ and $$x^2 + y^2 = z^2$$.",
+                "Here is the answer.\n\n1. First step\n\n- Inspect\n\n2. Second step\n\n- Fix\n\n3. Third step\n\n- Verify\n\n$A = {0, 1, 2}$ and $$x^2 + y^2 = z^2$$.",
                 metadata=serialize_message_metadata(
                     {
                         "reasoning_content": "Reasoned through the request.",
@@ -12029,6 +12050,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("Reasoned through the request.", markdown_response.get_data(as_text=True))
         self.assertNotIn("This stale reasoning should never be exported.", markdown_response.get_data(as_text=True))
         self.assertIn("### Tool Trace", markdown_response.get_data(as_text=True))
+        self.assertIn("2. Second step", markdown_response.get_data(as_text=True))
 
         docx_response = self.client.get(f"/api/conversations/{conversation_id}/export?format=docx")
         self.assertEqual(docx_response.status_code, 200)
@@ -12042,6 +12064,9 @@ class AppRoutesTestCase(unittest.TestCase):
         docx_text = "\n".join(paragraph.text for paragraph in docx_document.paragraphs)
         self.assertIn("Reasoned through the request.", docx_text)
         self.assertNotIn("This stale reasoning should never be exported.", docx_text)
+        self.assertIn("1. First step", docx_text)
+        self.assertIn("2. Second step", docx_text)
+        self.assertIn("3. Third step", docx_text)
         self.assertIn("A = {0, 1, 2}", docx_text)
         self.assertIn("x^2 + y^2 = z^2", docx_text)
         self.assertNotIn("$A = {0, 1, 2}$", docx_text)
@@ -12057,6 +12082,10 @@ class AppRoutesTestCase(unittest.TestCase):
             pdf_text = "\n".join(page.extract_text() or "" for page in pdf.pages)
         self.assertIn("Reasoned through the request.", pdf_text)
         self.assertNotIn("This stale reasoning should never be exported.", pdf_text)
+        self.assertRegex(pdf_text, r"1[.\s]+First step")
+        self.assertRegex(pdf_text, r"2[.\s]+Second step")
+        self.assertRegex(pdf_text, r"3[.\s]+Third step")
+        self.assertNotRegex(pdf_text, r"1[.\s]+Second step")
         self.assertIn("A = {0, 1, 2}", pdf_text)
         self.assertIn("x^2 + y^2 = z^2", pdf_text)
         self.assertNotIn("$A = {0, 1, 2}$", pdf_text)
