@@ -16,6 +16,7 @@ from config import (
     DOCUMENT_ALLOWED_MIME_TYPES,
     DOCUMENT_MAX_BYTES,
     DOCUMENT_MAX_TEXT_CHARS,
+    OCR_ENABLED,
 )
 
 MIME_DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -194,11 +195,22 @@ def _looks_like_real_table(data: list[list]) -> bool:
     return True
 
 
-def _extract_text_from_pdf_ocr(page) -> str:
+def _build_pdf_ocr_unavailable_notice(status: str) -> str:
+    normalized_status = str(status or "").strip().lower()
+    if normalized_status == "disabled":
+        return "[OCR fallback unavailable: OCR is disabled, so image-only PDF content may be incomplete.]"
+    if normalized_status == "unavailable":
+        return "[OCR fallback unavailable: OCR dependencies are missing, so image-only PDF content may be incomplete.]"
+    if normalized_status == "failed":
+        return "[OCR fallback failed on this page; image-only PDF content may be incomplete.]"
+    return ""
+
+
+def _extract_text_from_pdf_ocr(page) -> tuple[str, str]:
     try:
         from ocr_service import extract_image_text
     except ImportError:
-        return ""
+        return "", "unavailable"
 
     try:
         page_image = page.to_image(
@@ -208,10 +220,16 @@ def _extract_text_from_pdf_ocr(page) -> str:
         )
         image_buffer = io.BytesIO()
         page_image.original.save(image_buffer, format="PNG")
-        return extract_image_text(image_buffer.getvalue(), "image/png").strip()
+        extracted_text = extract_image_text(image_buffer.getvalue(), "image/png").strip()
+        return extracted_text, ("ok" if extracted_text else "empty")
+    except RuntimeError as exc:
+        LOGGER.warning("PDF OCR fallback runtime failure: %s", exc)
+        if not OCR_ENABLED or "disabled" in str(exc).lower():
+            return "", "disabled"
+        return "", "failed"
     except Exception as exc:
         LOGGER.warning("PDF OCR fallback failed: %s", exc)
-        return ""
+        return "", "failed"
 
 
 def _score_pdf_text_quality(text: str) -> float:
@@ -743,7 +761,7 @@ def _extract_text_from_pdf(doc_bytes: bytes) -> str:
                     continue
             has_page_images = bool(getattr(page, "images", None))
             image_coverage = _estimate_pdf_page_image_coverage(page)
-            should_compare_ocr = not table_bboxes and has_page_images and image_coverage >= _PDF_OCR_MIN_IMAGE_COVERAGE
+            should_compare_ocr = has_page_images and image_coverage >= _PDF_OCR_MIN_IMAGE_COVERAGE
             layout_text = ""
             linear_text = ""
             if table_bboxes:
@@ -753,8 +771,9 @@ def _extract_text_from_pdf(doc_bytes: bytes) -> str:
                 linear_text = (remaining.extract_text() or "").strip()
             text = _choose_best_pdf_text_candidate(column_ordered_text, layout_text, linear_text)
             ocr_text = ""
+            ocr_status = "not_attempted"
             if should_compare_ocr:
-                ocr_text = _extract_text_from_pdf_ocr(page)
+                ocr_text, ocr_status = _extract_text_from_pdf_ocr(page)
                 text = _choose_best_pdf_text_candidate(text, ocr_text)
             if text:
                 if text == _clean_pdf_page_text(layout_text) and not table_bboxes:
@@ -766,15 +785,27 @@ def _extract_text_from_pdf(doc_bytes: bytes) -> str:
                 if has_page_images and len(text) < _PDF_OCR_MIN_TEXT_CHARS:
                     # Very short text on an image-heavy page usually means the
                     # visible content is a scan or rasterized table.
-                    ocr_text = _clean_pdf_page_text(ocr_text or _extract_text_from_pdf_ocr(page))
+                    if not ocr_text:
+                        ocr_text, ocr_status = _extract_text_from_pdf_ocr(page)
+                    ocr_text = _clean_pdf_page_text(ocr_text)
                     if ocr_text:
                         page_parts = [_filter_repeating_page_edge_lines(ocr_text, repeated_edge_lines)]
+                    else:
+                        ocr_notice = _build_pdf_ocr_unavailable_notice(ocr_status)
+                        if ocr_notice:
+                            page_parts.append(ocr_notice)
             elif has_page_images:
                 # Image-only or nearly empty pages are often scans; render the
                 # page and run OCR as a fallback instead of dropping them.
-                ocr_text = _clean_pdf_page_text(ocr_text or _extract_text_from_pdf_ocr(page))
+                if not ocr_text:
+                    ocr_text, ocr_status = _extract_text_from_pdf_ocr(page)
+                ocr_text = _clean_pdf_page_text(ocr_text)
                 if ocr_text:
                     page_parts.append(_filter_repeating_page_edge_lines(ocr_text, repeated_edge_lines))
+                else:
+                    ocr_notice = _build_pdf_ocr_unavailable_notice(ocr_status)
+                    if ocr_notice:
+                        page_parts.append(ocr_notice)
             if not page_parts:
                 continue
             page_content = "\n\n".join(page_parts)
@@ -812,6 +843,7 @@ def _render_pdf_page_image_bytes(page, *, dpi: int = _PDF_VISION_RENDER_DPI, max
 def render_pdf_pages_for_vision(doc_bytes: bytes, *, max_pages: int = PDF_VISION_PAGE_LIMIT) -> list[dict]:
     page_limit = max(1, int(max_pages or 1))
     rendered_pages: list[dict] = []
+    failed_page_numbers: list[int] = []
 
     try:
         with pdfplumber.open(io.BytesIO(doc_bytes)) as pdf:
@@ -830,7 +862,8 @@ def render_pdf_pages_for_vision(doc_bytes: bytes, *, max_pages: int = PDF_VISION
                         total_pages,
                         exc,
                     )
-                    raise ValueError(f"Could not render page {page_number} of the uploaded PDF.") from exc
+                    failed_page_numbers.append(page_number)
+                    continue
                 rendered_pages.append(
                     {
                         "page_number": page_number,
@@ -845,6 +878,17 @@ def render_pdf_pages_for_vision(doc_bytes: bytes, *, max_pages: int = PDF_VISION
     except Exception as exc:
         LOGGER.warning("Could not open PDF for visual rendering: %s", exc)
         raise ValueError(f"Could not render the uploaded PDF as page images: {exc}") from exc
+
+    if not rendered_pages:
+        if failed_page_numbers:
+            failed_label = ", ".join(str(page_number) for page_number in failed_page_numbers)
+            raise ValueError(f"Could not render the uploaded PDF as page images. Failed pages: {failed_label}")
+        raise ValueError("Could not render the uploaded PDF as page images.")
+
+    if failed_page_numbers:
+        for page in rendered_pages:
+            page["failed_page_numbers"] = list(failed_page_numbers)
+            page["partial_failure"] = True
 
     return rendered_pages
 
@@ -934,10 +978,15 @@ def build_visual_canvas_markdown(filename: str, page_count: int, *, total_pages:
 
 def build_document_context_block(filename: str, text: str) -> tuple[str, bool]:
     name = os.path.basename(filename or "document")
-    rendered_text = build_canvas_markdown(name, text) if infer_canvas_format(name) == "markdown" else text
-    truncated = len(rendered_text) > DOCUMENT_MAX_TEXT_CHARS
-    clipped = rendered_text[:DOCUMENT_MAX_TEXT_CHARS] if truncated else rendered_text
+    source_text = str(text or "")
+    truncated = len(source_text) > DOCUMENT_MAX_TEXT_CHARS
+    clipped_source_text = source_text[:DOCUMENT_MAX_TEXT_CHARS] if truncated else source_text
+    rendered_text = (
+        build_canvas_markdown(name, clipped_source_text)
+        if infer_canvas_format(name) == "markdown"
+        else clipped_source_text
+    )
     header = f"[Uploaded document: {name}]"
     if truncated:
         header += " (truncated to first 50,000 characters)"
-    return f"{header}\n{clipped}", truncated
+    return f"{header}\n{rendered_text}", truncated

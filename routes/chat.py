@@ -3544,6 +3544,12 @@ def _strip_attachment_metadata(metadata: dict | None) -> dict:
         "submission_mode",
         "canvas_mode",
         "visual_page_count",
+        "visual_page_numbers",
+        "visual_failed_pages",
+        "visual_pages_partial",
+        "visual_total_page_count",
+        "visual_pages_truncated",
+        "visual_page_limit",
         "visual_page_image_ids",
         "video_id",
         "video_title",
@@ -3885,6 +3891,20 @@ def register_chat_routes(app) -> None:
                             rendered_page_count,
                             int(rendered_pages[0].get("total_pages") or rendered_page_count),
                         )
+                        rendered_page_numbers = sorted(
+                            {
+                                int(page.get("page_number") or 0)
+                                for page in rendered_pages
+                                if int(page.get("page_number") or 0) > 0
+                            }
+                        )
+                        rendered_page_number_set = set(rendered_page_numbers)
+                        attempted_page_limit = min(visual_total_page_count, PDF_VISION_PAGE_LIMIT)
+                        failed_render_pages = [
+                            page_number
+                            for page_number in range(1, attempted_page_limit + 1)
+                            if page_number not in rendered_page_number_set
+                        ]
                         visual_pages_truncated = visual_total_page_count > rendered_page_count or any(
                             bool(page.get("truncated")) for page in rendered_pages
                         )
@@ -3916,6 +3936,9 @@ def register_chat_routes(app) -> None:
                             "visual_total_page_count": visual_total_page_count,
                             "visual_pages_truncated": visual_pages_truncated,
                             "visual_page_limit": PDF_VISION_PAGE_LIMIT,
+                            "visual_page_numbers": rendered_page_numbers,
+                            "visual_failed_pages": failed_render_pages,
+                            "visual_pages_partial": bool(failed_render_pages),
                             "visual_page_image_ids": visual_page_image_ids,
                         }
                         processed_attachments.append(attachment)

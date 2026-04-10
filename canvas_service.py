@@ -362,7 +362,8 @@ def _raise_canvas_document_capability_error(document: dict, action: str, capabil
         )
     raise ValueError(
         f"{action} is not available for the visual canvas document '{title}'. "
-        "This action currently requires text-addressable canvas content."
+        "This document is image-backed and does not provide text-addressable lines. "
+        "Use focus_canvas_page for page navigation, or switch to a text-extracted document for line-based tools."
     )
 
 

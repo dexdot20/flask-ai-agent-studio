@@ -1807,6 +1807,25 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertTrue(result["has_more_above"])
         self.assertTrue(result["has_more_below"])
 
+    def test_scroll_canvas_document_visual_mode_error_includes_guidance(self):
+        runtime_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "doc-visual",
+                    "title": "scan.pdf",
+                    "path": "docs/scan.pdf",
+                    "format": "markdown",
+                    "content_mode": "visual",
+                    "canvas_mode": "preview_only",
+                    "content": "## Page 1\n\n[Visual page 1 preview is available in the Canvas panel.]",
+                }
+            ],
+            active_document_id="doc-visual",
+        )
+
+        with self.assertRaisesRegex(ValueError, "image-backed"):
+            scroll_canvas_document(runtime_state, 1, 3)
+
     def test_search_canvas_document_defaults_to_active_document(self):
         runtime_state = create_canvas_runtime_state(
             [
@@ -10340,7 +10359,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertTrue(all(page["total_pages"] == 4 for page in pages))
         self.assertEqual(render_page.call_count, 3)
 
-    def test_render_pdf_pages_for_vision_reports_page_specific_render_error(self):
+    def test_render_pdf_pages_for_vision_skips_failed_pages_and_returns_partial_result(self):
         fake_pdf = SimpleNamespace(pages=[object(), object()])
 
         class _FakePdfContext:
@@ -10354,7 +10373,29 @@ class AppRoutesTestCase(unittest.TestCase):
             "doc_service._render_pdf_page_image_bytes",
             side_effect=[(b"page-1", "image/jpeg"), ValueError("bad page bitmap")],
         ):
-            with self.assertRaisesRegex(ValueError, "page 2"):
+            pages = render_pdf_pages_for_vision(b"%PDF-1.4", max_pages=2)
+
+        self.assertEqual(len(pages), 1)
+        self.assertEqual(pages[0]["page_number"], 1)
+        self.assertEqual(pages[0]["image_bytes"], b"page-1")
+        self.assertEqual(pages[0]["failed_page_numbers"], [2])
+        self.assertTrue(pages[0]["partial_failure"])
+
+    def test_render_pdf_pages_for_vision_raises_when_all_pages_fail(self):
+        fake_pdf = SimpleNamespace(pages=[object(), object()])
+
+        class _FakePdfContext:
+            def __enter__(self_inner):
+                return fake_pdf
+
+            def __exit__(self_inner, exc_type, exc, tb):
+                return False
+
+        with patch("doc_service.pdfplumber.open", return_value=_FakePdfContext()), patch(
+            "doc_service._render_pdf_page_image_bytes",
+            side_effect=[ValueError("bad page bitmap"), ValueError("bad page bitmap")],
+        ):
+            with self.assertRaisesRegex(ValueError, "Failed pages: 1, 2"):
                 render_pdf_pages_for_vision(b"%PDF-1.4", max_pages=2)
 
     def test_build_visual_canvas_markdown_reports_truncated_preview(self):
@@ -10399,6 +10440,74 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertTrue(any("exam.pdf" in str(block.get("text") or "") for block in text_blocks))
         self.assertEqual(len(image_blocks), 2)
         self.assertTrue(all(str(block["image_url"]["url"]).startswith("data:image/jpeg;base64,") for block in image_blocks))
+
+    def test_build_api_messages_warns_when_visual_pdf_image_asset_is_missing(self):
+        normalized = [
+            {
+                "role": "user",
+                "content": "Please analyze this exam PDF.",
+                "metadata": {
+                    "attachments": [
+                        {
+                            "kind": "document",
+                            "file_name": "exam.pdf",
+                            "file_mime_type": "application/pdf",
+                            "submission_mode": "visual",
+                            "visual_page_count": 3,
+                            "visual_page_numbers": [1, 2, 3],
+                            "visual_page_image_ids": ["img-1", "img-2", "img-3"],
+                        }
+                    ]
+                },
+            }
+        ]
+
+        with patch(
+            "messages.read_image_asset_bytes",
+            side_effect=[
+                ({"mime_type": "image/jpeg"}, b"image-one"),
+                (None, None),
+                ({"mime_type": "image/jpeg"}, b"image-three"),
+            ],
+        ):
+            api_messages = build_api_messages(normalized, embed_visual_documents=True)
+
+        self.assertEqual(len(api_messages), 1)
+        self.assertIsInstance(api_messages[0]["content"], list)
+        text_blocks = [block for block in api_messages[0]["content"] if block.get("type") == "text"]
+        image_blocks = [block for block in api_messages[0]["content"] if block.get("type") == "image_url"]
+        self.assertEqual(len(image_blocks), 2)
+        self.assertTrue(any("visual PDF preview images" in str(block.get("text") or "") for block in text_blocks))
+        self.assertTrue(any("page(s): 2" in str(block.get("text") or "") for block in text_blocks))
+
+    def test_build_api_messages_preserves_visual_pdf_warning_when_all_pages_are_missing(self):
+        normalized = [
+            {
+                "role": "user",
+                "content": "Please analyze this exam PDF.",
+                "metadata": {
+                    "attachments": [
+                        {
+                            "kind": "document",
+                            "file_name": "exam.pdf",
+                            "file_mime_type": "application/pdf",
+                            "submission_mode": "visual",
+                            "visual_page_count": 2,
+                            "visual_page_numbers": [1, 2],
+                            "visual_page_image_ids": ["img-1", "img-2"],
+                        }
+                    ]
+                },
+            }
+        ]
+
+        with patch("messages.read_image_asset_bytes", return_value=(None, None)):
+            api_messages = build_api_messages(normalized, embed_visual_documents=True)
+
+        self.assertEqual(len(api_messages), 1)
+        self.assertIsInstance(api_messages[0]["content"], str)
+        self.assertIn("Please analyze this exam PDF.", api_messages[0]["content"])
+        self.assertIn("visual PDF preview images", api_messages[0]["content"])
 
     def test_chat_accepts_visual_pdf_mode_and_emits_preview_only_document_event(self):
         captured = {}
@@ -10543,6 +10652,45 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(image_response.status_code, 200)
         self.assertEqual(image_response.mimetype, "image/jpeg")
         self.assertEqual(image_response.data, b"page-one")
+
+    def test_chat_visual_pdf_records_failed_render_pages_in_metadata(self):
+        conversation_id = self._create_conversation()
+
+        rendered_pages = [
+            {"page_number": 1, "mime_type": "image/jpeg", "image_bytes": b"page-one", "total_pages": 3, "truncated": False},
+            {"page_number": 3, "mime_type": "image/jpeg", "image_bytes": b"page-three", "total_pages": 3, "truncated": False},
+        ]
+
+        with patch("routes.chat.can_model_process_images", return_value=True), patch(
+            "routes.chat.render_pdf_pages_for_vision",
+            return_value=rendered_pages,
+        ), patch("routes.chat.run_agent_stream", return_value=iter([{"type": "done"}])):
+            response = self.client.post(
+                "/chat",
+                data=MultiDict(
+                    [
+                        ("messages", json.dumps([{"role": "user", "content": "Analyze visually"}])),
+                        ("model", "deepseek-chat"),
+                        ("conversation_id", str(conversation_id)),
+                        ("user_content", "Analyze visually"),
+                        ("document_modes", json.dumps([{"file_name": "exam.pdf", "submission_mode": "visual"}])),
+                        ("document", (io.BytesIO(b"%PDF-1.4 fake pdf bytes"), "exam.pdf", "application/pdf")),
+                    ]
+                ),
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        conversation_response = self.client.get(f"/api/conversations/{conversation_id}")
+        self.assertEqual(conversation_response.status_code, 200)
+        messages = conversation_response.get_json()["messages"]
+        user_message = next(message for message in messages if message["role"] == "user")
+        attachments = user_message["metadata"].get("attachments") or []
+        document_attachment = next(entry for entry in attachments if entry["kind"] == "document")
+        self.assertEqual(document_attachment["visual_page_numbers"], [1, 3])
+        self.assertEqual(document_attachment["visual_failed_pages"], [2])
+        self.assertTrue(document_attachment["visual_pages_partial"])
+        self.assertEqual(document_attachment["visual_page_count"], 2)
 
     def test_canvas_export_endpoint_returns_markdown_and_pdf(self):
         conversation_id = self._create_conversation()
@@ -11055,6 +11203,16 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("[Uploaded document: notes.txt]", context_block)
         self.assertIn("# notes.txt", context_block)
         self.assertIn("first line\nsecond line", context_block)
+
+    def test_document_context_block_truncates_source_before_markdown_rendering(self):
+        with patch("doc_service.DOCUMENT_MAX_TEXT_CHARS", 5):
+            context_block, truncated = build_document_context_block("notes.txt", "abcdef")
+
+        self.assertTrue(truncated)
+        self.assertIn("[Uploaded document: notes.txt]", context_block)
+        self.assertIn("# notes.txt", context_block)
+        self.assertIn("abcde", context_block)
+        self.assertNotIn("abcdef", context_block)
 
     def test_format_table_as_markdown_produces_valid_markdown_table(self):
         table = [["Model", "Price", "Context"], ["GPT-4o", "$0.01", "128k"], ["Claude", "$0.015", "200k"]]

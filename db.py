@@ -1475,6 +1475,8 @@ def _normalize_message_attachment(entry) -> dict | None:
     submission_mode = str(entry.get("submission_mode") or "").strip().lower()[:20]
     canvas_mode = str(entry.get("canvas_mode") or "").strip().lower()[:40]
     visual_page_image_ids = entry.get("visual_page_image_ids") if isinstance(entry.get("visual_page_image_ids"), list) else []
+    visual_page_numbers = entry.get("visual_page_numbers") if isinstance(entry.get("visual_page_numbers"), list) else []
+    visual_failed_pages = entry.get("visual_failed_pages") if isinstance(entry.get("visual_failed_pages"), list) else []
     visual_page_count = entry.get("visual_page_count")
     visual_total_page_count = entry.get("visual_total_page_count")
     visual_page_limit = entry.get("visual_page_limit")
@@ -1500,6 +1502,34 @@ def _normalize_message_attachment(entry) -> dict | None:
             normalized_visual_page_ids.append(image_id)
     if normalized_visual_page_ids:
         cleaned["visual_page_image_ids"] = normalized_visual_page_ids
+
+    normalized_visual_page_numbers = []
+    for value in visual_page_numbers[:16]:
+        try:
+            page_number = int(value)
+        except (TypeError, ValueError):
+            continue
+        if page_number < 1 or page_number in normalized_visual_page_numbers:
+            continue
+        normalized_visual_page_numbers.append(page_number)
+    if normalized_visual_page_numbers:
+        cleaned["visual_page_numbers"] = normalized_visual_page_numbers
+
+    normalized_visual_failed_pages = []
+    for value in visual_failed_pages[:16]:
+        try:
+            page_number = int(value)
+        except (TypeError, ValueError):
+            continue
+        if page_number < 1 or page_number in normalized_visual_failed_pages:
+            continue
+        normalized_visual_failed_pages.append(page_number)
+    if normalized_visual_failed_pages:
+        cleaned["visual_failed_pages"] = normalized_visual_failed_pages
+
+    if entry.get("visual_pages_partial") is True:
+        cleaned["visual_pages_partial"] = True
+
     try:
         page_count = int(visual_page_count)
     except (TypeError, ValueError):

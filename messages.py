@@ -703,6 +703,19 @@ def build_user_message_for_model(
                     visual_document_notices.append(
                         f"Uploaded PDF for visual analysis: {file_name}. {page_count} page{'s are' if page_count != 1 else ' is'} attached as image input below."
                     )
+
+                failed_pages = [
+                    int(page_number)
+                    for page_number in (attachment.get("visual_failed_pages") or [])
+                    if isinstance(page_number, int) or str(page_number).isdigit()
+                ]
+                if failed_pages:
+                    failed_page_labels = ", ".join(str(page_number) for page_number in failed_pages[:10])
+                    if len(failed_pages) > 10:
+                        failed_page_labels += ", ..."
+                    visual_document_notices.append(
+                        f"Warning: Visual rendering skipped PDF page(s) {failed_page_labels}. Analyze only the attached rendered pages."
+                    )
                 continue
             context_block = str(attachment.get("file_context_block") or "").strip()
             if _document_attachment_is_represented_in_canvas(attachment, canvas_document_lookup):
@@ -778,7 +791,7 @@ def build_user_message_for_model(
     return "\n\n".join(parts)
 
 
-def _build_visual_document_api_blocks(metadata: dict | None) -> list[dict]:
+def _build_visual_document_api_blocks(metadata: dict | None, *, warning_messages: list[str] | None = None) -> list[dict]:
     attachments = extract_message_attachments(metadata)
     blocks: list[dict] = []
     for attachment in attachments:
@@ -786,10 +799,19 @@ def _build_visual_document_api_blocks(metadata: dict | None) -> list[dict]:
             continue
         if str(attachment.get("submission_mode") or "").strip().lower() != "visual":
             continue
+        file_name = str(attachment.get("file_name") or "PDF").strip() or "PDF"
         image_ids = attachment.get("visual_page_image_ids") if isinstance(attachment.get("visual_page_image_ids"), list) else []
-        for image_id in image_ids:
+        page_numbers = [
+            int(page_number)
+            for page_number in (attachment.get("visual_page_numbers") or [])
+            if isinstance(page_number, int) or str(page_number).isdigit()
+        ]
+        missing_pages: list[int] = []
+        for index, image_id in enumerate(image_ids, start=1):
+            mapped_page_number = page_numbers[index - 1] if index - 1 < len(page_numbers) else index
             asset, image_bytes = read_image_asset_bytes(str(image_id or "").strip())
             if not asset or not image_bytes:
+                missing_pages.append(mapped_page_number)
                 continue
             mime_type = str(asset.get("mime_type") or "image/jpeg").strip() or "image/jpeg"
             image_b64 = base64.b64encode(image_bytes).decode("utf-8")
@@ -798,6 +820,13 @@ def _build_visual_document_api_blocks(metadata: dict | None) -> list[dict]:
                     "type": "image_url",
                     "image_url": {"url": f"data:{mime_type};base64,{image_b64}"},
                 }
+            )
+        if missing_pages and warning_messages is not None:
+            page_list = ", ".join(str(page_number) for page_number in missing_pages[:10])
+            if len(missing_pages) > 10:
+                page_list += ", ..."
+            warning_messages.append(
+                f"Warning: One or more visual PDF preview images for {file_name} were unavailable at request time (page(s): {page_list}). Analyze only the attached page images."
             )
     return blocks
 
@@ -838,14 +867,16 @@ def build_user_message_for_api(
         canvas_documents=canvas_documents,
         clarification_questions=clarification_questions,
     )
+    visual_warning_messages: list[str] = []
     visual_blocks = [
         *_build_direct_image_api_blocks(metadata),
-        *_build_visual_document_api_blocks(metadata),
+        *_build_visual_document_api_blocks(metadata, warning_messages=visual_warning_messages),
     ]
-    if not visual_blocks:
-        return text_content
-
     prompt_text = str(text_content or "").strip() or "Analyze the attached visual inputs carefully."
+    if visual_warning_messages:
+        prompt_text = "\n\n".join([prompt_text, *visual_warning_messages])
+    if not visual_blocks:
+        return prompt_text
     return [
         {"type": "text", "text": prompt_text},
         *visual_blocks,
