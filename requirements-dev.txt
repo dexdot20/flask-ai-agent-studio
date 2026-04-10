@@ -1,4 +1,4 @@
-# Full development install: core runtime + optional stacks + lint/test tooling.
+# Full development install: core runtime, optional stacks, and lint/test tooling.
 -r requirements.txt
 -r requirements-rag.txt
 -r requirements-ocr-easy.txt

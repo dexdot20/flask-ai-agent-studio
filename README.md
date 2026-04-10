@@ -176,10 +176,14 @@ Manual smoke test checklist for the Canvas UI is available in [docs/canvas-ui-sm
 │   ├── index.html          # Chat UI
 │   └── settings.html       # Dedicated settings page
 ├── tests/
-│   └── test_app.py         # Backend, streaming, tool, RAG, pruning, and UI bootstrap tests
+│   └── test_app.py         # Backend, streaming, tool, RAG, fetch-to-canvas, pruning, and UI bootstrap tests
 ├── proxies.example.txt     # Sample proxy file
 ├── models/                 # Downloaded local model caches created by install.sh
-├── requirements.txt        # Runtime dependencies
+├── requirements.txt        # Core runtime dependencies
+├── requirements-rag.txt    # Optional RAG stack
+├── requirements-ocr-easy.txt      # Optional EasyOCR stack
+├── requirements-ocr-paddle.txt    # Optional PaddleOCR stack
+├── requirements-youtube-transcript.txt # Optional YouTube transcript stack
 ├── requirements-dev.txt    # Runtime + development tooling
 └── pyproject.toml          # Ruff configuration
 ```
@@ -409,6 +413,9 @@ Remote helper/direct image modes rely on at least one configured provider key pl
 | `FETCH_SUMMARIZE_MAX_INPUT_CHARS` | `80000` | Maximum raw text fed into fetch summarization |
 | `FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS` | `2400` | Maximum tokens returned by fetch summarization |
 | `FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS` | `24000` | Maximum raw tool-result text kept for fetch-style results |
+| `FETCH_URL_TO_CANVAS_CHUNK_THRESHOLD` | `20000` | Fetched pages at or above this size are split into Canvas documents |
+| `FETCH_URL_TO_CANVAS_CHUNK_CHARS` | `30000` | Target character budget for each imported Canvas chunk |
+| `FETCH_URL_TO_CANVAS_MAX_CHUNKS` | `10` | Maximum Canvas documents created from one page import |
 | `CHAT_SUMMARY_TRIGGER_TOKEN_COUNT` | `80000` | Visible-token count that triggers automatic summarization |
 | `CHAT_SUMMARY_MODE` | `auto` | `auto`, `never`, or `aggressive` |
 | `CHAT_SUMMARY_MODEL` | `deepseek-chat` | Fallback model used for summarization when no summary preference is stored in Settings |
@@ -417,15 +424,22 @@ Remote helper/direct image modes rely on at least one configured provider key pl
 | `PROMPT_RECENT_HISTORY_MAX_TOKENS` | `70000` | Max recent-history budget |
 | `PROMPT_SUMMARY_MAX_TOKENS` | `15000` | Max summary budget |
 | `PROMPT_RAG_MAX_TOKENS` | `6000` | Max RAG budget |
-| `PROMPT_RAG_AUTO_MAX_TOKENS` | `1200` | Auto-inject RAG cap used when no stronger override is set |
+| `PROMPT_RAG_AUTO_MAX_TOKENS` | `3000` | Auto-inject RAG cap used when no stronger override is set |
 | `PROMPT_TOOL_TRACE_MAX_TOKENS` | `500` | Max tool-trace budget |
 | `PROMPT_TOOL_MEMORY_MAX_TOKENS` | `1500` | Max tool-memory budget |
 | `PROMPT_PREFLIGHT_SUMMARY_TOKEN_COUNT` | `90000` | Preflight summary trigger budget |
+| `CANVAS_PROMPT_DEFAULT_MAX_LINES` | `250` | Default number of canvas lines injected into prompts |
+| `CANVAS_PROMPT_DEFAULT_MAX_TOKENS` | `4000` | Default token budget for canvas context injections |
+| `CANVAS_PROMPT_DEFAULT_MAX_CHARS` | `20000` | Default character budget for canvas context injections |
+| `CANVAS_PROMPT_CODE_LINE_MAX_CHARS` | `180` | Max characters kept per code line when canvas prompts are built |
+| `CANVAS_PROMPT_TEXT_LINE_MAX_CHARS` | `100` | Max characters kept per text line when canvas prompts are built |
 | `AGENT_CONTEXT_COMPACTION_THRESHOLD` | `0.85` | Fraction of budget that triggers context compaction |
 | `AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS` | `2` | How many recent exchanges are preserved during compaction |
 | `AGENT_TOOL_RESULT_TRANSCRIPT_MAX_CHARS` | `16000` | Maximum transcript length retained for tool results |
 | `SUMMARY_SOURCE_TARGET_TOKENS` | `6000` | Target source size for summarization |
 | `SUMMARY_RETRY_MIN_SOURCE_TOKENS` | `1500` | Minimum source size before retrying summary |
+| `PRUNING_TARGET_REDUCTION_RATIO` | `0.65` | Fraction of prunable content targeted for each pruning pass |
+| `PRUNING_MIN_TARGET_TOKENS` | `160` | Smallest prunable-token target before pruning is considered |
 
 ### Scratchpad and memory
 
@@ -438,12 +452,16 @@ The scratchpad is organized into named sections: `lessons`, `profile`, `notes`, 
 - max redirects: 5
 - web cache TTL: 24 hours
 - max search/news results per query: 5
+- fetch-to-canvas import defaults: 20,000-char split threshold, 30,000 chars per chunk, 10 chunks max
 - supported image types: PNG, JPEG, WEBP
 - max upload image size: 10 MB
 - document upload max size: 20 MB
 - document max extracted text: 50,000 characters
 - canvas prompt max lines: 250
-- canvas prompt max tokens: 2,000
+- canvas prompt max tokens: 4,000
+- canvas prompt max chars: 20,000
+- canvas code line max chars: 180
+- canvas text line max chars: 100
 - canvas expand max lines: 1,600
 - canvas scroll window lines: 200
 - canvas document limit: 50 documents per conversation
@@ -470,6 +488,7 @@ The Settings page persists these values in `app_settings`:
 - `openrouter_prompt_cache_enabled`
 - `chat_summary_detail_level`
 - `custom_models`
+- `default_persona_id`
 - `visible_model_order`
 - `operation_model_preferences`
 - `image_processing_method`
@@ -482,6 +501,9 @@ The Settings page persists these values in `app_settings`:
 - `tool_memory_auto_inject`
 - `canvas_prompt_max_lines`
 - `canvas_prompt_max_tokens`
+- `canvas_prompt_max_chars`
+- `canvas_prompt_code_line_max_chars`
+- `canvas_prompt_text_line_max_chars`
 - `canvas_expand_max_lines`
 - `canvas_scroll_window_lines`
 - `chat_summary_mode`
@@ -494,11 +516,27 @@ The Settings page persists these values in `app_settings`:
 - `entropy_protect_code_blocks`
 - `entropy_protect_tool_results`
 - `entropy_reference_boost`
+- `context_compaction_threshold`
+- `context_compaction_keep_recent_rounds`
+- `prompt_max_input_tokens`
+- `prompt_response_token_reserve`
+- `prompt_recent_history_max_tokens`
+- `prompt_summary_max_tokens`
+- `prompt_rag_max_tokens`
+- `prompt_tool_memory_max_tokens`
+- `prompt_tool_trace_max_tokens`
 - `pruning_enabled`
 - `pruning_token_threshold`
 - `pruning_batch_size`
+- `pruning_target_reduction_ratio`
+- `pruning_min_target_tokens`
 - `fetch_url_token_threshold`
 - `fetch_url_clip_aggressiveness`
+- `fetch_url_summarized_max_input_chars`
+- `fetch_url_summarized_max_output_tokens`
+- `fetch_url_to_canvas_chunk_threshold`
+- `fetch_url_to_canvas_chunk_chars`
+- `fetch_url_to_canvas_max_chunks`
 - `rag_auto_inject_source_types`
 - `operation_model_fallback_preferences`
 - `proxy_enabled_operations`
@@ -537,7 +575,7 @@ Prompt caching behavior is optimized in three different ways:
 
 The app includes a dedicated `/settings` page.
 
-- Assistant tab: general instructions, AI personality, OpenRouter model management, visible chat-model ordering, task-specific model preferences, temperature, image-processing method, helper image model, tool-step budget, clarification limits, sub-agent timeout/retry controls, fetch clipping, canvas limits, summarization, pruning, and context-selection strategy controls
+- Assistant tab: general instructions, AI personality, OpenRouter model management, visible chat-model ordering, task-specific model preferences and fallback chains, temperature, image-processing method, helper image model, tool-step budget, clarification limits, sub-agent timeout/retry controls, fetch clipping/summarization/import budgets, canvas limits, summarization, pruning, proxy scopes, reasoning auto-collapse, and context-selection strategy controls
 - Memory tab: conversation memory, scratchpad, tool-memory auto-injection, RAG auto-injection, RAG source pools, and user profile memory behavior
 - Tools tab: active tool permissions, including canvas and project-workspace tools
 - Knowledge tab: knowledge-base uploads, RAG maintenance, and sync controls
@@ -845,6 +883,13 @@ Fetch a specific web page and return only an AI-generated summary of its content
 - Arguments:
   - `url` (string, required) - full HTTP or HTTPS URL
   - `focus` (string, optional) - optional question or angle to focus the summary on
+
+#### `fetch_url_to_canvas`
+
+Fetch a specific web page and import it into one or more searchable Canvas documents. Use this when you want a long page to stay available across later turns.
+
+- Arguments:
+  - `url` (string, required) - full HTTP or HTTPS URL
 
 #### `grep_fetched_content`
 

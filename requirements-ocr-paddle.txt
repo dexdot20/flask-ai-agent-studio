@@ -1,4 +1,4 @@
-## Optional OCR stack using PaddleOCR.
+## Optional OCR stack using PaddleOCR for the local OCR fallback path.
 ## Install a matching paddlepaddle or paddlepaddle-gpu wheel separately when using this stack directly.
 numpy>=1.26
 paddlepaddle==3.2.2

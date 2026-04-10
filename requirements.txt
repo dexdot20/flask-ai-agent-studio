@@ -1,4 +1,4 @@
-## Core runtime dependencies shared by the Flask app, document/image/canvas tooling, and provider clients.
+## Core runtime dependencies shared by the Flask app, fetch-to-canvas flow, document/image/canvas tooling, workspace helpers, and provider clients.
 flask>=3.0
 openai>=1.54.0
 httpx>=0.27
