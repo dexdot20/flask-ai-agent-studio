@@ -84,7 +84,7 @@
         <section class="settings-tab-panel active" data-settings-panel="general" aria-labelledby="general-tab">
           <div class="settings-page-grid settings-page-grid--two">
             <div class="settings-page-stack">
-              <div class="settings-page-section-card settings-page-section-card--summary-policy">
+              <div class="settings-page-section-card">
                 <div class="settings-page-section-card__header">
                   <div>
                     <span class="settings-section-kicker">Assistant behavior</span>
@@ -92,19 +92,36 @@
                   </div>
                   <p>Choose which persona new and unassigned conversations should use by default.</p>
                 </div>
-                <div class="settings-form-cluster">
-                  <label class="settings-label" for="default-persona-select">Default persona</label>
-                  <select id="default-persona-select" class="settings-select">
-                    <option value="">No default persona</option>
-                  </select>
-                  <p class="settings-copy">Per-conversation personas override this choice. Use the Personas tab to create multiple assistants and assign them conversation by conversation.</p>
-                  <div class="settings-inline-actions">
-                    <button class="btn-ghost" id="open-personas-tab-btn" type="button">Manage personas</button>
-                  </div>
+                <div class="settings-subsection-grid settings-subsection-grid--two">
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Assignment</span>
+                      <h4 class="settings-subsection__title">Persona fallback</h4>
+                      <p class="settings-subsection__copy">Set the default assistant identity for new conversations. Individual conversations can still override it later.</p>
+                    </div>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="default-persona-select">Default persona</label>
+                      <select id="default-persona-select" class="settings-select">
+                        <option value="">No default persona</option>
+                      </select>
+                      <p class="settings-copy">Per-conversation personas override this choice. Use the Personas tab to create multiple assistants and assign them conversation by conversation.</p>
+                      <div class="settings-inline-actions">
+                        <button class="btn-ghost" id="open-personas-tab-btn" type="button">Manage personas</button>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Creativity</span>
+                      <h4 class="settings-subsection__title">Default temperature</h4>
+                      <p class="settings-subsection__copy">Tune the base balance between deterministic output and exploratory variation across the whole app.</p>
+                    </div>
+                    <label class="settings-label" for="temperature-input">Response temperature (0.0-2.0)</label>
+                    <input type="number" class="settings-number" id="temperature-input" min="0" max="2" step="0.1" value="0.7" />
+                    <p class="settings-copy">Lower values are more deterministic; higher values add more variation to assistant replies.</p>
+                  </section>
                 </div>
-                <label class="settings-label" for="temperature-input">Response temperature (0.0-2.0)</label>
-                <input type="number" class="settings-number" id="temperature-input" min="0" max="2" step="0.1" value="0.7" />
-                <p class="settings-copy">Lower values are more deterministic; higher values add more variation to assistant replies.</p>
               </div>
 
               <div class="settings-page-section-card">
@@ -115,8 +132,10 @@
                   </div>
                   <p>Choose how reasoning panels behave after a streamed answer finishes.</p>
                 </div>
-                <label class="tool-toggle"><input type="checkbox" id="reasoning-auto-collapse-toggle" /> <span>Auto-collapse reasoning panels after the answer completes</span></label>
-                <p class="settings-copy">Reasoning stays available on each assistant message and can still be expanded manually.</p>
+                <div class="settings-toggle-panel">
+                  <label class="tool-toggle"><input type="checkbox" id="reasoning-auto-collapse-toggle" /> <span>Auto-collapse reasoning panels after the answer completes</span></label>
+                  <p class="settings-copy">Reasoning stays available on each assistant message and can still be expanded manually.</p>
+                </div>
               </div>
             </div>
 
@@ -129,9 +148,16 @@
                   </div>
                   <p>Control how many clarification questions the assistant may ask in one turn.</p>
                 </div>
-                <label class="settings-label" for="clarification-max-questions-input">Max clarification questions (1-25)</label>
-                <input type="number" class="settings-number" id="clarification-max-questions-input" min="1" max="25" value="5" />
-                <p class="settings-copy">Higher values allow broader clarification turns, but the assistant should still ask only the minimum needed.</p>
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Turn depth</span>
+                    <h4 class="settings-subsection__title">Clarification breadth</h4>
+                    <p class="settings-subsection__copy">Useful when complex workflows need more structured intake, but still best kept lean for everyday use.</p>
+                  </div>
+                  <label class="settings-label" for="clarification-max-questions-input">Max clarification questions (1-25)</label>
+                  <input type="number" class="settings-number" id="clarification-max-questions-input" min="1" max="25" value="5" />
+                  <p class="settings-copy">Higher values allow broader clarification turns, but the assistant should still ask only the minimum needed.</p>
+                </section>
               </div>
 
               <div class="settings-page-section-card">
@@ -142,17 +168,32 @@
                   </div>
                   <p>Choose whether uploaded images should be described by a helper model, sent directly to the active multimodal model, or reduced to local OCR text.</p>
                 </div>
-                <label class="settings-label" for="image-processing-method-select">Image processing method</label>
-                <select id="image-processing-method-select">
-                  <option value="auto">Auto</option>
-                  <option value="llm_helper">Helper LLM description</option>
-                  <option value="llm_direct">Direct multimodal model input</option>
-                  <option value="local_ocr">Local OCR only</option>
-                </select>
-                <p class="settings-copy">Auto prefers helper descriptions first, then direct multimodal input when available, and finally falls back to OCR. OCR stays strict.</p>
-                <label class="settings-label" for="image-helper-model-select">Helper image model</label>
-                <select id="image-helper-model-select"></select>
-                <p class="settings-copy">Used only for Helper LLM description mode and stored image follow-up questions. Leave empty to fall back to the default chat model when it supports images.</p>
+                <div class="settings-subsection-grid settings-subsection-grid--two">
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Primary route</span>
+                      <h4 class="settings-subsection__title">How images are interpreted</h4>
+                    </div>
+                    <label class="settings-label" for="image-processing-method-select">Image processing method</label>
+                    <select id="image-processing-method-select">
+                      <option value="auto">Auto</option>
+                      <option value="llm_helper">Helper LLM description</option>
+                      <option value="llm_direct">Direct multimodal model input</option>
+                      <option value="local_ocr">Local OCR only</option>
+                    </select>
+                    <p class="settings-copy">Auto prefers helper descriptions first, then direct multimodal input when available, and finally falls back to OCR. OCR stays strict.</p>
+                  </section>
+
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Fallback helper</span>
+                      <h4 class="settings-subsection__title">Dedicated image model</h4>
+                    </div>
+                    <label class="settings-label" for="image-helper-model-select">Helper image model</label>
+                    <select id="image-helper-model-select"></select>
+                    <p class="settings-copy">Used only for Helper LLM description mode and stored image follow-up questions. Leave empty to fall back to the default chat model when it supports images.</p>
+                  </section>
+                </div>
               </div>
             </div>
           </div>
@@ -168,11 +209,13 @@
                 </div>
                 <p>Create multiple persistent AI personas and reuse them across conversations.</p>
               </div>
-              <div class="settings-inline-actions">
-                <button class="btn-primary" id="persona-new-btn" type="button">New persona</button>
-                <span id="persona-status" class="settings-status" data-tone="muted">Ready to create a persona</span>
+              <div class="settings-toggle-panel settings-toggle-panel--accent">
+                <div class="settings-inline-actions">
+                  <button class="btn-primary" id="persona-new-btn" type="button">New persona</button>
+                  <span id="persona-status" class="settings-status" data-tone="muted">Ready to create a persona</span>
+                </div>
+                <div id="persona-list" class="model-management-list model-management-list--spaced"></div>
               </div>
-              <div id="persona-list" class="model-management-list model-management-list--spaced"></div>
             </div>
 
             <div class="settings-page-section-card">
@@ -183,34 +226,57 @@
                 </div>
                 <p>Conversation personas replace the default persona for that conversation, but they still remain below direct user instructions at runtime.</p>
               </div>
-              <div class="settings-model-catalog-form">
-                <label class="settings-label" for="persona-name-input">Persona name</label>
-                <input id="persona-name-input" class="settings-text" type="text" placeholder="Example: Pragmatic Engineer" />
+              <div class="settings-subsection-grid settings-subsection-grid--two">
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Identity</span>
+                    <h4 class="settings-subsection__title">Persona name</h4>
+                    <p class="settings-subsection__copy">Use a short label that will still make sense later in conversation-level selectors.</p>
+                  </div>
+                  <label class="settings-label" for="persona-name-input">Persona name</label>
+                  <input id="persona-name-input" class="settings-text" type="text" placeholder="Example: Pragmatic Engineer" />
+                </section>
 
-                <label class="settings-label" for="general-instructions-input">General instructions</label>
-                <p class="settings-copy">Persistent response rules, formatting preferences, and strict behavior constraints for this persona.</p>
-                <div class="settings-inline-actions">
-                  <select id="general-instructions-template-select" class="settings-select" aria-label="General instructions templates">
-                    <option value="">Choose a template</option>
-                  </select>
-                  <button class="btn-ghost" id="general-instructions-template-apply-btn" type="button">Apply template</button>
-                </div>
-                <textarea id="general-instructions-input" rows="6" placeholder="Example: Keep answers concise, state assumptions clearly, and use bullets only when they improve scanning."></textarea>
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Behavior rules</span>
+                    <h4 class="settings-subsection__title">General instructions</h4>
+                    <p class="settings-subsection__copy">Persistent response rules, formatting preferences, and strict behavior constraints for this persona.</p>
+                  </div>
+                  <div class="settings-inline-actions">
+                    <select id="general-instructions-template-select" class="settings-select" aria-label="General instructions templates">
+                      <option value="">Choose a template</option>
+                    </select>
+                    <button class="btn-ghost" id="general-instructions-template-apply-btn" type="button">Apply template</button>
+                  </div>
+                  <textarea id="general-instructions-input" rows="6" placeholder="Example: Keep answers concise, state assumptions clearly, and use bullets only when they improve scanning."></textarea>
+                </section>
 
-                <label class="settings-label" for="ai-personality-input">AI personality</label>
-                <p class="settings-copy">Tone, attitude, and presentation style for this persona without weakening factual accuracy or instruction-following.</p>
-                <div class="settings-inline-actions">
-                  <select id="ai-personality-template-select" class="settings-select" aria-label="AI personality templates">
-                    <option value="">Choose a template</option>
-                  </select>
-                  <button class="btn-ghost" id="ai-personality-template-apply-btn" type="button">Apply template</button>
-                </div>
-                <textarea id="ai-personality-input" rows="5" placeholder="Example: Sound like a pragmatic senior engineer: calm, direct, rigorous, and low-fluff."></textarea>
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Voice</span>
+                    <h4 class="settings-subsection__title">AI personality</h4>
+                    <p class="settings-subsection__copy">Tone, attitude, and presentation style for this persona without weakening factual accuracy or instruction-following.</p>
+                  </div>
+                  <div class="settings-inline-actions">
+                    <select id="ai-personality-template-select" class="settings-select" aria-label="AI personality templates">
+                      <option value="">Choose a template</option>
+                    </select>
+                    <button class="btn-ghost" id="ai-personality-template-apply-btn" type="button">Apply template</button>
+                  </div>
+                  <textarea id="ai-personality-input" rows="5" placeholder="Example: Sound like a pragmatic senior engineer: calm, direct, rigorous, and low-fluff."></textarea>
+                </section>
 
-                <div class="settings-inline-actions">
-                  <button class="btn-primary" id="persona-save-btn" type="button">Create persona</button>
-                  <button class="btn-ghost btn-ghost--danger" id="persona-delete-btn" type="button" hidden>Delete persona</button>
-                </div>
+                <section class="settings-subsection settings-subsection--full">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Editor actions</span>
+                    <h4 class="settings-subsection__title">Save or remove persona</h4>
+                  </div>
+                  <div class="settings-inline-actions">
+                    <button class="btn-primary" id="persona-save-btn" type="button">Create persona</button>
+                    <button class="btn-ghost btn-ghost--danger" id="persona-delete-btn" type="button" hidden>Delete persona</button>
+                  </div>
+                </section>
               </div>
             </div>
           </div>
@@ -226,45 +292,79 @@
                 </div>
                 <p>Add OpenRouter models, declare their capabilities, and make them available to the rest of the settings UI.</p>
               </div>
-              <div class="settings-model-catalog-form">
-                <label class="settings-label" for="custom-model-name-input">Display name</label>
-                <input id="custom-model-name-input" class="settings-text" type="text" placeholder="Example: Claude Sonnet 4.5" />
-                <label class="settings-label" for="custom-model-api-model-input">OpenRouter model id</label>
-                <input id="custom-model-api-model-input" class="settings-text" type="text" placeholder="anthropic/claude-sonnet-4.5" />
-                <label class="settings-label" for="custom-model-routing-mode-select">Provider routing</label>
-                <select id="custom-model-routing-mode-select">
-                  <option value="auto">Automatic OpenRouter routing</option>
-                  <option value="specific">Pin a specific provider</option>
-                </select>
-                <div id="custom-model-provider-field" hidden>
-                  <label class="settings-label" for="custom-model-provider-slug-input">Provider slug</label>
-                  <input id="custom-model-provider-slug-input" class="settings-text" type="text" placeholder="anthropic, azure, deepinfra/turbo" />
-                  <p class="settings-copy">Use the exact OpenRouter provider slug from the model page. Examples: anthropic, azure, deepinfra/turbo.</p>
-                </div>
-                <label class="settings-label" for="custom-model-reasoning-mode-select">Reasoning</label>
-                <select id="custom-model-reasoning-mode-select">
-                  <option value="default">Use model default</option>
-                  <option value="enabled">Enabled</option>
-                  <option value="disabled">Disabled</option>
-                </select>
-                <label class="settings-label" for="custom-model-reasoning-effort-select">Reasoning effort</label>
-                <select id="custom-model-reasoning-effort-select">
-                  <option value="">Default effort</option>
-                  <option value="minimal">Minimal</option>
-                  <option value="low">Low</option>
-                  <option value="medium">Medium</option>
-                  <option value="high">High</option>
-                  <option value="xhigh">X-High</option>
-                </select>
-                <p class="settings-copy">Automatic routing keeps OpenRouter load balancing enabled. When reasoning is enabled, the selected effort is sent through OpenRouter's reasoning controls when the model supports it.</p>
-                <label class="tool-toggle"><input type="checkbox" id="custom-model-supports-tools-toggle" checked /> <span>Supports tool calling and can appear in the chat model selector</span></label>
-                <label class="tool-toggle"><input type="checkbox" id="custom-model-supports-vision-toggle" /> <span>Supports image input for visual analysis</span></label>
-                <label class="tool-toggle"><input type="checkbox" id="custom-model-supports-structured-toggle" /> <span>Supports structured outputs for strict JSON responses</span></label>
-                <div class="settings-inline-actions">
-                  <button class="btn-primary" id="add-custom-model-btn" type="button">Add OpenRouter model</button>
-                  <span id="custom-model-status" class="settings-status" data-tone="muted">No pending model changes</span>
-                </div>
-                <p class="settings-copy">You can add the same base model more than once if the reasoning mode, provider route, or capability flags differ.</p>
+              <div class="settings-subsection-grid settings-subsection-grid--two">
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Model identity</span>
+                    <h4 class="settings-subsection__title">Name and API id</h4>
+                  </div>
+                  <label class="settings-label" for="custom-model-name-input">Display name</label>
+                  <input id="custom-model-name-input" class="settings-text" type="text" placeholder="Example: Claude Sonnet 4.5" />
+                  <label class="settings-label" for="custom-model-api-model-input">OpenRouter model id</label>
+                  <input id="custom-model-api-model-input" class="settings-text" type="text" placeholder="anthropic/claude-sonnet-4.5" />
+                </section>
+
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Routing</span>
+                    <h4 class="settings-subsection__title">Provider selection</h4>
+                  </div>
+                  <label class="settings-label" for="custom-model-routing-mode-select">Provider routing</label>
+                  <select id="custom-model-routing-mode-select">
+                    <option value="auto">Automatic OpenRouter routing</option>
+                    <option value="specific">Pin a specific provider</option>
+                  </select>
+                  <div id="custom-model-provider-field" hidden>
+                    <label class="settings-label" for="custom-model-provider-slug-input">Provider slug</label>
+                    <input id="custom-model-provider-slug-input" class="settings-text" type="text" placeholder="anthropic, azure, deepinfra/turbo" />
+                    <p class="settings-copy">Use the exact OpenRouter provider slug from the model page. Examples: anthropic, azure, deepinfra/turbo.</p>
+                  </div>
+                </section>
+
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Reasoning profile</span>
+                    <h4 class="settings-subsection__title">Mode and effort</h4>
+                  </div>
+                  <label class="settings-label" for="custom-model-reasoning-mode-select">Reasoning</label>
+                  <select id="custom-model-reasoning-mode-select">
+                    <option value="default">Use model default</option>
+                    <option value="enabled">Enabled</option>
+                    <option value="disabled">Disabled</option>
+                  </select>
+                  <label class="settings-label" for="custom-model-reasoning-effort-select">Reasoning effort</label>
+                  <select id="custom-model-reasoning-effort-select">
+                    <option value="">Default effort</option>
+                    <option value="minimal">Minimal</option>
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                    <option value="xhigh">X-High</option>
+                  </select>
+                  <p class="settings-copy">Automatic routing keeps OpenRouter load balancing enabled. When reasoning is enabled, the selected effort is sent through OpenRouter's reasoning controls when the model supports it.</p>
+                </section>
+
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Capability flags</span>
+                    <h4 class="settings-subsection__title">Where the model can appear</h4>
+                  </div>
+                  <label class="tool-toggle"><input type="checkbox" id="custom-model-supports-tools-toggle" checked /> <span>Supports tool calling and can appear in the chat model selector</span></label>
+                  <label class="tool-toggle"><input type="checkbox" id="custom-model-supports-vision-toggle" /> <span>Supports image input for visual analysis</span></label>
+                  <label class="tool-toggle"><input type="checkbox" id="custom-model-supports-structured-toggle" /> <span>Supports structured outputs for strict JSON responses</span></label>
+                </section>
+
+                <section class="settings-subsection settings-subsection--full">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Catalog action</span>
+                    <h4 class="settings-subsection__title">Save this model variant</h4>
+                  </div>
+                  <div class="settings-inline-actions">
+                    <button class="btn-primary" id="add-custom-model-btn" type="button">Add OpenRouter model</button>
+                    <span id="custom-model-status" class="settings-status" data-tone="muted">No pending model changes</span>
+                  </div>
+                  <p class="settings-copy">You can add the same base model more than once if the reasoning mode, provider route, or capability flags differ.</p>
+                </section>
               </div>
             </div>
 
@@ -276,7 +376,9 @@
                 </div>
                 <p>OpenRouter models are saved in settings; built-in DeepSeek models remain available automatically.</p>
               </div>
-              <div id="custom-model-list" class="model-management-list"></div>
+              <div class="settings-subsection">
+                <div id="custom-model-list" class="model-management-list"></div>
+              </div>
             </div>
           </div>
 
@@ -289,7 +391,9 @@
                 </div>
                 <p>These rows control which tool-capable models appear in the header ComboBox and in what order.</p>
               </div>
-              <div id="chat-model-visibility-list" class="model-management-list"></div>
+              <div class="settings-subsection">
+                <div id="chat-model-visibility-list" class="model-management-list"></div>
+              </div>
             </div>
 
             <div class="settings-page-section-card">
@@ -300,89 +404,131 @@
                 </div>
                 <p>Pick preferred models for background or helper tasks without changing the active chat model.</p>
               </div>
-              <div class="settings-page-grid settings-page-grid--two settings-page-grid--model-preferences">
-                <div>
-                  <label class="settings-label" for="summary-model-preference-select">Summaries</label>
+              <div class="settings-subsection-grid settings-subsection-grid--three">
+                <section class="settings-subsection settings-subsection--compact">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Preferred model</span>
+                    <h4 class="settings-subsection__title">Summaries</h4>
+                  </div>
                   <select id="summary-model-preference-select"></select>
-                </div>
-                <div>
-                  <label class="settings-label" for="fetch-summarize-model-preference-select">Fetched URL summaries</label>
+                </section>
+                <section class="settings-subsection settings-subsection--compact">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Preferred model</span>
+                    <h4 class="settings-subsection__title">Fetched URL summaries</h4>
+                  </div>
                   <select id="fetch-summarize-model-preference-select"></select>
-                </div>
-                <div>
-                  <label class="settings-label" for="prune-model-preference-select">Pruning</label>
+                </section>
+                <section class="settings-subsection settings-subsection--compact">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Preferred model</span>
+                    <h4 class="settings-subsection__title">Pruning</h4>
+                  </div>
                   <select id="prune-model-preference-select"></select>
-                </div>
-                <div>
-                  <label class="settings-label" for="fix-text-model-preference-select">Fix text</label>
+                </section>
+                <section class="settings-subsection settings-subsection--compact">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Preferred model</span>
+                    <h4 class="settings-subsection__title">Fix text</h4>
+                  </div>
                   <select id="fix-text-model-preference-select"></select>
-                </div>
-                <div>
-                  <label class="settings-label" for="title-model-preference-select">Conversation titles</label>
+                </section>
+                <section class="settings-subsection settings-subsection--compact">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Preferred model</span>
+                    <h4 class="settings-subsection__title">Conversation titles</h4>
+                  </div>
                   <select id="title-model-preference-select"></select>
-                </div>
-                <div>
-                  <label class="settings-label" for="upload-metadata-model-preference-select">Upload metadata</label>
+                </section>
+                <section class="settings-subsection settings-subsection--compact">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Preferred model</span>
+                    <h4 class="settings-subsection__title">Upload metadata</h4>
+                  </div>
                   <select id="upload-metadata-model-preference-select"></select>
-                </div>
-                <div>
-                  <label class="settings-label" for="sub-agent-model-preference-select">Sub-agent</label>
+                </section>
+                <section class="settings-subsection settings-subsection--compact">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Preferred model</span>
+                    <h4 class="settings-subsection__title">Sub-agent</h4>
+                  </div>
                   <select id="sub-agent-model-preference-select"></select>
-                </div>
+                </section>
               </div>
 
-              <p class="settings-copy">Fallback models are used only when a preferred task model is unavailable. Add more than one to create a priority order for each operation.</p>
+              <div class="settings-callout" data-tone="info">Fallback models are used only when a preferred task model is unavailable. Add more than one to create a priority order for each operation.</div>
 
-              <div class="settings-page-grid settings-page-grid--two settings-page-grid--model-preferences">
-                <div>
-                  <div class="settings-label">Summaries</div>
+              <div class="settings-subsection-grid settings-subsection-grid--three">
+                <section class="settings-subsection settings-subsection--compact">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Fallback order</span>
+                    <h4 class="settings-subsection__title">Summaries</h4>
+                  </div>
                   <div id="summary-model-fallback-list" class="model-management-list"></div>
                   <div class="settings-inline-actions">
                     <button class="btn-ghost" id="summary-model-fallback-add-btn" type="button">Add fallback model</button>
                   </div>
-                </div>
-                <div>
-                  <div class="settings-label">Fetched URL summaries</div>
+                </section>
+                <section class="settings-subsection settings-subsection--compact">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Fallback order</span>
+                    <h4 class="settings-subsection__title">Fetched URL summaries</h4>
+                  </div>
                   <div id="fetch-summarize-model-fallback-list" class="model-management-list"></div>
                   <div class="settings-inline-actions">
                     <button class="btn-ghost" id="fetch-summarize-model-fallback-add-btn" type="button">Add fallback model</button>
                   </div>
-                </div>
-                <div>
-                  <div class="settings-label">Pruning</div>
+                </section>
+                <section class="settings-subsection settings-subsection--compact">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Fallback order</span>
+                    <h4 class="settings-subsection__title">Pruning</h4>
+                  </div>
                   <div id="prune-model-fallback-list" class="model-management-list"></div>
                   <div class="settings-inline-actions">
                     <button class="btn-ghost" id="prune-model-fallback-add-btn" type="button">Add fallback model</button>
                   </div>
-                </div>
-                <div>
-                  <div class="settings-label">Fix text</div>
+                </section>
+                <section class="settings-subsection settings-subsection--compact">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Fallback order</span>
+                    <h4 class="settings-subsection__title">Fix text</h4>
+                  </div>
                   <div id="fix-text-model-fallback-list" class="model-management-list"></div>
                   <div class="settings-inline-actions">
                     <button class="btn-ghost" id="fix-text-model-fallback-add-btn" type="button">Add fallback model</button>
                   </div>
-                </div>
-                <div>
-                  <div class="settings-label">Conversation titles</div>
+                </section>
+                <section class="settings-subsection settings-subsection--compact">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Fallback order</span>
+                    <h4 class="settings-subsection__title">Conversation titles</h4>
+                  </div>
                   <div id="title-model-fallback-list" class="model-management-list"></div>
                   <div class="settings-inline-actions">
                     <button class="btn-ghost" id="title-model-fallback-add-btn" type="button">Add fallback model</button>
                   </div>
-                </div>
-                <div>
-                  <div class="settings-label">Upload metadata</div>
+                </section>
+                <section class="settings-subsection settings-subsection--compact">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Fallback order</span>
+                    <h4 class="settings-subsection__title">Upload metadata</h4>
+                  </div>
                   <div id="upload-metadata-model-fallback-list" class="model-management-list"></div>
                   <div class="settings-inline-actions">
                     <button class="btn-ghost" id="upload-metadata-model-fallback-add-btn" type="button">Add fallback model</button>
                   </div>
-                </div>
-                <div>
-                  <div class="settings-label">Sub-agent</div>
+                </section>
+                <section class="settings-subsection settings-subsection--compact">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Fallback order</span>
+                    <h4 class="settings-subsection__title">Sub-agent</h4>
+                  </div>
                   <div id="sub-agent-model-fallback-list" class="model-management-list"></div>
                   <div class="settings-inline-actions">
                     <button class="btn-ghost" id="sub-agent-model-fallback-add-btn" type="button">Add fallback model</button>
                   </div>
-                </div>
+                </section>
               </div>
             </div>
           </div>
@@ -870,29 +1016,45 @@
                 </div>
                 <p>Control how much tool work the assistant and helper can perform per request.</p>
               </div>
-              <div class="settings-page-grid settings-page-grid--two">
-                <div>
+              <div class="settings-subsection-grid settings-subsection-grid--two">
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Execution caps</span>
+                    <h4 class="settings-subsection__title">Parent model limits</h4>
+                  </div>
                   <label class="settings-label" for="max-steps-input">Tool step limit (1-50)</label>
                   <input type="number" class="settings-number" id="max-steps-input" min="1" max="50" value="5" />
-                </div>
-                <div>
                   <label class="settings-label" for="max-parallel-tools-input">Parent model max parallel tools (1-12)</label>
                   <input type="number" class="settings-number" id="max-parallel-tools-input" min="1" max="12" value="4" />
-                </div>
-                <div>
+                </section>
+
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Delegated work</span>
+                    <h4 class="settings-subsection__title">Sub-agent quick budget</h4>
+                  </div>
                   <label class="settings-label" for="sub-agent-max-steps-input">Sub-agent max steps (1-12)</label>
                   <input type="number" class="settings-number" id="sub-agent-max-steps-input" min="1" max="12" value="6" />
-                </div>
-                <div>
-                  <label class="settings-label" for="fetch-threshold-input">Clipping threshold in tokens (400-20000)</label>
-                  <input type="number" class="settings-number" id="fetch-threshold-input" min="400" max="20000" value="3500" />
-                </div>
-                <div>
-                  <label class="settings-label" for="fetch-aggressiveness-input">Clipping aggressiveness (0-100)</label>
-                  <input type="number" class="settings-number" id="fetch-aggressiveness-input" min="0" max="100" value="50" />
-                </div>
+                  <p class="settings-copy">Calls above the parallel limit queue in the same turn, and the sub-agent may still finish early if it already has enough evidence.</p>
+                </section>
+
+                <section class="settings-subsection settings-subsection--full">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Fetched content clipping</span>
+                    <h4 class="settings-subsection__title">How aggressively long fetches are trimmed</h4>
+                  </div>
+                  <div class="settings-page-grid settings-page-grid--two settings-page-grid--compact">
+                    <div>
+                      <label class="settings-label" for="fetch-threshold-input">Clipping threshold in tokens (400-20000)</label>
+                      <input type="number" class="settings-number" id="fetch-threshold-input" min="400" max="20000" value="3500" />
+                    </div>
+                    <div>
+                      <label class="settings-label" for="fetch-aggressiveness-input">Clipping aggressiveness (0-100)</label>
+                      <input type="number" class="settings-number" id="fetch-aggressiveness-input" min="0" max="100" value="50" />
+                    </div>
+                  </div>
+                </section>
               </div>
-              <p class="settings-copy">Calls above the parallel limit queue in the same turn, and the sub-agent may still finish early if it already has enough evidence.</p>
             </div>
 
             <div class="settings-page-section-card">
@@ -903,14 +1065,22 @@
                 </div>
                 <p>Control how long fetched web content stays cached and whether supported OpenRouter models use prompt caching.</p>
               </div>
-              <div class="settings-page-grid settings-page-grid--two">
-                <div>
+              <div class="settings-subsection-grid settings-subsection-grid--two">
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Web cache</span>
+                    <h4 class="settings-subsection__title">Fetched content retention</h4>
+                  </div>
                   <label class="settings-label" for="web-cache-ttl-hours-input">Web cache TTL in hours (0-168)</label>
                   <input type="number" class="settings-number" id="web-cache-ttl-hours-input" min="0" max="168" value="24" />
                   <p class="settings-copy">Set to 0 to disable the SQLite-backed web cache.</p>
+                </section>
+
+                <div class="settings-toggle-panel">
+                  <label class="tool-toggle"><input type="checkbox" id="openrouter-prompt-cache-enabled-toggle" /> <span>Enable OpenRouter prompt cache when the selected model supports it</span></label>
+                  <p class="settings-copy">This only activates when the chosen OpenRouter model and provider actually support prompt caching.</p>
                 </div>
               </div>
-              <label class="tool-toggle"><input type="checkbox" id="openrouter-prompt-cache-enabled-toggle" /> <span>Enable OpenRouter prompt cache when the selected model supports it</span></label>
             </div>
 
             <div class="settings-page-section-card">
@@ -921,58 +1091,67 @@
                 </div>
                 <p>Control how long the delegated helper can run, how often it may retry, and how much parallel work it can do before falling back.</p>
               </div>
-              <div class="settings-page-grid settings-page-grid--two settings-page-grid--compact">
-                <div>
-                  <label class="settings-label" for="sub-agent-timeout-seconds-input">Timeout in seconds (5-900)</label>
-                  <input type="number" class="settings-number" id="sub-agent-timeout-seconds-input" min="5" max="900" value="240" />
-                  <p class="settings-copy">If the helper exceeds this limit, it pauses and may continue on a fallback model when available.</p>
-                </div>
-                <div>
-                  <label class="settings-label" for="sub-agent-retry-attempts-input">Retry attempts (0-5)</label>
-                  <input type="number" class="settings-number" id="sub-agent-retry-attempts-input" min="0" max="5" value="2" />
-                  <p class="settings-copy">Retries stay on the same model before moving to the next fallback candidate.</p>
-                </div>
-                <div>
-                  <label class="settings-label" for="sub-agent-retry-delay-seconds-input">Retry delay in seconds (0-60)</label>
-                  <input type="number" class="settings-number" id="sub-agent-retry-delay-seconds-input" min="0" max="60" value="5" />
-                  <p class="settings-copy">A short delay can help recover from transient provider pressure without losing the run.</p>
-                </div>
-                <div>
-                  <label class="settings-label" for="sub-agent-max-parallel-tools-input">Max parallel tools (1-12)</label>
-                  <input type="number" class="settings-number" id="sub-agent-max-parallel-tools-input" min="1" max="12" value="2" />
-                  <p class="settings-copy">Limits how many read-only sub-agent calls can run at once. Use the same value as the parent limit if you want both to behave identically.</p>
-                </div>
-              </div>
-              <div class="settings-page-section-card__header settings-page-section-card__header--nested">
-                <div>
-                  <span class="settings-section-kicker">Allowed tools</span>
-                  <h3>Web-only research scope</h3>
-                </div>
-                <p>Choose which web-only tools the delegated helper may use during research. This does not grant file, canvas, or memory access.</p>
-              </div>
-              <div class="tool-permission-sections" id="sub-agent-tool-toggles">
-                {% for section in sub_agent_tool_sections %}
-                <section class="tool-permission-section">
-                  <div class="tool-permission-section__header">
-                    <div>
-                      <div class="settings-label">{{ section.title }}</div>
-                      <p class="settings-copy">{{ section.description }}</p>
-                    </div>
-                    <p class="settings-copy">{{ section.note }}</p>
+              <div class="settings-subsection-grid settings-subsection-grid--two">
+                <section class="settings-subsection settings-subsection--full">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Runtime knobs</span>
+                    <h4 class="settings-subsection__title">Timeout, retries, and parallelism</h4>
                   </div>
-                  <div class="tool-toggles tool-toggles--page tool-permission-section__tools">
-                    {% for tool in section.tools %}
-                    <label class="tool-toggle">
-                      <input type="checkbox" name="sub-agent-allowed-tool" value="{{ tool.name }}" />
-                      <span>
-                        <strong>{{ tool.label }}</strong>
-                        {% if tool.description %}<br /><small>{{ tool.description }}</small>{% endif %}
-                      </span>
-                    </label>
+                  <div class="settings-page-grid settings-page-grid--two settings-page-grid--compact">
+                    <div>
+                      <label class="settings-label" for="sub-agent-timeout-seconds-input">Timeout in seconds (5-900)</label>
+                      <input type="number" class="settings-number" id="sub-agent-timeout-seconds-input" min="5" max="900" value="240" />
+                      <p class="settings-copy">If the helper exceeds this limit, it pauses and may continue on a fallback model when available.</p>
+                    </div>
+                    <div>
+                      <label class="settings-label" for="sub-agent-retry-attempts-input">Retry attempts (0-5)</label>
+                      <input type="number" class="settings-number" id="sub-agent-retry-attempts-input" min="0" max="5" value="2" />
+                      <p class="settings-copy">Retries stay on the same model before moving to the next fallback candidate.</p>
+                    </div>
+                    <div>
+                      <label class="settings-label" for="sub-agent-retry-delay-seconds-input">Retry delay in seconds (0-60)</label>
+                      <input type="number" class="settings-number" id="sub-agent-retry-delay-seconds-input" min="0" max="60" value="5" />
+                      <p class="settings-copy">A short delay can help recover from transient provider pressure without losing the run.</p>
+                    </div>
+                    <div>
+                      <label class="settings-label" for="sub-agent-max-parallel-tools-input">Max parallel tools (1-12)</label>
+                      <input type="number" class="settings-number" id="sub-agent-max-parallel-tools-input" min="1" max="12" value="2" />
+                      <p class="settings-copy">Limits how many read-only sub-agent calls can run at once. Use the same value as the parent limit if you want both to behave identically.</p>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="settings-subsection settings-subsection--full">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Research boundaries</span>
+                    <h4 class="settings-subsection__title">Web-only tool access</h4>
+                    <p class="settings-subsection__copy">Choose which web-only tools the delegated helper may use during research. This does not grant file, canvas, or memory access.</p>
+                  </div>
+                  <div class="tool-permission-sections" id="sub-agent-tool-toggles">
+                    {% for section in sub_agent_tool_sections %}
+                    <section class="tool-permission-section">
+                      <div class="tool-permission-section__header">
+                        <div>
+                          <div class="settings-label">{{ section.title }}</div>
+                          <p class="settings-copy">{{ section.description }}</p>
+                        </div>
+                        <p class="settings-copy">{{ section.note }}</p>
+                      </div>
+                      <div class="tool-toggles tool-toggles--page tool-permission-section__tools">
+                        {% for tool in section.tools %}
+                        <label class="tool-toggle">
+                          <input type="checkbox" name="sub-agent-allowed-tool" value="{{ tool.name }}" />
+                          <span>
+                            <strong>{{ tool.label }}</strong>
+                            {% if tool.description %}<br /><small>{{ tool.description }}</small>{% endif %}
+                          </span>
+                        </label>
+                        {% endfor %}
+                      </div>
+                    </section>
                     {% endfor %}
                   </div>
                 </section>
-                {% endfor %}
               </div>
             </div>
           </div>
@@ -985,6 +1164,7 @@
               </div>
               <p>Only enabled tools are exposed to the assistant and allowed to execute. This page does not widen the sandbox or override feature flags.</p>
             </div>
+            <div class="settings-callout" data-tone="info">These toggles only control tool exposure. They do not bypass workspace, canvas, auth, or environment-level safety checks.</div>
             <div class="tool-permission-sections" id="tool-toggles">
               {% for section in tool_sections %}
               <section class="tool-permission-section">
@@ -1019,16 +1199,18 @@
               </div>
               <p>Choose which operations may read and use proxies from proxies.txt. Unchecked operations always connect directly, and OpenRouter traffic usually stays direct unless your network requires a proxy.</p>
             </div>
-            <div class="tool-toggles tool-toggles--page">
-              {% for option in proxy_operation_options %}
-              <label class="tool-toggle">
-                <input type="checkbox" name="proxy-enabled-operation" value="{{ option.name }}" />
-                <span>
-                  <strong>{{ option.label }}</strong><br />
-                  <small>{{ option.description }}</small>
-                </span>
-              </label>
-              {% endfor %}
+            <div class="settings-toggle-panel">
+              <div class="tool-toggles tool-toggles--page">
+                {% for option in proxy_operation_options %}
+                <label class="tool-toggle">
+                  <input type="checkbox" name="proxy-enabled-operation" value="{{ option.name }}" />
+                  <span>
+                    <strong>{{ option.label }}</strong><br />
+                    <small>{{ option.description }}</small>
+                  </span>
+                </label>
+                {% endfor %}
+              </div>
             </div>
           </div>
         </section>
@@ -1043,8 +1225,12 @@
                 </div>
                 <p>Add a file to RAG and attach a short explanation so retrieval stays targeted.</p>
               </div>
-              <div class="kb-upload-form">
-                <div>
+              <div class="settings-subsection-grid settings-subsection-grid--two">
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Source file</span>
+                    <h4 class="settings-subsection__title">Choose the document</h4>
+                  </div>
                   <label class="settings-label" for="kb-upload-file">File</label>
                   <input
                     id="kb-upload-file"
@@ -1053,26 +1239,36 @@
                     accept=".txt,.md,.csv,.pdf,.docx,.py,.js,.ts,.tsx,.jsx,.json,.html,.css,.scss,.sh,.sql,.yaml,.yml"
                   />
                   <p class="settings-copy">Text, markdown, CSV, PDF, DOCX, and common code files are supported.</p>
-                </div>
-                <div>
+                </section>
+
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Source metadata</span>
+                    <h4 class="settings-subsection__title">Title and description</h4>
+                  </div>
                   <label class="settings-label" for="kb-upload-title">Title</label>
                   <input id="kb-upload-title" class="settings-text" type="text" placeholder="Short source name" />
-                </div>
-                <div>
                   <label class="settings-label" for="kb-upload-description">Description</label>
                   <textarea id="kb-upload-description" rows="4" placeholder="Why should the assistant use this source?"></textarea>
-                </div>
-                <label class="tool-toggle">
-                  <input type="checkbox" id="kb-upload-auto-inject-toggle" checked />
-                  <span>Allow this document in automatic RAG injection</span>
-                </label>
-                <div class="kb-actions-row kb-actions-row--upload">
-                  <div class="kb-actions-row__buttons">
-                    <button class="btn-ghost" id="kb-suggest-btn" type="button">Generate title &amp; description</button>
-                    <button class="btn-primary" id="kb-upload-btn" type="button">Upload to knowledge base</button>
+                </section>
+
+                <section class="settings-subsection settings-subsection--full">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Publishing controls</span>
+                    <h4 class="settings-subsection__title">Injection and upload</h4>
                   </div>
-                  <span id="kb-upload-status" class="settings-status">Ready to upload</span>
-                </div>
+                  <label class="tool-toggle">
+                    <input type="checkbox" id="kb-upload-auto-inject-toggle" checked />
+                    <span>Allow this document in automatic RAG injection</span>
+                  </label>
+                  <div class="kb-actions-row kb-actions-row--upload">
+                    <div class="kb-actions-row__buttons">
+                      <button class="btn-ghost" id="kb-suggest-btn" type="button">Generate title &amp; description</button>
+                      <button class="btn-primary" id="kb-upload-btn" type="button">Upload to knowledge base</button>
+                    </div>
+                    <span id="kb-upload-status" class="settings-status">Ready to upload</span>
+                  </div>
+                </section>
               </div>
             </div>
 
@@ -1084,13 +1280,27 @@
                 </div>
                 <p>Sync conversation history into RAG and manage indexed sources.</p>
               </div>
-              <div class="kb-actions-row">
-                <button class="btn-primary" id="kb-sync-btn" type="button">Sync chats</button>
-                <span id="kb-status" class="settings-status">Knowledge base idle</span>
-              </div>
-              <div class="kb-documents-block">
-                <div class="settings-label">Indexed sources</div>
-                <div id="kb-documents-list" class="kb-documents-list"></div>
+              <div class="settings-subsection-grid settings-subsection-grid--two">
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Sync</span>
+                    <h4 class="settings-subsection__title">Import conversation history</h4>
+                  </div>
+                  <div class="kb-actions-row">
+                    <button class="btn-primary" id="kb-sync-btn" type="button">Sync chats</button>
+                    <span id="kb-status" class="settings-status">Knowledge base idle</span>
+                  </div>
+                </section>
+
+                <section class="settings-subsection settings-subsection--full">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Indexed sources</span>
+                    <h4 class="settings-subsection__title">Current knowledge inventory</h4>
+                  </div>
+                  <div class="kb-documents-block">
+                    <div id="kb-documents-list" class="kb-documents-list"></div>
+                  </div>
+                </section>
               </div>
             </div>
           </div>

@@ -5554,6 +5554,10 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("settings-subsection-grid", html)
         self.assertIn("settings-callout", html)
         self.assertIn('id="tool-memory-lane-panel"', html)
+        self.assertIn("Persona fallback", html)
+        self.assertIn("Model identity", html)
+        self.assertIn("Research boundaries", html)
+        self.assertIn("Publishing controls", html)
         self.assertNotIn('style="', html)
 
     def test_settings_tools_cover_all_defined_tool_specs(self):
