@@ -80,6 +80,7 @@ from canvas_service import (
     batch_read_canvas_documents,
     batch_canvas_edits,
     build_canvas_project_manifest,
+    build_canvas_tool_result,
     create_canvas_runtime_state,
     find_latest_canvas_documents,
     find_latest_canvas_state,
@@ -634,6 +635,15 @@ class AppRoutesTestCase(unittest.TestCase):
             ["uploaded_document"] if payload["features"]["rag_enabled"] else [],
         )
         self.assertFalse(payload["tool_memory_auto_inject"])
+
+    def test_settings_page_mentions_ignored_canvas_documents(self):
+        response = self.client.get("/settings")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            "Ignored Canvas documents stay available for later reuse",
+            response.get_data(as_text=True),
+        )
 
     def test_settings_accepts_extended_summary_options(self):
         response = self.client.patch(
@@ -1875,6 +1885,48 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(len(full_payload["visible_lines"]), 3)
         self.assertEqual(full_payload["visible_line_end"], 3)
         self.assertFalse(full_payload["is_truncated"])
+
+    def test_build_canvas_prompt_payload_hides_ignored_active_document_content(self):
+        payload = _build_canvas_prompt_payload(
+            [
+                {
+                    "id": "canvas-1",
+                    "title": "legacy.py",
+                    "path": "src/legacy.py",
+                    "format": "code",
+                    "language": "python",
+                    "role": "source",
+                    "content": "SECRET_VALUE = 'hidden'\nprint(SECRET_VALUE)",
+                    "ignored": True,
+                    "ignored_reason": "Superseded by src/app.py",
+                    "symbols": ["legacy_main"],
+                },
+                {
+                    "id": "canvas-2",
+                    "title": "app.py",
+                    "path": "src/app.py",
+                    "format": "code",
+                    "language": "python",
+                    "role": "source",
+                    "content": "print('active')",
+                },
+            ],
+            active_document_id="canvas-1",
+            canvas_viewports=[
+                {"document_id": "canvas-1", "document_path": "src/legacy.py", "start_line": 1, "end_line": 1},
+                {"document_id": "canvas-2", "document_path": "src/app.py", "start_line": 1, "end_line": 1},
+            ],
+            max_lines=10,
+        )
+
+        self.assertIsNotNone(payload)
+        self.assertTrue(payload["active_document_ignored"])
+        self.assertEqual(payload["visible_lines"], [])
+        self.assertEqual(payload["visible_line_end"], 0)
+        self.assertEqual([entry["id"] for entry in payload["ignored_documents"]], ["canvas-1"])
+        self.assertEqual(payload["ignored_documents"][0]["ignored_reason"], "Superseded by src/app.py")
+        self.assertEqual([entry["id"] for entry in payload["other_documents"]], ["canvas-2"])
+        self.assertEqual([viewport["document_id"] for viewport in payload["viewports"]], ["canvas-2"])
 
     def test_build_canvas_prompt_payload_keeps_full_long_markdown_lines_when_document_fits_budget(self):
         long_line = "A" * 220
@@ -4776,6 +4828,49 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("## Tool Calling", content)
         self.assertIn("Use only the tools listed in the Active Tools section for this turn", content)
 
+    def test_runtime_system_message_represents_ignored_canvas_documents_as_metadata_only(self):
+        message = build_runtime_system_message(
+            active_tool_names=[
+                "update_canvas_metadata",
+                "expand_canvas_document",
+                "search_canvas_document",
+            ],
+            canvas_documents=[
+                {
+                    "id": "canvas-1",
+                    "title": "legacy.py",
+                    "path": "src/legacy.py",
+                    "format": "code",
+                    "language": "python",
+                    "role": "source",
+                    "content": "SECRET_VALUE = 'hidden'\nprint(SECRET_VALUE)",
+                    "ignored": True,
+                    "ignored_reason": "Superseded by src/app.py",
+                    "symbols": ["legacy_main"],
+                },
+                {
+                    "id": "canvas-2",
+                    "title": "app.py",
+                    "path": "src/app.py",
+                    "format": "code",
+                    "language": "python",
+                    "role": "source",
+                    "content": "print('active')",
+                },
+            ],
+            canvas_active_document_id="canvas-1",
+        )
+
+        content = message["content"]
+        self.assertIn("- Ignored in prompt: true", content)
+        self.assertIn("- Ignore reason: Superseded by src/app.py", content)
+        self.assertIn("## Ignored Canvas Documents", content)
+        self.assertIn("- src/legacy.py", content)
+        self.assertIn("  - Symbols: legacy_main", content)
+        self.assertIn("ignored=false", content)
+        self.assertNotIn("SECRET_VALUE = 'hidden'", content)
+        self.assertNotIn("print(SECRET_VALUE)", content)
+
     def test_build_tool_call_contract_mentions_parallel_and_dependent_tools(self):
         contract = build_tool_call_contract([
             "search_web",
@@ -5031,6 +5126,16 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("call expand_canvas_document again", expand_guidance)
         self.assertIn("before line-level edits", scroll_description)
         self.assertIn("Use this first when the user asks you to find something inside a large canvas", search_guidance)
+
+    def test_update_canvas_metadata_tool_spec_supports_ignored_documents(self):
+        metadata_spec = TOOL_SPEC_BY_NAME["update_canvas_metadata"]
+        metadata_properties = metadata_spec["parameters"]["properties"]
+        guidance = metadata_spec["prompt"]["guidance"]
+
+        self.assertIn("ignored", metadata_properties)
+        self.assertIn("ignored_reason", metadata_properties)
+        self.assertIn("ignored=true", guidance)
+        self.assertIn("ignored=false", guidance)
 
     def test_runtime_system_message_mentions_expand_snapshot_rule(self):
         message = build_runtime_system_message(
@@ -12894,6 +12999,65 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("exports", result["updated_fields"])
         self.assertEqual(result["document"]["imports"], ["sqlite3"])
         self.assertEqual(result["document"]["exports"], ["main"])
+
+    def test_update_canvas_metadata_can_ignore_and_restore_document(self):
+        runtime_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "canvas-1",
+                    "title": "legacy.py",
+                    "path": "src/legacy.py",
+                    "format": "code",
+                    "language": "python",
+                    "content": "print('legacy')",
+                }
+            ]
+        )
+
+        with self.assertRaisesRegex(ValueError, "ignored_reason"):
+            update_canvas_metadata(
+                runtime_state,
+                document_path="src/legacy.py",
+                ignored=True,
+            )
+
+        ignored_result = update_canvas_metadata(
+            runtime_state,
+            document_path="src/legacy.py",
+            ignored=True,
+            ignored_reason="Superseded by src/app.py",
+        )
+
+        self.assertTrue(ignored_result["document"]["ignored"])
+        self.assertEqual(ignored_result["document"]["ignored_reason"], "Superseded by src/app.py")
+        self.assertIn("ignored", ignored_result["updated_fields"])
+        self.assertIn("ignored_reason", ignored_result["updated_fields"])
+
+        ignored_tool_result = build_canvas_tool_result(ignored_result["document"], action="metadata_updated")
+        self.assertEqual(ignored_tool_result["content"], "")
+        self.assertFalse(ignored_tool_result["content_truncated"])
+
+        validation_result = validate_canvas_document(runtime_state, document_path="src/legacy.py")
+        self.assertEqual(validation_result["validator_used"], "none")
+        self.assertIn("ignored canvas documents", validation_result["issues"][0]["message"])
+
+        with self.assertRaisesRegex(ValueError, "ignored canvas document"):
+            search_canvas_document(runtime_state, "legacy", document_path="src/legacy.py")
+
+        restored_result = update_canvas_metadata(
+            runtime_state,
+            document_path="src/legacy.py",
+            ignored=False,
+        )
+
+        self.assertNotIn("ignored", restored_result["document"])
+        self.assertNotIn("ignored_reason", restored_result["document"])
+        self.assertIn("ignored", restored_result["updated_fields"])
+        self.assertIn("ignored_reason", restored_result["updated_fields"])
+
+        restored_search = search_canvas_document(runtime_state, "legacy", document_path="src/legacy.py")
+        self.assertGreater(restored_search["match_count"], 0)
+        self.assertEqual(restored_search["matches"][0]["document_id"], "canvas-1")
 
     def test_overlapping_edit_clears_auto_unpin_canvas_viewport(self):
         runtime_state = {"canvas": create_canvas_runtime_state(

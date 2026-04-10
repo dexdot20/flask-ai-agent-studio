@@ -1751,7 +1751,7 @@ TOOL_SPECS = [
     },
     {
         "name": "update_canvas_metadata",
-        "description": "Update canvas document metadata such as title, summary, role, imports, exports, dependencies, or important symbols without changing content lines.",
+        "description": "Update canvas document metadata such as title, summary, role, ignored state, ignore reason, imports, exports, dependencies, or important symbols without changing content lines.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -1760,6 +1760,8 @@ TOOL_SPECS = [
                 "title": {"type": "string"},
                 "summary": {"type": "string"},
                 "role": {"type": "string", "enum": ["source", "config", "dependency", "docs", "test", "script", "note"]},
+                "ignored": {"type": "boolean", "description": "Set true to hide this document's content from future automatic prompt excerpts without deleting it. Set false to re-enable the document later."},
+                "ignored_reason": {"type": "string", "description": "Short reason explaining why the document is being ignored. Required when turning ignored on for a document that does not already have a reason."},
                 "add_imports": {"type": "array", "items": {"type": "string"}},
                 "remove_imports": {"type": "array", "items": {"type": "string"}},
                 "add_exports": {"type": "array", "items": {"type": "string"}},
@@ -1771,8 +1773,8 @@ TOOL_SPECS = [
         },
         "prompt": {
             "purpose": "Updates canvas metadata without touching document content.",
-            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "title": "new title", "summary": "new summary", "role": "new role", "add_imports": "imports to append", "remove_imports": "imports to remove", "add_exports": "exports to append", "remove_exports": "exports to remove", "add_dependencies": "dependencies to append", "remove_dependencies": "dependencies to remove", "add_symbols": "symbols to append"},
-            "guidance": "Use this when only metadata should change and the document body must remain untouched.",
+            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "title": "new title", "summary": "new summary", "role": "new role", "ignored": "set true to suppress future prompt content or false to re-enable it", "ignored_reason": "short reason for ignoring the document", "add_imports": "imports to append", "remove_imports": "imports to remove", "add_exports": "exports to append", "remove_exports": "exports to remove", "add_dependencies": "dependencies to append", "remove_dependencies": "dependencies to remove", "add_symbols": "symbols to append"},
+            "guidance": "Use this when only metadata should change and the document body must remain untouched. Set ignored=true with ignored_reason to hide a document's content from future prompt excerpts without deleting it, and set ignored=false later when that document should become visible again.",
         },
     },
     {

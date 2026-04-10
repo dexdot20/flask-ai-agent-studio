@@ -5957,6 +5957,8 @@ def _run_update_canvas_metadata(tool_args: dict, runtime_state: dict):
         title=tool_args.get("title"),
         summary=tool_args.get("summary"),
         role=tool_args.get("role"),
+        ignored=tool_args.get("ignored"),
+        ignored_reason=tool_args.get("ignored_reason"),
         add_imports=tool_args.get("add_imports"),
         remove_imports=tool_args.get("remove_imports"),
         add_exports=tool_args.get("add_exports"),
@@ -5967,6 +5969,10 @@ def _run_update_canvas_metadata(tool_args: dict, runtime_state: dict):
     )
     tool_result = build_canvas_tool_result(result["document"], action="metadata_updated")
     tool_result["updated_fields"] = result.get("updated_fields") or []
+    if result["document"].get("ignored") is True:
+        return tool_result, f"Canvas document ignored: {result['document']['title']}"
+    if "ignored" in (result.get("updated_fields") or []):
+        return tool_result, f"Canvas document re-enabled: {result['document']['title']}"
     return tool_result, f"Canvas metadata updated for {result['document']['title']}"
 
 
@@ -6123,6 +6129,8 @@ def _build_already_visible_canvas_expand_result(tool_args: dict, runtime_state: 
 
     active_document = prompt_payload.get("active_document") if isinstance(prompt_payload.get("active_document"), dict) else None
     if not isinstance(active_document, dict):
+        return None
+    if prompt_payload.get("active_document_ignored") is True or active_document.get("ignored") is True:
         return None
 
     canvas_state = _get_canvas_runtime_state(runtime_state)

@@ -1243,6 +1243,27 @@ def _build_canvas_prompt_payload(
                 active_document = document
                 break
 
+    manifest_file_list = (manifest or {}).get("file_list") if isinstance((manifest or {}).get("file_list"), list) else []
+    ignored_documents = [
+        entry
+        for entry in manifest_file_list
+        if isinstance(entry, dict) and entry.get("ignored") is True
+    ]
+    ignored_document_ids = {str(entry.get("id") or "").strip() for entry in ignored_documents}
+    other_documents = [
+        entry
+        for entry in manifest_file_list
+        if isinstance(entry, dict)
+        and str(entry.get("id") or "").strip() != str(active_document.get("id") or "").strip()
+        and str(entry.get("id") or "").strip() not in ignored_document_ids
+    ]
+    filtered_viewports = [
+        viewport
+        for viewport in (canvas_viewports or [])
+        if isinstance(viewport, dict)
+        and str(viewport.get("document_id") or "").strip() not in ignored_document_ids
+    ]
+
     content = str(active_document.get("content") or "")
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
     all_lines = content.split("\n") if content else []
@@ -1251,6 +1272,26 @@ def _build_canvas_prompt_payload(
     clipped_line_count = 0
     line_format = str(active_document.get("format") or "").strip().lower()
     document_capabilities = get_canvas_document_capabilities(active_document)
+    active_document_ignored = active_document.get("ignored") is True
+
+    if active_document_ignored:
+        return {
+            "mode": (manifest or {}).get("mode") or "document",
+            "manifest": manifest,
+            "relationship_map": (manifest or {}).get("relationship_map"),
+            "document_count": len(documents),
+            "active_document": active_document,
+            "active_document_ignored": True,
+            "ignored_documents": ignored_documents,
+            "other_documents": other_documents,
+            "visible_lines": [],
+            "clipped_line_count": 0,
+            "is_truncated": False,
+            "visible_line_end": 0,
+            "total_lines": int(active_document.get("line_count") or len(all_lines)),
+            "viewports": filtered_viewports,
+            "content_hash": content_hash,
+        }
 
     if not document_capabilities["line_addressable"]:
         return {
@@ -1259,17 +1300,15 @@ def _build_canvas_prompt_payload(
             "relationship_map": (manifest or {}).get("relationship_map"),
             "document_count": len(documents),
             "active_document": active_document,
-            "other_documents": [
-                entry
-                for entry in ((manifest or {}).get("file_list") or [])
-                if entry.get("id") != active_document.get("id")
-            ],
+            "active_document_ignored": False,
+            "ignored_documents": ignored_documents,
+            "other_documents": other_documents,
             "visible_lines": [],
             "clipped_line_count": 0,
             "is_truncated": False,
             "visible_line_end": 0,
             "total_lines": int(active_document.get("line_count") or len(all_lines)),
-            "viewports": [viewport for viewport in (canvas_viewports or []) if isinstance(viewport, dict)],
+            "viewports": filtered_viewports,
             "content_hash": content_hash,
         }
 
@@ -1330,17 +1369,15 @@ def _build_canvas_prompt_payload(
         "relationship_map": (manifest or {}).get("relationship_map"),
         "document_count": len(documents),
         "active_document": active_document,
-        "other_documents": [
-            entry
-            for entry in ((manifest or {}).get("file_list") or [])
-            if entry.get("id") != active_document.get("id")
-        ],
+        "active_document_ignored": False,
+        "ignored_documents": ignored_documents,
+        "other_documents": other_documents,
         "visible_lines": visible_lines,
         "clipped_line_count": clipped_line_count,
         "is_truncated": len(visible_lines) < len(all_lines),
         "visible_line_end": len(visible_lines),
         "total_lines": int(active_document.get("line_count") or len(all_lines)),
-        "viewports": [viewport for viewport in (canvas_viewports or []) if isinstance(viewport, dict)],
+        "viewports": filtered_viewports,
         "content_hash": content_hash,
     }
 
@@ -1377,7 +1414,9 @@ def _build_canvas_workspace_summary(canvas_payload: dict) -> list[str]:
     total_lines = int(active_document.get("line_count") or 0)
     total_pages = int(active_document.get("page_count") or 0)
     visible_line_end = int(canvas_payload.get("visible_line_end") or 0)
-    if total_lines and visible_line_end:
+    if active_document.get("ignored") is True:
+        lines.append("- Canvas view status: hidden (active document is ignored for prompt content)")
+    elif total_lines and visible_line_end:
         if visible_line_end >= total_lines:
             lines.append(
                 f"- Canvas view status: full document visible ({visible_line_end}/{total_lines} lines)"
@@ -1403,6 +1442,88 @@ def _build_canvas_workspace_summary(canvas_payload: dict) -> list[str]:
         if len(other_labels) > len(shown_labels):
             lines.append(f"- Additional documents omitted: {len(other_labels) - len(shown_labels)}")
 
+    ignored_documents = canvas_payload.get("ignored_documents") if isinstance(canvas_payload.get("ignored_documents"), list) else []
+    ignored_labels = [
+        _document_label(entry)
+        for entry in ignored_documents
+        if isinstance(entry, dict) and str(entry.get("id") or "").strip() != str(active_document.get("id") or "").strip()
+    ]
+    if ignored_labels:
+        shown_ignored_labels = ignored_labels[:4]
+        lines.append(
+            f"- {'Ignored files' if is_project_mode and has_explicit_paths else 'Ignored canvas documents'}: "
+            f"{', '.join(shown_ignored_labels)} (metadata only)"
+        )
+        if len(ignored_labels) > len(shown_ignored_labels):
+            lines.append(f"- Additional ignored documents omitted: {len(ignored_labels) - len(shown_ignored_labels)}")
+
+    lines.append("")
+    return lines
+
+
+def _format_canvas_metadata_values(values) -> str | None:
+    if not isinstance(values, list):
+        return None
+    cleaned_values = [str(value).strip() for value in values if str(value).strip()]
+    if not cleaned_values:
+        return None
+    return ", ".join(cleaned_values[:8])
+
+
+def _build_ignored_canvas_documents_section(canvas_payload: dict) -> list[str]:
+    ignored_documents = canvas_payload.get("ignored_documents") if isinstance(canvas_payload.get("ignored_documents"), list) else []
+    if not ignored_documents:
+        return []
+
+    is_project_mode = str(canvas_payload.get("mode") or "document").strip().lower() == "project"
+    prefer_path = any(str(entry.get("path") or "").strip() for entry in ignored_documents)
+    lines = [
+        "## Ignored Canvas Documents",
+        "- These documents still exist in Canvas state, but their content is intentionally omitted from the prompt until re-enabled with update_canvas_metadata and ignored=false.",
+    ]
+
+    for entry in ignored_documents[:6]:
+        if not isinstance(entry, dict):
+            continue
+        label = (
+            str(entry.get("path") or entry.get("title") or entry.get("id") or "Canvas").strip()
+            if is_project_mode and prefer_path
+            else str(entry.get("title") or entry.get("path") or entry.get("id") or "Canvas").strip()
+        ) or "Canvas"
+        lines.append(f"- {label}")
+        title = str(entry.get("title") or "").strip()
+        if title and title != label:
+            lines.append(f"  - Title: {title}")
+        ignore_reason = str(entry.get("ignored_reason") or "").strip() or "No reason recorded."
+        lines.append(f"  - Ignore reason: {ignore_reason}")
+        if entry.get("role"):
+            lines.append(f"  - Role: {entry['role']}")
+        if entry.get("format"):
+            lines.append(f"  - Format: {entry['format']}")
+        if entry.get("content_mode"):
+            lines.append(f"  - Content mode: {entry['content_mode']}")
+        if entry.get("canvas_mode"):
+            lines.append(f"  - Canvas mode: {entry['canvas_mode']}")
+        if entry.get("language"):
+            lines.append(f"  - Language: {entry['language']}")
+        line_count = int(entry.get("line_count") or 0)
+        if line_count > 0:
+            lines.append(f"  - Total lines: {line_count}")
+        page_count = int(entry.get("page_count") or 0)
+        if page_count > 1:
+            lines.append(f"  - Total pages: {page_count}")
+        for key, label_text in (
+            ("imports", "Imports"),
+            ("exports", "Exports"),
+            ("symbols", "Symbols"),
+            ("dependencies", "Dependencies"),
+        ):
+            metadata_values = _format_canvas_metadata_values(entry.get(key))
+            if metadata_values:
+                lines.append(f"  - {label_text}: {metadata_values}")
+
+    if len(ignored_documents) > 6:
+        lines.append(f"- Additional ignored documents omitted: {len(ignored_documents) - 6}")
     lines.append("")
     return lines
 
@@ -1534,6 +1655,8 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
         "- Use preview_canvas_changes before a large or risky batch when you need a non-mutating diff preview first.",
         "- Use transform_canvas_lines for bulk find-replace work; use count_only first when the replacement scope is uncertain.",
         "- Use update_canvas_metadata for title, summary, role, dependency, or symbol metadata changes that do not change document content.",
+        "- Use update_canvas_metadata with ignored=true and ignored_reason to hide a canvas document's content from future prompts without deleting it; set ignored=false later to re-enable it.",
+        "- Do not use line-based read, search, validate, or edit tools on an ignored canvas document until it has been re-enabled.",
         "- Cleanup: if a canvas document is obsolete, superseded, or just a scratch draft that no longer needs to stay in context, delete it with delete_canvas_document so it stops consuming prompt space.",
         "- If the entire canvas is now obsolete or should be reset, use clear_canvas instead of leaving dead documents behind.",
         "- If you will keep working in the same region for multiple turns, use set_canvas_viewport so the pinned lines are injected automatically in later prompts.",
@@ -1818,6 +1941,7 @@ def _build_runtime_volatile_parts(
         if workspace_summary_lines:
             volatile_parts.extend(workspace_summary_lines)
         active_document = canvas_payload["active_document"]
+        active_document_ignored = active_document.get("ignored") is True
         volatile_parts.append("## Active Canvas Document")
         volatile_parts.append(f"- Active document id: {active_document['id']}")
         if not workspace_summary_lines and active_document.get("path"):
@@ -1834,24 +1958,34 @@ def _build_runtime_volatile_parts(
         volatile_parts.append(f"- Total lines: {canvas_payload['total_lines']}")
         if int(active_document.get("page_count") or 0) > 1:
             volatile_parts.append(f"- Total pages: {int(active_document.get('page_count') or 0)}")
-        if get_canvas_document_capabilities(active_document)["line_addressable"]:
+        if active_document_ignored:
+            volatile_parts.append("- Ignored in prompt: true")
+            if active_document.get("ignored_reason"):
+                volatile_parts.append(f"- Ignore reason: {active_document['ignored_reason']}")
+            volatile_parts.append("- Visible lines in prompt: hidden (ignored document)")
+        elif get_canvas_document_capabilities(active_document)["line_addressable"]:
             volatile_parts.append(
                 f"- Visible lines in prompt: 1-{canvas_payload['visible_line_end']}"
                 + (" (truncated excerpt)" if canvas_payload["is_truncated"] else "")
             )
         else:
             volatile_parts.append("- Visual preview: page images are available in the UI, but line excerpts are not injected for this document type.")
-        preview_compaction_note = _build_canvas_preview_compaction_note(
-            active_tool_names,
-            int(canvas_payload.get("clipped_line_count") or 0),
-        )
-        if preview_compaction_note:
-            volatile_parts.append(preview_compaction_note)
-        if "expand_canvas_document" in set(active_tool_names or []):
+        if not active_document_ignored:
+            preview_compaction_note = _build_canvas_preview_compaction_note(
+                active_tool_names,
+                int(canvas_payload.get("clipped_line_count") or 0),
+            )
+            if preview_compaction_note:
+                volatile_parts.append(preview_compaction_note)
+        if not active_document_ignored and "expand_canvas_document" in set(active_tool_names or []):
             volatile_parts.append(
                 "- Snapshot rule: expand_canvas_document returns a call-time snapshot. If the canvas may have changed after an earlier expansion, call it again before relying on that older view."
             )
-        if not get_canvas_document_capabilities(active_document)["line_addressable"]:
+        if active_document_ignored:
+            volatile_parts.append(
+                "- Guidance: This canvas document is intentionally ignored for automatic prompt content. Its metadata stays visible so you can re-enable it later with update_canvas_metadata and ignored=false when needed."
+            )
+        elif not get_canvas_document_capabilities(active_document)["line_addressable"]:
             volatile_parts.append(
                 "- Guidance: This active canvas document is an image-backed visual preview. Treat it as read-only and avoid line-based canvas inspection or editing tools."
             )
@@ -1866,18 +2000,19 @@ def _build_runtime_volatile_parts(
                 "- In project mode, prefer the explicit document_path shown in the prompt for targeting, even when you do not know the document_id yet."
             )
         if (
-            get_canvas_document_capabilities(active_document)["line_addressable"]
+            not active_document_ignored
+            and get_canvas_document_capabilities(active_document)["line_addressable"]
             and is_canvas_document_editable(active_document)
             and "rewrite_canvas_document" in set(active_tool_names or [])
         ):
             volatile_parts.append(
                 "- Auto-update rule: If your response generates content that directly replaces or substantially transforms this document, call rewrite_canvas_document immediately — do not ask the user for permission to save."
             )
-        if int(active_document.get("page_count") or 0) > 1 and get_canvas_document_capabilities(active_document)["line_addressable"]:
+        if not active_document_ignored and int(active_document.get("page_count") or 0) > 1 and get_canvas_document_capabilities(active_document)["line_addressable"]:
             volatile_parts.append(
                 "- Multi-page guidance: if the task refers to a specific PDF-style page, call focus_canvas_page only when the document already exposes explicit '## Page N' markers in its text content."
             )
-        if canvas_payload["visible_lines"]:
+        if canvas_payload["visible_lines"] and not active_document_ignored:
             _canvas_content_unchanged = (
                 previous_canvas_content_hash
                 and previous_canvas_content_hash == canvas_payload.get("content_hash")
@@ -1888,8 +2023,13 @@ def _build_runtime_volatile_parts(
                 )
             else:
                 volatile_parts.append("```text\n" + "\n".join(canvas_payload["visible_lines"]) + "\n```\n")
-        elif get_canvas_document_capabilities(active_document)["line_addressable"]:
+        elif get_canvas_document_capabilities(active_document)["line_addressable"] and not active_document_ignored:
             volatile_parts.append("(The active canvas document is empty.)\n")
+
+        ignored_documents_section = _build_ignored_canvas_documents_section(canvas_payload)
+        if ignored_documents_section:
+            volatile_parts.extend(ignored_documents_section)
+
         viewport_payloads = canvas_payload.get("viewports") if isinstance(canvas_payload.get("viewports"), list) else []
         if viewport_payloads:
             volatile_parts.append("## Pinned Canvas Viewports")

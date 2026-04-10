@@ -32,6 +32,7 @@ CANVAS_MAX_CONTENT_LENGTH = 120_000
 CANVAS_MAX_LANGUAGE_LENGTH = 48
 CANVAS_MAX_PATH_LENGTH = 240
 CANVAS_MAX_SUMMARY_LENGTH = 280
+CANVAS_MAX_IGNORE_REASON_LENGTH = 280
 CANVAS_MAX_SOURCE_URL_LENGTH = 500
 CANVAS_MAX_SCOPE_ID_LENGTH = 80
 CANVAS_MAX_RELATION_COUNT = 24
@@ -226,6 +227,20 @@ def _normalize_canvas_short_text(value, max_length: int) -> str | None:
     return text or None
 
 
+def _normalize_canvas_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value in (None, ""):
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _normalize_canvas_ignore_reason(value) -> str | None:
+    return _normalize_canvas_short_text(value, CANVAS_MAX_IGNORE_REASON_LENGTH)
+
+
 def _normalize_canvas_identifier(value) -> str | None:
     identifier = re.sub(r"[^a-z0-9_.:-]", "", str(value or "").strip().lower())[:CANVAS_MAX_SCOPE_ID_LENGTH]
     return identifier or None
@@ -331,20 +346,31 @@ def is_canvas_document_editable(document: dict | None) -> bool:
     return get_canvas_document_canvas_mode(document) == CANVAS_DOCUMENT_MODE_EDITABLE
 
 
+def is_canvas_document_ignored(document: dict | None) -> bool:
+    return isinstance(document, dict) and document.get("ignored") is True
+
+
 def get_canvas_document_capabilities(document: dict | None) -> dict[str, bool]:
     content_mode = get_canvas_document_content_mode(document)
+    ignored = is_canvas_document_ignored(document)
     return {
         "editable": is_canvas_document_editable(document),
-        "line_addressable": content_mode != CANVAS_CONTENT_MODE_VISUAL,
-        "page_addressable": int((document or {}).get("page_count") or 0) > 0,
-        "region_addressable": content_mode in {CANVAS_CONTENT_MODE_VISUAL, CANVAS_CONTENT_MODE_HYBRID},
+        "line_addressable": content_mode != CANVAS_CONTENT_MODE_VISUAL and not ignored,
+        "page_addressable": int((document or {}).get("page_count") or 0) > 0 and not ignored,
+        "region_addressable": content_mode in {CANVAS_CONTENT_MODE_VISUAL, CANVAS_CONTENT_MODE_HYBRID} and not ignored,
         "visual": content_mode == CANVAS_CONTENT_MODE_VISUAL,
         "hybrid": content_mode == CANVAS_CONTENT_MODE_HYBRID,
+        "ignored": ignored,
     }
 
 
 def _raise_canvas_document_capability_error(document: dict, action: str, capability: str) -> None:
     title = str(document.get("title") or "Canvas").strip() or "Canvas"
+    if document.get("ignored") is True:
+        raise ValueError(
+            f"{action} is not available for the ignored canvas document '{title}'. "
+            "Re-enable it with update_canvas_metadata and ignored=false before using text-addressable tools."
+        )
     if capability == "editable":
         raise ValueError(
             f"{action} is not available for the read-only visual canvas document '{title}'. "
@@ -743,7 +769,15 @@ def build_canvas_project_manifest(documents: list[dict] | None, active_document_
             "active": active_document is not None and document["id"] == active_document["id"],
             "priority": CANVAS_FILE_PRIORITY.get(role, 999),
         }
-        for key in ("path", "role", "language", "project_id", "workspace_id"):
+        for key in (
+            "path",
+            "role",
+            "language",
+            "project_id",
+            "workspace_id",
+            "content_mode",
+            "canvas_mode",
+        ):
             if document.get(key):
                 entry[key] = document[key]
         for key in ("source_url", "source_title", "source_kind", "import_group_id"):
@@ -757,6 +791,12 @@ def build_canvas_project_manifest(documents: list[dict] | None, active_document_
             values = document.get(key) if isinstance(document.get(key), list) else []
             if values:
                 entry[key] = values[:8]
+        if int(document.get("page_count") or 0) > 0:
+            entry["page_count"] = int(document["page_count"])
+        if document.get("ignored") is True:
+            entry["ignored"] = True
+        if document.get("ignored_reason"):
+            entry["ignored_reason"] = document["ignored_reason"]
         file_list.append(entry)
 
         if mode == CANVAS_MODE_PROJECT and not document.get("path"):
@@ -846,6 +886,11 @@ def normalize_canvas_document(value, *, fallback_title: str = "Canvas") -> dict 
     updated_at = str(value.get("updated_at") or "").strip()[:80]
     role = _normalize_canvas_role(value.get("role")) or _infer_canvas_role(path, title, format_name)
     summary = _normalize_canvas_short_text(value.get("summary"), CANVAS_MAX_SUMMARY_LENGTH)
+    ignored_explicit = "ignored" in value
+    ignored = _normalize_canvas_bool(value.get("ignored")) if ignored_explicit else False
+    ignored_reason = _normalize_canvas_ignore_reason(value.get("ignored_reason"))
+    if ignored_reason and not ignored and not ignored_explicit:
+        ignored = True
     imports = _normalize_canvas_string_list(value.get("imports"))
     exports = _normalize_canvas_string_list(value.get("exports"))
     symbols = _normalize_canvas_string_list(value.get("symbols"))
@@ -935,6 +980,10 @@ def normalize_canvas_document(value, *, fallback_title: str = "Canvas") -> dict 
     source_message_id = value.get("source_message_id")
     if isinstance(source_message_id, int) and source_message_id > 0:
         cleaned["source_message_id"] = source_message_id
+    if ignored:
+        cleaned["ignored"] = True
+        if ignored_reason:
+            cleaned["ignored_reason"] = ignored_reason
 
     return cleaned
 
@@ -2036,6 +2085,8 @@ def update_canvas_metadata(
     title: str | None = None,
     summary: str | None = None,
     role: str | None = None,
+    ignored: bool | None = None,
+    ignored_reason: str | None = None,
     add_imports: list[str] | None = None,
     remove_imports: list[str] | None = None,
     add_exports: list[str] | None = None,
@@ -2049,18 +2100,51 @@ def update_canvas_metadata(
     next_document = dict(document)
     updated_fields: list[str] = []
 
+    def add_updated_field(field_name: str) -> None:
+        if field_name not in updated_fields:
+            updated_fields.append(field_name)
+
     if title is not None:
         next_document["title"] = str(title or "Canvas").strip()[:CANVAS_MAX_TITLE_LENGTH] or "Canvas"
-        updated_fields.append("title")
+        add_updated_field("title")
     if summary is not None:
         next_document["summary"] = _normalize_canvas_short_text(summary, CANVAS_MAX_SUMMARY_LENGTH) or next_document.get("summary")
-        updated_fields.append("summary")
+        add_updated_field("summary")
     if role is not None:
         normalized_role = _normalize_canvas_role(role)
         if not normalized_role:
             raise ValueError(f"Unsupported canvas role: {role}")
         next_document["role"] = normalized_role
-        updated_fields.append("role")
+        add_updated_field("role")
+
+    previous_ignored = document.get("ignored") is True
+    previous_ignored_reason = _normalize_canvas_ignore_reason(document.get("ignored_reason"))
+    next_ignored = previous_ignored
+    if ignored is not None:
+        next_ignored = bool(ignored)
+    elif ignored_reason is not None and not next_ignored:
+        next_ignored = True
+
+    next_ignored_reason = previous_ignored_reason
+    if ignored_reason is not None:
+        next_ignored_reason = _normalize_canvas_ignore_reason(ignored_reason)
+
+    if next_ignored:
+        if not next_ignored_reason:
+            raise ValueError("ignored_reason is required when ignoring a canvas document.")
+        next_document["ignored"] = True
+        next_document["ignored_reason"] = next_ignored_reason
+    else:
+        next_document.pop("ignored", None)
+        next_document.pop("ignored_reason", None)
+
+    if next_ignored != previous_ignored:
+        add_updated_field("ignored")
+    if next_ignored:
+        if next_ignored_reason != previous_ignored_reason:
+            add_updated_field("ignored_reason")
+    elif previous_ignored_reason is not None:
+        add_updated_field("ignored_reason")
 
     if add_imports is not None or remove_imports is not None:
         next_document["imports"] = _merge_canvas_metadata_values(
@@ -2068,7 +2152,7 @@ def update_canvas_metadata(
             add_values=add_imports,
             remove_values=remove_imports,
         )
-        updated_fields.append("imports")
+        add_updated_field("imports")
 
     if add_exports is not None or remove_exports is not None:
         next_document["exports"] = _merge_canvas_metadata_values(
@@ -2076,7 +2160,7 @@ def update_canvas_metadata(
             add_values=add_exports,
             remove_values=remove_exports,
         )
-        updated_fields.append("exports")
+        add_updated_field("exports")
 
     if add_dependencies is not None or remove_dependencies is not None:
         next_document["dependencies"] = _merge_canvas_metadata_values(
@@ -2084,7 +2168,7 @@ def update_canvas_metadata(
             add_values=add_dependencies,
             remove_values=remove_dependencies,
         )
-        updated_fields.append("dependencies")
+        add_updated_field("dependencies")
 
     if add_symbols is not None:
         symbol_values = list(next_document.get("symbols") or [])
@@ -2095,7 +2179,7 @@ def update_canvas_metadata(
             symbol_values.append(value)
             symbol_lookup.add(value.casefold())
         next_document["symbols"] = symbol_values
-        updated_fields.append("symbols")
+        add_updated_field("symbols")
 
     normalized_document = _store_canvas_document(runtime_state, next_document)
     return {
@@ -2801,6 +2885,23 @@ def validate_canvas_document(
     validator: str | None = None,
 ) -> dict:
     _, document = _find_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
+    if document.get("ignored") is True:
+        return {
+            "status": "ok",
+            "action": "validated",
+            "document_id": document.get("id"),
+            "document_path": document.get("path"),
+            "title": document.get("title"),
+            "validator_used": "none",
+            "is_valid": False,
+            "issue_count": 1,
+            "issues": [
+                _build_canvas_validation_issue(
+                    "info",
+                    "Validation is not available for ignored canvas documents until they are re-enabled with update_canvas_metadata and ignored=false.",
+                )
+            ],
+        }
     if not get_canvas_document_capabilities(document)["line_addressable"]:
         return {
             "status": "ok",
@@ -2936,6 +3037,10 @@ def build_canvas_document_result_snapshot(document: dict | None) -> dict | None:
     visual_page_image_ids = normalized.get("visual_page_image_ids") if isinstance(normalized.get("visual_page_image_ids"), list) else []
     if visual_page_image_ids:
         snapshot["visual_page_image_ids"] = visual_page_image_ids
+    if normalized.get("ignored") is True:
+        snapshot["ignored"] = True
+    if normalized.get("ignored_reason"):
+        snapshot["ignored_reason"] = normalized["ignored_reason"]
     return snapshot
 
 
@@ -2955,7 +3060,10 @@ def build_canvas_tool_result(
     # For localized edits on code documents, show a context window around the
     # affected region rather than the first 2000 chars. This lets the model
     # verify its changes in place without having to scroll through the file.
-    if (
+    if normalized.get("ignored") is True:
+        preview = ""
+        content_truncated = False
+    elif (
         edit_start_line is not None
         and normalized.get("format") == "code"
         and action in ("lines_replaced", "lines_inserted", "lines_deleted", "lines_batch_edited")
@@ -3010,6 +3118,10 @@ def build_canvas_tool_result(
         values = normalized.get(key) if isinstance(normalized.get(key), list) else []
         if values:
             result[key] = values
+    if normalized.get("ignored") is True:
+        result["ignored"] = True
+    if normalized.get("ignored_reason"):
+        result["ignored_reason"] = normalized["ignored_reason"]
     return result
 
 
