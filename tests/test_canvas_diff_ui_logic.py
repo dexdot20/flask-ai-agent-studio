@@ -237,3 +237,146 @@ def test_render_canvas_diff_preview_is_not_hidden_by_edit_mode() -> None:
     assert "isCanvasEditing" not in hide_guard_match.group("guard")
     assert "canvas-diff__hunk-header" in render_body
     assert "Saved after live preview" in render_body
+
+
+def test_render_canvas_diff_preview_shows_scroll_hint_for_long_diffs() -> None:
+    source = _load_app_js_source()
+    render_match = re.search(r"function renderCanvasDiffPreview\(activeDocument\) \{(?P<body>.*?)\n\}", source, re.S)
+    assert render_match, "renderCanvasDiffPreview function was not found in static/app.js"
+    render_body = render_match.group("body")
+
+    assert "Scroll to see more of this diff." in render_body
+    assert "diff.truncated || diff.hunks.some((hunk) => hunk.lines.length > 18)" in render_body
+
+
+# --- Canvas streaming fast-path tests ---
+
+def _load_canvas_doc_list_signature_source() -> str:
+    source = APP_JS_PATH.read_text(encoding="utf-8")
+    start = source.find("function buildCanvasDocListSignature(")
+    assert start != -1, "buildCanvasDocListSignature was not found in static/app.js"
+    # Extract up to but not including renderCanvasPreviewFrame which follows it.
+    end = source.find("function renderCanvasPreviewFrame()", start)
+    assert end != -1, "renderCanvasPreviewFrame was not found after buildCanvasDocListSignature"
+    return source[start:end]
+
+
+def _run_canvas_doc_list_signature_assertions(script_body: str) -> None:
+    node_path = shutil.which("node")
+    if not node_path:
+        pytest.skip("node is not installed")
+
+    helper_source = _load_canvas_doc_list_signature_source()
+    node_script = textwrap.dedent(
+        f"""
+        {helper_source}
+
+        const assert = (condition, message) => {{
+          if (!condition) throw new Error(message);
+        }};
+
+        {script_body}
+        """
+    )
+    result = subprocess.run(
+        [node_path, "-e", node_script],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise AssertionError(
+            "Node buildCanvasDocListSignature assertions failed.\n"
+            f"STDOUT:\n{result.stdout}\n"
+            f"STDERR:\n{result.stderr}"
+        )
+
+
+def test_build_canvas_doc_list_signature_distinguishes_stored_vs_preview() -> None:
+    _run_canvas_doc_list_signature_assertions(
+        """
+        const stored = [{ id: "doc-1", isStreamingPreview: false }];
+        const preview = [{ id: "doc-1", isStreamingPreview: true }];
+
+        assert(
+          buildCanvasDocListSignature(stored) !== buildCanvasDocListSignature(preview),
+          "Stored and preview documents with the same ID must produce different doc-list signatures"
+        );
+        """
+    )
+
+
+def test_build_canvas_doc_list_signature_ignores_title_changes() -> None:
+    _run_canvas_doc_list_signature_assertions(
+        """
+        const docA = [{ id: "doc-1", isStreamingPreview: true, title: "Part" }];
+        const docB = [{ id: "doc-1", isStreamingPreview: true, title: "Full Title" }];
+
+        assert(
+          buildCanvasDocListSignature(docA) === buildCanvasDocListSignature(docB),
+          "Title changes on a streaming preview must not change the doc-list signature"
+        );
+        """
+    )
+
+
+def test_build_canvas_doc_list_signature_detects_document_added() -> None:
+    _run_canvas_doc_list_signature_assertions(
+        """
+        const before = [{ id: "doc-1", isStreamingPreview: true }];
+        const after = [
+          { id: "doc-1", isStreamingPreview: true },
+          { id: "doc-2", isStreamingPreview: false },
+        ];
+
+        assert(
+          buildCanvasDocListSignature(before) !== buildCanvasDocListSignature(after),
+          "Adding a document must change the doc-list signature"
+        );
+        """
+    )
+
+
+def test_ensure_streaming_canvas_preview_skips_rebuild_on_existing_preview() -> None:
+    """Verify the lazy rebuild guard is present in the ensureStreamingCanvasPreview source."""
+    source = _load_app_js_source()
+    func_match = re.search(
+        r"function ensureStreamingCanvasPreview\(toolName, previewKey.*?\) \{(?P<body>.*?)\n\}",
+        source,
+        re.S,
+    )
+    assert func_match, "ensureStreamingCanvasPreview was not found in static/app.js"
+    body = func_match.group("body")
+
+    # The guard must gate the expensive call behind a needsRebuild condition.
+    assert "const needsRebuild = !existing || existing.tool !== normalizedToolName;" in body, (
+        "ensureStreamingCanvasPreview must use a needsRebuild guard before calling "
+        "buildStreamingCanvasPreviewDocument"
+    )
+    assert "if (needsRebuild) {" in body, (
+        "buildStreamingCanvasPreviewDocument must be inside the needsRebuild branch"
+    )
+
+
+def test_render_canvas_preview_frame_uses_doc_list_signature_for_fast_path() -> None:
+    """Verify renderCanvasPreviewFrame distinguishes structural from metadata-only changes."""
+    source = _load_app_js_source()
+    func_match = re.search(
+        r"function renderCanvasPreviewFrame\(\) \{(?P<body>.*?)\n\}",
+        source,
+        re.S,
+    )
+    assert func_match, "renderCanvasPreviewFrame was not found in static/app.js"
+    body = func_match.group("body")
+
+    assert "buildCanvasDocListSignature(renderState.documents)" in body, (
+        "renderCanvasPreviewFrame must call buildCanvasDocListSignature to detect real list changes"
+    )
+    assert "lastCanvasDocListSignature" in body, (
+        "renderCanvasPreviewFrame must compare against lastCanvasDocListSignature"
+    )
+    assert "lastCanvasStructureSignature = renderState.structureSignature;" in body, (
+        "renderCanvasPreviewFrame must silently advance lastCanvasStructureSignature "
+        "on metadata-only changes to stay in sync"
+    )

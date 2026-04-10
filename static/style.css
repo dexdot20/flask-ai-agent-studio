@@ -4385,11 +4385,32 @@ kbd {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-height: 280px;
-  overflow: auto;
+  max-height: clamp(280px, 38vh, 520px);
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 12px;
+  padding-right: 16px;
+  scrollbar-gutter: stable;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.78rem;
+}
+
+.canvas-diff__footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+
+.canvas-diff__footer::before {
+  content: "↕";
+  color: var(--text-muted);
+  flex-shrink: 0;
 }
 
 .canvas-diff__hunk {
@@ -5146,8 +5167,14 @@ kbd {
   }
 
   .canvas-diff__body {
-    max-height: 220px;
+    max-height: clamp(220px, 34vh, 360px);
     padding: 10px;
+    padding-right: 14px;
+  }
+
+  .canvas-diff__footer {
+    padding: 7px 10px 8px;
+    font-size: 0.68rem;
   }
 
   .canvas-diff__hunk-header {

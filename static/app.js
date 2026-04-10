@@ -939,6 +939,7 @@ let streamingCanvasPreviews = new Map();
 let pendingCanvasPreviewTimer = 0;
 let pendingCanvasEditorPreviewTimer = 0;
 let lastCanvasStructureSignature = "";
+let lastCanvasDocListSignature = "";
 let latestSummaryStatus = null;
 let isSummaryOperationInFlight = false;
 let isPruneOperationInFlight = false;
@@ -3552,6 +3553,10 @@ function renderCanvasDiffPreview(activeDocument) {
   const sourceBadge = pendingCanvasDiff.source === "live-preview"
     ? '<span class="canvas-diff__badge">Saved after live preview</span>'
     : "";
+  const showScrollHint = diff.truncated || diff.hunks.some((hunk) => hunk.lines.length > 18);
+  const scrollHint = showScrollHint
+    ? '<div class="canvas-diff__footer">Scroll to see more of this diff.</div>'
+    : "";
 
   canvasDiffEl.hidden = false;
   canvasDiffEl.innerHTML =
@@ -3579,7 +3584,8 @@ function renderCanvasDiffPreview(activeDocument) {
           }).join("") +
         `</section>`
       ).join("") +
-    `</div>`;
+    `</div>` +
+    scrollHint;
 
   canvasDiffEl.querySelector('[data-action="dismiss-canvas-diff"]')?.addEventListener("click", () => {
     pendingCanvasDiff = null;
@@ -4138,18 +4144,31 @@ function ensureStreamingCanvasPreview(toolName, previewKey = "", snapshot = {}) 
     return null;
   }
   const existing = streamingCanvasPreviews.get(normalizedPreviewKey);
-  const rebuiltPreview = buildStreamingCanvasPreviewDocument(normalizedToolName, normalizedPreviewKey, snapshot);
-  const shouldRebuild = !existing
-    || existing.tool !== normalizedToolName
-    || (rebuiltPreview && rebuiltPreview.id && rebuiltPreview.id !== existing.id);
-  const isNewPreview = !existing || shouldRebuild;
+
+  // buildStreamingCanvasPreviewDocument does a full conversation-history scan to
+  // locate the target canvas document. Calling it on every content-delta event is
+  // the primary cause of main-thread blocking during canvas streaming, because a
+  // fast model can emit hundreds of deltas per second. Skip the expensive rebuild
+  // for all subsequent deltas once the preview is established and the tool name
+  // still matches. Rebuild is only needed when the preview is first created or
+  // when the active tool changes (extremely rare mid-stream).
+  const needsRebuild = !existing || existing.tool !== normalizedToolName;
+  let shouldRebuild = needsRebuild;
   let preview = existing;
-  if (shouldRebuild) {
-    preview = rebuiltPreview;
-    if (preview) {
-      streamingCanvasPreviews.set(normalizedPreviewKey, preview);
+  if (needsRebuild) {
+    const rebuiltPreview = buildStreamingCanvasPreviewDocument(normalizedToolName, normalizedPreviewKey, snapshot);
+    shouldRebuild = !existing
+      || existing.tool !== normalizedToolName
+      || (rebuiltPreview && rebuiltPreview.id && rebuiltPreview.id !== existing.id);
+    if (shouldRebuild) {
+      preview = rebuiltPreview;
+      if (preview) {
+        streamingCanvasPreviews.set(normalizedPreviewKey, preview);
+      }
     }
   }
+
+  const isNewPreview = !existing || shouldRebuild;
   if (!preview) {
     return null;
   }
@@ -4856,6 +4875,16 @@ function updateCanvasActiveDocumentDisplay(renderState) {
   closeCanvasOverflowMenu();
 }
 
+function buildCanvasDocListSignature(documents) {
+  // A lightweight signature that only tracks document-list structure (IDs and
+  // stored-vs-preview status). Used by renderCanvasPreviewFrame to distinguish
+  // real structural changes (add/remove document) from streaming-preview metadata
+  // changes (title, format, language updating as the model streams JSON fields).
+  return (documents || [])
+    .map((d) => `${String(d.id || "").trim()}\u241f${d.isStreamingPreview ? "preview" : "stored"}`)
+    .join("\u241e");
+}
+
 function renderCanvasPreviewFrame() {
   if (!canvasDocumentEl || !canvasEmptyState || !canvasSubtitle) {
     return;
@@ -4869,8 +4898,23 @@ function renderCanvasPreviewFrame() {
   }
 
   if (renderState.structureSignature !== lastCanvasStructureSignature) {
-    renderCanvasPanel();
-    return;
+    // Determine whether the signature change reflects a real structural change
+    // (document added or removed) or merely metadata updates on the streaming
+    // preview (title / format / language arriving as the model streams the JSON
+    // argument fields). Real structural changes require a full panel rebuild for
+    // the tree, tabs, and filter controls. Metadata-only changes can go through
+    // the fast-path DOM update used for every other preview frame — the content
+    // renderer already handles format/language transitions correctly.
+    const currentDocListSig = buildCanvasDocListSignature(renderState.documents);
+    if (currentDocListSig !== lastCanvasDocListSignature) {
+      // Document list changed — full panel rebuild required.
+      lastCanvasDocListSignature = currentDocListSig;
+      renderCanvasPanel();
+      return;
+    }
+    // Only metadata changed. Keep the full signature in sync so the next frame
+    // still detects real structural changes, then fall through to the fast path.
+    lastCanvasStructureSignature = renderState.structureSignature;
   }
 
   updateCanvasActiveDocumentDisplay(renderState);
@@ -5204,6 +5248,7 @@ function renderCanvasPanel() {
     visibleDocuments,
   } = renderState;
   lastCanvasStructureSignature = renderState.structureSignature;
+  lastCanvasDocListSignature = buildCanvasDocListSignature(renderDocuments);
 
   renderCanvasTree(renderDocuments, activeDocument);
   if (!renderDocuments.length) {
