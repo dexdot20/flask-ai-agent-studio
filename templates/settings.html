@@ -39,7 +39,7 @@
       <div class="settings-page-sidebar__intro">
         <span class="settings-page-sidebar__eyebrow">Workspace settings</span>
         <h2>Global runtime policy</h2>
-        <p>Each tab keeps one decision area together so the page stays readable and the chat view stays clean.</p>
+        <p>Essentials stay visible up front; advanced tuning stays tucked away until you actually need it.</p>
       </div>
 
       <nav class="settings-tabs" id="settings-tabs" aria-label="Settings tabs">
@@ -72,7 +72,7 @@
         <div>
           <span class="settings-page-banner__eyebrow">Global controls</span>
           <h2>Minimal, grouped settings</h2>
-          <p>Adjust behavior once here. All changes apply across conversations.</p>
+          <p>Start with the essentials. Advanced tuning stays tucked away so the page remains readable across long sessions.</p>
         </div>
         <div class="settings-page-toolbar__actions">
           <span id="settings-status" class="settings-status">Ready</span>
@@ -124,19 +124,6 @@
                 </div>
               </div>
 
-              <div class="settings-page-section-card">
-                <div class="settings-page-section-card__header">
-                  <div>
-                    <span class="settings-section-kicker">Assistant output</span>
-                    <h3>Reasoning display</h3>
-                  </div>
-                  <p>Choose how reasoning panels behave after a streamed answer finishes.</p>
-                </div>
-                <div class="settings-toggle-panel">
-                  <label class="tool-toggle"><input type="checkbox" id="reasoning-auto-collapse-toggle" /> <span>Auto-collapse reasoning panels after the answer completes</span></label>
-                  <p class="settings-copy">Reasoning stays available on each assistant message and can still be expanded manually.</p>
-                </div>
-              </div>
             </div>
 
             <div class="settings-page-stack">
@@ -402,7 +389,7 @@
                   <span class="settings-section-kicker">Special operations</span>
                   <h3>Task-specific models</h3>
                 </div>
-                <p>Pick preferred models for background or helper tasks without changing the active chat model.</p>
+                <p>Pick preferred models for helper work without changing the active chat model. Everyday routing stays visible; failover rules stay tucked away.</p>
               </div>
               <div class="settings-subsection-grid settings-subsection-grid--three">
                 <section class="settings-subsection settings-subsection--compact">
@@ -443,93 +430,85 @@
                 <section class="settings-subsection settings-subsection--compact">
                   <div class="settings-subsection__header">
                     <span class="settings-subsection__eyebrow">Preferred model</span>
-                    <h4 class="settings-subsection__title">Upload metadata</h4>
-                  </div>
-                  <select id="upload-metadata-model-preference-select"></select>
-                </section>
-                <section class="settings-subsection settings-subsection--compact">
-                  <div class="settings-subsection__header">
-                    <span class="settings-subsection__eyebrow">Preferred model</span>
                     <h4 class="settings-subsection__title">Sub-agent</h4>
                   </div>
                   <select id="sub-agent-model-preference-select"></select>
                 </section>
               </div>
-
-              <div class="settings-callout" data-tone="info">Fallback models are used only when a preferred task model is unavailable. Add more than one to create a priority order for each operation.</div>
-
-              <div class="settings-subsection-grid settings-subsection-grid--three">
-                <section class="settings-subsection settings-subsection--compact">
-                  <div class="settings-subsection__header">
-                    <span class="settings-subsection__eyebrow">Fallback order</span>
-                    <h4 class="settings-subsection__title">Summaries</h4>
+              <details class="settings-collapsible">
+                <summary class="settings-collapsible__summary">
+                  <div>
+                    <span class="settings-subsection__eyebrow">Advanced routing</span>
+                    <strong>Fallback order per operation</strong>
                   </div>
-                  <div id="summary-model-fallback-list" class="model-management-list"></div>
-                  <div class="settings-inline-actions">
-                    <button class="btn-ghost" id="summary-model-fallback-add-btn" type="button">Add fallback model</button>
+                  <span class="settings-collapsible__meta">Open only if you actively tune failover chains.</span>
+                </summary>
+                <div class="settings-collapsible__content">
+                  <div class="settings-callout" data-tone="info">Fallback models are used only when a preferred task model is unavailable. Add more than one only when you need an explicit recovery order.</div>
+                  <div class="settings-subsection-grid settings-subsection-grid--three">
+                    <section class="settings-subsection settings-subsection--compact">
+                      <div class="settings-subsection__header">
+                        <span class="settings-subsection__eyebrow">Fallback order</span>
+                        <h4 class="settings-subsection__title">Summaries</h4>
+                      </div>
+                      <div id="summary-model-fallback-list" class="model-management-list"></div>
+                      <div class="settings-inline-actions">
+                        <button class="btn-ghost" id="summary-model-fallback-add-btn" type="button">Add fallback model</button>
+                      </div>
+                    </section>
+                    <section class="settings-subsection settings-subsection--compact">
+                      <div class="settings-subsection__header">
+                        <span class="settings-subsection__eyebrow">Fallback order</span>
+                        <h4 class="settings-subsection__title">Fetched URL summaries</h4>
+                      </div>
+                      <div id="fetch-summarize-model-fallback-list" class="model-management-list"></div>
+                      <div class="settings-inline-actions">
+                        <button class="btn-ghost" id="fetch-summarize-model-fallback-add-btn" type="button">Add fallback model</button>
+                      </div>
+                    </section>
+                    <section class="settings-subsection settings-subsection--compact">
+                      <div class="settings-subsection__header">
+                        <span class="settings-subsection__eyebrow">Fallback order</span>
+                        <h4 class="settings-subsection__title">Pruning</h4>
+                      </div>
+                      <div id="prune-model-fallback-list" class="model-management-list"></div>
+                      <div class="settings-inline-actions">
+                        <button class="btn-ghost" id="prune-model-fallback-add-btn" type="button">Add fallback model</button>
+                      </div>
+                    </section>
+                    <section class="settings-subsection settings-subsection--compact">
+                      <div class="settings-subsection__header">
+                        <span class="settings-subsection__eyebrow">Fallback order</span>
+                        <h4 class="settings-subsection__title">Fix text</h4>
+                      </div>
+                      <div id="fix-text-model-fallback-list" class="model-management-list"></div>
+                      <div class="settings-inline-actions">
+                        <button class="btn-ghost" id="fix-text-model-fallback-add-btn" type="button">Add fallback model</button>
+                      </div>
+                    </section>
+                    <section class="settings-subsection settings-subsection--compact">
+                      <div class="settings-subsection__header">
+                        <span class="settings-subsection__eyebrow">Fallback order</span>
+                        <h4 class="settings-subsection__title">Conversation titles</h4>
+                      </div>
+                      <div id="title-model-fallback-list" class="model-management-list"></div>
+                      <div class="settings-inline-actions">
+                        <button class="btn-ghost" id="title-model-fallback-add-btn" type="button">Add fallback model</button>
+                      </div>
+                    </section>
+                    <section class="settings-subsection settings-subsection--compact">
+                      <div class="settings-subsection__header">
+                        <span class="settings-subsection__eyebrow">Fallback order</span>
+                        <h4 class="settings-subsection__title">Sub-agent</h4>
+                      </div>
+                      <div id="sub-agent-model-fallback-list" class="model-management-list"></div>
+                      <div class="settings-inline-actions">
+                        <button class="btn-ghost" id="sub-agent-model-fallback-add-btn" type="button">Add fallback model</button>
+                      </div>
+                    </section>
                   </div>
-                </section>
-                <section class="settings-subsection settings-subsection--compact">
-                  <div class="settings-subsection__header">
-                    <span class="settings-subsection__eyebrow">Fallback order</span>
-                    <h4 class="settings-subsection__title">Fetched URL summaries</h4>
-                  </div>
-                  <div id="fetch-summarize-model-fallback-list" class="model-management-list"></div>
-                  <div class="settings-inline-actions">
-                    <button class="btn-ghost" id="fetch-summarize-model-fallback-add-btn" type="button">Add fallback model</button>
-                  </div>
-                </section>
-                <section class="settings-subsection settings-subsection--compact">
-                  <div class="settings-subsection__header">
-                    <span class="settings-subsection__eyebrow">Fallback order</span>
-                    <h4 class="settings-subsection__title">Pruning</h4>
-                  </div>
-                  <div id="prune-model-fallback-list" class="model-management-list"></div>
-                  <div class="settings-inline-actions">
-                    <button class="btn-ghost" id="prune-model-fallback-add-btn" type="button">Add fallback model</button>
-                  </div>
-                </section>
-                <section class="settings-subsection settings-subsection--compact">
-                  <div class="settings-subsection__header">
-                    <span class="settings-subsection__eyebrow">Fallback order</span>
-                    <h4 class="settings-subsection__title">Fix text</h4>
-                  </div>
-                  <div id="fix-text-model-fallback-list" class="model-management-list"></div>
-                  <div class="settings-inline-actions">
-                    <button class="btn-ghost" id="fix-text-model-fallback-add-btn" type="button">Add fallback model</button>
-                  </div>
-                </section>
-                <section class="settings-subsection settings-subsection--compact">
-                  <div class="settings-subsection__header">
-                    <span class="settings-subsection__eyebrow">Fallback order</span>
-                    <h4 class="settings-subsection__title">Conversation titles</h4>
-                  </div>
-                  <div id="title-model-fallback-list" class="model-management-list"></div>
-                  <div class="settings-inline-actions">
-                    <button class="btn-ghost" id="title-model-fallback-add-btn" type="button">Add fallback model</button>
-                  </div>
-                </section>
-                <section class="settings-subsection settings-subsection--compact">
-                  <div class="settings-subsection__header">
-                    <span class="settings-subsection__eyebrow">Fallback order</span>
-                    <h4 class="settings-subsection__title">Upload metadata</h4>
-                  </div>
-                  <div id="upload-metadata-model-fallback-list" class="model-management-list"></div>
-                  <div class="settings-inline-actions">
-                    <button class="btn-ghost" id="upload-metadata-model-fallback-add-btn" type="button">Add fallback model</button>
-                  </div>
-                </section>
-                <section class="settings-subsection settings-subsection--compact">
-                  <div class="settings-subsection__header">
-                    <span class="settings-subsection__eyebrow">Fallback order</span>
-                    <h4 class="settings-subsection__title">Sub-agent</h4>
-                  </div>
-                  <div id="sub-agent-model-fallback-list" class="model-management-list"></div>
-                  <div class="settings-inline-actions">
-                    <button class="btn-ghost" id="sub-agent-model-fallback-add-btn" type="button">Add fallback model</button>
-                  </div>
-                </section>
-              </div>
+                </div>
+              </details>
             </div>
           </div>
         </section>
@@ -554,7 +533,7 @@
                 </div>
               </div>
 
-              <div class="settings-page-section-card">
+              <div class="settings-page-section-card settings-page-section-card--summary-policy">
                 <div class="settings-page-section-card__header">
                   <div>
                     <span class="settings-section-kicker">Conversation compression</span>
@@ -618,56 +597,67 @@
                     <p class="settings-copy">These messages are excluded from automatic summarization so the assistant keeps your opening context and latest turn intact.</p>
                   </section>
 
-                  <section class="settings-subsection settings-subsection--full">
-                    <div class="settings-subsection__header">
-                      <span class="settings-subsection__eyebrow">Selection strategy</span>
-                      <h4 class="settings-subsection__title">How raw history is chosen</h4>
-                      <p class="settings-subsection__copy">Classic keeps a recency-first window. Entropy scores older blocks by information density. Hybrid also reserves space so retrieval can refill dropped context.</p>
-                    </div>
-                    <div class="settings-form-cluster">
-                      <label class="settings-label" for="context-selection-strategy-select">Context selection strategy</label>
-                      <select id="context-selection-strategy-select">
-                        <option value="classic">Classic history window</option>
-                        <option value="entropy">Entropy only</option>
-                        <option value="entropy_rag_hybrid">Entropy + RAG hybrid</option>
-                      </select>
-                    </div>
-                    <fieldset id="entropy-controls-fieldset" class="settings-conditional-group settings-page-grid settings-page-grid--two settings-page-grid--compact">
-                      <div class="settings-form-cluster">
-                        <label class="settings-label" for="entropy-profile-select">Entropy profile</label>
-                        <select id="entropy-profile-select">
-                          <option value="conservative">Conservative</option>
-                          <option value="balanced">Balanced</option>
-                          <option value="aggressive">Aggressive</option>
-                        </select>
-                        <p class="settings-copy">Conservative keeps more conversational continuity. Aggressive trims harder and favors dense technical context over filler.</p>
-                      </div>
-                      <div class="settings-form-cluster" id="entropy-rag-budget-cluster">
-                        <label class="settings-label" for="entropy-rag-budget-ratio-input">Hybrid RAG reserve (0-80%)</label>
-                        <input type="number" class="settings-number" id="entropy-rag-budget-ratio-input" min="0" max="80" value="35" />
-                        <p class="settings-copy">Only used in Entropy + RAG hybrid mode. Higher values reserve more prompt budget for retrieved context instead of raw history.</p>
-                      </div>
-                      <div class="settings-form-cluster settings-form-cluster--split">
-                        <div class="settings-label">Entropy protection rules</div>
-                        <div class="settings-inline-grid">
-                          <label class="tool-toggle" for="entropy-protect-code-blocks-toggle">
-                            <input type="checkbox" id="entropy-protect-code-blocks-toggle" />
-                            <span>Protect code-heavy blocks</span>
-                          </label>
-                          <label class="tool-toggle" for="entropy-protect-tool-results-toggle">
-                            <input type="checkbox" id="entropy-protect-tool-results-toggle" />
-                            <span>Protect tool results</span>
-                          </label>
-                          <label class="tool-toggle" for="entropy-reference-boost-toggle">
-                            <input type="checkbox" id="entropy-reference-boost-toggle" />
-                            <span>Boost later-referenced context</span>
-                          </label>
-                        </div>
-                        <p class="settings-copy">These rules bias entropy scoring so structured data, tool traces, and context reused later in the thread survive trimming more reliably.</p>
-                      </div>
-                    </fieldset>
-                  </section>
                 </div>
+                <details class="settings-collapsible settings-collapsible--soft">
+                  <summary class="settings-collapsible__summary">
+                    <div>
+                      <span class="settings-subsection__eyebrow">Advanced history selection</span>
+                      <strong>Entropy and hybrid retrieval tuning</strong>
+                    </div>
+                    <span class="settings-collapsible__meta">Open only when classic recency windows stop being enough.</span>
+                  </summary>
+                  <div class="settings-collapsible__content">
+                    <section class="settings-subsection settings-subsection--compact">
+                      <div class="settings-subsection__header">
+                        <span class="settings-subsection__eyebrow">Selection strategy</span>
+                        <h4 class="settings-subsection__title">How raw history is chosen</h4>
+                        <p class="settings-subsection__copy">Classic keeps a recency-first window. Entropy scores older blocks by information density. Hybrid also reserves space so retrieval can refill dropped context.</p>
+                      </div>
+                      <div class="settings-form-cluster">
+                        <label class="settings-label" for="context-selection-strategy-select">Context selection strategy</label>
+                        <select id="context-selection-strategy-select">
+                          <option value="classic">Classic history window</option>
+                          <option value="entropy">Entropy only</option>
+                          <option value="entropy_rag_hybrid">Entropy + RAG hybrid</option>
+                        </select>
+                      </div>
+                      <fieldset id="entropy-controls-fieldset" class="settings-conditional-group settings-page-grid settings-page-grid--two settings-page-grid--compact">
+                        <div class="settings-form-cluster">
+                          <label class="settings-label" for="entropy-profile-select">Entropy profile</label>
+                          <select id="entropy-profile-select">
+                            <option value="conservative">Conservative</option>
+                            <option value="balanced">Balanced</option>
+                            <option value="aggressive">Aggressive</option>
+                          </select>
+                          <p class="settings-copy">Conservative keeps more conversational continuity. Aggressive trims harder and favors dense technical context over filler.</p>
+                        </div>
+                        <div class="settings-form-cluster" id="entropy-rag-budget-cluster">
+                          <label class="settings-label" for="entropy-rag-budget-ratio-input">Hybrid RAG reserve (0-80%)</label>
+                          <input type="number" class="settings-number" id="entropy-rag-budget-ratio-input" min="0" max="80" value="35" />
+                          <p class="settings-copy">Only used in Entropy + RAG hybrid mode. Higher values reserve more prompt budget for retrieved context instead of raw history.</p>
+                        </div>
+                        <div class="settings-form-cluster settings-form-cluster--split">
+                          <div class="settings-label">Entropy protection rules</div>
+                          <div class="settings-inline-grid">
+                            <label class="tool-toggle" for="entropy-protect-code-blocks-toggle">
+                              <input type="checkbox" id="entropy-protect-code-blocks-toggle" />
+                              <span>Protect code-heavy blocks</span>
+                            </label>
+                            <label class="tool-toggle" for="entropy-protect-tool-results-toggle">
+                              <input type="checkbox" id="entropy-protect-tool-results-toggle" />
+                              <span>Protect tool results</span>
+                            </label>
+                            <label class="tool-toggle" for="entropy-reference-boost-toggle">
+                              <input type="checkbox" id="entropy-reference-boost-toggle" />
+                              <span>Boost later-referenced context</span>
+                            </label>
+                          </div>
+                          <p class="settings-copy">These rules bias entropy scoring so structured data, tool traces, and context reused later in the thread survive trimming more reliably.</p>
+                        </div>
+                      </fieldset>
+                    </section>
+                  </div>
+                </details>
               </div>
 
               <div class="settings-page-section-card">
@@ -718,34 +708,52 @@
                   <section class="settings-subsection">
                     <div class="settings-subsection__header">
                       <span class="settings-subsection__eyebrow">Retrieved context</span>
-                      <h4 class="settings-subsection__title">RAG and saved memory lanes</h4>
-                      <p class="settings-subsection__copy">Keep generic retrieval and the dedicated saved web/fetch lane separate so each source uses a predictable share of prompt space.</p>
+                      <h4 class="settings-subsection__title">RAG lane</h4>
+                      <p class="settings-subsection__copy">Reserve a predictable share of prompt space for retrieved context without letting it crowd out the active conversation.</p>
                     </div>
                     <div class="settings-form-cluster">
                       <label class="settings-label" for="prompt-rag-max-tokens-input">RAG budget (0-120000)</label>
                       <input type="number" class="settings-number" id="prompt-rag-max-tokens-input" min="0" max="120000" value="18000" />
                       <p class="settings-copy">Upper bound for generic retrieved context coming from chats, tool outputs, saved web/fetches, and uploaded documents.</p>
                     </div>
-                    <div class="settings-form-cluster">
-                      <label class="settings-label" for="prompt-tool-memory-max-tokens-input">Dedicated tool-memory budget (0-120000)</label>
-                      <input type="number" class="settings-number" id="prompt-tool-memory-max-tokens-input" min="0" max="120000" value="10000" />
-                      <p class="settings-copy">Separate budget for the dedicated saved web/fetch memory lane when that feature is enabled below.</p>
-                    </div>
-                  </section>
-
-                  <section class="settings-subsection">
-                    <div class="settings-subsection__header">
-                      <span class="settings-subsection__eyebrow">Tool transcript</span>
-                      <h4 class="settings-subsection__title">Trace retention</h4>
-                      <p class="settings-subsection__copy">Decide how much tool-call detail survives into the next turn before the runtime starts compressing it aggressively.</p>
-                    </div>
-                    <div class="settings-form-cluster">
-                      <label class="settings-label" for="prompt-tool-trace-max-tokens-input">Tool trace budget (0-120000)</label>
-                      <input type="number" class="settings-number" id="prompt-tool-trace-max-tokens-input" min="0" max="120000" value="9000" />
-                      <p class="settings-copy">Controls how much tool-call transcript detail can survive into the next model turn before aggressive compaction begins.</p>
-                    </div>
                   </section>
                 </div>
+                <details class="settings-collapsible settings-collapsible--soft">
+                  <summary class="settings-collapsible__summary">
+                    <div>
+                      <span class="settings-subsection__eyebrow">Advanced lane budgets</span>
+                      <strong>Dedicated tool memory and trace retention</strong>
+                    </div>
+                    <span class="settings-collapsible__meta">Open when you want separate caps for saved fetch memory or verbose tool transcripts.</span>
+                  </summary>
+                  <div class="settings-collapsible__content">
+                    <div class="settings-subsection-grid settings-subsection-grid--two">
+                      <section class="settings-subsection settings-subsection--compact">
+                        <div class="settings-subsection__header">
+                          <span class="settings-subsection__eyebrow">Saved web/fetch memory</span>
+                          <h4 class="settings-subsection__title">Dedicated tool-memory budget</h4>
+                        </div>
+                        <div class="settings-form-cluster">
+                          <label class="settings-label" for="prompt-tool-memory-max-tokens-input">Dedicated tool-memory budget (0-120000)</label>
+                          <input type="number" class="settings-number" id="prompt-tool-memory-max-tokens-input" min="0" max="120000" value="10000" />
+                          <p class="settings-copy">Separate budget for the dedicated saved web/fetch memory lane when that feature is enabled below.</p>
+                        </div>
+                      </section>
+
+                      <section class="settings-subsection settings-subsection--compact">
+                        <div class="settings-subsection__header">
+                          <span class="settings-subsection__eyebrow">Tool transcript</span>
+                          <h4 class="settings-subsection__title">Trace retention</h4>
+                        </div>
+                        <div class="settings-form-cluster">
+                          <label class="settings-label" for="prompt-tool-trace-max-tokens-input">Tool trace budget (0-120000)</label>
+                          <input type="number" class="settings-number" id="prompt-tool-trace-max-tokens-input" min="0" max="120000" value="9000" />
+                          <p class="settings-copy">Controls how much tool-call transcript detail can survive into the next model turn before aggressive compaction begins.</p>
+                        </div>
+                      </section>
+                    </div>
+                  </div>
+                </details>
               </div>
 
               <div class="settings-page-section-card">
@@ -811,26 +819,51 @@
                     <p class="settings-copy">Hard ceiling on the raw character budget for the active canvas excerpt before token-based trimming kicks in.</p>
                   </div>
                   <div>
-                    <label class="settings-label" for="canvas-code-line-chars-input">Code line clip length (40-1000)</label>
-                    <input type="number" class="settings-number" id="canvas-code-line-chars-input" min="40" max="1000" value="180" />
-                    <p class="settings-copy">Long code lines are clipped to this width unless the full active document preview already fits inside the current prompt budget.</p>
-                  </div>
-                  <div>
-                    <label class="settings-label" for="canvas-text-line-chars-input">Text line clip length (40-1000)</label>
-                    <input type="number" class="settings-number" id="canvas-text-line-chars-input" min="40" max="1000" value="100" />
-                    <p class="settings-copy">Long prose or markdown lines are clipped to this width unless the full preview already fits inside the current prompt budget.</p>
-                  </div>
-                  <div>
                     <label class="settings-label" for="canvas-expand-lines-input">Expand max lines (100-4000)</label>
                     <input type="number" class="settings-number" id="canvas-expand-lines-input" min="100" max="4000" value="1600" />
                     <p class="settings-copy">Used when the assistant calls the larger canvas expansion tool.</p>
                   </div>
-                  <div>
-                    <label class="settings-label" for="canvas-scroll-lines-input">Scroll window lines (50-800)</label>
-                    <input type="number" class="settings-number" id="canvas-scroll-lines-input" min="50" max="800" value="200" />
-                    <p class="settings-copy">Caps how many lines a single targeted canvas scroll can return.</p>
-                  </div>
                 </div>
+                <details class="settings-collapsible settings-collapsible--soft">
+                  <summary class="settings-collapsible__summary">
+                    <div>
+                      <span class="settings-subsection__eyebrow">Advanced canvas reads</span>
+                      <strong>Line clipping and targeted scroll limits</strong>
+                    </div>
+                    <span class="settings-collapsible__meta">Open when very long code or prose lines still crowd the prompt.</span>
+                  </summary>
+                  <div class="settings-collapsible__content">
+                    <div class="settings-subsection-grid settings-subsection-grid--three">
+                      <section class="settings-subsection settings-subsection--compact">
+                        <div class="settings-subsection__header">
+                          <span class="settings-subsection__eyebrow">Long code lines</span>
+                          <h4 class="settings-subsection__title">Code line clip length</h4>
+                        </div>
+                        <label class="settings-label" for="canvas-code-line-chars-input">Code line clip length (40-1000)</label>
+                        <input type="number" class="settings-number" id="canvas-code-line-chars-input" min="40" max="1000" value="180" />
+                        <p class="settings-copy">Long code lines are clipped to this width unless the full active document preview already fits inside the current prompt budget.</p>
+                      </section>
+                      <section class="settings-subsection settings-subsection--compact">
+                        <div class="settings-subsection__header">
+                          <span class="settings-subsection__eyebrow">Long text lines</span>
+                          <h4 class="settings-subsection__title">Text line clip length</h4>
+                        </div>
+                        <label class="settings-label" for="canvas-text-line-chars-input">Text line clip length (40-1000)</label>
+                        <input type="number" class="settings-number" id="canvas-text-line-chars-input" min="40" max="1000" value="100" />
+                        <p class="settings-copy">Long prose or markdown lines are clipped to this width unless the full preview already fits inside the current prompt budget.</p>
+                      </section>
+                      <section class="settings-subsection settings-subsection--compact">
+                        <div class="settings-subsection__header">
+                          <span class="settings-subsection__eyebrow">Targeted reads</span>
+                          <h4 class="settings-subsection__title">Scroll window lines</h4>
+                        </div>
+                        <label class="settings-label" for="canvas-scroll-lines-input">Scroll window lines (50-800)</label>
+                        <input type="number" class="settings-number" id="canvas-scroll-lines-input" min="50" max="800" value="200" />
+                        <p class="settings-copy">Caps how many lines a single targeted canvas scroll can return.</p>
+                      </section>
+                    </div>
+                  </div>
+                </details>
               </div>
             </div>
 
@@ -1054,50 +1087,62 @@
                     </div>
                   </div>
                 </section>
-
-                <section class="settings-subsection settings-subsection--full">
-                  <div class="settings-subsection__header">
-                    <span class="settings-subsection__eyebrow">Summarized fetch budget</span>
-                    <h4 class="settings-subsection__title">How much page text reaches the summary model</h4>
-                  </div>
-                  <div class="settings-page-grid settings-page-grid--two settings-page-grid--compact">
-                    <div>
-                      <label class="settings-label" for="fetch-summarize-max-input-chars-input">Summary source max chars (4000-100000)</label>
-                      <input type="number" class="settings-number" id="fetch-summarize-max-input-chars-input" min="4000" max="100000" value="80000" />
-                      <p class="settings-copy">Caps how much cleaned page content is forwarded to <code>fetch_url_summarized</code> before the helper model sees it.</p>
-                    </div>
-                    <div>
-                      <label class="settings-label" for="fetch-summarize-max-output-tokens-input">Summary output token budget (200-4000)</label>
-                      <input type="number" class="settings-number" id="fetch-summarize-max-output-tokens-input" min="200" max="4000" value="2400" />
-                      <p class="settings-copy">Sets the default output-token budget for fetched URL summaries. Increase it for denser source summaries; lower it for tighter cost control.</p>
-                    </div>
-                  </div>
-                </section>
-
-                <section class="settings-subsection settings-subsection--full">
-                  <div class="settings-subsection__header">
-                    <span class="settings-subsection__eyebrow">URL to Canvas import</span>
-                    <h4 class="settings-subsection__title">Chunking for long fetched pages</h4>
-                  </div>
-                  <div class="settings-page-grid settings-page-grid--three settings-page-grid--compact">
-                    <div>
-                      <label class="settings-label" for="fetch-to-canvas-threshold-input">Chunk when page exceeds N chars (2000-100000)</label>
-                      <input type="number" class="settings-number" id="fetch-to-canvas-threshold-input" min="2000" max="100000" value="20000" />
-                      <p class="settings-copy">Shorter pages stay in one Canvas document. Longer pages are split into linked chunks automatically.</p>
-                    </div>
-                    <div>
-                      <label class="settings-label" for="fetch-to-canvas-chunk-chars-input">Per-document chunk size (4000-100000)</label>
-                      <input type="number" class="settings-number" id="fetch-to-canvas-chunk-chars-input" min="4000" max="100000" value="30000" />
-                      <p class="settings-copy">Controls the approximate character budget for each imported Canvas document created from one fetched page.</p>
-                    </div>
-                    <div>
-                      <label class="settings-label" for="fetch-to-canvas-max-chunks-input">Max Canvas documents per import (1-20)</label>
-                      <input type="number" class="settings-number" id="fetch-to-canvas-max-chunks-input" min="1" max="20" value="10" />
-                      <p class="settings-copy">Keeps one web import from flooding the Canvas document list. Large pages are truncated to this import budget.</p>
-                    </div>
-                  </div>
-                </section>
               </div>
+              <details class="settings-collapsible settings-collapsible--soft">
+                <summary class="settings-collapsible__summary">
+                  <div>
+                    <span class="settings-subsection__eyebrow">Advanced fetch controls</span>
+                    <strong>Summarized fetch and URL-to-Canvas tuning</strong>
+                  </div>
+                  <span class="settings-collapsible__meta">Open when long pages still need tighter helper-model or import limits.</span>
+                </summary>
+                <div class="settings-collapsible__content">
+                  <div class="settings-subsection-grid settings-subsection-grid--two">
+                    <section class="settings-subsection settings-subsection--compact settings-subsection--full">
+                      <div class="settings-subsection__header">
+                        <span class="settings-subsection__eyebrow">Summarized fetch budget</span>
+                        <h4 class="settings-subsection__title">How much page text reaches the summary model</h4>
+                      </div>
+                      <div class="settings-page-grid settings-page-grid--two settings-page-grid--compact">
+                        <div>
+                          <label class="settings-label" for="fetch-summarize-max-input-chars-input">Summary source max chars (4000-100000)</label>
+                          <input type="number" class="settings-number" id="fetch-summarize-max-input-chars-input" min="4000" max="100000" value="80000" />
+                          <p class="settings-copy">Caps how much cleaned page content is forwarded to <code>fetch_url_summarized</code> before the helper model sees it.</p>
+                        </div>
+                        <div>
+                          <label class="settings-label" for="fetch-summarize-max-output-tokens-input">Summary output token budget (200-4000)</label>
+                          <input type="number" class="settings-number" id="fetch-summarize-max-output-tokens-input" min="200" max="4000" value="2400" />
+                          <p class="settings-copy">Sets the default output-token budget for fetched URL summaries. Increase it for denser source summaries; lower it for tighter cost control.</p>
+                        </div>
+                      </div>
+                    </section>
+
+                    <section class="settings-subsection settings-subsection--compact settings-subsection--full">
+                      <div class="settings-subsection__header">
+                        <span class="settings-subsection__eyebrow">URL to Canvas import</span>
+                        <h4 class="settings-subsection__title">Chunking for long fetched pages</h4>
+                      </div>
+                      <div class="settings-page-grid settings-page-grid--three settings-page-grid--compact">
+                        <div>
+                          <label class="settings-label" for="fetch-to-canvas-threshold-input">Chunk when page exceeds N chars (2000-100000)</label>
+                          <input type="number" class="settings-number" id="fetch-to-canvas-threshold-input" min="2000" max="100000" value="20000" />
+                          <p class="settings-copy">Shorter pages stay in one Canvas document. Longer pages are split into linked chunks automatically.</p>
+                        </div>
+                        <div>
+                          <label class="settings-label" for="fetch-to-canvas-chunk-chars-input">Per-document chunk size (4000-100000)</label>
+                          <input type="number" class="settings-number" id="fetch-to-canvas-chunk-chars-input" min="4000" max="100000" value="30000" />
+                          <p class="settings-copy">Controls the approximate character budget for each imported Canvas document created from one fetched page.</p>
+                        </div>
+                        <div>
+                          <label class="settings-label" for="fetch-to-canvas-max-chunks-input">Max Canvas documents per import (1-20)</label>
+                          <input type="number" class="settings-number" id="fetch-to-canvas-max-chunks-input" min="1" max="20" value="10" />
+                          <p class="settings-copy">Keeps one web import from flooding the Canvas document list. Large pages are truncated to this import budget.</p>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+                </div>
+              </details>
             </div>
 
             <div class="settings-page-section-card">

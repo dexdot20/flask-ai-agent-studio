@@ -1980,7 +1980,7 @@ TOOL_SPECS = [
     },
     {
         "name": "delete_canvas_document",
-        "description": "Delete a canvas document. Defaults to the active document when document_id is omitted.",
+        "description": "Delete a canvas document, including obsolete or superseded ones. Defaults to the active document when document_id is omitted.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -1997,7 +1997,7 @@ TOOL_SPECS = [
         "prompt": {
             "purpose": "Deletes one canvas document from the current conversation.",
             "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path"},
-            "guidance": "Use this only when the user explicitly wants to remove a single canvas document. Deletion is irreversible for the current conversation state.",
+            "guidance": "Use this when a canvas document is obsolete, superseded, or a throwaway scratch draft, or when the user explicitly wants to remove a single canvas document. Deletion is irreversible for the current conversation state.",
         },
     },
     {
@@ -2010,7 +2010,7 @@ TOOL_SPECS = [
         "prompt": {
             "purpose": "Clears all canvas documents from the current conversation.",
             "inputs": {},
-            "guidance": "Use this only when the user explicitly requests deleting all canvas documents. This is irreversible for the current conversation state, so do not use it as a shortcut for deleting a single file.",
+            "guidance": "Use this when the whole canvas is obsolete, should be reset, or the user explicitly requests deleting all canvas documents. This is irreversible for the current conversation state, so do not use it as a shortcut for deleting a single file.",
         },
     },
 ]

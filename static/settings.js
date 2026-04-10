@@ -2355,7 +2355,6 @@ async function saveSettings() {
     entropy_protect_code_blocks: Boolean(entropyProtectCodeBlocksEl?.checked),
     entropy_protect_tool_results: Boolean(entropyProtectToolResultsEl?.checked),
     entropy_reference_boost: Boolean(entropyReferenceBoostEl?.checked),
-    reasoning_auto_collapse: Boolean(reasoningAutoCollapseEl?.checked),
     tool_memory_auto_inject: featureFlags.rag_enabled ? Boolean(toolMemoryAutoInjectEl?.checked) : false,
     pruning_enabled: Boolean(pruningEnabledEl?.checked),
     pruning_token_threshold: readNumericSetting(pruningTokenThresholdEl, 80000, { allowZero: false }),
@@ -2396,6 +2395,10 @@ async function saveSettings() {
       return acc;
     }, {}),
   };
+
+  if (reasoningAutoCollapseEl) {
+    payload.reasoning_auto_collapse = Boolean(reasoningAutoCollapseEl.checked);
+  }
 
   saveButtons.forEach((button) => {
     button.disabled = true;

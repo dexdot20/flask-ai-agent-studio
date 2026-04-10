@@ -1534,6 +1534,8 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
         "- Use preview_canvas_changes before a large or risky batch when you need a non-mutating diff preview first.",
         "- Use transform_canvas_lines for bulk find-replace work; use count_only first when the replacement scope is uncertain.",
         "- Use update_canvas_metadata for title, summary, role, dependency, or symbol metadata changes that do not change document content.",
+        "- Cleanup: if a canvas document is obsolete, superseded, or just a scratch draft that no longer needs to stay in context, delete it with delete_canvas_document so it stops consuming prompt space.",
+        "- If the entire canvas is now obsolete or should be reset, use clear_canvas instead of leaving dead documents behind.",
         "- If you will keep working in the same region for multiple turns, use set_canvas_viewport so the pinned lines are injected automatically in later prompts.",
         "- If the document is multi-page and the task is page-specific, use focus_canvas_page instead of manually estimating a page's line range.",
         "- When multiple files or canvas regions are involved, batch independent inspection calls together in one answer instead of requesting them one by one.",

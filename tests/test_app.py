@@ -4717,6 +4717,8 @@ class AppRoutesTestCase(unittest.TestCase):
         content = message["content"]
         self.assertIn("## Canvas Editing Guidance", content)
         self.assertIn("Do not rewrite the whole document when only part needs to change", content)
+        self.assertIn("obsolete, superseded, or just a scratch draft", content)
+        self.assertIn("use clear_canvas instead of leaving dead documents behind", content)
         self.assertIn("If you do not know the document_id, use the document_path", content)
         self.assertIn("## Tool Calling", content)
         self.assertIn("## Active Tools This Turn", content)
@@ -4728,6 +4730,15 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertNotIn("rewrite_canvas_document", active_tools_block)
         self.assertNotIn("## Active Canvas Document", content)
         self.assertNotIn("Available Tools", content)
+
+    def test_canvas_cleanup_tool_guidance_mentions_obsolete_documents(self):
+        delete_guidance = TOOL_SPEC_BY_NAME["delete_canvas_document"]["prompt"]["guidance"]
+        clear_guidance = TOOL_SPEC_BY_NAME["clear_canvas"]["prompt"]["guidance"]
+
+        self.assertIn("obsolete", delete_guidance)
+        self.assertIn("superseded", delete_guidance)
+        self.assertIn("obsolete", clear_guidance)
+        self.assertIn("reset", clear_guidance)
 
     def test_runtime_system_message_includes_active_canvas_document_context(self):
         message = build_runtime_system_message(
@@ -5656,11 +5667,16 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("proxy-enabled-operation", html)
         self.assertIn("settings-subsection-grid", html)
         self.assertIn("settings-callout", html)
+        self.assertIn("settings-collapsible", html)
+        self.assertIn("Fallback order per operation", html)
         self.assertIn('id="tool-memory-lane-panel"', html)
         self.assertIn("Persona fallback", html)
         self.assertIn("Model identity", html)
         self.assertIn("Research boundaries", html)
         self.assertIn("Publishing controls", html)
+        self.assertNotIn('id="reasoning-auto-collapse-toggle"', html)
+        self.assertNotIn('id="upload-metadata-model-preference-select"', html)
+        self.assertNotIn('id="upload-metadata-model-fallback-list"', html)
         self.assertNotIn('style="', html)
 
     def test_settings_tools_cover_all_defined_tool_specs(self):

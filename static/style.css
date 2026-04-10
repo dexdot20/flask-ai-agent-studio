@@ -6830,20 +6830,20 @@ kbd {
 
 .settings-page-shell {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
-  gap: 20px;
-  width: min(1180px, calc(100% - 48px));
+  grid-template-columns: 296px minmax(0, 1fr);
+  gap: 28px;
+  width: min(1440px, calc(100% - 56px));
   margin: 0 auto;
-  padding: 20px 0 28px;
+  padding: 24px 0 36px;
   align-items: start;
 }
 
 .settings-page-sidebar {
   position: sticky;
-  top: 20px;
+  top: 24px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
 }
 
 .settings-page-sidebar__intro,
@@ -6851,13 +6851,14 @@ kbd {
 .settings-page-section-card,
 .settings-stat-card {
   border: 1px solid var(--border);
-  background: var(--surface);
-  box-shadow: none;
+  background: rgba(20, 23, 31, 0.92);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(10px);
 }
 
 .settings-page-sidebar__intro {
-  padding: 18px;
-  border-radius: 18px;
+  padding: 22px;
+  border-radius: 22px;
 }
 
 .settings-page-sidebar__eyebrow,
@@ -6875,7 +6876,7 @@ kbd {
 .settings-page-sidebar__intro h2,
 .settings-page-toolbar h2,
 .settings-page-section-card__header h3 {
-  font-size: 1rem;
+  font-size: 1.08rem;
   line-height: 1.3;
   letter-spacing: -0.02em;
 }
@@ -6884,8 +6885,8 @@ kbd {
 .settings-page-toolbar p,
 .settings-page-section-card__header p {
   color: var(--text-secondary);
-  font-size: 0.82rem;
-  line-height: 1.55;
+  font-size: 0.84rem;
+  line-height: 1.62;
 }
 
 .settings-label {
@@ -6983,17 +6984,17 @@ kbd {
 .settings-page-content {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 20px;
   min-width: 0;
 }
 
 .settings-page-toolbar {
-  border-radius: 18px;
-  padding: 18px 20px;
+  border-radius: 22px;
+  padding: 22px 24px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 18px;
 }
 
 .settings-page-toolbar__actions {
@@ -7008,13 +7009,13 @@ kbd {
 .settings-tab-panels {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 20px;
 }
 
 .settings-tab-panel {
   display: none;
   flex-direction: column;
-  gap: 16px;
+  gap: 20px;
 }
 
 .settings-tab-panel.active {
@@ -7023,7 +7024,7 @@ kbd {
 
 .settings-page-grid {
   display: grid;
-  gap: 16px;
+  gap: 20px;
 }
 
 .settings-page-grid--two {
@@ -7039,23 +7040,23 @@ kbd {
 .settings-page-stack {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 20px;
 }
 
 .settings-page-section-card {
-  border-radius: 18px;
-  padding: 18px;
+  border-radius: 22px;
+  padding: 22px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 18px;
 }
 
 .settings-page-section-card__header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
-  padding-bottom: 2px;
+  gap: 18px;
+  padding-bottom: 4px;
 }
 
 .settings-page-section-card__header > div {
@@ -7063,12 +7064,12 @@ kbd {
 }
 
 .settings-page-section-card__header p {
-  max-width: 42ch;
+  max-width: 52ch;
 }
 
 .settings-page-section-card--summary-policy {
-  gap: 12px;
-  padding: 16px;
+  gap: 14px;
+  padding: 20px;
 }
 
 .settings-page-section-card--summary-policy .settings-page-grid--compact {
@@ -7122,7 +7123,7 @@ kbd {
 
 .settings-subsection-grid {
   display: grid;
-  gap: 12px;
+  gap: 16px;
 }
 
 .settings-subsection-grid--two {
@@ -7137,16 +7138,16 @@ kbd {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.02);
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.028);
 }
 
 .settings-subsection--compact {
-  gap: 10px;
-  padding: 12px;
+  gap: 12px;
+  padding: 15px;
 }
 
 .settings-subsection--full {
@@ -7185,13 +7186,85 @@ kbd {
 
 .settings-callout {
   margin: 0;
-  padding: 12px 14px;
-  border-radius: 14px;
+  padding: 14px 16px;
+  border-radius: 16px;
   border: 1px solid rgba(79, 110, 247, 0.18);
   background: rgba(79, 110, 247, 0.06);
   color: var(--text-secondary);
   font-size: 0.8rem;
   line-height: 1.55;
+}
+
+.settings-collapsible {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.02);
+  overflow: hidden;
+}
+
+.settings-collapsible--soft {
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.settings-collapsible[open] {
+  border-color: rgba(79, 110, 247, 0.2);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.settings-collapsible__summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  cursor: pointer;
+}
+
+.settings-collapsible__summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-collapsible__summary:hover {
+  background: rgba(79, 110, 247, 0.035);
+}
+
+.settings-collapsible__summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.settings-collapsible__summary::after {
+  content: "";
+  width: 10px;
+  height: 10px;
+  margin-left: auto;
+  border-right: 2px solid #b8c3f2;
+  border-bottom: 2px solid #b8c3f2;
+  transform: rotate(45deg);
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.settings-collapsible[open] .settings-collapsible__summary::after {
+  transform: rotate(225deg);
+}
+
+.settings-collapsible__meta {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  max-width: 28ch;
+  text-align: right;
+}
+
+.settings-collapsible__content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 0 18px 18px;
 }
 
 .settings-callout[data-tone="info"] {
@@ -7215,10 +7288,10 @@ kbd {
 .settings-toggle-panel {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 14px;
+  gap: 12px;
+  padding: 16px;
   border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.02);
+  background: rgba(255, 255, 255, 0.025);
 }
 
 .settings-toggle-panel--accent {
@@ -7228,7 +7301,7 @@ kbd {
 
 .settings-conditional-group {
   margin: 0;
-  padding: 14px;
+  padding: 16px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.015);
 }
@@ -7261,14 +7334,14 @@ kbd {
 .tool-permission-sections {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
 }
 
 .tool-permission-section {
-  padding: 12px;
-  border-radius: 14px;
+  padding: 14px;
+  border-radius: 16px;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.015);
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .tool-permission-section__header {
@@ -7286,15 +7359,15 @@ kbd {
 .tool-toggles--page {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 14px;
 }
 
 .tool-toggle {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding: 12px 14px;
-  border-radius: 14px;
+  padding: 14px 16px;
+  border-radius: 16px;
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.02);
   color: var(--text-primary);
@@ -7322,9 +7395,9 @@ kbd {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 14px;
+  padding: 16px;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 16px;
+  border-radius: 18px;
   background: rgba(255, 255, 255, 0.025);
 }
 
@@ -7474,6 +7547,11 @@ kbd {
 
 .settings-number {
   width: min(220px, 100%);
+}
+
+.settings-page-grid .settings-number,
+.settings-page-grid .settings-select {
+  max-width: 100%;
 }
 
 .settings-page-section-card textarea {
@@ -7635,7 +7713,23 @@ body.login-page-body {
   color: #f0cc7a;
 }
 
-@media (max-width: 1080px) {
+@media (max-width: 1320px) {
+  .settings-page-grid--three,
+  .settings-subsection-grid--three {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .settings-page-grid--model-catalog,
+  .settings-page-grid--model-panels {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-collapsible__meta {
+    max-width: 20ch;
+  }
+}
+
+@media (max-width: 1180px) {
   .settings-page-shell {
     grid-template-columns: 1fr;
     width: min(100%, calc(100% - 48px));
@@ -7661,12 +7755,14 @@ body.login-page-body {
   }
 }
 
-@media (max-width: 840px) {
+@media (max-width: 960px) {
   .settings-page-grid--two,
   .settings-page-grid--three,
   .settings-subsection-grid--two,
   .settings-subsection-grid--three,
-  .tool-toggles--page {
+  .tool-toggles--page,
+  .settings-inline-grid,
+  .rag-settings-grid {
     grid-template-columns: 1fr;
   }
 
@@ -7678,6 +7774,20 @@ body.login-page-body {
   .settings-page-toolbar__actions {
     width: 100%;
     justify-content: space-between;
+  }
+
+  .settings-collapsible__summary {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .settings-collapsible__summary::after {
+    margin-left: 0;
+  }
+
+  .settings-collapsible__meta {
+    max-width: none;
+    text-align: left;
   }
 
   .settings-page-grid--model-preferences {
