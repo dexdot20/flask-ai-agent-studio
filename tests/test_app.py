@@ -2223,8 +2223,10 @@ class AppRoutesTestCase(unittest.TestCase):
             canvas_prompt_max_lines=10,
         )
 
-        self.assertIn("scroll_canvas_document", message["content"])
-        self.assertIn("expand_canvas_document", message["content"])
+        self.assertIn("This canvas excerpt is truncated", message["content"])
+        self.assertIn("when no canvas read tool is enabled", message["content"])
+        self.assertNotIn("scroll_canvas_document", message["content"])
+        self.assertNotIn("expand_canvas_document", message["content"])
 
     def test_runtime_system_message_does_not_ask_expand_scroll_for_full_canvas(self):
         content = "\n".join(f"line {index}" for index in range(1, 11))
@@ -2696,7 +2698,7 @@ class AppRoutesTestCase(unittest.TestCase):
 
         def check_rag_context(*args, **kwargs):
             self.assertTrue(chat_sync.called)
-            self.assertEqual(chat_sync.call_args.kwargs, {"conversation_id": conversation_id, "force": False})
+            self.assertEqual(chat_sync.call_args.kwargs, {"conversation_id": conversation_id, "force": True})
             return None
 
         with patch("routes.chat.run_agent_stream", return_value=fake_events), patch(
@@ -3623,7 +3625,7 @@ class AppRoutesTestCase(unittest.TestCase):
             ]
         )
 
-        with patch("db.IMAGE_STORAGE_DIR", self.image_storage_dir), patch(
+        with patch("db.IMAGE_STORAGE_DIR", self.image_storage_dir), patch("routes.chat.IMAGE_UPLOADS_ENABLED", True), patch(
             "routes.chat.analyze_uploaded_image",
             return_value={
                 "ocr_text": "invoice total 42",
@@ -3679,9 +3681,11 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(message["role"], "system")
         content = message["content"]
         self.assertIn("## Current Date and Time", content)
+        self.assertIn("AUTHORITATIVE CURRENT TIME", content)
         self.assertIn("2026-03-15T21:40:00+03:00", content)
         self.assertIn("- Time: 21:40", content)
-        self.assertIn("User Preferences\nKeep answers short.", content)
+        self.assertIn("## Core Directives", content)
+        self.assertIn("Keep answers short.", content)
         self.assertIn("Scratchpad (AI Persistent Memory)", content)
         self.assertIn("### User Profile & Mindset", content)
         self.assertIn("The user is 22 years old.", content)
@@ -3800,7 +3804,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertTrue(outcome["applied"])
         prompt_messages = mocked_collect.call_args.args[0]
         prompt_text = "\n".join(str(message.get("content") or "") for message in prompt_messages)
-        self.assertIn("more detailed summary", prompt_text)
+        self.assertIn("Write a detailed summary", prompt_text)
         stored_entries = get_user_profile_entries()
         self.assertTrue(any("concise answers" in entry["value"].lower() for entry in stored_entries))
         self.assertGreaterEqual(outcome.get("stored_profile_fact_count", 0), 1)
@@ -4522,8 +4526,7 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("## Active Tools This Turn", content)
         self.assertIn("Native function calling is enabled for this turn.", content)
         active_tools_start = content.index("## Active Tools This Turn")
-        active_tools_end = content.index("## Current Date and Time", active_tools_start)
-        active_tools_block = content[active_tools_start:active_tools_end]
+        active_tools_block = content[active_tools_start:]
         self.assertIn("Callable tools: `create_canvas_document`", active_tools_block)
         self.assertNotIn("replace_canvas_lines", active_tools_block)
         self.assertNotIn("rewrite_canvas_document", active_tools_block)
@@ -4947,12 +4950,14 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertNotIn("Current Date and Time", stable_content)
         self.assertIn("Persistent note", stable_content)
         self.assertIn("Current Date and Time", content)
+        self.assertTrue(content.startswith("## Current Date and Time"))
+        self.assertIn("> **AUTHORITATIVE CURRENT TIME:**", content)
         self.assertNotIn("User Preferences", content)
         self.assertIn("Date: ", content)
         self.assertIn("Time: ", content)
         self.assertEqual(messages[2]["role"], "user")
 
-    def test_prepend_runtime_context_places_datetime_after_conversation_summaries(self):
+    def test_prepend_runtime_context_places_datetime_before_conversation_summaries(self):
         messages = prepend_runtime_context(
             [
                 {"role": "summary", "content": "Earlier summary"},
@@ -4966,12 +4971,13 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(messages[2]["role"], "system")
         content = messages[2]["content"]
         self.assertIn("## Conversation Summaries", content)
-        self.assertIn("already included in the prompt as assistant summary messages", content)
+        self.assertIn("authoritative compressed history for earlier deleted turns", content)
         self.assertIn("## Current Date and Time", content)
-        self.assertLess(content.index("## Conversation Summaries"), content.index("## Current Date and Time"))
+        self.assertTrue(content.startswith("## Current Date and Time"))
+        self.assertLess(content.index("## Current Date and Time"), content.index("## Conversation Summaries"))
         self.assertNotIn("id", messages[2])
 
-    def test_runtime_system_message_places_stable_context_before_tool_history(self):
+    def test_runtime_system_message_places_datetime_before_tool_history(self):
         message = build_runtime_system_message(
             active_tool_names=["search_knowledge_base", "search_tool_memory"],
             tool_memory_context="Remembered result context.",
@@ -4993,9 +4999,11 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertIn("## Active Canvas Document", content)
         self.assertIn("## Tool Execution History", content)
         self.assertIn("## Current Date and Time", content)
+        self.assertIn("> **AUTHORITATIVE CURRENT TIME:**", content)
+        self.assertLess(content.index("## Current Date and Time"), content.index("## Tool Memory"))
         self.assertLess(content.index("## Tool Memory"), content.index("## Tool Execution History"))
         self.assertLess(content.index("## Active Canvas Document"), content.index("## Tool Execution History"))
-        self.assertLess(content.index("## Tool Execution History"), content.index("## Current Date and Time"))
+        self.assertLess(content.index("## Current Date and Time"), content.index("## Tool Execution History"))
 
     def test_runtime_system_message_includes_workspace_sandbox(self):
         message = build_runtime_system_message(
@@ -6709,7 +6717,7 @@ class AppRoutesTestCase(unittest.TestCase):
             ]
         )
 
-        with patch("db.IMAGE_STORAGE_DIR", self.image_storage_dir), patch(
+        with patch("db.IMAGE_STORAGE_DIR", self.image_storage_dir), patch("routes.chat.IMAGE_UPLOADS_ENABLED", True), patch(
             "routes.chat.analyze_uploaded_image",
             return_value={
                 "analysis_method": "llm_helper",
@@ -6760,7 +6768,7 @@ class AppRoutesTestCase(unittest.TestCase):
             captured["initial_canvas_documents"] = kwargs.get("initial_canvas_documents") or []
             return iter([{"type": "done"}])
 
-        with patch("db.IMAGE_STORAGE_DIR", self.image_storage_dir), patch(
+        with patch("db.IMAGE_STORAGE_DIR", self.image_storage_dir), patch("routes.chat.IMAGE_UPLOADS_ENABLED", True), patch(
             "routes.chat.analyze_uploaded_image",
             side_effect=[
                 {
@@ -10997,10 +11005,16 @@ class AppRoutesTestCase(unittest.TestCase):
         with get_db() as conn:
             insert_message(conn, conversation_id, "assistant", "Canvas ready.", metadata=metadata)
 
-        delete_response = self.client.delete(
-            f"/api/conversations/{conversation_id}/canvas?document_path=src/config.py"
-        )
+        with patch("routes.conversations.sync_conversations_to_rag_safe") as mocked_sync_safe, patch(
+            "routes.conversations.sync_conversations_to_rag_background"
+        ) as mocked_sync_background:
+            delete_response = self.client.delete(
+                f"/api/conversations/{conversation_id}/canvas?document_path=src/config.py"
+            )
+
         self.assertEqual(delete_response.status_code, 200)
+        mocked_sync_safe.assert_called_once_with(conversation_id=conversation_id)
+        mocked_sync_background.assert_not_called()
         delete_payload = delete_response.get_json()
         self.assertEqual(delete_payload["remaining_count"], 1)
         self.assertEqual(delete_payload["documents"][0]["path"], "src/app.py")
@@ -12070,7 +12084,7 @@ class AppRoutesTestCase(unittest.TestCase):
 
         response = self.client.get(f"/api/conversations/{conversation_id}/export?format=txt")
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.get_json()["error"], "format must be md, docx, or pdf.")
+        self.assertEqual(response.get_json()["error"], "format must be md, json, docx, or pdf.")
 
     def test_canvas_line_replace_rejects_out_of_bounds_start_line(self):
         runtime_state = create_canvas_runtime_state(
@@ -13722,8 +13736,13 @@ class AppRoutesTestCase(unittest.TestCase):
 
         api_messages = build_api_messages(normalized)
 
-        self.assertEqual(api_messages[2]["name"], "search_web")
-        self.assertNotIn("tool_call_id", api_messages[2])
+        self.assertEqual(
+            api_messages,
+            [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "I am searching."},
+            ],
+        )
 
     def test_build_api_messages_drops_outbound_message_ids_for_provider(self):
         normalized = normalize_chat_messages(
@@ -14222,8 +14241,7 @@ class AppRoutesTestCase(unittest.TestCase):
             ]
         )
 
-        self.assertIsNone(api_messages[0]["content"])
-        self.assertIn("tool_calls", api_messages[0])
+        self.assertEqual(api_messages, [])
 
     def test_runtime_system_message_avoids_duplicate_active_canvas_identity_when_workspace_summary_is_present(self):
         message = build_runtime_system_message(

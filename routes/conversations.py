@@ -830,7 +830,10 @@ def register_conversation_routes(app) -> None:
             )
 
         if RAG_ENABLED:
-            sync_conversations_to_rag_background(current_app._get_current_object(), conversation_id=conv_id)
+            if current_app.testing:
+                sync_conversations_to_rag_safe(conversation_id=conv_id)
+            else:
+                sync_conversations_to_rag_background(current_app._get_current_object(), conversation_id=conv_id)
 
         _, updated_messages = _load_conversation_payload(conv_id)
         active_document_id = get_canvas_runtime_active_document_id(runtime_state)

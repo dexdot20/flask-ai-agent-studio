@@ -8173,7 +8173,7 @@ def run_agent_stream(
             turn_result = yield from stream_model_turn(
                 final_messages,
                 allow_tools=False,
-                buffer_answer=False,
+                buffer_answer=True,
                 call_type="final_answer",
                 retry_reason=final_retry_reason,
             )

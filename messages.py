@@ -1705,8 +1705,10 @@ def _build_current_time_context(now: datetime) -> str:
     normalized_now = _round_time_for_cache(now)
     offset = normalized_now.strftime("%z")
     timezone_label = f"UTC{offset[:3]}:{offset[3:]}" if offset else (normalized_now.tzname() or "UTC")
+    emphasized_timestamp = normalized_now.strftime("%A, %d %B %Y — %H:%M")
     return (
-        f"## Current Date and Time\n- ISO: {normalized_now.isoformat(timespec='seconds')}\n"
+        f"## Current Date and Time\n> **AUTHORITATIVE CURRENT TIME:** {emphasized_timestamp} ({timezone_label})\n"
+        f"- ISO: {normalized_now.isoformat(timespec='seconds')}\n"
         f"- Date: {normalized_now.date().isoformat()}\n- Time: {normalized_now.strftime('%H:%M')}\n"
         f"- Weekday: {normalized_now.strftime('%A')}\n- Timezone: {timezone_label}\n"
     )
@@ -1754,6 +1756,9 @@ def _build_runtime_volatile_parts(
     include_time_context: bool = True,
 ) -> list[str]:
     volatile_parts: list[str] = []
+
+    if include_time_context:
+        volatile_parts.append(_build_current_time_context(now))
 
     tool_memory_payload = _build_tool_memory_payload(tool_memory_context, active_tool_names)
     if tool_memory_payload:
@@ -1909,9 +1914,6 @@ def _build_runtime_volatile_parts(
     active_tools_context = _build_active_tools_context(active_tool_names)
     if active_tools_context:
         volatile_parts.extend(active_tools_context)
-
-    if include_time_context:
-        volatile_parts.append(_build_current_time_context(now))
 
     return volatile_parts
 

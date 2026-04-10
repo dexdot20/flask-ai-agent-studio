@@ -4184,7 +4184,10 @@ def register_chat_routes(app) -> None:
                         (model, conv_id),
                     )
                 if RAG_ENABLED:
-                    _schedule_rag_conversation_sync(conversation_id=conv_id)
+                    # Edit-replay must clean stale tool-result RAG state before any
+                    # follow-up retrieval in this same request. Background sync leaves
+                    # a window where deleted-message tool results can still surface.
+                    sync_conversations_to_rag_safe(conversation_id=conv_id, force=True)
                 persisted_user_message_id = edited_message_id
             elif persisted_user_content or user_message_metadata:
                 with get_db() as conn:
