@@ -470,9 +470,10 @@ class TestRagRuntime(BaseAppRoutesTestCase):
             )
 
         self.assertIsNotNone(result)
-        self.assertEqual([match["source_name"] for match in result["matches"]], ["Conversation archive", "Other"])
-        self.assertTrue(result["matches"][0]["archived_conversation"])
-        self.assertEqual(result["matches"][0]["archived_message_count"], 12)
+        # Archived conversation chunks are now excluded from auto-inject
+        # (exclude_archived_conversations=True), so only non-archived
+        # non-excluded sources remain.
+        self.assertEqual([match["source_name"] for match in result["matches"]], ["Other"])
 
     def test_build_rag_auto_context_limits_chunks_per_source(self):
         fake_hits = [

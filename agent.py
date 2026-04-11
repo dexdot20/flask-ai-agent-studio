@@ -204,6 +204,13 @@ CANVAS_CONTEXT_READ_TOOL_NAMES = {
     "batch_read_canvas_documents",
     "scroll_canvas_document",
 }
+# All canvas read/inspect tools (superset of CANVAS_CONTEXT_READ_TOOL_NAMES).
+# Used by the canvas dependency barrier and the self-read guard to identify
+# tools that must not observe stale pre-mutation canvas state.
+CANVAS_ALL_READ_TOOL_NAMES = CANVAS_CONTEXT_READ_TOOL_NAMES | {
+    "search_canvas_document",
+    "validate_canvas_document",
+}
 CANVAS_STREAM_OPEN_TOOL_NAMES = {
     "create_canvas_document",
     "rewrite_canvas_document",
@@ -8200,6 +8207,19 @@ def run_agent_stream(
         if pending_slots:
             parallel_slots = [s for s in pending_slots if _is_parallel_safe_tool_call(s["tool_name"], s.get("tool_args") or {})]
             sequential_slots = [s for s in pending_slots if not _is_parallel_safe_tool_call(s["tool_name"], s.get("tool_args") or {})]
+
+            # Canvas dependency barrier: when the batch contains both canvas
+            # mutations and canvas reads, the reads must not run in the
+            # parallel pool (they would observe stale pre-mutation state).
+            # Move them to the sequential queue so they execute *after* the
+            # mutations in their original request order.
+            _has_canvas_mutation = any(s["tool_name"] in CANVAS_MUTATION_TOOL_NAMES for s in pending_slots)
+            if _has_canvas_mutation:
+                _canvas_read_slots = [s for s in parallel_slots if s["tool_name"] in CANVAS_ALL_READ_TOOL_NAMES]
+                if _canvas_read_slots:
+                    parallel_slots = [s for s in parallel_slots if s not in _canvas_read_slots]
+                    sequential_slots.extend(_canvas_read_slots)
+
             sub_agent_parallel_slots = [s for s in parallel_slots if s["tool_name"] == "sub_agent"]
             direct_parallel_slots = [s for s in parallel_slots if s["tool_name"] != "sub_agent"]
             buffered_sub_agent_slots = (
@@ -8246,15 +8266,46 @@ def run_agent_stream(
                         if isinstance(event, dict):
                             yield event
 
+            # Canvas self-read guard: track which document IDs were mutated
+            # in this batch so that a subsequent same-batch read of the same
+            # document can be short-circuited with a helpful message instead
+            # of wasting tokens on a redundant inspection.
+            _canvas_mutated_doc_ids: set[str] = set()
+
             for s in sequential_slots:
                 try:
-                    if s["tool_name"] == "sub_agent":
-                        res, summ = yield from _run_sub_agent_stream(s["tool_args"], runtime_state)
+                    _tool_name = s["tool_name"]
+                    _tool_args = s.get("tool_args") or {}
+
+                    # Self-read guard: if this is a canvas read targeting a
+                    # document that was just mutated in the same batch,
+                    # return a short-circuit result instead of executing.
+                    if _tool_name in CANVAS_ALL_READ_TOOL_NAMES and _canvas_mutated_doc_ids:
+                        _target_doc_id = str(_tool_args.get("document_id") or "").strip()
+                        if _target_doc_id and _target_doc_id in _canvas_mutated_doc_ids:
+                            _guard_msg = (
+                                f"Skipped: document '{_target_doc_id}' was already modified in this turn. "
+                                "The mutation result above contains the updated snapshot. "
+                                "Re-reading immediately is unnecessary."
+                            )
+                            s["exec_result"] = {"ok": True, "result": _guard_msg, "summary": _guard_msg}
+                            continue
+
+                    if _tool_name == "sub_agent":
+                        res, summ = yield from _run_sub_agent_stream(_tool_args, runtime_state)
                     else:
                         if s.get("is_canvas"):
-                            yield {"type": "canvas_executing", "tool": s["tool_name"], "call_id": s["call_id"]}
-                        res, summ = _execute_tool(s["tool_name"], s["tool_args"], runtime_state=runtime_state)
+                            yield {"type": "canvas_executing", "tool": _tool_name, "call_id": s["call_id"]}
+                        res, summ = _execute_tool(_tool_name, _tool_args, runtime_state=runtime_state)
                     s["exec_result"] = {"ok": True, "result": res, "summary": summ}
+
+                    # Track mutated canvas document IDs for the self-read guard.
+                    if _tool_name in CANVAS_MUTATION_TOOL_NAMES and s["exec_result"].get("ok"):
+                        _mutated_id = str(_tool_args.get("document_id") or "").strip()
+                        if not _mutated_id and isinstance(res, dict):
+                            _mutated_id = str(res.get("document_id") or res.get("id") or "").strip()
+                        if _mutated_id:
+                            _canvas_mutated_doc_ids.add(_mutated_id)
                 except Exception as exc:
                     s["exec_result"] = {"ok": False, "error": _format_tool_execution_error(exc)}
 

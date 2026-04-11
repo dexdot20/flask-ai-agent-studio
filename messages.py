@@ -240,6 +240,7 @@ HISTORICAL_CONTEXT_INJECTION_STRIP_HEADINGS = {
     "## Canvas File Set Summary",
     "## Canvas Workspace Summary",
     "## Canvas Editing Guidance",
+    "## Code Document Rules",
     "## Active Canvas Document",
     "## Ignored Canvas Documents",
     "## Pinned Canvas Viewports",
@@ -316,6 +317,15 @@ def build_conversation_memory_section(entries) -> list[str]:
     normalized_entries = _normalize_conversation_memory_entries(entries)
     if not normalized_entries:
         return []
+
+    # Deduplicate: for the same (entry_type, key) pair, keep only the latest
+    # entry (last in list order, which corresponds to the highest DB id /
+    # most recent created_at).  This prevents the prompt from carrying stale
+    # values when a memory key has been updated multiple times.
+    seen: dict[tuple[str, str], int] = {}
+    for index, entry in enumerate(normalized_entries):
+        seen[(entry["entry_type"], entry["key"])] = index
+    normalized_entries = [entry for index, entry in enumerate(normalized_entries) if seen.get((entry["entry_type"], entry["key"])) == index]
 
     parts = [
         "## Conversation Memory",

@@ -173,7 +173,7 @@ from project_workspace_service import (
     restore_temporary_workspace_snapshot,
 )
 from rag import preload_embedder
-from rag_service import build_rag_auto_context, build_tool_memory_auto_context, conversation_rag_source_key
+from rag_service import build_rag_auto_context, build_tool_memory_auto_context, conversation_archived_rag_source_key, conversation_rag_source_key
 from rag_service import sync_conversations_to_rag_background, sync_conversations_to_rag_safe
 from routes.request_utils import is_valid_model_id, normalize_model_id, parse_messages_payload, parse_optional_int
 from token_utils import estimate_text_tokens
@@ -2745,6 +2745,8 @@ def _build_clarification_rag_query(message_content: str, clarification_response:
 
 _RAG_QUERY_ENRICHMENT_ENTRY_TYPES = {"task_context", "topic"}
 _RAG_QUERY_ENRICHMENT_MAX_CHARS = 500
+_RAG_QUERY_ENRICHMENT_MAX_MEMORY_ENTRIES = 3
+_RAG_QUERY_ENRICHMENT_MAX_MEMORY_CHARS = 200
 
 
 def _enrich_rag_query_with_context(
@@ -2757,8 +2759,12 @@ def _enrich_rag_query_with_context(
     meaningful RAG vector searches."""
     parts: list[str] = []
 
-    # 1. Collect relevant conversation-memory entries (task_context, topic).
-    for row in conversation_memory_rows or []:
+    # 1. Collect relevant conversation-memory entries (task_context, topic),
+    #    capped to avoid query drift from overly broad context injection.
+    _memory_chars = 0
+    _memory_count = 0
+    _seen_keys: set[tuple[str, str]] = set()
+    for row in reversed(conversation_memory_rows or []):
         if not isinstance(row, dict):
             continue
         entry_type = str(row.get("entry_type") or "").strip().lower()
@@ -2766,10 +2772,22 @@ def _enrich_rag_query_with_context(
             continue
         key = str(row.get("key") or "").strip()
         value = str(row.get("value") or "").strip()
-        if key and value:
-            parts.append(f"{key}: {value}")
-        elif value:
-            parts.append(value)
+        if not value:
+            continue
+        # Deduplicate: keep latest (first seen in reverse order) per (type, key).
+        _dedup_pair = (entry_type, key)
+        if _dedup_pair in _seen_keys:
+            continue
+        _seen_keys.add(_dedup_pair)
+        part = f"{key}: {value}" if key else value
+        if _memory_chars + len(part) > _RAG_QUERY_ENRICHMENT_MAX_MEMORY_CHARS:
+            continue
+        parts.append(part)
+        _memory_chars += len(part)
+        _memory_count += 1
+        if _memory_count >= _RAG_QUERY_ENRICHMENT_MAX_MEMORY_ENTRIES:
+            break
+    parts.reverse()  # Restore chronological order.
 
     # 2. Extract the latest conversation summary excerpt.
     if canonical_messages:
@@ -4506,6 +4524,7 @@ def register_chat_routes(app) -> None:
             {
                 conversation_rag_source_key(RAG_SOURCE_CONVERSATION, conv_id),
                 conversation_rag_source_key(RAG_SOURCE_TOOL_RESULT, conv_id),
+                conversation_archived_rag_source_key(conv_id),
             }
             if conv_id
             else None

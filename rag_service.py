@@ -810,6 +810,7 @@ def _query_auto_injected_rag_hits(
         threshold,
         allowed_source_types=allowed_source_types,
         auto_inject_only=True,
+        exclude_archived_conversations=True,
     )
     strong_threshold = min(1.0, float(threshold) + AUTO_INJECT_STRONG_MATCH_MARGIN)
     strong_match_count = sum(
@@ -852,6 +853,7 @@ def _normalize_rag_hits(
     *,
     allowed_source_types: set[str] | list[str] | tuple[str, ...] | None = None,
     auto_inject_only: bool = False,
+    exclude_archived_conversations: bool = False,
 ) -> list[dict]:
     del query
     allowed_types = _normalize_allowed_source_types(allowed_source_types)
@@ -867,6 +869,8 @@ def _normalize_rag_hits(
         if allowed_types is not None and source_type not in allowed_types:
             continue
         if auto_inject_only and not _coerce_metadata_bool(metadata, "auto_inject_enabled", default=True):
+            continue
+        if exclude_archived_conversations and metadata.get("archived_conversation") is True:
             continue
         expires_at_ts = _coerce_optional_timestamp(metadata.get("expires_at_ts"))
         matches.append(
@@ -1131,6 +1135,7 @@ def build_rag_auto_context(
             max(0.0, min(1.0, float(threshold))),
             allowed_source_types=allowed_source_types,
             auto_inject_only=True,
+            exclude_archived_conversations=True,
         )
     if exclude_source_keys:
         matches = [m for m in matches if m.get("source_key") not in exclude_source_keys]
