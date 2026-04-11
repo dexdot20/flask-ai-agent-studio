@@ -940,6 +940,11 @@ let pendingCanvasPreviewTimer = 0;
 let pendingCanvasEditorPreviewTimer = 0;
 let lastCanvasStructureSignature = "";
 let lastCanvasDocListSignature = "";
+let activeAnswerRenderPending = false;
+let deferredCanvasPreviewRender = false;
+let deferredCanvasPanelRender = false;
+let pendingDeferredCanvasRenderFlushTimer = 0;
+let lastCanvasPreviewRenderAt = 0;
 let latestSummaryStatus = null;
 let isSummaryOperationInFlight = false;
 let isPruneOperationInFlight = false;
@@ -1465,6 +1470,8 @@ const CANVAS_PANEL_MIN_WIDTH = 420;
 const CANVAS_PANEL_MAX_WIDTH = 1100;
 const CANVAS_ROOT_PATH_FILTER = "__root__";
 const CANVAS_PREVIEW_RENDER_INTERVAL_MS = 32;
+const CANVAS_STREAMING_RENDER_DEFER_INTERVAL_MS = 48;
+const CANVAS_STREAMING_PREVIEW_THROTTLE_MS = 96;
 const CANVAS_CODE_FILE_EXTENSIONS = new Set([
   ".bat",
   ".c",
@@ -4243,9 +4250,88 @@ function buildCanvasRenderState(documents = getCanvasRenderableDocuments()) {
   };
 }
 
-function scheduleCanvasPreviewRender() {
+function clearDeferredCanvasRenderFlushTimer() {
+  if (!pendingDeferredCanvasRenderFlushTimer) {
+    return;
+  }
+
+  globalThis.clearTimeout(pendingDeferredCanvasRenderFlushTimer);
+  pendingDeferredCanvasRenderFlushTimer = 0;
+}
+
+function shouldDeferCanvasRenderForStreaming() {
+  return Boolean(isStreaming && activeAnswerRenderPending);
+}
+
+function scheduleDeferredCanvasRenderFlush(delay = CANVAS_STREAMING_RENDER_DEFER_INTERVAL_MS) {
+  if (pendingDeferredCanvasRenderFlushTimer) {
+    return;
+  }
+
+  const nextDelay = Math.max(CANVAS_STREAMING_RENDER_DEFER_INTERVAL_MS, Number(delay) || 0);
+  pendingDeferredCanvasRenderFlushTimer = globalThis.setTimeout(() => {
+    pendingDeferredCanvasRenderFlushTimer = 0;
+    flushDeferredCanvasRenderWork();
+  }, nextDelay);
+}
+
+function flushDeferredCanvasRenderWork() {
+  if (shouldDeferCanvasRenderForStreaming()) {
+    scheduleDeferredCanvasRenderFlush();
+    return;
+  }
+
+  if (deferredCanvasPanelRender) {
+    deferredCanvasPanelRender = false;
+    deferredCanvasPreviewRender = false;
+    renderCanvasPanel();
+    return;
+  }
+
+  if (deferredCanvasPreviewRender) {
+    deferredCanvasPreviewRender = false;
+    scheduleCanvasPreviewRender({ allowWhileAnswerPending: true });
+  }
+}
+
+function requestCanvasPanelRender({ deferForStreaming = false } = {}) {
+  const shouldDelayPanelRender = deferForStreaming && isStreaming && (activeAnswerRenderPending || activeAssistantStreamingHasVisibleAnswer);
+  if (shouldDelayPanelRender) {
+    deferredCanvasPanelRender = true;
+    scheduleDeferredCanvasRenderFlush();
+    return false;
+  }
+
+  deferredCanvasPanelRender = false;
+  deferredCanvasPreviewRender = false;
+  renderCanvasPanel();
+  return true;
+}
+
+function scheduleCanvasPreviewRender(options = {}) {
+  const allowWhileAnswerPending = options.allowWhileAnswerPending === true;
+  if (!allowWhileAnswerPending && shouldDeferCanvasRenderForStreaming()) {
+    deferredCanvasPreviewRender = true;
+    scheduleDeferredCanvasRenderFlush();
+    return;
+  }
+
+  if (isStreaming && activeAssistantStreamingHasVisibleAnswer && lastCanvasPreviewRenderAt > 0) {
+    const elapsedMs = Date.now() - lastCanvasPreviewRenderAt;
+    if (elapsedMs < CANVAS_STREAMING_PREVIEW_THROTTLE_MS) {
+      deferredCanvasPreviewRender = true;
+      scheduleDeferredCanvasRenderFlush(CANVAS_STREAMING_PREVIEW_THROTTLE_MS - elapsedMs);
+      return;
+    }
+  }
+
+  deferredCanvasPreviewRender = false;
   scheduleCanvasRenderJob("preview", () => {
+    lastCanvasPreviewRenderAt = Date.now();
     renderCanvasPreviewFrame();
+    if (deferredCanvasPanelRender || deferredCanvasPreviewRender) {
+      scheduleDeferredCanvasRenderFlush();
+    }
   });
 }
 
@@ -5301,7 +5387,7 @@ function openCanvas(triggerEl = null, options = {}) {
   setCanvasMobileTreeOpen(false);
   applyCanvasPanelWidth(readCanvasWidthPreference(), false);
   closeCanvasOverflowMenu();
-  renderCanvasPanel();
+  requestCanvasPanelRender({ deferForStreaming: options.deferPanelRender !== false });
   if (shouldFocusPanel) {
     canvasClose?.focus();
   }
@@ -10740,6 +10826,13 @@ function setStreaming(active) {
   isStreaming = active;
   if (!active) {
     userScrolledUp = false;
+    activeAnswerRenderPending = false;
+    lastCanvasPreviewRenderAt = 0;
+    clearDeferredCanvasRenderFlushTimer();
+    flushDeferredCanvasRenderWork();
+  }
+  if (messagesEl) {
+    messagesEl.style.scrollBehavior = active ? "auto" : "";
   }
   sendBtn.style.display = active ? "none" : "";
   cancelBtn.hidden = !active;
@@ -12508,13 +12601,18 @@ async function sendMessage(options = {}) {
       return;
     }
 
+    activeAnswerRenderPending = true;
+
     const flushStreamingAnswerFrame = () => {
       pendingAnswerRenderTimer = null;
+      activeAnswerRenderPending = false;
       if (visibleAnswer === fullAnswer) {
+        flushDeferredCanvasRenderWork();
         return;
       }
       if (!String(fullAnswer || "").trim()) {
         visibleAnswer = fullAnswer;
+        flushDeferredCanvasRenderWork();
         return;
       }
 
@@ -12524,6 +12622,7 @@ async function sendMessage(options = {}) {
         activeAssistantStreamingHasVisibleAnswer = true;
       }
       scrollToBottom();
+      flushDeferredCanvasRenderWork();
     };
 
     if (typeof window.requestAnimationFrame === "function") {
@@ -12543,8 +12642,10 @@ async function sendMessage(options = {}) {
       }
       pendingAnswerRenderTimer = null;
     }
+    activeAnswerRenderPending = false;
     if (!String(fullAnswer || "").trim()) {
       visibleAnswer = fullAnswer;
+      flushDeferredCanvasRenderWork();
       return;
     }
 
@@ -12553,6 +12654,7 @@ async function sendMessage(options = {}) {
     if (String(visibleAnswer || "").trim()) {
       activeAssistantStreamingHasVisibleAnswer = true;
     }
+    flushDeferredCanvasRenderWork();
   };
 
   const scheduleReasoningRender = () => {
@@ -12921,7 +13023,7 @@ async function sendMessage(options = {}) {
         if (!isCanvasOpen()) {
           openCanvas(null, { focusPanel: false });
         } else {
-          renderCanvasPanel();
+          requestCanvasPanelRender({ deferForStreaming: true });
         }
         setCanvasStatus(getCanvasStreamingStatusMessage(event.tool, previewDocument, "loading"), "muted");
       } else if (event.type === "canvas_executing") {
@@ -12976,7 +13078,7 @@ async function sendMessage(options = {}) {
         streamingCanvasDocuments = nextDocuments;
         if (streamingCanvasDocuments.length) {
           activeCanvasDocumentId = String(nextActiveCandidate?.id || "").trim() || streamingCanvasDocuments[streamingCanvasDocuments.length - 1].id;
-          renderCanvasPanel();
+          requestCanvasPanelRender({ deferForStreaming: true });
           const pendingCanvasRequest = pendingDocumentCanvasOpen;
           const canvasWasOpen = isCanvasOpen();
           const activeDocumentChangeMessage = describeCanvasActiveDocumentChange(previousSelectedDocument, nextActiveCandidate, requestedActiveId);
@@ -13013,7 +13115,7 @@ async function sendMessage(options = {}) {
           isCanvasEditing = false;
           editingCanvasDocumentId = null;
           activeCanvasDocumentId = null;
-          renderCanvasPanel();
+          requestCanvasPanelRender({ deferForStreaming: true });
           if (isCanvasOpen()) {
             closeCanvas();
           }

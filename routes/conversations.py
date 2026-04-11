@@ -21,6 +21,11 @@ from canvas_service import (
     get_canvas_runtime_documents,
     rewrite_canvas_document,
 )
+from conversation_cleanup_service import (
+    delete_conversation_workspace,
+    purge_conversation_rag_sources,
+    rollback_conversation_branch,
+)
 from conversation_export import (
     build_conversation_docx_download,
     build_conversation_json_download,
@@ -32,8 +37,6 @@ from config import (
     RAG_DISABLED_FEATURE_ERROR,
     RAG_ENABLED,
     RAG_SEARCH_DEFAULT_TOP_K,
-    RAG_SOURCE_CONVERSATION,
-    RAG_SOURCE_TOOL_RESULT,
 )
 from db import (
     create_persona,
@@ -64,9 +67,9 @@ from db import (
     parse_message_metadata,
     parse_message_tool_calls,
     read_image_asset_bytes,
+    revert_conversation_state_mutations,
     sanitize_edited_user_message_metadata,
     serialize_message_metadata,
-    soft_delete_messages,
     list_personas,
     update_conversation_memory_entry,
     update_persona,
@@ -85,9 +88,7 @@ from model_registry import (
 from prune_service import prune_message, prune_conversation_batch, score_conversation_messages_for_prune
 from rag import delete_source as rag_delete_source
 from rag_service import (
-    conversation_rag_source_key,
     delete_rag_document_record,
-    delete_rag_source_record,
     ensure_supported_rag_sources,
     get_rag_document_record,
     ingest_uploaded_rag_document,
@@ -610,6 +611,7 @@ def register_conversation_routes(app) -> None:
                 key,
                 value,
                 message_id=message_id,
+                mutation_context={"source_message_id": message_id},
             )
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
@@ -653,6 +655,7 @@ def register_conversation_routes(app) -> None:
                 key,
                 value,
                 message_id=message_id,
+                mutation_context={"source_message_id": message_id},
             )
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
@@ -679,7 +682,12 @@ def register_conversation_routes(app) -> None:
         if not conversation:
             return jsonify({"error": "Not found."}), 404
 
-        deleted = delete_conversation_memory_entry(entry_id, conv_id)
+        current_entry = get_conversation_memory_entry(entry_id, conv_id)
+        deleted = delete_conversation_memory_entry(
+            entry_id,
+            conv_id,
+            mutation_context={"source_message_id": current_entry.get("message_id") if current_entry else None},
+        )
         if not deleted:
             return jsonify({"error": "Memory entry not found."}), 404
 
@@ -1216,15 +1224,20 @@ def register_conversation_routes(app) -> None:
             if role == "assistant" and parse_message_tool_calls(row["tool_calls"]):
                 return jsonify({"error": "Assistant tool-call messages cannot be deleted."}), 400
 
-            deleted_at = datetime.now().astimezone().isoformat(timespec="seconds")
-            soft_delete_messages(conn, row_conversation_id, [message_id], deleted_at)
+        branch_cleanup = rollback_conversation_branch(
+            row_conversation_id,
+            message_id,
+            include_anchor=True,
+        )
+
+        with get_db() as conn:
             conn.execute(
                 "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
                 (row_conversation_id,),
             )
 
         if RAG_ENABLED:
-            sync_conversations_to_rag_safe(conversation_id=row_conversation_id)
+            sync_conversations_to_rag_safe(conversation_id=row_conversation_id, force=True)
 
         _, updated_messages = _load_conversation_payload(row_conversation_id)
         return jsonify(
@@ -1232,6 +1245,7 @@ def register_conversation_routes(app) -> None:
                 "deleted": True,
                 "message_id": message_id,
                 "conversation_id": row_conversation_id,
+                "deleted_message_ids": branch_cleanup.get("deleted_message_ids") or [message_id],
                 "messages": updated_messages,
             }
         )
@@ -1331,14 +1345,20 @@ def register_conversation_routes(app) -> None:
 
     @app.route("/api/conversations/<int:conv_id>", methods=["DELETE"])
     def delete_conversation(conv_id):
+        with get_db() as conn:
+            conversation = conn.execute("SELECT id FROM conversations WHERE id = ?", (conv_id,)).fetchone()
+            if not conversation:
+                return jsonify({"error": "Not found."}), 404
+
+        revert_conversation_state_mutations(conv_id)
+        if RAG_ENABLED:
+            purge_conversation_rag_sources(conv_id, include_archived=True)
         delete_conversation_image_assets(conv_id)
         delete_conversation_file_assets(conv_id)
         delete_conversation_video_assets(conv_id)
+        delete_conversation_workspace(conv_id)
         with get_db() as conn:
             conn.execute("DELETE FROM conversations WHERE id = ?", (conv_id,))
-        if RAG_ENABLED:
-            delete_rag_source_record(conversation_rag_source_key(RAG_SOURCE_CONVERSATION, conv_id))
-            delete_rag_source_record(conversation_rag_source_key(RAG_SOURCE_TOOL_RESULT, conv_id))
         return "", 204
 
     @app.route("/api/conversations/<int:conv_id>", methods=["PATCH"])

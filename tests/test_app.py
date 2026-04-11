@@ -59,6 +59,7 @@ from agent import (
     run_agent_stream,
 )
 from app import create_app
+from conversation_cleanup_service import capture_workspace_snapshot_for_assistant_message
 from canvas_service import (
     batch_canvas_edits,
     build_canvas_project_manifest,
@@ -657,7 +658,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             user_message_id = insert_message(conn, conversation_id, "user", "Delete me")
             assistant_message_id = insert_message(conn, conversation_id, "assistant", "Keep me")
 
-        with patch("routes.conversations.sync_conversations_to_rag_safe"):
+        with patch("routes.conversations.sync_conversations_to_rag_safe") as mocked_sync:
             response = self.client.delete(
                 f"/api/messages/{user_message_id}",
                 json={"conversation_id": conversation_id},
@@ -668,8 +669,80 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertTrue(payload["deleted"])
         self.assertEqual(payload["message_id"], user_message_id)
         self.assertEqual(payload["conversation_id"], conversation_id)
-        self.assertEqual([message["id"] for message in payload["messages"]], [assistant_message_id])
-        self.assertEqual([message["id"] for message in get_conversation_messages(conversation_id)], [assistant_message_id])
+        self.assertEqual(payload["deleted_message_ids"], [user_message_id, assistant_message_id])
+        self.assertEqual(payload["messages"], [])
+        self.assertEqual(get_conversation_messages(conversation_id), [])
+        mocked_sync.assert_called_once_with(conversation_id=conversation_id, force=True)
+
+    def test_delete_conversation_message_rolls_back_branch_mutations_and_workspace(self):
+        conversation_id = self._create_conversation()
+        workspace_root = os.path.join(self.temp_dir.name, "delete-branch-workspace")
+        os.makedirs(workspace_root, exist_ok=True)
+        workspace_file = os.path.join(workspace_root, "state.txt")
+
+        with get_db() as conn:
+            first_user_id = insert_message(conn, conversation_id, "user", "First prompt")
+            first_assistant_id = insert_message(conn, conversation_id, "assistant", "First answer")
+            deleted_user_id = insert_message(conn, conversation_id, "user", "Delete this branch")
+            later_assistant_id = insert_message(conn, conversation_id, "assistant", "Later branch answer")
+
+        with patch(
+            "conversation_cleanup_service.create_workspace_runtime_state",
+            side_effect=lambda conversation_id=None, root_path=None: create_workspace_runtime_state(root_path=workspace_root),
+        ), patch("routes.conversations.sync_conversations_to_rag_safe") as mocked_sync:
+            with open(workspace_file, "w", encoding="utf-8") as fh:
+                fh.write("baseline workspace")
+            capture_workspace_snapshot_for_assistant_message(
+                conversation_id,
+                first_assistant_id,
+                source_message_id=first_user_id,
+            )
+
+            with open(workspace_file, "w", encoding="utf-8") as fh:
+                fh.write("later workspace")
+
+            append_to_scratchpad(
+                "Later branch scratchpad",
+                conversation_id=conversation_id,
+                source_message_id=later_assistant_id,
+            )
+            upsert_user_profile_entry(
+                "fact:branch-delete",
+                "later profile",
+                confidence=0.7,
+                source="test",
+                conversation_id=conversation_id,
+                source_message_id=later_assistant_id,
+            )
+            insert_conversation_memory_entry(
+                conversation_id,
+                "task_context",
+                "branch-memory",
+                "later memory",
+                message_id=later_assistant_id,
+                mutation_context={"source_message_id": later_assistant_id},
+            )
+
+            response = self.client.delete(
+                f"/api/messages/{deleted_user_id}",
+                json={"conversation_id": conversation_id},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["deleted_message_ids"], [deleted_user_id, later_assistant_id])
+        self.assertEqual([message["id"] for message in payload["messages"]], [first_user_id, first_assistant_id])
+        self.assertEqual([message["id"] for message in get_conversation_messages(conversation_id)], [first_user_id, first_assistant_id])
+
+        scratchpad_sections = get_all_scratchpad_sections(get_app_settings())
+        self.assertNotIn("Later branch scratchpad", scratchpad_sections.get("notes", ""))
+        self.assertNotIn("fact:branch-delete", {entry["key"] for entry in get_user_profile_entries()})
+        self.assertEqual(get_conversation_memory(conversation_id), [])
+
+        with open(workspace_file, "r", encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "baseline workspace")
+
+        mocked_sync.assert_called_once_with(conversation_id=conversation_id, force=True)
 
     def test_create_conversation_accepts_custom_openrouter_model(self):
         response = self.client.patch(
@@ -1538,6 +1611,92 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             row = conn.execute("SELECT metadata FROM messages WHERE id = ?", (edited_message_id,)).fetchone()
         persisted_metadata = parse_message_metadata(row["metadata"])
         self.assertNotIn("Stale branch excerpt", str(persisted_metadata.get("context_injection") or ""))
+
+    def test_chat_edit_reverts_later_branch_state_before_replay_prompt(self):
+        captured = {}
+        conversation_id = self._create_conversation()
+        workspace_root = os.path.join(self.temp_dir.name, "edit-replay-prompt-workspace")
+
+        save_app_settings(
+            {
+                "user_preferences": "",
+                "max_steps": "1",
+                "active_tools": "[]",
+                "rag_auto_inject": "false",
+            }
+        )
+        append_to_scratchpad("Baseline scratchpad")
+        upsert_user_profile_entry("fact:edit-replay", "baseline profile", confidence=0.9, source="test")
+
+        with get_db() as conn:
+            insert_message(conn, conversation_id, "user", "First question")
+            insert_message(conn, conversation_id, "assistant", "First answer")
+            edited_message_id = insert_message(conn, conversation_id, "user", "Old message")
+            later_assistant_id = insert_message(conn, conversation_id, "assistant", "Old answer")
+
+        append_to_scratchpad(
+            "Stale scratchpad",
+            conversation_id=conversation_id,
+            source_message_id=later_assistant_id,
+        )
+        upsert_user_profile_entry(
+            "fact:edit-replay",
+            "stale profile",
+            confidence=0.3,
+            source="test",
+            conversation_id=conversation_id,
+            source_message_id=later_assistant_id,
+        )
+        insert_conversation_memory_entry(
+            conversation_id,
+            "task_context",
+            "stale-memory",
+            "stale memory",
+            message_id=later_assistant_id,
+            mutation_context={"source_message_id": later_assistant_id},
+        )
+
+        def fake_run_agent_stream(api_messages, *args, **kwargs):
+            captured["api_messages"] = api_messages
+            return iter(
+                [
+                    {"type": "answer_start"},
+                    {"type": "answer_delta", "text": "Replay completed."},
+                    {"type": "tool_capture", "tool_results": []},
+                    {"type": "done"},
+                ]
+            )
+
+        with patch(
+            "conversation_cleanup_service.create_workspace_runtime_state",
+            side_effect=lambda conversation_id=None, root_path=None: create_workspace_runtime_state(root_path=workspace_root),
+        ), patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream), patch(
+            "routes.chat.sync_conversations_to_rag_safe"
+        ):
+            response = self.client.post(
+                "/chat",
+                json={
+                    "conversation_id": conversation_id,
+                    "edited_message_id": edited_message_id,
+                    "model": "deepseek-chat",
+                    "user_content": "New message",
+                    "messages": [{"role": "user", "content": "New message"}],
+                },
+            )
+            response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        system_text = "\n\n".join(
+            str(message.get("content") or "")
+            for message in captured["api_messages"]
+            if message.get("role") == "system"
+        )
+        self.assertIn("Baseline scratchpad", system_text)
+        self.assertNotIn("Stale scratchpad", system_text)
+        self.assertIn("baseline profile", system_text)
+        self.assertNotIn("stale profile", system_text)
+        self.assertNotIn("stale memory", system_text)
+        self.assertEqual(get_conversation_memory(conversation_id), [])
 
     def test_chat_edit_rolls_back_mutable_state_when_replay_stream_fails(self):
         conversation_id = self._create_conversation()
@@ -4874,6 +5033,45 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(response.status_code, 204)
         self.assertIsNone(get_video_asset(asset["video_id"], conversation_id=conversation_id))
 
+    def test_delete_conversation_reverts_global_state_and_deletes_workspace(self):
+        conversation_id = self._create_conversation()
+        workspace_root = os.path.join(self.temp_dir.name, "conversation-delete-workspace")
+        os.makedirs(workspace_root, exist_ok=True)
+        workspace_file = os.path.join(workspace_root, "state.txt")
+        with open(workspace_file, "w", encoding="utf-8") as fh:
+            fh.write("workspace state")
+
+        with get_db() as conn:
+            user_message_id = insert_message(conn, conversation_id, "user", "Conversation prompt")
+            assistant_message_id = insert_message(conn, conversation_id, "assistant", "Conversation answer")
+
+        append_to_scratchpad(
+            "Conversation scoped scratchpad",
+            conversation_id=conversation_id,
+            source_message_id=assistant_message_id,
+        )
+        upsert_user_profile_entry(
+            "fact:conversation-delete",
+            "delete me",
+            confidence=0.8,
+            source="test",
+            conversation_id=conversation_id,
+            source_message_id=assistant_message_id,
+        )
+
+        with patch(
+            "conversation_cleanup_service.get_workspace_root_for_conversation",
+            return_value=workspace_root,
+        ), patch("routes.conversations.purge_conversation_rag_sources") as mocked_purge:
+            response = self.client.delete(f"/api/conversations/{conversation_id}")
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(os.path.exists(workspace_root))
+        self.assertNotIn("Conversation scoped scratchpad", get_all_scratchpad_sections(get_app_settings()).get("notes", ""))
+        self.assertNotIn("fact:conversation-delete", {entry["key"] for entry in get_user_profile_entries()})
+        self.assertEqual(self.client.get(f"/api/conversations/{conversation_id}").status_code, 404)
+        mocked_purge.assert_called_once_with(conversation_id, include_archived=True)
+
     def test_delete_conversation_removes_persisted_image_files(self):
         conversation_id = self._create_conversation()
 
@@ -5460,6 +5658,19 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("vertical-align: text-bottom;", style_text)
         self.assertIn("@keyframes streamCursorBlink", style_text)
 
+    def test_frontend_canvas_streaming_defers_panel_and_preview_renders(self):
+        script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
+        script_text = script_path.read_text(encoding="utf-8")
+
+        self.assertIn("let activeAnswerRenderPending = false;", script_text)
+        self.assertIn("const CANVAS_STREAMING_PREVIEW_THROTTLE_MS = 96;", script_text)
+        self.assertIn("function requestCanvasPanelRender({ deferForStreaming = false } = {})", script_text)
+        self.assertIn("function flushDeferredCanvasRenderWork()", script_text)
+        self.assertIn("activeAnswerRenderPending = true;", script_text)
+        self.assertIn("flushDeferredCanvasRenderWork();", script_text)
+        self.assertIn('requestCanvasPanelRender({ deferForStreaming: options.deferPanelRender !== false });', script_text)
+        self.assertIn('messagesEl.style.scrollBehavior = active ? "auto" : "";', script_text)
+
     def test_settings_ui_exposes_fetch_threshold_input(self):
         html = self.client.get("/settings").get_data(as_text=True)
         self.assertIn("Tool budgets", html)
@@ -5538,7 +5749,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         ) as mocked_append:
             events = list(run_agent_stream([{"role": "user", "content": "Remember this"}], "deepseek-chat", 2, ["append_scratchpad"]))
 
-        mocked_append.assert_called_once_with(["The user is 22 years old."], section="preferences")
+        mocked_append.assert_called_once_with(
+            ["The user is 22 years old."],
+            section="preferences",
+            conversation_id=None,
+            source_message_id=None,
+        )
         tool_result_event = next(event for event in events if event["type"] == "tool_result")
         self.assertEqual(tool_result_event["tool"], "append_scratchpad")
         self.assertEqual(tool_result_event["summary"], "Scratchpad updated")

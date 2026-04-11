@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -164,6 +165,24 @@ RAG_SOURCE_TYPE_SETTING_OPTIONS = (
     RAG_SOURCE_TOOL_MEMORY,
     RAG_SOURCE_UPLOADED_DOCUMENT,
 )
+STATE_MUTATION_TARGET_CONVERSATION_MEMORY = "conversation_memory"
+STATE_MUTATION_TARGET_SCRATCHPAD_SECTION = "scratchpad_section"
+STATE_MUTATION_TARGET_USER_PROFILE = "user_profile"
+STATE_MUTATION_OPERATION_APPEND = "append"
+STATE_MUTATION_OPERATION_DELETE = "delete"
+STATE_MUTATION_OPERATION_REPLACE = "replace"
+STATE_MUTATION_OPERATION_UPSERT = "upsert"
+STATE_MUTATION_TARGET_KINDS = {
+    STATE_MUTATION_TARGET_CONVERSATION_MEMORY,
+    STATE_MUTATION_TARGET_SCRATCHPAD_SECTION,
+    STATE_MUTATION_TARGET_USER_PROFILE,
+}
+STATE_MUTATION_OPERATIONS = {
+    STATE_MUTATION_OPERATION_APPEND,
+    STATE_MUTATION_OPERATION_DELETE,
+    STATE_MUTATION_OPERATION_REPLACE,
+    STATE_MUTATION_OPERATION_UPSERT,
+}
 
 
 def configure_db_path(path: str | None = None) -> str:
@@ -270,6 +289,20 @@ def init_db() -> None:
                 FOREIGN KEY (assistant_message_id) REFERENCES messages(id) ON DELETE SET NULL,
                 FOREIGN KEY (source_message_id) REFERENCES messages(id) ON DELETE SET NULL
             );
+            CREATE TABLE IF NOT EXISTS conversation_state_mutations (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id   INTEGER NOT NULL,
+                source_message_id INTEGER,
+                target_kind       TEXT NOT NULL,
+                target_key        TEXT NOT NULL,
+                operation         TEXT NOT NULL,
+                before_value      TEXT,
+                after_value       TEXT,
+                reverted_at       TEXT,
+                created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                FOREIGN KEY (source_message_id) REFERENCES messages(id) ON DELETE SET NULL
+            );
             CREATE TABLE IF NOT EXISTS image_assets (
                 image_id         TEXT PRIMARY KEY,
                 conversation_id  INTEGER NOT NULL,
@@ -353,6 +386,10 @@ def init_db() -> None:
             ON model_invocations(assistant_message_id, id);
             CREATE INDEX IF NOT EXISTS idx_model_invocations_source_message
             ON model_invocations(source_message_id, id);
+            CREATE INDEX IF NOT EXISTS idx_conversation_state_mutations_conversation_source
+            ON conversation_state_mutations(conversation_id, source_message_id, id);
+            CREATE INDEX IF NOT EXISTS idx_conversation_state_mutations_target
+            ON conversation_state_mutations(target_kind, target_key, id);
             CREATE INDEX IF NOT EXISTS idx_personas_updated_at
             ON personas(updated_at, id);
             """
@@ -624,6 +661,8 @@ def insert_conversation_memory_entry(
     key: str,
     value: str,
     message_id: int | None = None,
+    *,
+    mutation_context: dict | None = None,
 ) -> dict:
     normalized_conversation_id = int(conversation_id or 0)
     if normalized_conversation_id <= 0:
@@ -673,6 +712,18 @@ def insert_conversation_memory_entry(
         ).fetchone()
     entry = _conversation_memory_row_to_dict(row) or {}
     entry["updated_existing"] = existing_entry is not None
+    before_snapshot = dict(existing_entry) if isinstance(existing_entry, dict) else None
+    after_snapshot = {key: value for key, value in entry.items() if key != "updated_existing"}
+    if before_snapshot != after_snapshot:
+        record_conversation_state_mutation(
+            normalized_conversation_id,
+            source_message_id=_normalize_state_mutation_source_message_id((mutation_context or {}).get("source_message_id")),
+            target_kind=STATE_MUTATION_TARGET_CONVERSATION_MEMORY,
+            target_key=normalized_key,
+            operation=STATE_MUTATION_OPERATION_UPSERT,
+            before_value=before_snapshot,
+            after_value=after_snapshot,
+        )
     return entry
 
 
@@ -704,6 +755,8 @@ def update_conversation_memory_entry(
     key: str,
     value: str,
     message_id: int | None = None,
+    *,
+    mutation_context: dict | None = None,
 ) -> dict | None:
     normalized_entry_id = int(entry_id or 0)
     normalized_conversation_id = int(conversation_id or 0)
@@ -738,7 +791,20 @@ def update_conversation_memory_entry(
             ),
         )
 
-    return get_conversation_memory_entry(normalized_entry_id, normalized_conversation_id)
+    updated_entry = get_conversation_memory_entry(normalized_entry_id, normalized_conversation_id)
+    before_snapshot = dict(current_entry) if isinstance(current_entry, dict) else None
+    after_snapshot = dict(updated_entry) if isinstance(updated_entry, dict) else None
+    if before_snapshot != after_snapshot:
+        record_conversation_state_mutation(
+            normalized_conversation_id,
+            source_message_id=_normalize_state_mutation_source_message_id((mutation_context or {}).get("source_message_id")),
+            target_kind=STATE_MUTATION_TARGET_CONVERSATION_MEMORY,
+            target_key=normalized_key,
+            operation=STATE_MUTATION_OPERATION_UPSERT,
+            before_value=before_snapshot,
+            after_value=after_snapshot,
+        )
+    return updated_entry
 
 
 def get_conversation_memory(conversation_id: int, limit: int = 40) -> list[dict]:
@@ -759,10 +825,19 @@ def get_conversation_memory(conversation_id: int, limit: int = 40) -> list[dict]
     return [entry for entry in (_conversation_memory_row_to_dict(row) for row in rows) if entry]
 
 
-def delete_conversation_memory_entry(entry_id: int, conversation_id: int) -> bool:
+def delete_conversation_memory_entry(
+    entry_id: int,
+    conversation_id: int,
+    *,
+    mutation_context: dict | None = None,
+) -> bool:
     normalized_entry_id = int(entry_id or 0)
     normalized_conversation_id = int(conversation_id or 0)
     if normalized_entry_id <= 0 or normalized_conversation_id <= 0:
+        return False
+
+    current_entry = get_conversation_memory_entry(normalized_entry_id, normalized_conversation_id)
+    if not current_entry:
         return False
 
     with get_db() as conn:
@@ -770,7 +845,355 @@ def delete_conversation_memory_entry(entry_id: int, conversation_id: int) -> boo
             "DELETE FROM conversation_memory WHERE id = ? AND conversation_id = ?",
             (normalized_entry_id, normalized_conversation_id),
         )
-    return int(cursor.rowcount or 0) > 0
+    deleted = int(cursor.rowcount or 0) > 0
+    if deleted:
+        record_conversation_state_mutation(
+            normalized_conversation_id,
+            source_message_id=_normalize_state_mutation_source_message_id((mutation_context or {}).get("source_message_id")),
+            target_kind=STATE_MUTATION_TARGET_CONVERSATION_MEMORY,
+            target_key=str(current_entry.get("key") or "").strip(),
+            operation=STATE_MUTATION_OPERATION_DELETE,
+            before_value=dict(current_entry),
+            after_value=None,
+        )
+    return deleted
+
+
+def _normalize_state_mutation_target_kind(value: str) -> str:
+    normalized = str(value or "").strip()
+    if normalized not in STATE_MUTATION_TARGET_KINDS:
+        raise ValueError(f"Unsupported state mutation target kind: {value!r}")
+    return normalized
+
+
+def _normalize_state_mutation_operation(value: str) -> str:
+    normalized = str(value or "").strip()
+    if normalized not in STATE_MUTATION_OPERATIONS:
+        raise ValueError(f"Unsupported state mutation operation: {value!r}")
+    return normalized
+
+
+def _normalize_state_mutation_target_key(value: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise ValueError("State mutation target key is required.")
+    return normalized[:200]
+
+
+def _normalize_state_mutation_source_message_id(value) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized > 0 else None
+
+
+def serialize_state_mutation_value(value) -> str | None:
+    if value is None:
+        return None
+    try:
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return json.dumps(str(value), ensure_ascii=False, separators=(",", ":"))
+
+
+def parse_state_mutation_value(raw_value):
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, (dict, list, int, float, bool)):
+        return raw_value
+    if isinstance(raw_value, str):
+        stripped = raw_value.strip()
+        if not stripped:
+            return ""
+        try:
+            return json.loads(stripped)
+        except Exception:
+            return raw_value
+    try:
+        return json.loads(raw_value)
+    except Exception:
+        return str(raw_value)
+
+
+def record_conversation_state_mutation(
+    conversation_id: int,
+    *,
+    source_message_id: int | None = None,
+    target_kind: str,
+    target_key: str,
+    operation: str,
+    before_value=None,
+    after_value=None,
+) -> dict | None:
+    normalized_conversation_id = int(conversation_id or 0)
+    if normalized_conversation_id <= 0:
+        return None
+
+    normalized_target_kind = _normalize_state_mutation_target_kind(target_kind)
+    normalized_target_key = _normalize_state_mutation_target_key(target_key)
+    normalized_operation = _normalize_state_mutation_operation(operation)
+    normalized_source_message_id = _normalize_state_mutation_source_message_id(source_message_id)
+
+    with get_db() as conn:
+        cursor = conn.execute(
+            """INSERT INTO conversation_state_mutations (
+                   conversation_id, source_message_id, target_kind, target_key,
+                   operation, before_value, after_value
+               ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                normalized_conversation_id,
+                normalized_source_message_id,
+                normalized_target_kind,
+                normalized_target_key,
+                normalized_operation,
+                serialize_state_mutation_value(before_value),
+                serialize_state_mutation_value(after_value),
+            ),
+        )
+    return {
+        "id": int(cursor.lastrowid or 0),
+        "conversation_id": normalized_conversation_id,
+        "source_message_id": normalized_source_message_id,
+        "target_kind": normalized_target_kind,
+        "target_key": normalized_target_key,
+        "operation": normalized_operation,
+    }
+
+
+def _state_mutation_target_identity(row) -> tuple:
+    target_kind = str(row["target_kind"] or "").strip()
+    target_key = str(row["target_key"] or "").strip()
+    if target_kind == STATE_MUTATION_TARGET_CONVERSATION_MEMORY:
+        return (target_kind, int(row["conversation_id"] or 0), target_key)
+    return (target_kind, target_key)
+
+
+def _load_state_mutation_history_for_target(conn, target_identity: tuple) -> list[dict]:
+    if not target_identity:
+        return []
+
+    if target_identity[0] == STATE_MUTATION_TARGET_CONVERSATION_MEMORY:
+        _target_kind, target_conversation_id, target_key = target_identity
+        rows = conn.execute(
+            """SELECT id, conversation_id, source_message_id, target_kind, target_key,
+                      operation, before_value, after_value, reverted_at, created_at
+               FROM conversation_state_mutations
+               WHERE target_kind = ? AND conversation_id = ? AND target_key = ?
+               ORDER BY id ASC""",
+            (STATE_MUTATION_TARGET_CONVERSATION_MEMORY, int(target_conversation_id), str(target_key)),
+        ).fetchall()
+    else:
+        target_kind, target_key = target_identity
+        rows = conn.execute(
+            """SELECT id, conversation_id, source_message_id, target_kind, target_key,
+                      operation, before_value, after_value, reverted_at, created_at
+               FROM conversation_state_mutations
+               WHERE target_kind = ? AND target_key = ?
+               ORDER BY id ASC""",
+            (str(target_kind), str(target_key)),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _extract_scratchpad_mutation_content(value) -> str:
+    if isinstance(value, dict):
+        return normalize_scratchpad_text(value.get("content", ""))
+    return normalize_scratchpad_text(value)
+
+
+def _extract_scratchpad_appended_notes(value) -> list[str]:
+    if not isinstance(value, dict):
+        return []
+    notes = value.get("appended_notes") if isinstance(value.get("appended_notes"), list) else []
+    normalized_notes = []
+    seen_notes = set()
+    for raw_note in notes:
+        normalized_note = " ".join(str(raw_note or "").strip().split())
+        if not normalized_note or normalized_note in seen_notes:
+            continue
+        seen_notes.add(normalized_note)
+        normalized_notes.append(normalized_note)
+    return normalized_notes
+
+
+def _replay_scratchpad_state(baseline_value, remaining_mutations: list[dict]) -> dict:
+    content = _extract_scratchpad_mutation_content(baseline_value)
+    for mutation in remaining_mutations:
+        operation = str(mutation.get("operation") or "").strip()
+        after_value = parse_state_mutation_value(mutation.get("after_value"))
+        if operation == STATE_MUTATION_OPERATION_REPLACE:
+            content = _extract_scratchpad_mutation_content(after_value)
+            continue
+        if operation != STATE_MUTATION_OPERATION_APPEND:
+            continue
+        current_lines = content.splitlines() if content else []
+        current_set = set(current_lines)
+        for note in _extract_scratchpad_appended_notes(after_value):
+            if note in current_set:
+                continue
+            current_lines.append(note)
+            current_set.add(note)
+        content = normalize_scratchpad_text("\n".join(current_lines))
+    return {"content": content}
+
+
+def _replay_generic_state(baseline_value, remaining_mutations: list[dict]):
+    state = baseline_value
+    for mutation in remaining_mutations:
+        operation = str(mutation.get("operation") or "").strip()
+        after_value = parse_state_mutation_value(mutation.get("after_value"))
+        if operation == STATE_MUTATION_OPERATION_DELETE:
+            state = None
+            continue
+        state = after_value
+    return state
+
+
+def _apply_replayed_state_to_target(conn, target_identity: tuple, next_state) -> None:
+    if not target_identity:
+        return
+
+    target_kind = target_identity[0]
+    if target_kind == STATE_MUTATION_TARGET_SCRATCHPAD_SECTION:
+        _target_kind, section_id = target_identity
+        normalized_section_id = normalize_scratchpad_section_id(section_id)
+        section_key = SCRATCHPAD_SECTION_SETTING_KEYS[normalized_section_id]
+        section_content = _extract_scratchpad_mutation_content(next_state)
+        _upsert_app_setting(conn, section_key, section_content)
+        if normalized_section_id == SCRATCHPAD_DEFAULT_SECTION:
+            _upsert_app_setting(conn, "scratchpad", "")
+        return
+
+    if target_kind == STATE_MUTATION_TARGET_USER_PROFILE:
+        _target_kind, profile_key = target_identity
+        conn.execute("DELETE FROM user_profile WHERE key = ?", (str(profile_key),))
+        if not isinstance(next_state, dict):
+            return
+        value = _normalize_user_profile_value(next_state.get("value"))
+        if not value:
+            return
+        conn.execute(
+            """INSERT INTO user_profile (key, value, confidence, source, updated_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (
+                str(next_state.get("key") or profile_key),
+                value,
+                float(next_state.get("confidence") or 0.0),
+                str(next_state.get("source") or "manual"),
+                str(next_state.get("updated_at") or "").strip()
+                or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            ),
+        )
+        return
+
+    if target_kind == STATE_MUTATION_TARGET_CONVERSATION_MEMORY:
+        _target_kind, target_conversation_id, memory_key = target_identity
+        conn.execute(
+            "DELETE FROM conversation_memory WHERE conversation_id = ? AND key = ?",
+            (int(target_conversation_id), str(memory_key)),
+        )
+        if not isinstance(next_state, dict):
+            return
+        conn.execute(
+            """INSERT INTO conversation_memory (id, conversation_id, message_id, entry_type, key, value, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                int(next_state.get("id") or 0) or None,
+                int(next_state.get("conversation_id") or target_conversation_id),
+                _normalize_state_mutation_source_message_id(next_state.get("message_id")),
+                _normalize_conversation_memory_entry_type(next_state.get("entry_type") or "task_context"),
+                _normalize_conversation_memory_key(next_state.get("key") or memory_key),
+                _normalize_conversation_memory_value(next_state.get("value") or ""),
+                str(next_state.get("created_at") or "").strip()
+                or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            ),
+        )
+
+
+def revert_conversation_state_mutations(
+    conversation_id: int,
+    *,
+    source_message_ids: Iterable[int] | None = None,
+) -> dict:
+    normalized_conversation_id = int(conversation_id or 0)
+    if normalized_conversation_id <= 0:
+        return {"reverted_count": 0, "targets": []}
+
+    normalized_source_message_ids = None
+    if source_message_ids is not None:
+        normalized_source_message_ids = [
+            int(message_id)
+            for message_id in source_message_ids
+            if int(message_id or 0) > 0
+        ]
+        if not normalized_source_message_ids:
+            return {"reverted_count": 0, "targets": []}
+
+    with get_db() as conn:
+        query = [
+            "SELECT id, conversation_id, source_message_id, target_kind, target_key, operation, before_value, after_value, reverted_at, created_at",
+            "FROM conversation_state_mutations",
+            "WHERE conversation_id = ? AND reverted_at IS NULL",
+        ]
+        params: list[object] = [normalized_conversation_id]
+        if normalized_source_message_ids is not None:
+            placeholders = ", ".join("?" for _ in normalized_source_message_ids)
+            query.append(f"AND source_message_id IN ({placeholders})")
+            params.extend(normalized_source_message_ids)
+        query.append("ORDER BY id DESC")
+        target_rows = [dict(row) for row in conn.execute("\n".join(query), tuple(params)).fetchall()]
+        if not target_rows:
+            return {"reverted_count": 0, "targets": []}
+
+        rows_by_target: dict[tuple, list[dict]] = {}
+        for row in target_rows:
+            rows_by_target.setdefault(_state_mutation_target_identity(row), []).append(row)
+
+        reverted_ids: list[int] = []
+        affected_targets: list[dict] = []
+        reverted_at = "datetime('now')"
+
+        for target_identity, rollback_rows in rows_by_target.items():
+            history_rows = _load_state_mutation_history_for_target(conn, target_identity)
+            if not history_rows:
+                continue
+
+            rollback_ids = {int(row["id"] or 0) for row in rollback_rows if int(row["id"] or 0) > 0}
+            remaining_rows = [
+                row
+                for row in history_rows
+                if row.get("reverted_at") in (None, "") and int(row.get("id") or 0) not in rollback_ids
+            ]
+            baseline_value = parse_state_mutation_value(history_rows[0].get("before_value"))
+            target_kind = target_identity[0]
+            if target_kind == STATE_MUTATION_TARGET_SCRATCHPAD_SECTION:
+                next_state = _replay_scratchpad_state(baseline_value, remaining_rows)
+            else:
+                next_state = _replay_generic_state(baseline_value, remaining_rows)
+            _apply_replayed_state_to_target(conn, target_identity, next_state)
+            reverted_ids.extend(sorted(rollback_ids))
+            affected_targets.append(
+                {
+                    "target_kind": target_kind,
+                    "target_key": target_identity[-1],
+                    "reverted_mutation_count": len(rollback_ids),
+                }
+            )
+
+        if reverted_ids:
+            placeholders = ", ".join("?" for _ in reverted_ids)
+            conn.execute(
+                f"UPDATE conversation_state_mutations SET reverted_at = datetime('now') WHERE id IN ({placeholders})",
+                tuple(reverted_ids),
+            )
+
+    return {
+        "reverted_count": len(reverted_ids),
+        "targets": affected_targets,
+    }
 
 
 def _build_user_profile_fact_key(value: str) -> str:
@@ -806,7 +1229,15 @@ def _is_user_profile_fact_candidate(value: str) -> bool:
     return any(keyword in normalized_value for keyword in keywords)
 
 
-def upsert_user_profile_entry(key: str, value: str, confidence: float = 1.0, source: str = "manual") -> dict | None:
+def upsert_user_profile_entry(
+    key: str,
+    value: str,
+    confidence: float = 1.0,
+    source: str = "manual",
+    *,
+    conversation_id: int | None = None,
+    source_message_id: int | None = None,
+) -> dict | None:
     normalized_key = str(key or "").strip()[:120]
     normalized_value = _normalize_user_profile_value(value)
     normalized_source = str(source or "").strip()[:80] or "manual"
@@ -820,6 +1251,10 @@ def upsert_user_profile_entry(key: str, value: str, confidence: float = 1.0, sou
         return None
 
     with get_db() as conn:
+        previous_row = conn.execute(
+            "SELECT key, value, confidence, source, updated_at FROM user_profile WHERE key = ?",
+            (normalized_key,),
+        ).fetchone()
         conn.execute(
             """INSERT INTO user_profile (key, value, confidence, source, updated_at)
                VALUES (?, ?, ?, ?, datetime('now'))
@@ -830,15 +1265,41 @@ def upsert_user_profile_entry(key: str, value: str, confidence: float = 1.0, sou
                    updated_at = datetime('now')""",
             (normalized_key, normalized_value, normalized_confidence, normalized_source),
         )
-    return {
+        updated_row = conn.execute(
+            "SELECT key, value, confidence, source, updated_at FROM user_profile WHERE key = ?",
+            (normalized_key,),
+        ).fetchone()
+    entry = {
         "key": normalized_key,
         "value": normalized_value,
         "confidence": normalized_confidence,
         "source": normalized_source,
     }
+    if updated_row:
+        entry["updated_at"] = updated_row["updated_at"]
+
+    before_snapshot = dict(previous_row) if previous_row else None
+    if int(conversation_id or 0) > 0 and before_snapshot != entry:
+        record_conversation_state_mutation(
+            int(conversation_id),
+            source_message_id=_normalize_state_mutation_source_message_id(source_message_id),
+            target_kind=STATE_MUTATION_TARGET_USER_PROFILE,
+            target_key=normalized_key,
+            operation=STATE_MUTATION_OPERATION_UPSERT,
+            before_value=before_snapshot,
+            after_value=entry,
+        )
+    return entry
 
 
-def upsert_user_profile_facts(facts: list[str], confidence: float = 0.8, source: str = "summary_extraction") -> list[dict]:
+def upsert_user_profile_facts(
+    facts: list[str],
+    confidence: float = 0.8,
+    source: str = "summary_extraction",
+    *,
+    conversation_id: int | None = None,
+    source_message_id: int | None = None,
+) -> list[dict]:
     stored: list[dict] = []
     for raw_fact in facts or []:
         normalized_fact = _normalize_user_profile_value(raw_fact)
@@ -849,6 +1310,8 @@ def upsert_user_profile_facts(facts: list[str], confidence: float = 0.8, source:
             normalized_fact,
             confidence=confidence,
             source=source,
+            conversation_id=conversation_id,
+            source_message_id=source_message_id,
         )
         if entry is not None:
             stored.append(entry)
@@ -3188,7 +3651,13 @@ def _migrate_legacy_assistant_behavior_settings(settings: dict) -> dict:
     return settings
 
 
-def append_to_scratchpad(notes, section: str = SCRATCHPAD_DEFAULT_SECTION) -> tuple[dict, str]:
+def append_to_scratchpad(
+    notes,
+    section: str = SCRATCHPAD_DEFAULT_SECTION,
+    *,
+    conversation_id: int | None = None,
+    source_message_id: int | None = None,
+) -> tuple[dict, str]:
     """Append one or more notes. `notes` may be a string or a list of strings."""
     section_id = normalize_scratchpad_section_id(section)
     section_key = SCRATCHPAD_SECTION_SETTING_KEYS[section_id]
@@ -3230,6 +3699,16 @@ def append_to_scratchpad(notes, section: str = SCRATCHPAD_DEFAULT_SECTION) -> tu
     next_value = normalize_scratchpad_text("\n".join(current_lines))
     settings[section_key] = next_value
     save_app_settings(settings)
+    if int(conversation_id or 0) > 0 and appended:
+        record_conversation_state_mutation(
+            int(conversation_id),
+            source_message_id=_normalize_state_mutation_source_message_id(source_message_id),
+            target_kind=STATE_MUTATION_TARGET_SCRATCHPAD_SECTION,
+            target_key=section_id,
+            operation=STATE_MUTATION_OPERATION_APPEND,
+            before_value={"content": current},
+            after_value={"content": next_value, "appended_notes": appended},
+        )
     return {
         "status": "appended",
         "section": section_id,
@@ -3240,14 +3719,31 @@ def append_to_scratchpad(notes, section: str = SCRATCHPAD_DEFAULT_SECTION) -> tu
     }, "Scratchpad updated"
 
 
-def replace_scratchpad(new_content, section: str = SCRATCHPAD_DEFAULT_SECTION) -> tuple[dict, str]:
+def replace_scratchpad(
+    new_content,
+    section: str = SCRATCHPAD_DEFAULT_SECTION,
+    *,
+    conversation_id: int | None = None,
+    source_message_id: int | None = None,
+) -> tuple[dict, str]:
     section_id = normalize_scratchpad_section_id(section)
     section_key = SCRATCHPAD_SECTION_SETTING_KEYS[section_id]
     normalized_content = normalize_scratchpad_text(new_content)
 
     settings = get_app_settings()
+    current_content = normalize_scratchpad_text(settings.get(section_key, ""))
     settings[section_key] = normalized_content
     save_app_settings(settings)
+    if int(conversation_id or 0) > 0 and current_content != normalized_content:
+        record_conversation_state_mutation(
+            int(conversation_id),
+            source_message_id=_normalize_state_mutation_source_message_id(source_message_id),
+            target_kind=STATE_MUTATION_TARGET_SCRATCHPAD_SECTION,
+            target_key=section_id,
+            operation=STATE_MUTATION_OPERATION_REPLACE,
+            before_value={"content": current_content},
+            after_value={"content": normalized_content},
+        )
     return {
         "status": "replaced",
         "section": section_id,

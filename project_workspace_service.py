@@ -5,6 +5,7 @@ import difflib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import shutil
 import sys
 import tomllib
 
@@ -16,6 +17,9 @@ WORKSPACE_MAX_FILE_BYTES = 200_000
 WORKSPACE_MAX_WRITE_BATCH = 100
 WORKSPACE_MAX_DIFF_CHARS = 12_000
 WORKSPACE_VALIDATION_MAX_NOTES = 50
+WORKSPACE_HISTORY_DIRNAME = ".workspace-history"
+WORKSPACE_HISTORY_WORKSPACE_DIRNAME = "workspace"
+WORKSPACE_HISTORY_MANIFEST_FILENAME = "manifest.json"
 
 
 def get_workspace_root_for_conversation(conversation_id: int) -> str:
@@ -46,6 +50,131 @@ def ensure_workspace_available(runtime_state: dict | None) -> Path:
     root = Path(root_path).resolve()
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def _normalize_workspace_snapshot_key(snapshot_key: str | None) -> str:
+    normalized = "".join(
+        char if char.isalnum() or char in {"-", "_"} else "-"
+        for char in str(snapshot_key or "").strip().lower()
+    ).strip("-")
+    if not normalized:
+        raise ValueError("A workspace snapshot key is required.")
+    return normalized[:120]
+
+
+def _get_workspace_history_root(root: Path) -> Path:
+    return root / WORKSPACE_HISTORY_DIRNAME
+
+
+def _get_workspace_snapshot_root(root: Path, snapshot_key: str | None) -> Path:
+    return _get_workspace_history_root(root) / _normalize_workspace_snapshot_key(snapshot_key)
+
+
+def _is_workspace_internal_relative_path(relative_path: str | None) -> bool:
+    normalized = str(relative_path or "").strip().replace("\\", "/")
+    return normalized == WORKSPACE_HISTORY_DIRNAME or normalized.startswith(f"{WORKSPACE_HISTORY_DIRNAME}/")
+
+
+def _is_workspace_internal_path(root: Path, path: Path) -> bool:
+    try:
+        relative_path = path.relative_to(root).as_posix()
+    except ValueError:
+        return False
+    return _is_workspace_internal_relative_path(relative_path)
+
+
+def _iter_workspace_user_entries(root: Path):
+    for child in root.iterdir():
+        if child.name == WORKSPACE_HISTORY_DIRNAME:
+            continue
+        yield child
+
+
+def _clear_workspace_user_contents(root: Path) -> None:
+    for child in _iter_workspace_user_entries(root):
+        if child.is_dir():
+            shutil.rmtree(child, ignore_errors=True)
+            continue
+        try:
+            child.unlink()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            continue
+
+
+def _copy_workspace_user_contents(source_root: Path, destination_root: Path) -> None:
+    destination_root.mkdir(parents=True, exist_ok=True)
+    for child in _iter_workspace_user_entries(source_root):
+        target = destination_root / child.name
+        if child.is_dir():
+            shutil.copytree(child, target, dirs_exist_ok=True)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(child, target)
+
+
+def capture_workspace_snapshot(runtime_state: dict | None, snapshot_key: str, metadata: dict | None = None) -> dict:
+    root = ensure_workspace_available(runtime_state)
+    snapshot_root = _get_workspace_snapshot_root(root, snapshot_key)
+    history_root = _get_workspace_history_root(root)
+    history_root.mkdir(parents=True, exist_ok=True)
+    if snapshot_root.exists():
+        shutil.rmtree(snapshot_root, ignore_errors=True)
+    snapshot_root.mkdir(parents=True, exist_ok=True)
+
+    snapshot_workspace_root = snapshot_root / WORKSPACE_HISTORY_WORKSPACE_DIRNAME
+    _copy_workspace_user_contents(root, snapshot_workspace_root)
+
+    manifest_path = snapshot_root / WORKSPACE_HISTORY_MANIFEST_FILENAME
+    manifest = {
+        "snapshot_key": _normalize_workspace_snapshot_key(snapshot_key),
+        "conversation_id": runtime_state.get("conversation_id") if isinstance(runtime_state, dict) else None,
+        "metadata": metadata if isinstance(metadata, dict) else {},
+    }
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {
+        "status": "ok",
+        "action": "workspace_snapshot_captured",
+        "snapshot_key": manifest["snapshot_key"],
+        "path": snapshot_root.as_posix(),
+    }
+
+
+def restore_workspace_snapshot(runtime_state: dict | None, snapshot_key: str) -> dict:
+    root = ensure_workspace_available(runtime_state)
+    snapshot_root = _get_workspace_snapshot_root(root, snapshot_key)
+    snapshot_workspace_root = snapshot_root / WORKSPACE_HISTORY_WORKSPACE_DIRNAME
+    if not snapshot_root.exists() or not snapshot_workspace_root.exists() or not snapshot_workspace_root.is_dir():
+        raise ValueError("Workspace snapshot not found.")
+
+    _clear_workspace_user_contents(root)
+    _copy_workspace_user_contents(snapshot_workspace_root, root)
+    return {
+        "status": "ok",
+        "action": "workspace_snapshot_restored",
+        "snapshot_key": _normalize_workspace_snapshot_key(snapshot_key),
+    }
+
+
+def workspace_snapshot_exists(runtime_state: dict | None, snapshot_key: str) -> bool:
+    root = ensure_workspace_available(runtime_state)
+    snapshot_root = _get_workspace_snapshot_root(root, snapshot_key)
+    snapshot_workspace_root = snapshot_root / WORKSPACE_HISTORY_WORKSPACE_DIRNAME
+    return snapshot_root.exists() and snapshot_workspace_root.exists() and snapshot_workspace_root.is_dir()
+
+
+def clear_workspace(runtime_state: dict | None, *, preserve_history: bool = True) -> dict:
+    root = ensure_workspace_available(runtime_state)
+    if preserve_history:
+        _clear_workspace_user_contents(root)
+    else:
+        shutil.rmtree(root, ignore_errors=True)
+    return {
+        "status": "ok",
+        "action": "workspace_cleared",
+        "preserve_history": preserve_history,
+    }
 
 
 def _read_text_if_exists(path: Path) -> str | None:
@@ -128,6 +257,8 @@ def _normalize_workspace_relative_path(value: str | None, *, allow_empty: bool =
             continue
         if part == "..":
             raise ValueError("Path cannot escape the workspace root.")
+        if part == WORKSPACE_HISTORY_DIRNAME:
+            raise ValueError("Path cannot access internal workspace history.")
         normalized_parts.append(part)
     normalized = "/".join(normalized_parts)
     if not normalized and not allow_empty:
@@ -226,6 +357,8 @@ def list_dir(runtime_state: dict | None, path: str | None = None) -> dict:
         raise ValueError("Directory not found.")
     entries = []
     for child in sorted(target.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower())):
+        if child.name == WORKSPACE_HISTORY_DIRNAME:
+            continue
         rel = child.relative_to(ensure_workspace_available(runtime_state)).as_posix()
         entries.append(
             {
@@ -253,6 +386,8 @@ def search_files(runtime_state: dict | None, query: str, path_prefix: str | None
 
     matches = []
     for current_path in sorted(search_root.rglob("*")):
+        if _is_workspace_internal_path(root, current_path):
+            continue
         rel = current_path.relative_to(root).as_posix()
         if needle in rel.lower():
             matches.append({"path": rel, "match_type": "path"})
@@ -503,7 +638,11 @@ def validate_project_workspace(runtime_state: dict | None, path: str | None = No
     issues = []
     warnings = []
     checked_files = []
-    python_files = sorted(target_root.rglob("*.py"))
+    python_files = sorted(
+        py_file
+        for py_file in target_root.rglob("*.py")
+        if not _is_workspace_internal_path(target_root, py_file)
+    )
     for py_file in python_files:
         rel = py_file.relative_to(ensure_workspace_available(runtime_state)).as_posix()
         checked_files.append(rel)
@@ -516,7 +655,7 @@ def validate_project_workspace(runtime_state: dict | None, path: str | None = No
     relative_files = {
         path.relative_to(target_root).as_posix()
         for path in target_root.rglob("*")
-        if path.is_file()
+        if path.is_file() and not _is_workspace_internal_path(target_root, path)
     }
     looks_like_python_project = bool(python_files or {"requirements.txt", "pyproject.toml"} & relative_files)
     if looks_like_python_project:

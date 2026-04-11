@@ -4496,17 +4496,44 @@ def _get_canvas_runtime_state(runtime_state: dict) -> dict:
     return runtime_state.setdefault("canvas", create_canvas_runtime_state())
 
 
+def _get_agent_state_mutation_context(runtime_state: dict) -> tuple[int | None, int | None]:
+    if not isinstance(runtime_state, dict):
+        return None, None
+
+    agent_context = runtime_state.get("agent_context")
+    if not isinstance(agent_context, dict):
+        return None, None
+
+    conversation_id = int(agent_context.get("conversation_id") or 0)
+    source_message_id = agent_context.get("source_message_id")
+    normalized_source_message_id = int(source_message_id) if source_message_id not in (None, "") else None
+    return (
+        conversation_id if conversation_id > 0 else None,
+        normalized_source_message_id if normalized_source_message_id and normalized_source_message_id > 0 else None,
+    )
+
+
 def _run_append_scratchpad(tool_args: dict, runtime_state: dict):
-    del runtime_state
     notes = tool_args.get("notes") or tool_args.get("note", "")
     section = tool_args.get("section") or "notes"
-    return append_to_scratchpad(notes, section=section)
+    conversation_id, source_message_id = _get_agent_state_mutation_context(runtime_state)
+    return append_to_scratchpad(
+        notes,
+        section=section,
+        conversation_id=conversation_id,
+        source_message_id=source_message_id,
+    )
 
 
 def _run_replace_scratchpad(tool_args: dict, runtime_state: dict):
-    del runtime_state
     section = tool_args.get("section") or "notes"
-    return replace_scratchpad(tool_args.get("new_content", ""), section=section)
+    conversation_id, source_message_id = _get_agent_state_mutation_context(runtime_state)
+    return replace_scratchpad(
+        tool_args.get("new_content", ""),
+        section=section,
+        conversation_id=conversation_id,
+        source_message_id=source_message_id,
+    )
 
 
 def _run_read_scratchpad(tool_args: dict, runtime_state: dict):
@@ -4629,6 +4656,7 @@ def _maybe_save_search_result_to_conversation_memory(tool_name: str, tool_args: 
         key,
         _build_search_memory_value(tool_name, result),
         message_id=message_id,
+        mutation_context={"source_message_id": message_id},
     )
     updated = entry.get("updated_existing") is True
     return {
@@ -4676,6 +4704,7 @@ def _run_save_to_conversation_memory(tool_args: dict, runtime_state: dict):
         tool_args.get("key", ""),
         tool_args.get("value", ""),
         message_id=message_id,
+        mutation_context={"source_message_id": message_id},
     )
     updated = entry.get("updated_existing") is True
     return {
@@ -4698,8 +4727,14 @@ def _run_delete_conversation_memory_entry(tool_args: dict, runtime_state: dict):
     if conversation_id <= 0:
         return {"status": "error", "error": "No active conversation context was provided."}, "Conversation memory unavailable"
 
+    source_message_id = agent_context.get("source_message_id")
+    message_id = int(source_message_id) if source_message_id not in (None, "") else None
     entry_id = int(tool_args.get("entry_id") or 0)
-    deleted = delete_conversation_memory_entry(entry_id, conversation_id)
+    deleted = delete_conversation_memory_entry(
+        entry_id,
+        conversation_id,
+        mutation_context={"source_message_id": message_id},
+    )
     return {
         "status": "ok" if deleted else "not_found",
         "deleted": deleted,

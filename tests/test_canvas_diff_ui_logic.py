@@ -376,3 +376,45 @@ def test_render_canvas_preview_frame_uses_doc_list_signature_for_fast_path() -> 
         "renderCanvasPreviewFrame must silently advance lastCanvasStructureSignature "
         "on metadata-only changes to stay in sync"
     )
+
+
+def test_schedule_canvas_preview_render_defers_when_answer_frame_is_pending() -> None:
+    source = _load_app_js_source()
+    func_match = re.search(
+        r"function scheduleCanvasPreviewRender\(options = \{\}\) \{(?P<body>.*?)\n\}",
+        source,
+        re.S,
+    )
+    assert func_match, "scheduleCanvasPreviewRender was not found in static/app.js"
+    body = func_match.group("body")
+
+    assert "shouldDeferCanvasRenderForStreaming" in body, (
+        "scheduleCanvasPreviewRender must consult the shared deferred-render helper before drawing Canvas previews"
+    )
+    assert "deferredCanvasPreviewRender = true;" in body, (
+        "scheduleCanvasPreviewRender must mark preview updates as deferred when chat rendering has priority"
+    )
+    assert "scheduleDeferredCanvasRenderFlush" in body, (
+        "Deferred preview updates must be rescheduled after the answer frame finishes"
+    )
+    assert "CANVAS_STREAMING_PREVIEW_THROTTLE_MS" in body, (
+        "Streaming canvas preview updates should be throttled while answer rendering is active"
+    )
+
+
+def test_open_canvas_uses_deferred_panel_render_during_streaming() -> None:
+    source = _load_app_js_source()
+    func_match = re.search(
+        r"function openCanvas\(triggerEl = null, options = \{\}\) \{(?P<body>.*?)\n\}",
+        source,
+        re.S,
+    )
+    assert func_match, "openCanvas was not found in static/app.js"
+    body = func_match.group("body")
+
+    assert "requestCanvasPanelRender" in body, (
+        "openCanvas must route panel rendering through the deferred render coordinator"
+    )
+    assert "options.deferPanelRender !== false" in body, (
+        "openCanvas should keep deferred panel rendering enabled by default during streaming"
+    )

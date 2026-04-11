@@ -43,6 +43,10 @@ from config import (
     YOUTUBE_TRANSCRIPTS_DISABLED_FEATURE_ERROR,
     YOUTUBE_TRANSCRIPTS_ENABLED,
 )
+from conversation_cleanup_service import (
+    capture_workspace_snapshot_for_assistant_message,
+    rollback_conversation_branch,
+)
 from db import (
     build_conversation_assistant_behavior,
     build_user_profile_system_context,
@@ -113,7 +117,6 @@ from db import (
     insert_message,
     insert_model_invocation,
     parse_message_metadata,
-    mark_messages_deleted_by_edit_replay,
     restore_soft_deleted_messages,
     sanitize_edited_user_message_metadata,
     serialize_message_metadata,
@@ -3637,7 +3640,11 @@ def maybe_create_conversation_summary(
         stored_profile_facts = []
         if structured_summary:
             try:
-                stored_profile_facts = upsert_user_profile_facts(structured_summary.get("facts") or [])
+                stored_profile_facts = upsert_user_profile_facts(
+                    structured_summary.get("facts") or [],
+                    conversation_id=conversation_id,
+                    source_message_id=summary_message_id,
+                )
             except Exception:
                 LOGGER.exception("Failed to persist extracted user profile facts for conversation_id=%s", conversation_id)
 
@@ -4379,6 +4386,7 @@ def register_chat_routes(app) -> None:
             user_message_metadata = serialize_message_metadata(user_message_metadata_payload)
 
             if edited_message_id is not None:
+                later_message_ids: list[int] = []
                 with get_db() as conn:
                     existing_message = conn.execute(
                         """SELECT id, role, position, content, metadata, prompt_tokens, completion_tokens, total_tokens
@@ -4412,18 +4420,38 @@ def register_chat_routes(app) -> None:
                         later_message_ids,
                         settings,
                     )
-                    if later_message_ids:
-                        soft_delete_messages(
-                            conn,
-                            conv_id,
-                            later_message_ids,
-                            datetime.now().astimezone().isoformat(timespec="seconds"),
-                        )
-                        mark_messages_deleted_by_edit_replay(conn, conv_id, later_message_ids)
                     conn.execute(
                         "UPDATE conversations SET model = ?, updated_at = datetime('now') WHERE id = ?",
                         (model, conv_id),
                     )
+                if later_message_ids:
+                    try:
+                        rollback_conversation_branch(
+                            conv_id,
+                            edited_message_id,
+                            include_anchor=False,
+                        )
+                    except Exception:
+                        _rollback_edit_replay_snapshot(
+                            edit_replay_snapshot,
+                            created_image_ids=[
+                                str(asset.get("image_id") or "").strip()
+                                for asset in created_image_assets
+                                if isinstance(asset, dict)
+                            ],
+                            created_file_ids=[
+                                str(asset.get("file_id") or "").strip()
+                                for asset in created_file_assets
+                                if isinstance(asset, dict)
+                            ],
+                            created_video_ids=[
+                                str(asset.get("video_id") or "").strip()
+                                for asset in created_video_assets
+                                if isinstance(asset, dict)
+                            ],
+                        )
+                        _cleanup_workspace_snapshot(edit_replay_snapshot.get("workspace_snapshot"))
+                        return jsonify({"error": "Edited replay failed. Previous state restored."}), 500
                 if RAG_ENABLED:
                     # Edit-replay must clean stale tool-result RAG state before any
                     # follow-up retrieval in this same request. Background sync leaves
@@ -4473,6 +4501,8 @@ def register_chat_routes(app) -> None:
                             update_image_asset(normalized_image_id, message_id=persisted_user_message_id)
 
             canonical_messages = get_conversation_messages(conv_id)
+            if edited_message_id is not None:
+                settings = get_app_settings()
         elif conv_id:
             canonical_messages = get_conversation_messages(conv_id)
 
@@ -5023,6 +5053,19 @@ def register_chat_routes(app) -> None:
                     pending_clarification=pending_clarification,
                 )
                 persist_model_invocations(persisted_assistant_message_id)
+                if conv_id and persisted_assistant_message_id is not None:
+                    try:
+                        capture_workspace_snapshot_for_assistant_message(
+                            conv_id,
+                            persisted_assistant_message_id,
+                            source_message_id=persisted_user_message_id,
+                        )
+                    except Exception:
+                        LOGGER.exception(
+                            "Failed to capture workspace snapshot for conversation=%s assistant_message_id=%s",
+                            conv_id,
+                            persisted_assistant_message_id,
+                        )
 
                 if persisted_user_message_id is not None or persisted_assistant_message_id is not None:
                     yield json.dumps(
