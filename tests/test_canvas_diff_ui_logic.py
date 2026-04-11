@@ -189,17 +189,23 @@ def test_streaming_canvas_preview_keeps_markdown_rendering_for_small_drafts() ->
 def test_streaming_canvas_preview_uses_plaintext_fallback_for_large_markdown() -> None:
     _run_streaming_canvas_preview_assertions(
         """
-        const longText = Array.from({ length: 120 }, (_, index) => `line ${index + 1}`).join("\\n");
+        // Limit is now 800 lines / 30000 chars — use values that clearly exceed both.
+        const longText = Array.from({ length: 900 }, (_, index) => `line ${index + 1}`).join("\\n");
         const document = {
           format: "markdown",
           content: longText,
-          line_count: 120,
+          line_count: 900,
         };
 
         assert(getStreamingCanvasPreviewRenderMode(document) === "markdown-plain", "Large markdown drafts should switch to plaintext fallback mode");
         const html = renderStreamingCanvasPreviewBody(document);
         assert(html.includes("canvas-stream-markdown-block"), "Large markdown drafts should render with the plaintext preview shell");
         assert(!html.includes("rendered-stream"), "Large markdown drafts should skip expensive live markdown rendering");
+
+        // Documents well below the new limits must still render with proper markdown.
+        const shortText = Array.from({ length: 120 }, (_, index) => `line ${index + 1}`).join("\\n");
+        const shortDoc = { format: "markdown", content: shortText, line_count: 120 };
+        assert(getStreamingCanvasPreviewRenderMode(shortDoc) === "markdown", "Typical-length markdown drafts (120 lines) must keep full markdown rendering");
         """
     )
 
@@ -247,10 +253,35 @@ def test_render_canvas_diff_preview_shows_scroll_hint_for_long_diffs() -> None:
     assert render_match, "renderCanvasDiffPreview function was not found in static/app.js"
     render_body = render_match.group("body")
 
-    assert "Scroll to see more of this diff." in render_body
-    assert "<div class=\"canvas-diff__footer\" hidden>Scroll to see more of this diff.</div>" in render_body
-    assert "diffBodyEl.scrollHeight > diffBodyEl.clientHeight + 1" in render_body
-    assert 'canvasDiffEl.classList.toggle("canvas-diff--scrollable", isScrollable);' in render_body
+    # The scroll hint must live INSIDE the diff body (as the second-to-last flex item)
+    # so that hovering over it and scrolling targets the correct scroll container.
+    assert 'canvas-diff__scroll-hint' in render_body, "scroll hint element must be present inside the diff body"
+    assert 'canvas-diff__scroll-sentinel' in render_body, "scroll sentinel element must be present after the scroll hint"
+    assert "↓ scroll to see more" in render_body, "scroll hint must have descriptive text"
+
+    # Display must be toggled by IntersectionObserver on the sentinel, not rAF.
+    assert "IntersectionObserver" in render_body, "IntersectionObserver must be used to show/hide the scroll hint"
+    assert "root: diffBodyEl" in render_body, "IntersectionObserver root must target the diff body scroll container"
+
+    # Old rAF-based scroll detection must be gone.
+    assert "syncScrollHint" not in render_body, "old rAF-based syncScrollHint approach must be removed"
+    assert "diffBodyEl.scrollHeight" not in render_body, "old scrollHeight measurement must be removed"
+
+
+def test_canvas_sync_does_not_clear_pending_diff_on_repeat_sync() -> None:
+    source = _load_app_js_source()
+    canvas_sync_match = re.search(r"else if \(event\.type === \"canvas_sync\"\) \{(?P<body>.*?)\n\s*\} else if \(event\.type === \"history_sync\"\)", source, re.S)
+    assert canvas_sync_match, "canvas_sync block was not found in static/app.js"
+    canvas_sync_body = canvas_sync_match.group("body")
+
+    # The old `else if (pendingCanvasDiff?.documentId === nextActiveCandidate.id) { pendingCanvasDiff = null; }`
+    # branch must be absent.  It caused the diff to disappear when a second canvas_sync event
+    # (from the final agent tool_capture after an early commit emit) arrived with identical
+    # content on both sides (nextDiff === null) and cleared the still-valid pending diff.
+    assert "} else if (pendingCanvasDiff?.documentId === nextActiveCandidate.id)" not in canvas_sync_body, (
+        "Auto-clear of pendingCanvasDiff on no-diff canvas_sync must be removed; "
+        "it caused the diff to disappear when a second redundant canvas_sync arrived."
+    )
 
 
 def _load_canvas_doc_list_signature_source() -> str:

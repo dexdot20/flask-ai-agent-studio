@@ -4397,26 +4397,37 @@ kbd {
   font-size: 0.78rem;
 }
 
-.canvas-diff__footer[hidden] {
+/* Sticky scroll-hint lives INSIDE .canvas-diff__body so mouse-wheel
+   events over it are captured by the body's scroll container, not a
+   parent element.  IntersectionObserver shows it when the sentinel
+   (placed after the last hunk) is not visible in the scrollport. */
+.canvas-diff__scroll-hint {
+  position: sticky;
+  bottom: 0;
+  align-self: stretch;
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 7px;
+  height: 38px;
+  margin-top: -38px;          /* overlap the last row of content */
+  background: linear-gradient(to bottom, transparent 0%, rgba(14, 18, 30, 0.88) 65%);
+  color: rgba(200, 210, 255, 0.38);
+  font-size: 0.69rem;
+  letter-spacing: 0.02em;
+  pointer-events: none;       /* wheel events pass through to body */
+  z-index: 2;
+}
+
+.canvas-diff__scroll-hint[hidden] {
   display: none;
 }
 
-.canvas-diff__footer {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px 10px;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
-  background: rgba(255, 255, 255, 0.02);
-  color: var(--text-secondary);
-  font-size: 0.7rem;
-  line-height: 1.4;
-}
-
-.canvas-diff__footer::before {
-  content: "↕";
-  color: var(--text-muted);
+.canvas-diff__scroll-sentinel {
+  height: 1px;
   flex-shrink: 0;
+  pointer-events: none;
 }
 
 .canvas-diff__hunk {

@@ -3080,8 +3080,8 @@ function renderCanvasMarkdownSheet(contentHtml, options = {}) {
   );
 }
 
-const STREAMING_CANVAS_MARKDOWN_PLAIN_TEXT_CHAR_LIMIT = 1800;
-const STREAMING_CANVAS_MARKDOWN_PLAIN_TEXT_LINE_LIMIT = 80;
+const STREAMING_CANVAS_MARKDOWN_PLAIN_TEXT_CHAR_LIMIT = 30000;
+const STREAMING_CANVAS_MARKDOWN_PLAIN_TEXT_LINE_LIMIT = 800;
 
 function getStreamingCanvasPreviewFormat(document) {
   return document?.format === "code" ? "code" : "markdown";
@@ -3587,22 +3587,28 @@ function renderCanvasDiffPreview(activeDocument) {
           }).join("") +
         `</section>`
       ).join("") +
-    `</div>` +
-    `<div class="canvas-diff__footer" hidden>Scroll to see more of this diff.</div>`;
+      `<div class="canvas-diff__scroll-hint" hidden aria-hidden="true">↓ scroll to see more</div>` +
+      `<div class="canvas-diff__scroll-sentinel" aria-hidden="true"></div>` +
+    `</div>`;
 
   const diffBodyEl = canvasDiffEl.querySelector(".canvas-diff__body");
-  const diffFooterEl = canvasDiffEl.querySelector(".canvas-diff__footer");
-  const syncScrollHint = () => {
-    if (!diffBodyEl || !diffFooterEl) {
-      return;
-    }
-    const isScrollable = diffBodyEl.scrollHeight > diffBodyEl.clientHeight + 1;
-    diffFooterEl.hidden = !isScrollable;
-    canvasDiffEl.classList.toggle("canvas-diff--scrollable", isScrollable);
-  };
+  const scrollHintEl = canvasDiffEl.querySelector(".canvas-diff__scroll-hint");
+  const sentinelEl = canvasDiffEl.querySelector(".canvas-diff__scroll-sentinel");
 
-  syncScrollHint();
-  globalThis.requestAnimationFrame(syncScrollHint);
+  // Show the sticky scroll-hint whenever the sentinel (placed after the last hunk)
+  // is not visible within the diff body's scrollport.  This is more reliable than
+  // a one-shot rAF measurement and ensures the hint is only shown when the user
+  // genuinely has content below the fold.  Because the hint lives INSIDE the body,
+  // hovering over it and using the mouse-wheel scrolls the correct element.
+  if (diffBodyEl && scrollHintEl && sentinelEl) {
+    const scrollObserver = new IntersectionObserver(
+      (entries) => {
+        scrollHintEl.hidden = entries[0].isIntersecting;
+      },
+      { root: diffBodyEl, threshold: 0 },
+    );
+    scrollObserver.observe(sentinelEl);
+  }
 
   canvasDiffEl.querySelector('[data-action="dismiss-canvas-diff"]')?.addEventListener("click", () => {
     pendingCanvasDiff = null;
@@ -13082,9 +13088,12 @@ async function sendMessage(options = {}) {
               source: hadStreamingPreviewForDoc ? "live-preview" : "direct-sync",
               diff: nextDiff,
             };
-          } else if (pendingCanvasDiff?.documentId === nextActiveCandidate.id) {
-            pendingCanvasDiff = null;
           }
+          // Do NOT clear pendingCanvasDiff here when nextDiff is null.
+          // A second canvas_sync (e.g. from the final tool_capture after an early
+          // commit emit) sees identical content on both sides → nextDiff = null,
+          // but the diff shown to the user is still valid and should stay visible
+          // until they explicitly dismiss it or a new canvas_sync produces a new diff.
         }
         resetStreamingCanvasPreview();
         streamingCanvasDocuments = nextDocuments;
