@@ -3206,8 +3206,15 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         self.assertEqual(response.status_code, 200)
         first_call_messages = mocked_stream.call_args.args[0]
-        full_content = first_call_messages[0]["content"]
-        self.assertIn("The user prefers concise answers.", full_content)
+        injected_context = next(
+            (
+                message["content"]
+                for message in first_call_messages[1:]
+                if message.get("role") == "system" and "The user prefers concise answers." in str(message.get("content") or "")
+            ),
+            None,
+        )
+        self.assertIsNotNone(injected_context)
 
     def test_chat_uses_saved_rag_sensitivity_and_context_size(self):
         conversation_id = self._create_conversation()
@@ -10284,6 +10291,13 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(payload["invocations"][0]["request"]["messages"][0]["content"], "Hello")
         self.assertEqual(payload["invocations"][1]["call_type"], "final_answer")
         self.assertTrue(payload["transcript"][1]["has_reasoning"])
+        self.assertTrue(payload["transcript"][0]["created_at"])
+        self.assertTrue(payload["transcript"][1]["created_at"])
+        self.assertIn("metadata", payload["transcript"][1])
+        self.assertEqual(
+            payload["transcript"][1]["metadata"]["reasoning_content"],
+            "Reasoned through the request.",
+        )
 
     def test_conversation_export_endpoint_marks_legacy_json_export_when_no_exact_snapshots(self):
         conversation_id = self._create_conversation("Legacy Raw Export")
@@ -10412,6 +10426,148 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("### Reasoning", exported_text)
         self.assertIn("Recovered cached reasoning.", exported_text)
         self.assertIn("Legacy answer.", exported_text)
+
+    def test_conversation_payload_includes_message_created_at(self):
+        conversation_id = self._create_conversation("Created At Chat")
+
+        with get_db() as conn:
+            insert_message(conn, conversation_id, "user", "Timestamp me")
+
+        response = self.client.get(f"/api/conversations/{conversation_id}")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["messages"][0]["content"], "Timestamp me")
+        self.assertTrue(payload["messages"][0]["created_at"])
+
+    def test_serialize_message_metadata_preserves_rich_tool_result_and_trace_fields(self):
+        metadata = parse_message_metadata(
+            serialize_message_metadata(
+                {
+                    "tool_results": [
+                        {
+                            "tool_name": "fetch_url",
+                            "content": "Short fetched content.",
+                            "summary": "Fetched page summary.",
+                            "recovery_hint": "Use grep_fetched_content for an exact quote.",
+                            "fetch_diagnostic": "HTTP 200 · cleaned HTML",
+                            "meta_description": "Page description.",
+                            "structured_data": '{"headline": "Demo"}',
+                            "fetch_outcome": "success",
+                            "content_mode": "clipped_text",
+                            "raw_content_available": True,
+                            "content_token_estimate": 12,
+                            "content_char_count": 24,
+                        }
+                    ],
+                    "tool_trace": [
+                        {
+                            "tool_name": "fetch_url",
+                            "step": 1,
+                            "state": "done",
+                            "executed_at": "10:15:00",
+                            "summary": "Fetched the page.",
+                        }
+                    ],
+                },
+                include_private_fields=True,
+            ),
+            include_private_fields=True,
+        )
+
+        self.assertEqual(metadata["tool_results"][0]["recovery_hint"], "Use grep_fetched_content for an exact quote.")
+        self.assertEqual(metadata["tool_results"][0]["fetch_diagnostic"], "HTTP 200 · cleaned HTML")
+        self.assertEqual(metadata["tool_results"][0]["meta_description"], "Page description.")
+        self.assertEqual(metadata["tool_results"][0]["structured_data"], '{"headline": "Demo"}')
+        self.assertEqual(metadata["tool_results"][0]["fetch_outcome"], "success")
+        self.assertTrue(metadata["tool_results"][0]["raw_content_available"])
+        self.assertEqual(metadata["tool_results"][0]["content_char_count"], 24)
+        self.assertEqual(metadata["tool_trace"][0]["executed_at"], "10:15:00")
+
+    def test_raw_json_conversation_export_preserves_message_metadata(self):
+        conversation_id = self._create_conversation("Metadata Export Chat")
+
+        with get_db() as conn:
+            insert_message(
+                conn,
+                conversation_id,
+                "user",
+                "Please inspect the fetched page.",
+                metadata=serialize_message_metadata(
+                    {
+                        "attachments": [
+                            {
+                                "kind": "document",
+                                "file_id": "file-123",
+                                "file_name": "report.pdf",
+                                "file_mime_type": "application/pdf",
+                                "file_context_block": "# Report\n\nBody",
+                            }
+                        ]
+                    }
+                ),
+            )
+            insert_message(
+                conn,
+                conversation_id,
+                "assistant",
+                "I inspected it.",
+                metadata=serialize_message_metadata(
+                    {
+                        "tool_trace": [
+                            {
+                                "tool_name": "fetch_url",
+                                "step": 1,
+                                "state": "done",
+                                "executed_at": "10:15:00",
+                                "summary": "Fetched page",
+                            }
+                        ],
+                        "tool_results": [
+                            {
+                                "tool_name": "fetch_url",
+                                "content": "Short fetched content.",
+                                "summary": "Fetched page summary.",
+                                "fetch_diagnostic": "HTTP 200 · cleaned HTML",
+                                "recovery_hint": "Use grep_fetched_content for an exact quote.",
+                            }
+                        ],
+                        "canvas_documents": [
+                            {
+                                "id": "canvas-1",
+                                "title": "Notes",
+                                "format": "markdown",
+                                "content": "# Notes",
+                            }
+                        ],
+                        "active_document_id": "canvas-1",
+                    },
+                    include_private_fields=True,
+                ),
+            )
+
+        response = self.client.get(f"/api/conversations/{conversation_id}/export?format=json")
+
+        self.assertEqual(response.status_code, 200)
+        payload = json.loads(response.get_data(as_text=True))
+        user_entry = payload["transcript"][0]
+        assistant_entry = payload["transcript"][1]
+
+        self.assertEqual(user_entry["metadata"]["attachments"][0]["file_name"], "report.pdf")
+        self.assertEqual(assistant_entry["metadata"]["tool_trace"][0]["executed_at"], "10:15:00")
+        self.assertEqual(
+            assistant_entry["metadata"]["tool_results"][0]["fetch_diagnostic"],
+            "HTTP 200 · cleaned HTML",
+        )
+        self.assertEqual(assistant_entry["metadata"]["active_document_id"], "canvas-1")
+        self.assertEqual(assistant_entry["metadata"]["canvas_documents"][0]["title"], "Notes")
+
+    def test_frontend_normalize_history_entry_preserves_message_timestamps(self):
+        script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
+        script_text = script_path.read_text(encoding="utf-8")
+
+        self.assertIn('created_at: String(source.created_at || "").trim()', script_text)
+        self.assertIn('deleted_at: String(source.deleted_at || "").trim()', script_text)
 
     def test_conversation_export_endpoint_rejects_invalid_format(self):
         conversation_id = self._create_conversation("Exportable Chat")

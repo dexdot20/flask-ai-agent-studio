@@ -312,12 +312,26 @@ def _iter_message_sections(messages: list[dict]) -> list[dict]:
     return sections
 
 
+def _build_raw_export_message_metadata(message: dict) -> dict | None:
+    metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+    if not metadata:
+        return None
+
+    cleaned = {
+        key: value
+        for key, value in metadata.items()
+        if key != "_edit_replay_deleted"
+    }
+    return cleaned or None
+
+
 def _build_raw_export_transcript(messages: list[dict]) -> list[dict]:
     transcript = []
     for message in messages or []:
         if not isinstance(message, dict):
             continue
         metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+        raw_metadata = _build_raw_export_message_metadata(message)
         transcript.append(
             {
                 "id": message.get("id"),
@@ -328,6 +342,9 @@ def _build_raw_export_transcript(messages: list[dict]) -> list[dict]:
                 "tool_calls": message.get("tool_calls") if isinstance(message.get("tool_calls"), list) else [],
                 "has_reasoning": bool(str(metadata.get("reasoning_content") or "").strip()),
                 "usage": message.get("usage") if isinstance(message.get("usage"), dict) else None,
+                "created_at": _safe_text(message.get("created_at")) or None,
+                "deleted_at": _safe_text(message.get("deleted_at")) or None,
+                "metadata": raw_metadata,
             }
         )
     return transcript

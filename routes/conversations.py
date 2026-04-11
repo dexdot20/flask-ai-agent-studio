@@ -1102,7 +1102,7 @@ def register_conversation_routes(app) -> None:
             if metadata.get("is_pruned") is True:
                 updated_row = conn.execute(
                     """SELECT id, position, role, content, metadata, tool_calls, tool_call_id,
-                              prompt_tokens, completion_tokens, total_tokens, deleted_at
+                              prompt_tokens, completion_tokens, total_tokens, created_at, deleted_at
                        FROM messages WHERE id = ?""",
                     (message_id,),
                 ).fetchone()
@@ -1183,7 +1183,7 @@ def register_conversation_routes(app) -> None:
             )
             updated_row = conn.execute(
                 """SELECT id, position, role, content, metadata, tool_calls, tool_call_id,
-                          prompt_tokens, completion_tokens, total_tokens, deleted_at
+                          prompt_tokens, completion_tokens, total_tokens, created_at, deleted_at
                    FROM messages WHERE id = ?""",
                 (message_id,),
             ).fetchone()

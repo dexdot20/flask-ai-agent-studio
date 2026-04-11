@@ -2505,12 +2505,34 @@ def _normalize_message_tool_result(entry: dict) -> dict | None:
     if summary_notice:
         cleaned["summary_notice"] = summary_notice
 
+    for key, max_length in (
+        ("recovery_hint", 300),
+        ("fetch_diagnostic", 600),
+        ("meta_description", 300),
+        ("structured_data", 600),
+        ("fetch_outcome", 120),
+        ("model", 120),
+        ("focus", 300),
+        ("error", 400),
+    ):
+        value = str(entry.get(key) or "").strip()[:max_length]
+        if value:
+            cleaned[key] = value
+
     if isinstance(entry.get("cleanup_applied"), bool):
         cleaned["cleanup_applied"] = entry["cleanup_applied"]
+
+    if entry.get("raw_content_available") is True:
+        cleaned["raw_content_available"] = True
 
     token_estimate = _coerce_non_negative_int(entry.get("content_token_estimate"))
     if token_estimate is not None:
         cleaned["content_token_estimate"] = token_estimate
+
+    content_char_count = _coerce_non_negative_int(entry.get("content_char_count"))
+    if content_char_count is not None:
+        cleaned["content_char_count"] = content_char_count
+
     return cleaned
 
 
@@ -2542,6 +2564,10 @@ def _normalize_message_tool_trace_entry(entry: dict) -> dict | None:
     summary = str(entry.get("summary") or "").strip()[:RAG_TOOL_RESULT_SUMMARY_MAX_CHARS]
     if summary:
         cleaned["summary"] = summary
+
+    executed_at = str(entry.get("executed_at") or "").strip()[:40]
+    if executed_at:
+        cleaned["executed_at"] = executed_at
 
     if isinstance(entry.get("cached"), bool):
         cleaned["cached"] = entry["cached"]
@@ -3167,6 +3193,7 @@ def message_row_to_dict(row, *, include_private_metadata: bool = False) -> dict:
         "completion_tokens": row["completion_tokens"],
         "total_tokens": row["total_tokens"],
         "usage": usage,
+        "created_at": row["created_at"] if "created_at" in row_keys else None,
         "deleted_at": row["deleted_at"] if "deleted_at" in row_keys else None,
     }
 
@@ -4612,7 +4639,7 @@ def get_conversation_message_rows(
 ) -> list[sqlite3.Row]:
     query = (
         """SELECT id, position, role, content, metadata, tool_calls, tool_call_id,
-                  prompt_tokens, completion_tokens, total_tokens, deleted_at
+                  prompt_tokens, completion_tokens, total_tokens, created_at, deleted_at
            FROM messages
            WHERE conversation_id = ?"""
     )

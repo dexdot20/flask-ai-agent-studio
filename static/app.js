@@ -7012,6 +7012,8 @@ function normalizeHistoryEntry(entry) {
     tool_calls: toolCalls,
     tool_call_id: toolCallId,
     usage,
+    created_at: String(source.created_at || "").trim(),
+    deleted_at: String(source.deleted_at || "").trim(),
   };
 }
 
