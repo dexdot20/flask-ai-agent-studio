@@ -2119,9 +2119,15 @@ def get_openai_tool_specs(
     active_tool_names: list[str],
     canvas_documents: list[dict] | None = None,
     clarification_max_questions: int | None = None,
+    *,
+    workspace_root: str | None = None,
 ) -> list[dict]:
     specs = []
-    runtime_tool_names = resolve_runtime_tool_names(active_tool_names, canvas_documents=canvas_documents)
+    runtime_tool_names = resolve_runtime_tool_names(
+        active_tool_names,
+        canvas_documents=canvas_documents,
+        workspace_root=workspace_root,
+    )
     for tool in get_enabled_tool_specs(runtime_tool_names, clarification_max_questions=clarification_max_questions):
         parameters = copy.deepcopy(tool.get("parameters") or {})
         if parameters.get("type") == "object":
@@ -2153,9 +2159,15 @@ def get_prompt_tool_context(
     active_tool_names: list[str],
     canvas_documents: list[dict] | None = None,
     clarification_max_questions: int | None = None,
+    *,
+    workspace_root: str | None = None,
 ) -> list[dict] | None:
     tools = []
-    runtime_tool_names = resolve_runtime_tool_names(active_tool_names, canvas_documents=canvas_documents)
+    runtime_tool_names = resolve_runtime_tool_names(
+        active_tool_names,
+        canvas_documents=canvas_documents,
+        workspace_root=workspace_root,
+    )
     for tool in get_enabled_tool_specs(runtime_tool_names, clarification_max_questions=clarification_max_questions):
         parameters = tool.get("parameters") if isinstance(tool.get("parameters"), dict) else {}
         properties = parameters.get("properties") if isinstance(parameters.get("properties"), dict) else {}

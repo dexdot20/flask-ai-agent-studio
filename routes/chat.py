@@ -167,6 +167,11 @@ from model_registry import (
 )
 from ocr_service import preload_ocr_engine
 from project_workspace_service import create_workspace_runtime_state, get_workspace_root
+from project_workspace_service import (
+    capture_temporary_workspace_snapshot,
+    delete_temporary_workspace_snapshot,
+    restore_temporary_workspace_snapshot,
+)
 from rag import preload_embedder
 from rag_service import build_rag_auto_context, build_tool_memory_auto_context, conversation_rag_source_key
 from rag_service import sync_conversations_to_rag_background, sync_conversations_to_rag_safe
@@ -401,59 +406,20 @@ def _snapshot_workspace_tree(conversation_id: int | None) -> dict | None:
         return None
 
     try:
-        workspace_runtime_state = create_workspace_runtime_state(conversation_id)
-        workspace_root = get_workspace_root(workspace_runtime_state)
+        return capture_temporary_workspace_snapshot(
+            create_workspace_runtime_state(conversation_id),
+            prefix=f"chat-edit-workspace-{int(conversation_id)}-",
+        )
     except Exception:
         return None
 
-    normalized_root = str(workspace_root or "").strip()
-    if not normalized_root:
-        return None
-
-    backup_dir = tempfile.mkdtemp(prefix=f"chat-edit-workspace-{int(conversation_id)}-")
-    backup_root = os.path.join(backup_dir, "workspace")
-    existed = os.path.isdir(normalized_root)
-    if existed:
-        try:
-            shutil.copytree(normalized_root, backup_root)
-        except Exception:
-            shutil.rmtree(backup_dir, ignore_errors=True)
-            return None
-
-    return {
-        "root_path": normalized_root,
-        "backup_dir": backup_dir,
-        "backup_root": backup_root,
-        "root_existed": existed,
-    }
-
 
 def _restore_workspace_tree(snapshot: dict | None) -> None:
-    if not isinstance(snapshot, dict):
-        return
-
-    root_path = str(snapshot.get("root_path") or "").strip()
-    if not root_path:
-        return
-
-    backup_root = str(snapshot.get("backup_root") or "").strip()
-    root_existed = snapshot.get("root_existed") is True
-
-    if os.path.isdir(root_path):
-        shutil.rmtree(root_path, ignore_errors=True)
-
-    if root_existed and os.path.isdir(backup_root):
-        os.makedirs(os.path.dirname(root_path), exist_ok=True)
-        shutil.copytree(backup_root, root_path)
+    restore_temporary_workspace_snapshot(snapshot)
 
 
 def _cleanup_workspace_snapshot(snapshot: dict | None) -> None:
-    if not isinstance(snapshot, dict):
-        return
-
-    backup_dir = str(snapshot.get("backup_dir") or "").strip()
-    if backup_dir:
-        shutil.rmtree(backup_dir, ignore_errors=True)
+    delete_temporary_workspace_snapshot(snapshot)
 
 
 def _capture_edit_replay_snapshot(

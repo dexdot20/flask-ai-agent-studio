@@ -292,7 +292,7 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         self.assertIn("Multiple canvas tool calls in one answer are fine", content)
         self.assertIn("If you do not know the document_id, use the document_path", content)
         self.assertIn("## Active Tools This Turn", content)
-        self.assertNotIn("## Canvas Workspace Summary", content)
+        self.assertNotIn("## Canvas File Set Summary", content)
         self.assertNotIn("## Canvas Decision Matrix", content)
         self.assertIn("create_canvas_document", content)
         self.assertNotIn("## Canvas Workflow", content)
@@ -417,7 +417,7 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         content = message["content"]
-        self.assertIn("## Canvas Workspace Summary", content)
+        self.assertIn("## Canvas File Set Summary", content)
         self.assertIn("- Working mode: project", content)
         self.assertIn("- Project label: demo-app", content)
         self.assertIn("- Active file: src/app.py", content)

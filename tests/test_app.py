@@ -2592,7 +2592,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("Multiple canvas tool calls in one answer are fine", content)
         self.assertIn("If you do not know the document_id, use the document_path", content)
         self.assertIn("## Active Tools This Turn", content)
-        self.assertNotIn("## Canvas Workspace Summary", content)
+        self.assertNotIn("## Canvas File Set Summary", content)
         self.assertNotIn("## Canvas Decision Matrix", content)
         self.assertIn("create_canvas_document", content)
         self.assertNotIn("## Canvas Workflow", content)
@@ -2717,7 +2717,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         )
 
         content = message["content"]
-        self.assertIn("## Canvas Workspace Summary", content)
+        self.assertIn("## Canvas File Set Summary", content)
         self.assertIn("- Working mode: project", content)
         self.assertIn("- Project label: demo-app", content)
         self.assertIn("- Active file: src/app.py", content)
@@ -3577,11 +3577,16 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         self.assertEqual(
             section_titles,
-            ["Assistant & Memory", "Web Research", "Canvas Editing", "Workspace Sandbox"],
+            ["Assistant & Memory", "Web Research", "Draft Files (Canvas)", "Real Files (Workspace)"],
         )
 
+        assistant_tools = next(section for section in sections if section["key"] == "assistant")["tools"]
         workspace_tools = next(section for section in sections if section["key"] == "workspace")["tools"]
         canvas_tools = next(section for section in sections if section["key"] == "canvas")["tools"]
+        research_section = next(section for section in sections if section["key"] == "research")
+
+        self.assertIn("save_to_conversation_memory", [tool["name"] for tool in assistant_tools])
+        self.assertIn("delete_conversation_memory_entry", [tool["name"] for tool in assistant_tools])
 
         self.assertIn("read_file", [tool["name"] for tool in workspace_tools])
         self.assertIn("validate_project_workspace", [tool["name"] for tool in workspace_tools])
@@ -3589,6 +3594,23 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("batch_read_canvas_documents", [tool["name"] for tool in canvas_tools])
         self.assertIn("validate_canvas_document", [tool["name"] for tool in canvas_tools])
         self.assertIn("focus_canvas_page", [tool["name"] for tool in canvas_tools])
+        self.assertEqual(
+            research_section["note"],
+            "When enabled, these tools stay available at runtime, but the prompt still tells the assistant to avoid unnecessary external lookups.",
+        )
+
+        assistant_labels = {tool["name"]: tool["label"] for tool in assistant_tools}
+        research_labels = {tool["name"]: tool["label"] for tool in research_section["tools"]}
+        canvas_labels = {tool["name"]: tool["label"] for tool in canvas_tools}
+
+        self.assertEqual(assistant_labels["save_to_conversation_memory"], "Save chat memory")
+        self.assertEqual(assistant_labels["delete_conversation_memory_entry"], "Delete chat memory")
+        self.assertEqual(assistant_labels["sub_agent"], "Web research helper")
+        self.assertEqual(assistant_labels["search_tool_memory"], "Search remembered research")
+        self.assertEqual(research_labels["fetch_url_summarized"], "Summarize URL")
+        self.assertEqual(research_labels["fetch_url_to_canvas"], "Import URL into Canvas")
+        self.assertEqual(canvas_labels["batch_read_canvas_documents"], "Read multiple canvas documents")
+        self.assertEqual(canvas_labels["validate_canvas_document"], "Validate canvas document")
 
     def test_sub_agent_allowed_tools_are_web_only(self):
         self.assertEqual(
@@ -5256,7 +5278,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
     def test_estimate_message_breakdown_classifies_canvas_workspace_sections_as_canvas(self):
         content = "\n".join(
             [
-                "## Canvas Workspace Summary",
+                "## Canvas File Set Summary",
                 "- Active file: src/app.py",
                 "",
                 "## Canvas Editing Guidance",
@@ -5310,6 +5332,73 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         )
 
         self.assertEqual(runtime_names, ["search_web", "create_canvas_document"])
+
+    def test_get_openai_tool_specs_include_workspace_tools_only_with_workspace_root(self):
+        tools_with_workspace = get_openai_tool_specs(
+            ["read_file", "list_dir", "search_web"],
+            workspace_root="/tmp/workspace-root",
+        )
+        tools_without_workspace = get_openai_tool_specs(["read_file", "list_dir", "search_web"])
+
+        self.assertEqual(
+            [entry["function"]["name"] for entry in tools_with_workspace],
+            ["search_web", "read_file", "list_dir"],
+        )
+        self.assertEqual(
+            [entry["function"]["name"] for entry in tools_without_workspace],
+            ["search_web"],
+        )
+
+    def test_run_agent_stream_exposes_workspace_tools_to_model_only_when_workspace_root_exists(self):
+        response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        reasoning_content="",
+                        content="Done.",
+                        tool_calls=[],
+                    )
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=2, completion_tokens=2, total_tokens=4),
+        )
+
+        workspace_runtime_state = create_workspace_runtime_state(
+            root_path=os.path.join(self.temp_dir.name, "agent-workspace"),
+        )
+
+        with patch("agent.client.chat.completions.create", return_value=response) as mocked_create:
+            list(
+                run_agent_stream(
+                    [{"role": "user", "content": "Inspect the workspace."}],
+                    "deepseek-chat",
+                    1,
+                    ["read_file", "search_web"],
+                    workspace_runtime_state=workspace_runtime_state,
+                )
+            )
+
+        self.assertIn("tools", mocked_create.call_args.kwargs)
+        self.assertEqual(
+            [entry["function"]["name"] for entry in mocked_create.call_args.kwargs["tools"]],
+            ["search_web", "read_file"],
+        )
+
+        with patch("agent.client.chat.completions.create", return_value=response) as mocked_create_without_workspace:
+            list(
+                run_agent_stream(
+                    [{"role": "user", "content": "Inspect the workspace."}],
+                    "deepseek-chat",
+                    1,
+                    ["read_file", "search_web"],
+                    workspace_runtime_state=create_workspace_runtime_state(),
+                )
+            )
+
+        self.assertEqual(
+            [entry["function"]["name"] for entry in mocked_create_without_workspace.call_args.kwargs["tools"]],
+            ["search_web"],
+        )
 
     def test_resolve_runtime_tool_names_keeps_canvas_tools_when_canvas_documents_exist(self):
         runtime_names = resolve_runtime_tool_names(
@@ -6064,6 +6153,89 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(executor_limits, [2])
         tool_results = [event for event in events if event["type"] == "tool_result"]
         self.assertEqual([event["tool"] for event in tool_results], ["search_web", "fetch_url", "read_file"])
+
+    def test_run_agent_stream_does_not_session_cache_workspace_reads_after_workspace_mutation(self):
+        responses = [
+            iter(
+                [
+                    self._tool_call_chunk("read_file", {"path": "demo/app.py"}, call_id="call-1"),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=3, completion_tokens=2, total_tokens=5)),
+                ]
+            ),
+            iter(
+                [
+                    self._tool_call_chunk(
+                        "update_file",
+                        {"path": "demo/app.py", "content": "print('v2')\n"},
+                        call_id="call-2",
+                    ),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=3, completion_tokens=2, total_tokens=5)),
+                ]
+            ),
+            iter(
+                [
+                    self._tool_call_chunk("read_file", {"path": "demo/app.py"}, call_id="call-3"),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=3, completion_tokens=2, total_tokens=5)),
+                ]
+            ),
+            iter(
+                [
+                    self._stream_chunk(content="Done."),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=1, total_tokens=3)),
+                ]
+            ),
+        ]
+        executed_calls = []
+
+        def fake_execute(tool_name, tool_args, runtime_state=None):
+            del runtime_state
+            executed_calls.append((tool_name, dict(tool_args)))
+            if tool_name == "read_file":
+                read_count = len([name for name, _args in executed_calls if name == "read_file"])
+                rendered_content = "1: print('v1')" if read_count == 1 else "1: print('v2')"
+                return (
+                    {
+                        "status": "ok",
+                        "action": "file_read",
+                        "path": str(tool_args.get("path") or ""),
+                        "content": rendered_content,
+                    },
+                    f"File read: {tool_args.get('path')}",
+                )
+            if tool_name == "update_file":
+                return (
+                    {
+                        "status": "ok",
+                        "action": "file_updated",
+                        "path": str(tool_args.get("path") or ""),
+                    },
+                    f"File updated: {tool_args.get('path')}",
+                )
+            raise AssertionError(f"Unexpected tool: {tool_name}")
+
+        workspace_runtime_state = create_workspace_runtime_state(
+            root_path=os.path.join(self.temp_dir.name, "workspace-cache"),
+        )
+
+        with patch("agent.client.chat.completions.create", side_effect=responses), patch(
+            "agent._execute_tool",
+            side_effect=fake_execute,
+        ):
+            events = list(
+                run_agent_stream(
+                    [{"role": "user", "content": "Inspect, edit, then inspect again."}],
+                    "deepseek-chat",
+                    4,
+                    ["read_file", "update_file"],
+                    workspace_runtime_state=workspace_runtime_state,
+                )
+            )
+
+        read_calls = [entry for entry in executed_calls if entry[0] == "read_file"]
+        self.assertEqual(len(read_calls), 2)
+        read_results = [event for event in events if event["type"] == "tool_result" and event["tool"] == "read_file"]
+        self.assertEqual(len(read_results), 2)
+        self.assertTrue(all(event.get("cached") is False for event in read_results))
 
     def test_execute_tool_runs_sub_agent_with_user_selected_web_tools(self):
         runtime_state = {

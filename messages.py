@@ -237,6 +237,7 @@ HISTORICAL_CONTEXT_INJECTION_STRIP_HEADINGS = {
     "## Scratchpad (AI Persistent Memory)",
     "## Conversation Memory",
     "## Conversation Memory Priority",
+    "## Canvas File Set Summary",
     "## Canvas Workspace Summary",
     "## Canvas Editing Guidance",
     "## Active Canvas Document",
@@ -1406,7 +1407,7 @@ def _build_canvas_workspace_summary(canvas_payload: dict) -> list[str]:
             return str(entry.get("path") or entry.get("title") or entry.get("id") or "Canvas").strip() or "Canvas"
         return str(entry.get("title") or entry.get("path") or entry.get("id") or "Canvas").strip() or "Canvas"
 
-    lines = ["## Canvas Workspace Summary"]
+    lines = ["## Canvas File Set Summary"]
     lines.append(f"- Working mode: {canvas_payload.get('mode') or 'document'}")
 
     project_name = str(manifest.get("project_name") or "").strip()
@@ -1625,7 +1626,7 @@ def _build_canvas_truncated_excerpt_guidance(active_tool_names: list[str]) -> st
     return (
         "- Guidance: This canvas excerpt is truncated. Use visible line numbers for line-level canvas edits. "
         "The Canvas UI may show more content than the model currently has in context; only the excerpt below and any pinned viewports are visible to you right now. "
-        "If an explicit document_path is listed in the workspace summary or active document block, use that exact value. Otherwise do not invent a path; target the active document or use document_id instead. "
+        "If an explicit document_path is listed in the Canvas File Set Summary or Active Canvas Document block, use that exact value. Otherwise do not invent a path; target the active document or use document_id instead. "
         f"{inspect_guidance} Never guess line numbers outside the visible excerpt."
     )
 
@@ -1667,7 +1668,7 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
         "- If you will keep working in the same region for multiple turns, use set_canvas_viewport so the pinned lines are injected automatically in later prompts.",
         "- If the document is multi-page and the task is page-specific, use focus_canvas_page instead of manually estimating a page's line range.",
         "- When multiple files or canvas regions are involved, batch independent inspection calls together in one answer instead of requesting them one by one.",
-        "- If you do not know the document_id, use the document_path carefully: use document_path only when an explicit project path is shown in the Canvas Workspace Summary or Active Canvas Document block; otherwise do not invent a path and target the active document or use document_id.",
+        "- If you do not know the document_id, use the document_path carefully: use document_path only when an explicit project path is shown in the Canvas File Set Summary or Active Canvas Document block; otherwise do not invent a path and target the active document or use document_id.",
         "- For optional selector fields such as document_id or document_path, omit the key entirely when unknown; never send null.",
         "- Use rewrite_canvas_document when most of the document should change or when you already know the complete intended replacement content.",
         "- When you already know the required edits across multiple canvas documents, emit all of those edit tool calls in a single answer instead of editing one document, waiting, and then editing the next.",

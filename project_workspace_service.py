@@ -7,6 +7,7 @@ import os
 from pathlib import Path, PurePosixPath
 import shutil
 import sys
+import tempfile
 import tomllib
 
 from config import PROJECT_WORKSPACE_ROOT
@@ -174,6 +175,73 @@ def clear_workspace(runtime_state: dict | None, *, preserve_history: bool = True
         "status": "ok",
         "action": "workspace_cleared",
         "preserve_history": preserve_history,
+    }
+
+
+def capture_temporary_workspace_snapshot(
+    runtime_state: dict | None,
+    *,
+    prefix: str = "workspace-temp-snapshot-",
+) -> dict | None:
+    root_path = get_workspace_root(runtime_state)
+    if not root_path:
+        return None
+
+    root = Path(root_path).resolve()
+    root_existed = root.is_dir()
+    backup_dir = Path(tempfile.mkdtemp(prefix=prefix))
+    backup_root = backup_dir / WORKSPACE_HISTORY_WORKSPACE_DIRNAME
+    if root_existed:
+        _copy_workspace_user_contents(root, backup_root)
+
+    return {
+        "root_path": root.as_posix(),
+        "backup_dir": backup_dir.as_posix(),
+        "backup_root": backup_root.as_posix(),
+        "root_existed": root_existed,
+        "mode": "temporary_workspace_snapshot",
+    }
+
+
+def restore_temporary_workspace_snapshot(snapshot: dict | None) -> dict:
+    if not isinstance(snapshot, dict):
+        return {"status": "skipped", "reason": "snapshot_missing"}
+
+    root_path = str(snapshot.get("root_path") or "").strip()
+    if not root_path:
+        return {"status": "skipped", "reason": "workspace_root_missing"}
+
+    root = Path(root_path).resolve()
+    backup_root = Path(str(snapshot.get("backup_root") or "").strip())
+    root_existed = snapshot.get("root_existed") is True
+
+    if root.exists():
+        _clear_workspace_user_contents(root)
+    elif root_existed or backup_root.exists():
+        root.mkdir(parents=True, exist_ok=True)
+
+    if backup_root.exists() and backup_root.is_dir():
+        _copy_workspace_user_contents(backup_root, root)
+
+    return {
+        "status": "ok",
+        "action": "temporary_workspace_snapshot_restored",
+        "root_existed": root_existed,
+    }
+
+
+def delete_temporary_workspace_snapshot(snapshot: dict | None) -> dict:
+    if not isinstance(snapshot, dict):
+        return {"status": "skipped", "reason": "snapshot_missing"}
+
+    backup_dir = str(snapshot.get("backup_dir") or "").strip()
+    if not backup_dir:
+        return {"status": "skipped", "reason": "backup_dir_missing"}
+
+    shutil.rmtree(backup_dir, ignore_errors=True)
+    return {
+        "status": "ok",
+        "action": "temporary_workspace_snapshot_deleted",
     }
 
 

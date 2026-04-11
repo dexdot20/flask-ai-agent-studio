@@ -57,6 +57,7 @@ from project_workspace_service import (
     create_directory as workspace_create_directory,
     create_file as workspace_create_file,
     create_workspace_runtime_state,
+    get_workspace_root,
     list_dir as workspace_list_dir,
     read_file as workspace_read_file,
     search_files as workspace_search_files,
@@ -282,6 +283,9 @@ PARALLEL_SAFE_TOOL_NAMES = (WEB_TOOL_NAMES - {"fetch_url_to_canvas"}) | {
     # Delegated read-only helper
     "sub_agent",
 }
+SESSION_CACHEABLE_TOOL_NAMES = (WEB_TOOL_NAMES - {"fetch_url_to_canvas"}) | {
+    "grep_fetched_content",
+}
 SUB_AGENT_MAX_TRANSCRIPT_MESSAGES = 24
 SUB_AGENT_MAX_MESSAGE_CONTENT_CHARS = 4_000
 SUB_AGENT_MAX_REASONING_CHARS = 4_000
@@ -308,6 +312,7 @@ SYSTEM_BREAKDOWN_SECTION_KEY_BY_HEADING = {
     "## Tool Execution History": "tool_trace",
     "## Tool Memory": "tool_memory",
     "## Knowledge Base": "rag_context",
+    "## Canvas File Set Summary": "canvas",
     "## Canvas Workspace Summary": "canvas",
     "## Canvas Editing Guidance": "canvas",
     "## Code Document Rules": "canvas",
@@ -1174,6 +1179,10 @@ _TOOL_NAME_ALIASES = {
 def _normalize_tool_name(tool_name: str) -> str:
     name = str(tool_name or "").strip()
     return _TOOL_NAME_ALIASES.get(name, name)
+
+
+def _is_session_cacheable_tool(tool_name: str) -> bool:
+    return _normalize_tool_name(tool_name) in SESSION_CACHEABLE_TOOL_NAMES
 
 
 def _resolve_sub_agent_tool_names(settings: dict) -> list[str]:
@@ -7475,10 +7484,12 @@ def run_agent_stream(
         if allow_tools:
             current_canvas_documents = get_canvas_runtime_documents(runtime_state.get("canvas"))
             prompt_enabled_tool_names = enabled_tool_names if prompt_tool_names is None else prompt_tool_names
+            workspace_root = get_workspace_root(runtime_state.get("workspace"))
             turn_tools = get_openai_tool_specs(
                 prompt_enabled_tool_names,
                 canvas_documents=current_canvas_documents,
                 clarification_max_questions=get_clarification_max_questions(model_settings),
+                workspace_root=workspace_root,
             )
             if turn_tools:
                 request_kwargs["tools"] = turn_tools
@@ -8111,7 +8122,7 @@ def run_agent_stream(
                 continue
             tool_call_counts[tool_name] += 1
 
-            if tool_name not in CANVAS_TOOL_NAMES and cache_key in tool_result_cache:
+            if _is_session_cacheable_tool(tool_name) and cache_key in tool_result_cache:
                 cached_result, cached_summary = tool_result_cache[cache_key]
                 transcript_result = _prepare_tool_result_for_transcript(
                     tool_name,
@@ -8392,7 +8403,7 @@ def run_agent_stream(
                         fetch_url_token_threshold=fetch_url_token_threshold,
                         fetch_url_clip_aggressiveness=fetch_url_clip_aggressiveness,
                     )
-                    if tool_name not in CANVAS_TOOL_NAMES:
+                    if _is_session_cacheable_tool(tool_name):
                         tool_result_cache[cache_key] = (result, summary)
                     storage_entry = _build_tool_result_storage_entry(
                         tool_name,

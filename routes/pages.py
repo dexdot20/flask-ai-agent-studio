@@ -142,21 +142,23 @@ from tool_registry import TOOL_SPEC_BY_NAME
 
 
 TOOL_PERMISSION_LABELS = {
+    "save_to_conversation_memory": "Save chat memory",
+    "delete_conversation_memory_entry": "Delete chat memory",
     "append_scratchpad": "Append persistent scratchpad",
     "replace_scratchpad": "Rewrite persistent scratchpad section",
     "read_scratchpad": "Read persistent scratchpad",
     "ask_clarifying_question": "Ask interactive clarification questions",
-    "sub_agent": "Delegate to sub-agent",
+    "sub_agent": "Web research helper",
     "image_explain": "Follow up on stored images",
     "search_knowledge_base": "Knowledge base search",
-    "search_tool_memory": "Search tool memory",
+    "search_tool_memory": "Search remembered research",
     "search_web": "Web search",
     "fetch_url": "Read URL content",
-    "fetch_url_summarized": "Fetch URL (summarized)",
-    "fetch_url_to_canvas": "Fetch URL to Canvas",
+    "fetch_url_summarized": "Summarize URL",
+    "fetch_url_to_canvas": "Import URL into Canvas",
     "grep_fetched_content": "Search fetched page content",
-    "search_news_ddgs": "Search news (DDGS)",
-    "search_news_google": "Search news (Google)",
+    "search_news_ddgs": "News search — DDGS",
+    "search_news_google": "News search — Google",
     "create_canvas_document": "Create canvas document",
     "expand_canvas_document": "Expand canvas document",
     "scroll_canvas_document": "Scroll canvas document",
@@ -164,6 +166,7 @@ TOOL_PERMISSION_LABELS = {
     "rewrite_canvas_document": "Rewrite canvas document",
     "preview_canvas_changes": "Preview canvas changes",
     "batch_canvas_edits": "Batch canvas edits",
+    "batch_read_canvas_documents": "Read multiple canvas documents",
     "transform_canvas_lines": "Transform canvas lines",
     "update_canvas_metadata": "Update canvas metadata",
     "set_canvas_viewport": "Set canvas viewport",
@@ -181,22 +184,25 @@ TOOL_PERMISSION_LABELS = {
     "list_dir": "List directory",
     "search_files": "Search files",
     "write_project_tree": "Write project tree",
-    "validate_project_workspace": "Validate project workspace",
+    "validate_project_workspace": "Lightweight workspace validation",
+    "validate_canvas_document": "Validate canvas document",
 }
 
 TOOL_PERMISSION_DESCRIPTIONS = {
+    "save_to_conversation_memory": "Save a short chat-scoped memory entry for later turns in this conversation.",
+    "delete_conversation_memory_entry": "Remove one outdated chat-scoped memory entry.",
     "append_scratchpad": "Append durable facts to a named persistent memory section.",
     "replace_scratchpad": "Fully rewrite one persistent memory section.",
     "read_scratchpad": "Read the current persistent memory before editing.",
     "ask_clarifying_question": "Pause and ask the user structured questions before answering.",
-    "sub_agent": "Delegate a bounded research task to a read-only helper agent.",
+    "sub_agent": "Delegate a bounded web research task to a read-only helper agent.",
     "image_explain": "Ask follow-up questions about a previously uploaded image.",
     "search_knowledge_base": "Semantic search over synced chats and uploaded documents.",
-    "search_tool_memory": "Search remembered web research results from past conversations.",
+    "search_tool_memory": "Search remembered web research results from earlier conversations.",
     "search_web": "Live web search via DuckDuckGo for current facts.",
     "fetch_url": "Read and extract cleaned text from a specific web page.",
-    "fetch_url_summarized": "Fetch a page and return an AI-generated summary only.",
-    "fetch_url_to_canvas": "Fetch a page and import it into one or more searchable Canvas documents.",
+    "fetch_url_summarized": "Fetch a page and return only a focused AI summary.",
+    "fetch_url_to_canvas": "Fetch a page and import it into one or more searchable Canvas draft documents.",
     "grep_fetched_content": "Search for a keyword or pattern inside a previously fetched page.",
     "search_news_ddgs": "Search recent news articles via DuckDuckGo News.",
     "search_news_google": "Search recent news articles via Google News RSS.",
@@ -207,6 +213,7 @@ TOOL_PERMISSION_DESCRIPTIONS = {
     "rewrite_canvas_document": "Fully replace a canvas document's content in one operation.",
     "preview_canvas_changes": "Dry-run a set of canvas edits and preview the result without applying.",
     "batch_canvas_edits": "Apply several non-overlapping line edits to a canvas document in one call.",
+    "batch_read_canvas_documents": "Read multiple canvas documents or ranges in one call.",
     "transform_canvas_lines": "Apply a text transformation to a range of lines in a canvas document.",
     "update_canvas_metadata": "Update the title, language, or other metadata of a canvas document.",
     "set_canvas_viewport": "Pin a line range as the active viewport for a canvas document.",
@@ -225,6 +232,7 @@ TOOL_PERMISSION_DESCRIPTIONS = {
     "search_files": "Search file paths or file contents within the workspace sandbox.",
     "write_project_tree": "Create or overwrite many files and directories in one batch.",
     "validate_project_workspace": "Run lightweight validation checks against the workspace sandbox.",
+    "validate_canvas_document": "Run a syntax or structure check on a canvas document without editing it.",
 }
 
 TOOL_PERMISSION_SECTION_ORDER = ["assistant", "research", "canvas", "workspace"]
@@ -237,16 +245,16 @@ TOOL_PERMISSION_SECTION_METADATA = {
     "research": {
         "title": "Web Research",
         "description": "Search and fetch public web content when the request calls for outside information.",
-        "note": "These tools are still context-gated during runtime if the prompt is not web-related.",
+        "note": "When enabled, these tools stay available at runtime, but the prompt still tells the assistant to avoid unnecessary external lookups.",
     },
     "canvas": {
-        "title": "Canvas Editing",
-        "description": "Editable draft documents, canvas search, and line-level changes inside the conversation canvas.",
+        "title": "Draft Files (Canvas)",
+        "description": "Conversation-attached draft documents, canvas search, and line-level changes inside Canvas.",
         "note": "Enable inspection helpers such as expand and scroll separately when you want read-only canvas navigation.",
     },
     "workspace": {
-        "title": "Workspace Sandbox",
-        "description": "Create, read, update, and validate files inside the conversation workspace only.",
+        "title": "Real Files (Workspace)",
+        "description": "Create, read, update, and validate real files inside the conversation workspace sandbox only.",
         "note": "This panel cannot expand the sandbox boundary. It only controls which sandbox operations the assistant may request.",
     },
 }
@@ -281,7 +289,7 @@ PROXY_OPERATION_OPTIONS = [
 
 
 def _get_tool_permission_section_key(name: str) -> str:
-    if name in {"append_scratchpad", "replace_scratchpad", "read_scratchpad", "ask_clarifying_question", "sub_agent", "image_explain", "search_knowledge_base", "search_tool_memory"}:
+    if name in {"save_to_conversation_memory", "delete_conversation_memory_entry", "append_scratchpad", "replace_scratchpad", "read_scratchpad", "ask_clarifying_question", "sub_agent", "image_explain", "search_knowledge_base", "search_tool_memory"}:
         return "assistant"
     if name in {"search_web", "fetch_url", "fetch_url_summarized", "fetch_url_to_canvas", "grep_fetched_content", "search_news_ddgs", "search_news_google"}:
         return "research"
