@@ -1350,7 +1350,18 @@ def build_user_profile_system_context(max_tokens: int = 500, limit: int = 12) ->
     lines: list[str] = []
     total_tokens = 0
     for entry in entries:
-        line = f"- {entry['value']}"
+        meta_parts: list[str] = []
+        confidence = entry.get("confidence")
+        source = str(entry.get("source") or "").strip()
+        updated_at = str(entry.get("updated_at") or "").strip()
+        if isinstance(confidence, (int, float)):
+            meta_parts.append(f"confidence: {float(confidence):.2f}")
+        if source:
+            meta_parts.append(f"source: {source}")
+        if updated_at:
+            meta_parts.append(updated_at)
+        meta_suffix = f" ({', '.join(meta_parts)})" if meta_parts else ""
+        line = f"- {entry['value']}{meta_suffix}"
         line_tokens = estimate_text_tokens(line)
         if lines and total_tokens + line_tokens > max_tokens:
             break
@@ -3581,9 +3592,9 @@ def build_effective_user_preferences(settings: dict | None = None) -> str:
     ai_personality = get_ai_personality(settings)
     parts = []
     if general_instructions:
-        parts.append(f"General instructions:\n{general_instructions}")
+        parts.append(f"## General Instructions\n{general_instructions}")
     if ai_personality:
-        parts.append(f"AI personality:\n{ai_personality}")
+        parts.append(f"## AI Personality\n{ai_personality}")
     return "\n\n".join(parts).strip()
 
 

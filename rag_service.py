@@ -240,7 +240,7 @@ def build_tool_memory_source_key(tool_name: str, args_hash: str) -> str:
 
 
 def build_tool_result_record_content(entry: dict, index: int) -> str:
-    parts = [f"[{index}] tool:{entry['tool_name']}"]
+    parts = [f"## [{index}] {entry['tool_name']}"]
     if entry.get("input_preview"):
         parts.append(f"Input: {entry['input_preview']}")
     if entry.get("summary"):
@@ -1060,7 +1060,7 @@ def build_tool_memory_auto_context(query: str, top_k: int) -> str | None:
         similarity_text = f"{float(similarity):.2f}" if isinstance(similarity, (int, float)) else "n/a"
         excerpt = _clip_rag_excerpt(match.get("text", ""), limit=1000)
         if excerpt:
-            sections.append(f"Source: {source_name}\nSimilarity: {similarity_text}\n{excerpt}")
+            sections.append(f"## {source_name}\nSimilarity: {similarity_text}\n{excerpt}")
     if not sections:
         return None
     return "\n\n".join(sections)

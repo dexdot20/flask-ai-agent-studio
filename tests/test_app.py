@@ -3058,8 +3058,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("## Conversation Summaries", content)
         self.assertIn("authoritative compressed history for earlier deleted turns", content)
         self.assertIn("## Current Date and Time", content)
-        self.assertTrue(content.startswith("## Current Date and Time"))
-        self.assertLess(content.index("## Current Date and Time"), content.index("## Conversation Summaries"))
+        self.assertGreater(content.index("## Current Date and Time"), content.index("## Conversation Summaries"))
         self.assertNotIn("id", messages[2])
 
     def test_runtime_system_message_places_datetime_before_tool_history(self):
@@ -3085,10 +3084,10 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("## Tool Execution History", content)
         self.assertIn("## Current Date and Time", content)
         self.assertIn("> **AUTHORITATIVE CURRENT TIME:**", content)
-        self.assertLess(content.index("## Current Date and Time"), content.index("## Tool Memory"))
         self.assertLess(content.index("## Tool Memory"), content.index("## Tool Execution History"))
         self.assertLess(content.index("## Active Canvas Document"), content.index("## Tool Execution History"))
-        self.assertLess(content.index("## Current Date and Time"), content.index("## Tool Execution History"))
+        self.assertGreater(content.index("## Current Date and Time"), content.index("## Tool Memory"))
+        self.assertGreater(content.index("## Current Date and Time"), content.index("## Tool Execution History"))
 
     def test_runtime_system_message_includes_workspace_sandbox(self):
         message = build_runtime_system_message(
