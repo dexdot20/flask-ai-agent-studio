@@ -3560,10 +3560,6 @@ function renderCanvasDiffPreview(activeDocument) {
   const sourceBadge = pendingCanvasDiff.source === "live-preview"
     ? '<span class="canvas-diff__badge">Saved after live preview</span>'
     : "";
-  const showScrollHint = diff.truncated || diff.hunks.some((hunk) => hunk.lines.length > 18);
-  const scrollHint = showScrollHint
-    ? '<div class="canvas-diff__footer">Scroll to see more of this diff.</div>'
-    : "";
 
   canvasDiffEl.hidden = false;
   canvasDiffEl.innerHTML =
@@ -3579,7 +3575,7 @@ function renderCanvasDiffPreview(activeDocument) {
         `<button class="canvas-diff__close" type="button" data-action="dismiss-canvas-diff">Hide diff</button>` +
       `</div>` +
     `</div>` +
-    `<div class="canvas-diff__body">` +
+    `<div class="canvas-diff__body" tabindex="0">` +
       diff.hunks.map((hunk) =>
         `<section class="canvas-diff__hunk">` +
           `<div class="canvas-diff__hunk-header">${escHtml(hunk.label)}</div>` +
@@ -3592,7 +3588,21 @@ function renderCanvasDiffPreview(activeDocument) {
         `</section>`
       ).join("") +
     `</div>` +
-    scrollHint;
+    `<div class="canvas-diff__footer" hidden>Scroll to see more of this diff.</div>`;
+
+  const diffBodyEl = canvasDiffEl.querySelector(".canvas-diff__body");
+  const diffFooterEl = canvasDiffEl.querySelector(".canvas-diff__footer");
+  const syncScrollHint = () => {
+    if (!diffBodyEl || !diffFooterEl) {
+      return;
+    }
+    const isScrollable = diffBodyEl.scrollHeight > diffBodyEl.clientHeight + 1;
+    diffFooterEl.hidden = !isScrollable;
+    canvasDiffEl.classList.toggle("canvas-diff--scrollable", isScrollable);
+  };
+
+  syncScrollHint();
+  globalThis.requestAnimationFrame(syncScrollHint);
 
   canvasDiffEl.querySelector('[data-action="dismiss-canvas-diff"]')?.addEventListener("click", () => {
     pendingCanvasDiff = null;
@@ -13080,7 +13090,8 @@ async function sendMessage(options = {}) {
         streamingCanvasDocuments = nextDocuments;
         if (streamingCanvasDocuments.length) {
           activeCanvasDocumentId = String(nextActiveCandidate?.id || "").trim() || streamingCanvasDocuments[streamingCanvasDocuments.length - 1].id;
-          requestCanvasPanelRender({ deferForStreaming: true });
+          const shouldPrioritizeCommittedCanvasRender = hadStreamingPreviewForDoc || isCanvasOpen();
+          requestCanvasPanelRender({ deferForStreaming: !shouldPrioritizeCommittedCanvasRender });
           const pendingCanvasRequest = pendingDocumentCanvasOpen;
           const canvasWasOpen = isCanvasOpen();
           const activeDocumentChangeMessage = describeCanvasActiveDocumentChange(previousSelectedDocument, nextActiveCandidate, requestedActiveId);

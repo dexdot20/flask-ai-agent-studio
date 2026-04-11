@@ -8390,6 +8390,58 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertTrue(preview_event["replace_content"])
         self.assertEqual(preview_event["delta"], "# Draft\n\nUpdated")
 
+    def test_chat_forwards_committed_canvas_sync_before_trailing_answer_text(self):
+        conversation_id = self._create_conversation()
+        fake_events = iter(
+            [
+                {"type": "answer_start"},
+                {"type": "answer_delta", "text": "Preparing the committed draft..."},
+                {
+                    "type": "tool_capture",
+                    "tool_results": [],
+                    "canvas_modified": True,
+                    "successful_canvas_mutation": True,
+                    "canvas_documents": [
+                        {
+                            "id": "canvas-1",
+                            "title": "Draft",
+                            "format": "markdown",
+                            "content": "# Draft\n\nCommitted body",
+                        }
+                    ],
+                    "active_document_id": "canvas-1",
+                },
+                {"type": "answer_delta", "text": " The summary is ready now."},
+                {"type": "done"},
+            ]
+        )
+
+        with patch("routes.chat.run_agent_stream", return_value=fake_events):
+            response = self.client.post(
+                "/chat",
+                json={
+                    "conversation_id": conversation_id,
+                    "model": "deepseek-chat",
+                    "user_content": "Update the draft",
+                    "messages": [{"role": "user", "content": "Update the draft"}],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        events = [json.loads(line) for line in response.get_data(as_text=True).strip().splitlines()]
+        canvas_index = next(index for index, event in enumerate(events) if event["type"] == "canvas_sync")
+        trailing_answer_index = next(
+            index
+            for index, event in enumerate(events)
+            if event["type"] == "answer_delta" and event["text"] == " The summary is ready now."
+        )
+        self.assertLess(canvas_index, trailing_answer_index)
+
+        conversation_response = self.client.get(f"/api/conversations/{conversation_id}")
+        messages = conversation_response.get_json()["messages"]
+        assistant_messages = [message for message in messages if message["role"] == "assistant"]
+        self.assertEqual(assistant_messages[-1]["metadata"]["canvas_documents"][0]["content"], "# Draft\n\nCommitted body")
+
     def test_chat_does_not_auto_open_canvas_when_state_is_unchanged(self):
         conversation_id = self._create_conversation()
         fake_events = iter(
@@ -13153,6 +13205,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         tool_capture_event = next(event for event in events if event["type"] == "tool_capture")
         self.assertTrue(tool_capture_event["successful_canvas_mutation"])
         self.assertEqual(tool_capture_event["canvas_documents"][0]["content"], "# Yeni Taslak\n\n- Güncellendi")
+        first_tool_capture_index = next(index for index, event in enumerate(events) if event["type"] == "tool_capture")
+        first_answer_index = next(index for index, event in enumerate(events) if event["type"] == "answer_delta")
+        self.assertLess(first_tool_capture_index, first_answer_index)
 
     def test_run_agent_stream_accepts_python_literal_tool_call_arguments(self):
         responses = [

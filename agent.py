@@ -8485,6 +8485,11 @@ def run_agent_stream(
                         canvas_modified = True
                         if not _tool_result_has_error(tool_name, result):
                             successful_canvas_mutation = True
+                            # Emit the committed canvas snapshot immediately so
+                            # the frontend can replace the live preview with the
+                            # final rendered document before the assistant's
+                            # prose finishes streaming.
+                            yield build_tool_capture_event()
                     clarification_event = _extract_clarification_event(result)
                     if clarification_event is not None:
                         _trace_agent_event(

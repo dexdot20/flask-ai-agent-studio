@@ -4388,11 +4388,17 @@ kbd {
   max-height: clamp(280px, 38vh, 520px);
   overflow-y: auto;
   overflow-x: hidden;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   padding: 12px;
   padding-right: 16px;
   scrollbar-gutter: stable;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.78rem;
+}
+
+.canvas-diff__footer[hidden] {
+  display: none;
 }
 
 .canvas-diff__footer {

@@ -224,6 +224,8 @@ def test_canvas_sync_no_longer_suppresses_diff_after_live_preview() -> None:
     assert "!hadStreamingPreviewForDoc &&" not in canvas_sync_body
     assert 'source: hadStreamingPreviewForDoc ? "live-preview" : "direct-sync"' in canvas_sync_body
     assert "const nextDiff = previousVersionOfNextDocument.content !== nextActiveCandidate.content" in canvas_sync_body
+    assert "const shouldPrioritizeCommittedCanvasRender = hadStreamingPreviewForDoc || isCanvasOpen();" in canvas_sync_body
+    assert "requestCanvasPanelRender({ deferForStreaming: !shouldPrioritizeCommittedCanvasRender });" in canvas_sync_body
 
 
 def test_render_canvas_diff_preview_is_not_hidden_by_edit_mode() -> None:
@@ -246,7 +248,9 @@ def test_render_canvas_diff_preview_shows_scroll_hint_for_long_diffs() -> None:
     render_body = render_match.group("body")
 
     assert "Scroll to see more of this diff." in render_body
-    assert "diff.truncated || diff.hunks.some((hunk) => hunk.lines.length > 18)" in render_body
+    assert "<div class=\"canvas-diff__footer\" hidden>Scroll to see more of this diff.</div>" in render_body
+    assert "diffBodyEl.scrollHeight > diffBodyEl.clientHeight + 1" in render_body
+    assert 'canvasDiffEl.classList.toggle("canvas-diff--scrollable", isScrollable);' in render_body
 
 
 def _load_canvas_doc_list_signature_source() -> str:
