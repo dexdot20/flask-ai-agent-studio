@@ -71,44 +71,44 @@ def _run_canvas_diff_assertions(script_body: str) -> None:
 
 
 def _run_streaming_canvas_preview_assertions(script_body: str) -> None:
-        node_path = shutil.which("node")
-        if not node_path:
-                pytest.skip("node is not installed")
+    node_path = shutil.which("node")
+    if not node_path:
+        pytest.skip("node is not installed")
 
-        helper_source = _load_streaming_canvas_preview_source()
-        node_script = textwrap.dedent(
-                f"""
-                const escHtml = (value) => String(value || "")
-                    .replace(/&/g, "&amp;")
-                    .replace(/</g, "&lt;")
-                    .replace(/>/g, "&gt;")
-                    .replace(/\"/g, "&quot;");
-                const renderStreamingMarkdown = (text) => `<div class="rendered-stream">${{escHtml(String(text || ""))}}</div>`;
+    helper_source = _load_streaming_canvas_preview_source()
+    node_script = textwrap.dedent(
+        f"""
+        const escHtml = (value) => String(value || "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/\"/g, "&quot;");
+        const renderStreamingMarkdown = (text) => `<div class="rendered-stream">${{escHtml(String(text || ""))}}</div>`;
 
-                {helper_source}
+        {helper_source}
 
-                const assert = (condition, message) => {{
-                    if (!condition) {{
-                        throw new Error(message);
-                    }}
-                }};
+        const assert = (condition, message) => {{
+            if (!condition) {{
+                throw new Error(message);
+            }}
+        }};
 
-                {script_body}
-                """
+        {script_body}
+        """
+    )
+    result = subprocess.run(
+        [node_path, "-e", node_script],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise AssertionError(
+            "Node streaming canvas preview assertions failed.\n"
+            f"STDOUT:\n{result.stdout}\n"
+            f"STDERR:\n{result.stderr}"
         )
-        result = subprocess.run(
-                [node_path, "-e", node_script],
-                cwd=REPO_ROOT,
-                capture_output=True,
-                text=True,
-                check=False,
-        )
-        if result.returncode != 0:
-                raise AssertionError(
-                        "Node streaming canvas preview assertions failed.\n"
-                        f"STDOUT:\n{result.stdout}\n"
-                        f"STDERR:\n{result.stderr}"
-                )
 
 
 def test_build_canvas_diff_preserves_separate_hunks() -> None:
@@ -249,13 +249,10 @@ def test_render_canvas_diff_preview_shows_scroll_hint_for_long_diffs() -> None:
     assert "diff.truncated || diff.hunks.some((hunk) => hunk.lines.length > 18)" in render_body
 
 
-# --- Canvas streaming fast-path tests ---
-
 def _load_canvas_doc_list_signature_source() -> str:
     source = APP_JS_PATH.read_text(encoding="utf-8")
     start = source.find("function buildCanvasDocListSignature(")
     assert start != -1, "buildCanvasDocListSignature was not found in static/app.js"
-    # Extract up to but not including renderCanvasPreviewFrame which follows it.
     end = source.find("function renderCanvasPreviewFrame()", start)
     assert end != -1, "renderCanvasPreviewFrame was not found after buildCanvasDocListSignature"
     return source[start:end]
@@ -349,7 +346,6 @@ def test_ensure_streaming_canvas_preview_skips_rebuild_on_existing_preview() -> 
     assert func_match, "ensureStreamingCanvasPreview was not found in static/app.js"
     body = func_match.group("body")
 
-    # The guard must gate the expensive call behind a needsRebuild condition.
     assert "const needsRebuild = !existing || existing.tool !== normalizedToolName;" in body, (
         "ensureStreamingCanvasPreview must use a needsRebuild guard before calling "
         "buildStreamingCanvasPreviewDocument"

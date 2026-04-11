@@ -1,0 +1,64 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from app import create_app
+from db import get_db, insert_message, serialize_message_metadata
+
+
+class BaseAppRoutesTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = f"{self.temp_dir.name}/test.db"
+        self.image_storage_dir = f"{self.temp_dir.name}/image-store"
+        self.login_pin_patcher = patch("config.LOGIN_PIN", "")
+        self.login_pin_patcher.start()
+        self.app = create_app(database_path=self.db_path)
+        self.app.config.update(TESTING=True)
+        self.client = self.app.test_client()
+
+    def tearDown(self) -> None:
+        self.login_pin_patcher.stop()
+        self.temp_dir.cleanup()
+
+    def _create_conversation(self, title: str = "Test Chat") -> int:
+        response = self.client.post(
+            "/api/conversations",
+            json={"title": title, "model": "deepseek-chat"},
+        )
+        self.assertEqual(response.status_code, 201)
+        return response.get_json()["id"]
+
+    def _insert_pending_clarification_assistant(
+        self,
+        conversation_id: int,
+        *,
+        text: str = "Let me clarify a few details.",
+        questions: list[dict] | None = None,
+    ) -> int:
+        normalized_questions = questions or [
+            {
+                "id": "budget",
+                "label": "Budget?",
+                "input_type": "text",
+                "required": True,
+            }
+        ]
+        with self.app.app_context():
+            with get_db() as conn:
+                return insert_message(
+                    conn,
+                    conversation_id,
+                    "assistant",
+                    text,
+                    metadata=serialize_message_metadata(
+                        {
+                            "pending_clarification": {
+                                "questions": normalized_questions,
+                                "submit_label": "Send answers",
+                            }
+                        }
+                    ),
+                )

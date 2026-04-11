@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import math
 import os
 import re
-import math
 import socket
 import sys
 import warnings
@@ -35,7 +35,7 @@ class _FakeChromaCollection:
         self._rows: dict[str, dict] = {}
 
     def upsert(self, ids, documents, embeddings, metadatas):
-        for item_id, document, embedding, metadata in zip(ids, documents, embeddings, metadatas):
+        for item_id, document, embedding, metadata in zip(ids, documents, embeddings, metadatas, strict=False):
             self._rows[str(item_id)] = {
                 "id": str(item_id),
                 "document": document,
