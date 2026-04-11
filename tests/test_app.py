@@ -3031,9 +3031,11 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         stable_content = messages[0]["content"]
         content = messages[1]["content"]
         self.assertNotIn("Current Date and Time", stable_content)
-        self.assertIn("Persistent note", stable_content)
+        self.assertNotIn("Persistent note", stable_content)
+        self.assertIn("## Assistant Role", stable_content)
+        self.assertIn("Persistent note", content)
         self.assertIn("Current Date and Time", content)
-        self.assertTrue(content.startswith("## Current Date and Time"))
+        self.assertLess(content.index("## Scratchpad (AI Persistent Memory)"), content.index("## Current Date and Time"))
         self.assertIn("> **AUTHORITATIVE CURRENT TIME:**", content)
         self.assertNotIn("User Preferences", content)
         self.assertIn("Date: ", content)
@@ -12357,6 +12359,49 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertNotIn("Earlier search result", system_messages[0]["content"])
         self.assertNotIn("Earlier KB excerpt", system_messages[0]["content"])
 
+    def test_build_api_messages_strips_historical_dynamic_runtime_state_injections(self):
+        historical_context = (
+            "## User Profile\n"
+            "The user prefers concise answers.\n\n"
+            "## Scratchpad (AI Persistent Memory)\n"
+            "### General Notes\n"
+            "Persistent note\n\n"
+            "## Conversation Memory\n"
+            "- #7 [task_context] 10:23 - Goal: Keep stable rules cached.\n\n"
+            "## Conversation Memory Priority\n"
+            "- Save chat-specific facts before more context is lost.\n"
+        )
+        latest_context = "## Current Date and Time\n- Time: 21:40"
+        normalized = normalize_chat_messages(
+            [
+                {
+                    "role": "user",
+                    "content": "First",
+                    "metadata": parse_message_metadata(
+                        serialize_message_metadata({"context_injection": historical_context})
+                    ),
+                },
+                {"role": "assistant", "content": "Reply"},
+                {
+                    "role": "user",
+                    "content": "Second",
+                    "metadata": parse_message_metadata(
+                        serialize_message_metadata({"context_injection": latest_context})
+                    ),
+                },
+            ]
+        )
+
+        api_messages = build_api_messages(normalized)
+
+        system_messages = [message for message in api_messages if message["role"] == "system"]
+        self.assertEqual(len(system_messages), 1)
+        self.assertIn("21:40", system_messages[0]["content"])
+        self.assertNotIn("The user prefers concise answers.", system_messages[0]["content"])
+        self.assertNotIn("Persistent note", system_messages[0]["content"])
+        self.assertNotIn("Goal: Keep stable rules cached.", system_messages[0]["content"])
+        self.assertNotIn("## Conversation Memory Priority", system_messages[0]["content"])
+
     def test_build_api_messages_strips_answered_clarification_tool_blocks(self):
         normalized = normalize_chat_messages(
             [
@@ -17765,6 +17810,65 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         untraced_stats = untraced_result[2]
         self.assertEqual(traced_stats["base_system_tokens"], untraced_stats["base_system_tokens"])
         self.assertGreater(traced_stats["tool_trace_tokens"], 0)
+
+    def test_budgeted_prompt_messages_move_dynamic_state_to_bottom_injection(self):
+        canonical_messages = normalize_chat_messages(
+            [
+                {"id": 1, "position": 1, "role": "user", "content": "Hello"},
+            ]
+        )
+        settings = {"user_preferences": "", "scratchpad": ""}
+        conversation_memory = [
+            {
+                "id": 7,
+                "entry_type": "task_context",
+                "key": "Goal",
+                "value": "Keep stable rules cached.",
+                "created_at": "2026-04-08 10:23:00",
+            }
+        ]
+
+        with patch("routes.chat.build_user_profile_system_context", return_value="The user prefers concise answers."), patch(
+            "routes.chat.get_all_scratchpad_sections", return_value={"notes": "Persistent note"}
+        ), patch("routes.chat.get_prompt_max_input_tokens", return_value=6000), patch(
+            "routes.chat.get_prompt_response_token_reserve", return_value=1000
+        ), patch("routes.chat.get_prompt_recent_history_max_tokens", return_value=1000), patch(
+            "routes.chat.get_prompt_summary_max_tokens", return_value=0
+        ), patch("routes.chat.get_prompt_rag_max_tokens", return_value=0), patch(
+            "routes.chat.get_prompt_tool_trace_max_tokens", return_value=0
+        ), patch("routes.chat.get_prompt_tool_memory_max_tokens", return_value=0), patch(
+            "routes.chat.get_clarification_max_questions", return_value=5
+        ):
+            api_messages, _, _, _ = _build_budgeted_prompt_messages(
+                canonical_messages,
+                settings,
+                active_tool_names=["save_to_conversation_memory"],
+                clarification_response=None,
+                all_clarification_rounds=None,
+                retrieved_context=None,
+                tool_memory_context=None,
+                conversation_memory=conversation_memory,
+            )
+
+        self.assertEqual([message["role"] for message in api_messages], ["system", "system", "user"])
+        static_content = api_messages[0]["content"]
+        dynamic_content = api_messages[1]["content"]
+        self.assertIn("## Assistant Role", static_content)
+        self.assertIn("## Conversation Memory Write Policy", static_content)
+        self.assertNotIn("## User Profile", static_content)
+        self.assertNotIn("## Scratchpad (AI Persistent Memory)", static_content)
+        self.assertNotIn("## Conversation Memory\n", static_content)
+
+        self.assertIn("## User Profile", dynamic_content)
+        self.assertIn("The user prefers concise answers.", dynamic_content)
+        self.assertIn("## Scratchpad (AI Persistent Memory)", dynamic_content)
+        self.assertIn("Persistent note", dynamic_content)
+        self.assertIn("## Conversation Memory", dynamic_content)
+        self.assertIn("Goal: Keep stable rules cached.", dynamic_content)
+        self.assertIn("## Current Date and Time", dynamic_content)
+        self.assertLess(dynamic_content.index("## User Profile"), dynamic_content.index("## Current Date and Time"))
+        self.assertLess(dynamic_content.index("## Scratchpad (AI Persistent Memory)"), dynamic_content.index("## Current Date and Time"))
+        self.assertLess(dynamic_content.index("## Conversation Memory"), dynamic_content.index("## Current Date and Time"))
 
     def test_budgeted_prompt_messages_keep_prefix_anchor_before_summaries(self):
         canonical_messages = normalize_chat_messages(

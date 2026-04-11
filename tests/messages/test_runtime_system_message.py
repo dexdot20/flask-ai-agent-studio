@@ -731,14 +731,53 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         stable_content = messages[0]["content"]
         content = messages[1]["content"]
         self.assertNotIn("Current Date and Time", stable_content)
-        self.assertIn("Persistent note", stable_content)
+        self.assertNotIn("Persistent note", stable_content)
+        self.assertIn("## Assistant Role", stable_content)
+        self.assertIn("Persistent note", content)
         self.assertIn("Current Date and Time", content)
-        self.assertTrue(content.startswith("## Current Date and Time"))
+        self.assertLess(content.index("## Scratchpad (AI Persistent Memory)"), content.index("## Current Date and Time"))
         self.assertIn("> **AUTHORITATIVE CURRENT TIME:**", content)
         self.assertNotIn("User Preferences", content)
         self.assertIn("Date: ", content)
         self.assertIn("Time: ", content)
         self.assertEqual(messages[2]["role"], "user")
+
+    def test_prepend_runtime_context_moves_dynamic_state_into_bottom_system_message(self):
+        messages = prepend_runtime_context(
+            [{"role": "user", "content": "Hello"}],
+            user_preferences="Keep answers short.",
+            active_tool_names=["save_to_conversation_memory"],
+            user_profile_context="The user prefers concise answers.",
+            conversation_memory=[
+                {
+                    "id": 7,
+                    "entry_type": "task_context",
+                    "key": "Goal",
+                    "value": "Keep stable rules cached.",
+                    "created_at": "2026-04-08 10:23:00",
+                }
+            ],
+            scratchpad_sections={"notes": "Persistent note"},
+        )
+
+        static_content = messages[0]["content"]
+        dynamic_content = messages[1]["content"]
+        self.assertIn("## Assistant Role", static_content)
+        self.assertIn("## Conversation Memory Write Policy", static_content)
+        self.assertNotIn("## User Profile", static_content)
+        self.assertNotIn("## Scratchpad (AI Persistent Memory)", static_content)
+        self.assertNotIn("## Conversation Memory\n", static_content)
+
+        self.assertIn("## User Profile", dynamic_content)
+        self.assertIn("The user prefers concise answers.", dynamic_content)
+        self.assertIn("## Scratchpad (AI Persistent Memory)", dynamic_content)
+        self.assertIn("Persistent note", dynamic_content)
+        self.assertIn("## Conversation Memory", dynamic_content)
+        self.assertIn("Goal: Keep stable rules cached.", dynamic_content)
+        self.assertIn("## Current Date and Time", dynamic_content)
+        self.assertLess(dynamic_content.index("## User Profile"), dynamic_content.index("## Current Date and Time"))
+        self.assertLess(dynamic_content.index("## Scratchpad (AI Persistent Memory)"), dynamic_content.index("## Current Date and Time"))
+        self.assertLess(dynamic_content.index("## Conversation Memory"), dynamic_content.index("## Current Date and Time"))
 
     def test_prepend_runtime_context_places_datetime_before_conversation_summaries(self):
         messages = prepend_runtime_context(

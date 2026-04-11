@@ -233,9 +233,14 @@ HISTORICAL_CONTEXT_INJECTION_STRIP_HEADINGS = {
     "## Clarification Response",
     "## Tool Memory",
     "## Knowledge Base",
+    "## User Profile",
+    "## Scratchpad (AI Persistent Memory)",
+    "## Conversation Memory",
+    "## Conversation Memory Priority",
     "## Canvas Workspace Summary",
     "## Canvas Editing Guidance",
     "## Active Canvas Document",
+    "## Ignored Canvas Documents",
     "## Pinned Canvas Viewports",
     "## Conversation Summaries",
     "## Tool Execution History",
@@ -2074,132 +2079,92 @@ def _build_runtime_volatile_parts(
     return volatile_parts
 
 
-def build_runtime_context_injection(
-    active_tool_names=None,
-    clarification_response: dict | None = None,
-    all_clarification_rounds: list[dict] | None = None,
-    retrieved_context=None,
-    tool_trace_context=None,
-    tool_memory_context=None,
-    now=None,
-    canvas_documents=None,
-    canvas_active_document_id: str | None = None,
-    canvas_viewports: list[dict] | None = None,
-    canvas_prompt_max_lines: int | None = None,
-    canvas_prompt_max_chars: int | None = None,
-    canvas_prompt_max_tokens: int | None = None,
-    canvas_prompt_code_line_max_chars: int | None = None,
-    canvas_prompt_text_line_max_chars: int | None = None,
-    workspace_root: str | None = None,
-    runtime_tool_names: list[str] | None = None,
-    canvas_payload: dict | None = None,
-    summary_count: int = 0,
-    include_time_context: bool = True,
-    previous_canvas_content_hash: str | None = None,
-) -> str:
-    normalized_now = (now or datetime.now().astimezone()).astimezone()
-    resolved_tool_names = _normalize_tool_name_list(runtime_tool_names)
-    if not resolved_tool_names:
-        resolved_tool_names = resolve_runtime_tool_names(
-            _normalize_tool_name_list(active_tool_names),
-            canvas_documents=canvas_documents,
-            workspace_root=workspace_root,
-        )
-    return _finalize_prompt_text(
-        _build_runtime_volatile_parts(
-            active_tool_names=resolved_tool_names,
-            clarification_response=clarification_response,
-            all_clarification_rounds=all_clarification_rounds,
-            retrieved_context=retrieved_context,
-            tool_trace_context=tool_trace_context,
-            tool_memory_context=tool_memory_context,
-            now=normalized_now,
-            canvas_documents=canvas_documents,
-            canvas_active_document_id=canvas_active_document_id,
-            canvas_viewports=canvas_viewports,
-            canvas_prompt_max_lines=canvas_prompt_max_lines,
-            canvas_prompt_max_chars=canvas_prompt_max_chars,
-            canvas_prompt_max_tokens=canvas_prompt_max_tokens,
-            canvas_prompt_code_line_max_chars=canvas_prompt_code_line_max_chars,
-            canvas_prompt_text_line_max_chars=canvas_prompt_text_line_max_chars,
-            canvas_payload=canvas_payload,
-            summary_count=summary_count,
-            include_time_context=include_time_context,
-            previous_canvas_content_hash=previous_canvas_content_hash,
-        )
-    )
-
-
-def build_runtime_system_message(
-    user_preferences="",
-    active_tool_names=None,
-    clarification_response: dict | None = None,
-    all_clarification_rounds: list[dict] | None = None,
-    retrieved_context=None,
+def _build_runtime_dynamic_state_parts(
+    *,
+    runtime_tool_names: list[str],
     user_profile_context=None,
     conversation_memory=None,
-    tool_trace_context=None,
-    tool_memory_context=None,
-    now=None,
-    scratchpad="",
+    scratchpad: str = "",
     scratchpad_sections=None,
-    canvas_documents=None,
-    canvas_active_document_id: str | None = None,
-    canvas_viewports: list[dict] | None = None,
-    canvas_prompt_max_lines: int | None = None,
-    canvas_prompt_max_chars: int | None = None,
-    canvas_prompt_max_tokens: int | None = None,
-    canvas_prompt_code_line_max_chars: int | None = None,
-    canvas_prompt_text_line_max_chars: int | None = None,
-    workspace_root: str | None = None,
-    clarification_max_questions: int | None = None,
-    max_parallel_tools: int | None = None,
-    include_time_context: bool = True,
-    include_volatile_context: bool = True,
-    runtime_tool_names: list[str] | None = None,
-    canvas_payload: dict | None = None,
     summary_count: int = 0,
-    previous_canvas_content_hash: str | None = None,
-):
-    now = (now or datetime.now().astimezone()).astimezone()
-    preferences_text = (user_preferences or "").strip()
+) -> list[str]:
+    parts: list[str] = []
+    normalized_user_profile_context = str(user_profile_context or "").strip()
     normalized_scratchpad_sections = _normalize_runtime_scratchpad_sections(
         scratchpad_sections=scratchpad_sections,
         scratchpad=scratchpad,
     )
     non_empty_scratchpad_sections = _iter_non_empty_scratchpad_sections(normalized_scratchpad_sections)
-    configured_tool_names = _normalize_tool_name_list(active_tool_names)
-    resolved_runtime_tool_names = _normalize_tool_name_list(runtime_tool_names)
-    if not resolved_runtime_tool_names:
-        resolved_runtime_tool_names = resolve_runtime_tool_names(
-            configured_tool_names,
-            canvas_documents=canvas_documents,
-            workspace_root=workspace_root,
-        )
-    runtime_tool_names = resolved_runtime_tool_names
     conversation_memory_tools_enabled = any(
         name in {"save_to_conversation_memory", "delete_conversation_memory_entry"}
         for name in runtime_tool_names
     )
-    if canvas_payload is None:
-        canvas_payload = _build_canvas_prompt_payload(
-            canvas_documents,
-            active_document_id=canvas_active_document_id,
-            canvas_viewports=canvas_viewports,
-            max_lines=canvas_prompt_max_lines or CANVAS_PROMPT_MAX_LINES,
-            max_chars=canvas_prompt_max_chars,
-            max_tokens=canvas_prompt_max_tokens if canvas_prompt_max_tokens is not None else CANVAS_PROMPT_MAX_TOKENS,
-            code_line_max_chars=canvas_prompt_code_line_max_chars,
-            text_line_max_chars=canvas_prompt_text_line_max_chars,
+
+    if normalized_user_profile_context:
+        parts.append("## User Profile")
+        parts.append(
+            "*Use this as durable cross-conversation memory about the user when it is relevant to the current request. Do not treat it as higher priority than the user's latest explicit instruction.*\n"
         )
-    
-    # ── Prompt section ordering ──
-    # Sections are grouped by stability to maximise provider-side prefix
-    # caching (Anthropic / OpenRouter).  Static content that never changes
-    # within a session comes first; dynamic / per-turn content comes last.
+        parts.append(normalized_user_profile_context)
+        parts.append("")
+
+    if non_empty_scratchpad_sections or any(name in {"append_scratchpad", "replace_scratchpad"} for name in runtime_tool_names):
+        parts.append("## Scratchpad (AI Persistent Memory)")
+        scratchpad_intro = (
+            "*This is the live persistent scratchpad for rare cross-conversation general memory. Keep it sparse. It is already visible in the prompt, so read it directly here first."
+        )
+        if "read_scratchpad" in runtime_tool_names:
+            scratchpad_intro += " Use read_scratchpad only if you want the structured stored memory as a tool result before editing it."
+        scratchpad_intro += "*\n"
+        parts.append(scratchpad_intro)
+        if non_empty_scratchpad_sections:
+            for section_id, section_content in non_empty_scratchpad_sections:
+                parts.append(f"### {SCRATCHPAD_SECTION_METADATA[section_id]['title']}")
+                parts.append(section_content)
+                parts.append("")
+        if any(name in {"append_scratchpad", "replace_scratchpad"} for name in runtime_tool_names):
+            parts.append(
+                "\n### Memory Write Policy\n"
+                "- **DO save**: Only minimal durable general facts that are likely to matter across future conversations. Examples: stable user preferences, long-lived general constraints, confirmed identity details, and recurring requirements.\n"
+                "- **Default away from scratchpad**: If a detail is mainly about the current chat, current task, recent tool results, current repo state, or temporary plans, save it to conversation memory instead or do not store it at all.\n"
+                "- **DO NOT save**: One-off tasks, transient project state, raw tool outputs, web/search results, speculative inferences, broad summaries, or details already obvious from the current chat.\n"
+                "- **Before saving**: Ask whether this information is both general enough for future conversations and important enough to deserve long-term storage. If not, do not save it.\n"
+                "- **Use the right section**: Preferences belong in User Preferences, reasoning patterns in User Profile & Mindset, durable takeaways in Lessons Learned, recurring unresolved issues in Open Problems, long-running cross-conversation continuity in In-Progress Tasks, technical background in Domain Facts, and overflow facts in General Notes.\n"
+                "- **Web findings**: Do not turn search/news/URL results into scratchpad entries unless the result is clearly durable and the user would reasonably expect it to be remembered later. Never save them just because they were requested.\n"
+                "- **Style**: Each `notes` item must be one single short standalone fact. Never put multiple facts in one item. `append_scratchpad` appends to one section at a time, and `replace_scratchpad` rewrites one section at a time."
+            )
+        parts.append("")
+
+    conversation_memory_section = build_conversation_memory_section(conversation_memory)
+    if conversation_memory_section:
+        parts.extend(conversation_memory_section)
+
+    if summary_count and conversation_memory_tools_enabled:
+        parts.append("## Conversation Memory Priority")
+        parts.append(
+            "- Earlier turns in this chat have already been summarized or compacted. Treat Conversation Memory as the durable record for older constraints, decisions, and findings, and save newly confirmed details there before more context is lost."
+        )
+        parts.append("")
+
+    return parts
+
+
+def _build_runtime_static_parts(
+    *,
+    user_preferences: str = "",
+    runtime_tool_names: list[str],
+    clarification_max_questions: int | None = None,
+    max_parallel_tools: int | None = None,
+    canvas_payload: dict | None = None,
+    workspace_root: str | None = None,
+) -> list[str]:
+    preferences_text = (user_preferences or "").strip()
+    conversation_memory_tools_enabled = any(
+        name in {"save_to_conversation_memory", "delete_conversation_memory_entry"}
+        for name in runtime_tool_names
+    )
 
     parts = [
-        # ─── Block 1: Fully static (never changes within a session) ───
         "## Assistant Role",
         "- You are a tool-using assistant.",
         "- Base decisions on the conversation state, tool results, and runtime context with minimal redundancy.",
@@ -2207,7 +2172,6 @@ def build_runtime_system_message(
         "",
     ]
 
-    # User preferences (semi-static — changes only when user edits settings)
     if preferences_text:
         parts.append(
             f"## Core Directives\n"
@@ -2215,7 +2179,6 @@ def build_runtime_system_message(
             f"{preferences_text}\n"
         )
 
-    # Tool contract (conditional-static — stable while the same tools are active)
     contract = build_tool_call_contract(
         runtime_tool_names,
         clarification_max_questions=clarification_max_questions,
@@ -2237,7 +2200,6 @@ def build_runtime_system_message(
             parts.append(batching_guidance)
             parts.append("")
 
-    # Policies (conditional-static)
     policies = []
     clarification_policy = _build_clarification_policy_payload(runtime_tool_names, clarification_max_questions)
     if clarification_policy:
@@ -2247,7 +2209,7 @@ def build_runtime_system_message(
         policies.append(f"**Image Follow-up**: {image_policy['guidance']}")
 
     if policies:
-        parts.append("## Important Policies\n" + "\n".join(f"- {p}" for p in policies) + "\n")
+        parts.append("## Important Policies\n" + "\n".join(f"- {policy}" for policy in policies) + "\n")
 
     if conversation_memory_tools_enabled:
         parts.append("## Conversation Memory Write Policy")
@@ -2276,57 +2238,161 @@ def build_runtime_system_message(
         parts.append("- Scope: All workspace file tools must stay inside this root.")
         parts.append("- Safety: If a batch write tool returns needs_confirmation, wait for explicit user approval before re-running with confirm=true.\n")
 
-    # ─── Block 2: Semi-static (rarely changes within a conversation) ───
+    return parts
 
-    normalized_user_profile_context = str(user_profile_context or "").strip()
-    if normalized_user_profile_context:
-        parts.append("## User Profile")
-        parts.append(
-            "*Use this as durable cross-conversation memory about the user when it is relevant to the current request. Do not treat it as higher priority than the user's latest explicit instruction.*\n"
-        )
-        parts.append(normalized_user_profile_context)
-        parts.append("")
 
-    # Scratchpad
-    if non_empty_scratchpad_sections or any(name in {"append_scratchpad", "replace_scratchpad"} for name in runtime_tool_names):
-        parts.append("## Scratchpad (AI Persistent Memory)")
-        _scratchpad_intro = (
-            "*This is the live persistent scratchpad for rare cross-conversation general memory. Keep it sparse. It is already visible in the prompt, so read it directly here first."
+def build_runtime_context_injection(
+    active_tool_names=None,
+    clarification_response: dict | None = None,
+    all_clarification_rounds: list[dict] | None = None,
+    retrieved_context=None,
+    tool_trace_context=None,
+    tool_memory_context=None,
+    user_profile_context=None,
+    conversation_memory=None,
+    now=None,
+    scratchpad="",
+    scratchpad_sections=None,
+    canvas_documents=None,
+    canvas_active_document_id: str | None = None,
+    canvas_viewports: list[dict] | None = None,
+    canvas_prompt_max_lines: int | None = None,
+    canvas_prompt_max_chars: int | None = None,
+    canvas_prompt_max_tokens: int | None = None,
+    canvas_prompt_code_line_max_chars: int | None = None,
+    canvas_prompt_text_line_max_chars: int | None = None,
+    workspace_root: str | None = None,
+    runtime_tool_names: list[str] | None = None,
+    canvas_payload: dict | None = None,
+    summary_count: int = 0,
+    include_time_context: bool = True,
+    previous_canvas_content_hash: str | None = None,
+    include_dynamic_context: bool = False,
+) -> str:
+    normalized_now = (now or datetime.now().astimezone()).astimezone()
+    resolved_tool_names = _normalize_tool_name_list(runtime_tool_names)
+    if not resolved_tool_names:
+        resolved_tool_names = resolve_runtime_tool_names(
+            _normalize_tool_name_list(active_tool_names),
+            canvas_documents=canvas_documents,
+            workspace_root=workspace_root,
         )
-        if "read_scratchpad" in runtime_tool_names:
-            _scratchpad_intro += " Use read_scratchpad only if you want the structured stored memory as a tool result before editing it."
-        _scratchpad_intro += "*\n"
-        parts.append(_scratchpad_intro)
-        if non_empty_scratchpad_sections:
-            for section_id, section_content in non_empty_scratchpad_sections:
-                parts.append(f"### {SCRATCHPAD_SECTION_METADATA[section_id]['title']}")
-                parts.append(section_content)
-                parts.append("")
-        if any(name in {"append_scratchpad", "replace_scratchpad"} for name in runtime_tool_names):
-            parts.append(
-                "\n### Memory Write Policy\n"
-                "- **DO save**: Only minimal durable general facts that are likely to matter across future conversations. Examples: stable user preferences, long-lived general constraints, confirmed identity details, and recurring requirements.\n"
-                "- **Default away from scratchpad**: If a detail is mainly about the current chat, current task, recent tool results, current repo state, or temporary plans, save it to conversation memory instead or do not store it at all.\n"
-                "- **DO NOT save**: One-off tasks, transient project state, raw tool outputs, web/search results, speculative inferences, broad summaries, or details already obvious from the current chat.\n"
-                "- **Before saving**: Ask whether this information is both general enough for future conversations and important enough to deserve long-term storage. If not, do not save it.\n"
-                "- **Use the right section**: Preferences belong in User Preferences, reasoning patterns in User Profile & Mindset, durable takeaways in Lessons Learned, recurring unresolved issues in Open Problems, long-running cross-conversation continuity in In-Progress Tasks, technical background in Domain Facts, and overflow facts in General Notes.\n"
-                "- **Web findings**: Do not turn search/news/URL results into scratchpad entries unless the result is clearly durable and the user would reasonably expect it to be remembered later. Never save them just because they were requested.\n"
-                "- **Style**: Each `notes` item must be one single short standalone fact. Never put multiple facts in one item. `append_scratchpad` appends to one section at a time, and `replace_scratchpad` rewrites one section at a time."
+    parts: list[str] = []
+    if include_dynamic_context:
+        parts.extend(
+            _build_runtime_dynamic_state_parts(
+                runtime_tool_names=resolved_tool_names,
+                user_profile_context=user_profile_context,
+                conversation_memory=conversation_memory,
+                scratchpad=scratchpad,
+                scratchpad_sections=scratchpad_sections,
+                summary_count=summary_count,
             )
-        parts.append("")
-
-    # ─── Block 3: Dynamic (changes frequently per turn) ───
-
-    conversation_memory_section = build_conversation_memory_section(conversation_memory)
-    if conversation_memory_section:
-        parts.extend(conversation_memory_section)
-
-    if summary_count and conversation_memory_tools_enabled:
-        parts.append("## Conversation Memory Priority")
-        parts.append(
-            "- Earlier turns in this chat have already been summarized or compacted. Treat Conversation Memory as the durable record for older constraints, decisions, and findings, and save newly confirmed details there before more context is lost."
         )
-        parts.append("")
+    parts.extend(
+        _build_runtime_volatile_parts(
+            active_tool_names=resolved_tool_names,
+            clarification_response=clarification_response,
+            all_clarification_rounds=all_clarification_rounds,
+            retrieved_context=retrieved_context,
+            tool_trace_context=tool_trace_context,
+            tool_memory_context=tool_memory_context,
+            now=normalized_now,
+            canvas_documents=canvas_documents,
+            canvas_active_document_id=canvas_active_document_id,
+            canvas_viewports=canvas_viewports,
+            canvas_prompt_max_lines=canvas_prompt_max_lines,
+            canvas_prompt_max_chars=canvas_prompt_max_chars,
+            canvas_prompt_max_tokens=canvas_prompt_max_tokens,
+            canvas_prompt_code_line_max_chars=canvas_prompt_code_line_max_chars,
+            canvas_prompt_text_line_max_chars=canvas_prompt_text_line_max_chars,
+            canvas_payload=canvas_payload,
+            summary_count=summary_count,
+            include_time_context=include_time_context,
+            previous_canvas_content_hash=previous_canvas_content_hash,
+        )
+    )
+    return _finalize_prompt_text(parts)
+
+
+def build_runtime_system_message(
+    user_preferences="",
+    active_tool_names=None,
+    clarification_response: dict | None = None,
+    all_clarification_rounds: list[dict] | None = None,
+    retrieved_context=None,
+    user_profile_context=None,
+    conversation_memory=None,
+    tool_trace_context=None,
+    tool_memory_context=None,
+    now=None,
+    scratchpad="",
+    scratchpad_sections=None,
+    canvas_documents=None,
+    canvas_active_document_id: str | None = None,
+    canvas_viewports: list[dict] | None = None,
+    canvas_prompt_max_lines: int | None = None,
+    canvas_prompt_max_chars: int | None = None,
+    canvas_prompt_max_tokens: int | None = None,
+    canvas_prompt_code_line_max_chars: int | None = None,
+    canvas_prompt_text_line_max_chars: int | None = None,
+    workspace_root: str | None = None,
+    clarification_max_questions: int | None = None,
+    max_parallel_tools: int | None = None,
+    include_time_context: bool = True,
+    include_volatile_context: bool = True,
+    include_dynamic_context: bool = True,
+    runtime_tool_names: list[str] | None = None,
+    canvas_payload: dict | None = None,
+    summary_count: int = 0,
+    previous_canvas_content_hash: str | None = None,
+):
+    now = (now or datetime.now().astimezone()).astimezone()
+    configured_tool_names = _normalize_tool_name_list(active_tool_names)
+    resolved_runtime_tool_names = _normalize_tool_name_list(runtime_tool_names)
+    if not resolved_runtime_tool_names:
+        resolved_runtime_tool_names = resolve_runtime_tool_names(
+            configured_tool_names,
+            canvas_documents=canvas_documents,
+            workspace_root=workspace_root,
+        )
+    runtime_tool_names = resolved_runtime_tool_names
+    conversation_memory_tools_enabled = any(
+        name in {"save_to_conversation_memory", "delete_conversation_memory_entry"}
+        for name in runtime_tool_names
+    )
+    if canvas_payload is None:
+        canvas_payload = _build_canvas_prompt_payload(
+            canvas_documents,
+            active_document_id=canvas_active_document_id,
+            canvas_viewports=canvas_viewports,
+            max_lines=canvas_prompt_max_lines or CANVAS_PROMPT_MAX_LINES,
+            max_chars=canvas_prompt_max_chars,
+            max_tokens=canvas_prompt_max_tokens if canvas_prompt_max_tokens is not None else CANVAS_PROMPT_MAX_TOKENS,
+            code_line_max_chars=canvas_prompt_code_line_max_chars,
+            text_line_max_chars=canvas_prompt_text_line_max_chars,
+        )
+    
+    parts = _build_runtime_static_parts(
+        user_preferences=user_preferences,
+        runtime_tool_names=runtime_tool_names,
+        clarification_max_questions=clarification_max_questions,
+        max_parallel_tools=max_parallel_tools,
+        canvas_payload=canvas_payload,
+        workspace_root=workspace_root,
+    )
+
+    if include_dynamic_context:
+        parts.extend(
+            _build_runtime_dynamic_state_parts(
+                runtime_tool_names=runtime_tool_names,
+                user_profile_context=user_profile_context,
+                conversation_memory=conversation_memory,
+                scratchpad=scratchpad,
+                scratchpad_sections=scratchpad_sections,
+                summary_count=summary_count,
+            )
+        )
 
     if include_volatile_context:
         parts.extend(
@@ -2445,6 +2511,7 @@ def prepend_runtime_context(
             max_parallel_tools=max_parallel_tools,
             include_time_context=False,
             include_volatile_context=False,
+            include_dynamic_context=False,
             runtime_tool_names=resolved_runtime_tool_names,
             canvas_payload=canvas_payload,
             now=normalized_now,
@@ -2470,6 +2537,10 @@ def prepend_runtime_context(
             retrieved_context=retrieved_context,
             tool_trace_context=tool_trace_context,
             tool_memory_context=tool_memory_context,
+            user_profile_context=user_profile_context,
+            conversation_memory=conversation_memory,
+            scratchpad=scratchpad,
+            scratchpad_sections=scratchpad_sections,
             canvas_documents=canvas_documents,
             canvas_active_document_id=canvas_active_document_id,
             canvas_viewports=canvas_viewports,
@@ -2485,6 +2556,7 @@ def prepend_runtime_context(
             include_time_context=True,
             now=normalized_now,
             previous_canvas_content_hash=previous_canvas_content_hash,
+            include_dynamic_context=True,
         )
 
     if not injection_content:

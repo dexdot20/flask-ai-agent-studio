@@ -2481,6 +2481,7 @@ def _build_budgeted_prompt_messages(
         max_parallel_tools=max_parallel_tools,
         include_time_context=False,
         include_volatile_context=False,
+        include_dynamic_context=False,
         runtime_tool_names=runtime_tool_names,
         now=prompt_now,
     )
@@ -2492,6 +2493,9 @@ def _build_budgeted_prompt_messages(
         retrieved_context=None,
         tool_trace_context=None,
         tool_memory_context=None,
+        user_profile_context=user_profile_context,
+        conversation_memory=conversation_memory,
+        scratchpad_sections=scratchpad_sections,
         canvas_documents=canvas_documents,
         canvas_active_document_id=canvas_active_document_id,
         canvas_viewports=canvas_viewports,
@@ -2506,6 +2510,7 @@ def _build_budgeted_prompt_messages(
         include_time_context=True,
         now=prompt_now,
         previous_canvas_content_hash=previous_canvas_content_hash,
+        include_dynamic_context=True,
     )
     if base_context_injection:
         base_runtime_messages.append({"role": "system", "content": base_context_injection})
@@ -2595,6 +2600,9 @@ def _build_budgeted_prompt_messages(
         retrieved_context=rag_context,
         tool_trace_context=trimmed_tool_trace,
         tool_memory_context=trimmed_tool_memory,
+        user_profile_context=user_profile_context,
+        conversation_memory=conversation_memory,
+        scratchpad_sections=scratchpad_sections,
         canvas_documents=canvas_documents,
         canvas_active_document_id=canvas_active_document_id,
         canvas_viewports=canvas_viewports,
@@ -2609,6 +2617,7 @@ def _build_budgeted_prompt_messages(
         include_time_context=True,
         now=prompt_now,
         previous_canvas_content_hash=previous_canvas_content_hash,
+        include_dynamic_context=True,
     )
 
     api_messages = prepend_runtime_context(
