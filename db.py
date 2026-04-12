@@ -34,6 +34,7 @@ from config import (
     CLARIFICATION_QUESTION_LIMIT_MIN,
     CONVERSATION_MEMORY_ENABLED,
     DB_PATH,
+    DEEPSEEK_API_KEY,
     DEFAULT_WEB_CACHE_TTL_HOURS,
     DEFAULT_SETTINGS,
     OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED,
@@ -46,6 +47,7 @@ from config import (
     FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS,
     FETCH_SUMMARIZE_MAX_INPUT_CHARS,
     FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS,
+    FETCH_SUMMARY_MAX_CHARS,
     FETCH_SUMMARY_TOKEN_THRESHOLD,
     FETCH_URL_TO_CANVAS_CHUNK_CHARS,
     FETCH_URL_TO_CANVAS_CHUNK_THRESHOLD,
@@ -57,6 +59,16 @@ from config import (
     MAX_PERSONA_COUNT,
     MAX_PERSONA_NAME_LENGTH,
     MAX_USER_PREFERENCES_LENGTH,
+    LOGIN_LOCKOUT_SECONDS,
+    LOGIN_MAX_FAILED_ATTEMPTS,
+    LOGIN_REMEMBER_SESSION_DAYS,
+    LOGIN_SESSION_TIMEOUT_MINUTES,
+    OCR_ENABLED,
+    OCR_PROVIDER,
+    OCR_SUPPORTED_PROVIDERS,
+    OPENROUTER_APP_TITLE,
+    OPENROUTER_HTTP_REFERER,
+    OPENROUTER_API_KEY,
     PROMPT_MAX_INPUT_TOKENS,
     PROMPT_PREFLIGHT_SUMMARY_TOKEN_COUNT,
     PROMPT_RAG_MAX_TOKENS,
@@ -69,6 +81,13 @@ from config import (
     RAG_DEFAULT_CONTEXT_SIZE_PRESET,
     RAG_DEFAULT_SENSITIVITY_PRESET,
     RAG_ENABLED,
+    RAG_CHUNK_OVERLAP,
+    RAG_CHUNK_SIZE,
+    RAG_MAX_CHUNKS_PER_SOURCE,
+    RAG_QUERY_EXPANSION_ENABLED,
+    RAG_QUERY_EXPANSION_MAX_VARIANTS,
+    RAG_SEARCH_DEFAULT_TOP_K,
+    RAG_SEARCH_MIN_SIMILARITY,
     RAG_SOURCE_CONVERSATION,
     RAG_SOURCE_TOOL_MEMORY,
     RAG_SOURCE_TOOL_RESULT,
@@ -78,6 +97,9 @@ from config import (
     RAG_TOOL_RESULT_SUMMARY_MAX_CHARS,
     SUMMARY_RETRY_MIN_SOURCE_TOKENS,
     SUMMARY_SOURCE_TARGET_TOKENS,
+    TOOL_MEMORY_TTL_DEFAULT_SECONDS,
+    TOOL_MEMORY_TTL_NEWS_SECONDS,
+    TOOL_MEMORY_TTL_WEB_SECONDS,
     MAX_PARALLEL_TOOLS_MAX,
     MAX_PARALLEL_TOOLS_MIN,
     SUB_AGENT_ALLOWED_TOOL_NAMES,
@@ -97,6 +119,10 @@ from config import (
     SUB_AGENT_TIMEOUT_MIN_SECONDS,
     WEB_CACHE_TTL_HOURS_MAX,
     WEB_CACHE_TTL_HOURS_MIN,
+    YOUTUBE_TRANSCRIPT_DEFAULT_LANGUAGE,
+    YOUTUBE_TRANSCRIPT_MODEL_SIZE,
+    YOUTUBE_TRANSCRIPTS_ENABLED,
+    CHAT_SUMMARY_MODEL,
 )
 from proxy_settings import normalize_proxy_enabled_operations
 from tool_registry import TOOL_SPEC_BY_NAME
@@ -3313,8 +3339,40 @@ def list_conversation_model_invocations(conversation_id: int) -> list[dict]:
     return [_model_invocation_row_to_dict(row) for row in rows]
 
 
+def _build_runtime_default_settings() -> dict[str, str]:
+    return {
+        "openrouter_http_referer": OPENROUTER_HTTP_REFERER,
+        "openrouter_app_title": OPENROUTER_APP_TITLE,
+        "login_session_timeout_minutes": str(LOGIN_SESSION_TIMEOUT_MINUTES),
+        "login_max_failed_attempts": str(LOGIN_MAX_FAILED_ATTEMPTS),
+        "login_lockout_seconds": str(LOGIN_LOCKOUT_SECONDS),
+        "login_remember_session_days": str(LOGIN_REMEMBER_SESSION_DAYS),
+        "conversation_memory_enabled": "true" if CONVERSATION_MEMORY_ENABLED else "false",
+        "ocr_enabled": "true" if OCR_ENABLED else "false",
+        "ocr_provider": OCR_PROVIDER,
+        "rag_enabled": "true" if RAG_ENABLED else "false",
+        "youtube_transcripts_enabled": "true" if YOUTUBE_TRANSCRIPTS_ENABLED else "false",
+        "youtube_transcript_model_size": YOUTUBE_TRANSCRIPT_MODEL_SIZE,
+        "youtube_transcript_language": YOUTUBE_TRANSCRIPT_DEFAULT_LANGUAGE,
+        "chat_summary_model": CHAT_SUMMARY_MODEL,
+        "rag_chunk_size": str(RAG_CHUNK_SIZE),
+        "rag_chunk_overlap": str(RAG_CHUNK_OVERLAP),
+        "rag_max_chunks_per_source": str(RAG_MAX_CHUNKS_PER_SOURCE),
+        "rag_search_top_k": str(RAG_SEARCH_DEFAULT_TOP_K),
+        "rag_search_min_similarity": str(RAG_SEARCH_MIN_SIMILARITY),
+        "rag_query_expansion_enabled": "true" if RAG_QUERY_EXPANSION_ENABLED else "false",
+        "rag_query_expansion_max_variants": str(RAG_QUERY_EXPANSION_MAX_VARIANTS),
+        "tool_memory_ttl_default_seconds": str(TOOL_MEMORY_TTL_DEFAULT_SECONDS),
+        "tool_memory_ttl_web_seconds": str(TOOL_MEMORY_TTL_WEB_SECONDS),
+        "tool_memory_ttl_news_seconds": str(TOOL_MEMORY_TTL_NEWS_SECONDS),
+        "fetch_raw_max_text_chars": str(FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS),
+        "fetch_summary_max_chars": str(FETCH_SUMMARY_MAX_CHARS),
+    }
+
+
 def get_app_settings() -> dict:
     settings = DEFAULT_SETTINGS.copy()
+    settings.update(_build_runtime_default_settings())
     with get_db() as conn:
         rows = conn.execute(
             "SELECT key, value FROM app_settings WHERE key IN ({})".format(", ".join("?" for _ in settings)),
@@ -3928,14 +3986,160 @@ def _ensure_canvas_inspection_tools(names: list[str]) -> list[str]:
     return names
 
 
+def _get_bool_setting_value(source: dict, key: str, default_value: bool) -> bool:
+    raw_value = source.get(key)
+    if raw_value is None:
+        return default_value
+    if isinstance(raw_value, bool):
+        return raw_value
+    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def get_openrouter_http_referer(settings: dict | None = None) -> str:
+    source = settings if settings is not None else get_app_settings()
+    return str(source.get("openrouter_http_referer", OPENROUTER_HTTP_REFERER) or "").strip()
+
+
+def get_openrouter_app_title(settings: dict | None = None) -> str:
+    source = settings if settings is not None else get_app_settings()
+    return str(source.get("openrouter_app_title", OPENROUTER_APP_TITLE) or "").strip()
+
+
+def get_login_session_timeout_minutes(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(source, "login_session_timeout_minutes", LOGIN_SESSION_TIMEOUT_MINUTES, 1, 10_080)
+
+
+def get_login_max_failed_attempts(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(source, "login_max_failed_attempts", LOGIN_MAX_FAILED_ATTEMPTS, 1, 50)
+
+
+def get_login_lockout_seconds(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(source, "login_lockout_seconds", LOGIN_LOCKOUT_SECONDS, 1, 86_400)
+
+
+def get_login_remember_session_days(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(source, "login_remember_session_days", LOGIN_REMEMBER_SESSION_DAYS, 1, 3_650)
+
+
+def get_conversation_memory_enabled(settings: dict | None = None) -> bool:
+    source = settings if settings is not None else get_app_settings()
+    return _get_bool_setting_value(source, "conversation_memory_enabled", CONVERSATION_MEMORY_ENABLED)
+
+
+def get_ocr_enabled(settings: dict | None = None) -> bool:
+    source = settings if settings is not None else get_app_settings()
+    return _get_bool_setting_value(source, "ocr_enabled", OCR_ENABLED)
+
+
+def get_ocr_provider(settings: dict | None = None) -> str:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = str(source.get("ocr_provider", OCR_PROVIDER) or "").strip().lower()
+    if raw_value in OCR_SUPPORTED_PROVIDERS:
+        return raw_value
+    return OCR_PROVIDER
+
+
+def get_image_uploads_enabled(settings: dict | None = None) -> bool:
+    return get_ocr_enabled(settings) or bool(DEEPSEEK_API_KEY) or bool(OPENROUTER_API_KEY)
+
+
+def get_rag_enabled(settings: dict | None = None) -> bool:
+    source = settings if settings is not None else get_app_settings()
+    return _get_bool_setting_value(source, "rag_enabled", RAG_ENABLED)
+
+
+def get_youtube_transcripts_enabled(settings: dict | None = None) -> bool:
+    source = settings if settings is not None else get_app_settings()
+    return _get_bool_setting_value(source, "youtube_transcripts_enabled", YOUTUBE_TRANSCRIPTS_ENABLED)
+
+
+def get_youtube_transcript_language(settings: dict | None = None) -> str:
+    source = settings if settings is not None else get_app_settings()
+    return str(source.get("youtube_transcript_language", YOUTUBE_TRANSCRIPT_DEFAULT_LANGUAGE) or "").strip()[:32]
+
+
+def get_youtube_transcript_model_size(settings: dict | None = None) -> str:
+    source = settings if settings is not None else get_app_settings()
+    return str(source.get("youtube_transcript_model_size", YOUTUBE_TRANSCRIPT_MODEL_SIZE) or "").strip() or YOUTUBE_TRANSCRIPT_MODEL_SIZE
+
+
+def get_chat_summary_model(settings: dict | None = None) -> str:
+    source = settings if settings is not None else get_app_settings()
+    return str(source.get("chat_summary_model", CHAT_SUMMARY_MODEL) or "").strip()
+
+
+def get_rag_chunk_size(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(source, "rag_chunk_size", RAG_CHUNK_SIZE, 300, CONTENT_MAX_CHARS)
+
+
+def get_rag_chunk_overlap(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(source, "rag_chunk_overlap", RAG_CHUNK_OVERLAP, 0, max(0, get_rag_chunk_size(source) // 2))
+
+
+def get_rag_max_chunks_per_source(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(source, "rag_max_chunks_per_source", RAG_MAX_CHUNKS_PER_SOURCE, 1, 20)
+
+
+def get_rag_search_top_k(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(source, "rag_search_top_k", RAG_SEARCH_DEFAULT_TOP_K, 1, 50)
+
+
+def get_rag_search_min_similarity(settings: dict | None = None) -> float:
+    source = settings if settings is not None else get_app_settings()
+    return _get_float_setting_value(source, "rag_search_min_similarity", RAG_SEARCH_MIN_SIMILARITY, 0.0, 1.0)
+
+
+def get_rag_query_expansion_enabled(settings: dict | None = None) -> bool:
+    source = settings if settings is not None else get_app_settings()
+    return _get_bool_setting_value(source, "rag_query_expansion_enabled", RAG_QUERY_EXPANSION_ENABLED)
+
+
+def get_rag_query_expansion_max_variants(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(source, "rag_query_expansion_max_variants", RAG_QUERY_EXPANSION_MAX_VARIANTS, 1, 10)
+
+
+def get_tool_memory_ttl_default_seconds(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(source, "tool_memory_ttl_default_seconds", TOOL_MEMORY_TTL_DEFAULT_SECONDS, 60, 31_536_000)
+
+
+def get_tool_memory_ttl_web_seconds(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(source, "tool_memory_ttl_web_seconds", TOOL_MEMORY_TTL_WEB_SECONDS, 60, 31_536_000)
+
+
+def get_tool_memory_ttl_news_seconds(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(source, "tool_memory_ttl_news_seconds", TOOL_MEMORY_TTL_NEWS_SECONDS, 60, 31_536_000)
+
+
+def get_fetch_raw_max_text_chars(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(source, "fetch_raw_max_text_chars", FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS, 1_000, CONTENT_MAX_CHARS)
+
+
+def get_fetch_summary_max_chars(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(source, "fetch_summary_max_chars", FETCH_SUMMARY_MAX_CHARS, 500, CONTENT_MAX_CHARS)
+
+
 def get_active_tool_names(settings: dict | None = None) -> list[str]:
     source = settings if settings is not None else get_app_settings()
     names = normalize_active_tool_names(source.get("active_tools"))
-    if not RAG_ENABLED:
+    if not get_rag_enabled(source):
         names = [name for name in names if name != "search_knowledge_base"]
-    if not IMAGE_UPLOADS_ENABLED:
+    if not get_image_uploads_enabled(source):
         names = [name for name in names if name != "image_explain"]
-    if not CONVERSATION_MEMORY_ENABLED:
+    if not get_conversation_memory_enabled(source):
         names = [
             name
             for name in names
@@ -3948,11 +4152,11 @@ def get_active_tool_names(settings: dict | None = None) -> list[str]:
         return names
     if source.get("active_tools") is None:
         names = normalize_active_tool_names(DEFAULT_SETTINGS["active_tools"])
-        if not RAG_ENABLED:
+        if not get_rag_enabled(source):
             names = [name for name in names if name != "search_knowledge_base"]
-        if not IMAGE_UPLOADS_ENABLED:
+        if not get_image_uploads_enabled(source):
             names = [name for name in names if name != "image_explain"]
-        if not CONVERSATION_MEMORY_ENABLED:
+        if not get_conversation_memory_enabled(source):
             names = [
                 name
                 for name in names
@@ -3977,7 +4181,7 @@ def get_model_temperature(settings: dict | None = None) -> float:
 
 
 def get_rag_auto_inject_enabled(settings: dict | None = None) -> bool:
-    if not RAG_ENABLED:
+    if not get_rag_enabled(settings):
         return False
     source = settings if settings is not None else get_app_settings()
     raw_value = source.get("rag_auto_inject", DEFAULT_SETTINGS["rag_auto_inject"])
@@ -4001,7 +4205,7 @@ def get_rag_context_size(settings: dict | None = None) -> str:
 
 
 def get_rag_source_types(settings: dict | None = None) -> list[str]:
-    if not RAG_ENABLED:
+    if not get_rag_enabled(settings):
         return []
     source = settings if settings is not None else get_app_settings()
     raw_value = source.get("rag_source_types", DEFAULT_SETTINGS["rag_source_types"])
@@ -4009,7 +4213,7 @@ def get_rag_source_types(settings: dict | None = None) -> list[str]:
 
 
 def get_rag_auto_inject_source_types(settings: dict | None = None) -> list[str]:
-    if not RAG_ENABLED:
+    if not get_rag_enabled(settings):
         return []
     source = settings if settings is not None else get_app_settings()
     raw_value = source.get("rag_auto_inject_source_types", DEFAULT_SETTINGS["rag_auto_inject_source_types"])
@@ -4065,7 +4269,7 @@ def get_entropy_reference_boost_enabled(settings: dict | None = None) -> bool:
 
 
 def get_tool_memory_auto_inject_enabled(settings: dict | None = None) -> bool:
-    if not RAG_ENABLED:
+    if not get_rag_enabled(settings):
         return False
     source = settings if settings is not None else get_app_settings()
     raw_value = source.get("tool_memory_auto_inject", DEFAULT_SETTINGS["tool_memory_auto_inject"])

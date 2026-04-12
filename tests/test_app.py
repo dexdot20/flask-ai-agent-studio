@@ -222,6 +222,32 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(payload["sub_agent_allowed_tool_names"], SUB_AGENT_ALLOWED_TOOL_NAMES)
         self.assertEqual(payload["web_cache_ttl_hours"], 24)
         self.assertTrue(payload["openrouter_prompt_cache_enabled"])
+        self.assertIn("openrouter_http_referer", payload)
+        self.assertIn("openrouter_app_title", payload)
+        self.assertIn("login_session_timeout_minutes", payload)
+        self.assertIn("login_max_failed_attempts", payload)
+        self.assertIn("login_lockout_seconds", payload)
+        self.assertIn("login_remember_session_days", payload)
+        self.assertIn("conversation_memory_enabled", payload)
+        self.assertIn("ocr_enabled", payload)
+        self.assertIn("ocr_provider", payload)
+        self.assertIn("rag_enabled", payload)
+        self.assertIn("youtube_transcripts_enabled", payload)
+        self.assertIn("youtube_transcript_language", payload)
+        self.assertIn("youtube_transcript_model_size", payload)
+        self.assertIn("chat_summary_model", payload)
+        self.assertIn("rag_chunk_size", payload)
+        self.assertIn("rag_chunk_overlap", payload)
+        self.assertIn("rag_max_chunks_per_source", payload)
+        self.assertIn("rag_search_top_k", payload)
+        self.assertIn("rag_search_min_similarity", payload)
+        self.assertIn("rag_query_expansion_enabled", payload)
+        self.assertIn("rag_query_expansion_max_variants", payload)
+        self.assertIn("tool_memory_ttl_default_seconds", payload)
+        self.assertIn("tool_memory_ttl_web_seconds", payload)
+        self.assertIn("tool_memory_ttl_news_seconds", payload)
+        self.assertIn("fetch_raw_max_text_chars", payload)
+        self.assertIn("fetch_summary_max_chars", payload)
         self.assertEqual(payload["chat_summary_detail_level"], "balanced")
         self.assertEqual(payload["rag_auto_inject"], bool(payload["features"]["rag_enabled"]))
         self.assertEqual(payload["chat_summary_mode"], "auto")
@@ -293,6 +319,68 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ["conversation", "tool_result", "tool_memory", "uploaded_document"] if payload["features"]["rag_enabled"] else [],
         )
         self.assertFalse(payload["tool_memory_auto_inject"])
+
+    def test_settings_patch_roundtrips_runtime_managed_fields(self):
+        response = self.client.patch(
+            "/api/settings",
+            json={
+                "openrouter_http_referer": "https://example.com/runtime",
+                "openrouter_app_title": "Runtime Settings Test",
+                "login_session_timeout_minutes": 45,
+                "login_max_failed_attempts": 7,
+                "login_lockout_seconds": 900,
+                "login_remember_session_days": 120,
+                "conversation_memory_enabled": False,
+                "ocr_enabled": False,
+                "ocr_provider": "easyocr",
+                "rag_enabled": True,
+                "youtube_transcripts_enabled": True,
+                "youtube_transcript_language": "tr",
+                "youtube_transcript_model_size": "medium",
+                "chat_summary_model": "deepseek-reasoner",
+                "rag_chunk_size": 2200,
+                "rag_chunk_overlap": 300,
+                "rag_max_chunks_per_source": 3,
+                "rag_search_top_k": 6,
+                "rag_search_min_similarity": 0.42,
+                "rag_query_expansion_enabled": False,
+                "rag_query_expansion_max_variants": 4,
+                "tool_memory_ttl_default_seconds": 650000,
+                "tool_memory_ttl_web_seconds": 50000,
+                "tool_memory_ttl_news_seconds": 9000,
+                "fetch_raw_max_text_chars": 26000,
+                "fetch_summary_max_chars": 8500,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["openrouter_http_referer"], "https://example.com/runtime")
+        self.assertEqual(payload["openrouter_app_title"], "Runtime Settings Test")
+        self.assertEqual(payload["login_session_timeout_minutes"], 45)
+        self.assertEqual(payload["login_max_failed_attempts"], 7)
+        self.assertEqual(payload["login_lockout_seconds"], 900)
+        self.assertEqual(payload["login_remember_session_days"], 120)
+        self.assertFalse(payload["conversation_memory_enabled"])
+        self.assertFalse(payload["ocr_enabled"])
+        self.assertEqual(payload["ocr_provider"], "easyocr")
+        self.assertTrue(payload["rag_enabled"])
+        self.assertTrue(payload["youtube_transcripts_enabled"])
+        self.assertEqual(payload["youtube_transcript_language"], "tr")
+        self.assertEqual(payload["youtube_transcript_model_size"], "medium")
+        self.assertEqual(payload["chat_summary_model"], "deepseek-reasoner")
+        self.assertEqual(payload["rag_chunk_size"], 2200)
+        self.assertEqual(payload["rag_chunk_overlap"], 300)
+        self.assertEqual(payload["rag_max_chunks_per_source"], 3)
+        self.assertEqual(payload["rag_search_top_k"], 6)
+        self.assertAlmostEqual(payload["rag_search_min_similarity"], 0.42)
+        self.assertFalse(payload["rag_query_expansion_enabled"])
+        self.assertEqual(payload["rag_query_expansion_max_variants"], 4)
+        self.assertEqual(payload["tool_memory_ttl_default_seconds"], 650000)
+        self.assertEqual(payload["tool_memory_ttl_web_seconds"], 50000)
+        self.assertEqual(payload["tool_memory_ttl_news_seconds"], 9000)
+        self.assertEqual(payload["fetch_raw_max_text_chars"], 26000)
+        self.assertEqual(payload["fetch_summary_max_chars"], 8500)
         self.assertEqual(payload["image_helper_model"], "")
         self.assertIn("features", payload)
         self.assertIn("rag_enabled", payload["features"])
@@ -1152,6 +1240,13 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             bootstrap_client.get("/")
 
             mocked_sync.assert_called_once_with()
+
+    def test_create_app_applies_persisted_login_lifetime_setting(self):
+        save_app_settings({"login_remember_session_days": "14"})
+
+        second_app = create_app(database_path=self.db_path)
+
+        self.assertEqual(second_app.config["PERMANENT_SESSION_LIFETIME"], timedelta(days=14))
 
     def test_database_initialization_adds_rag_document_expiration_column(self):
         with get_db() as conn:
@@ -3558,9 +3653,20 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("Model identity", html)
         self.assertIn("Research boundaries", html)
         self.assertIn("Publishing controls", html)
+        self.assertIn('id="settings-restart-banner"', html)
+        self.assertIn('id="upload-metadata-model-preference-select"', html)
+        self.assertIn('id="upload-metadata-model-fallback-list"', html)
+        self.assertIn('id="chat-summary-model-select"', html)
+        self.assertIn('id="openrouter-http-referer-input"', html)
+        self.assertIn('id="openrouter-app-title-input"', html)
+        self.assertIn('id="login-session-timeout-minutes-input"', html)
+        self.assertIn('id="conversation-memory-enabled-toggle"', html)
+        self.assertIn('id="ocr-enabled-toggle"', html)
+        self.assertIn('id="rag-enabled-toggle"', html)
+        self.assertIn('id="youtube-transcript-model-size-select"', html)
+        self.assertIn('id="tool-memory-ttl-default-seconds-input"', html)
+        self.assertIn('id="fetch-summary-max-chars-input"', html)
         self.assertNotIn('id="reasoning-auto-collapse-toggle"', html)
-        self.assertNotIn('id="upload-metadata-model-preference-select"', html)
-        self.assertNotIn('id="upload-metadata-model-fallback-list"', html)
         self.assertNotIn('style="', html)
 
     def test_settings_tools_cover_all_defined_tool_specs(self):

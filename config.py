@@ -3,6 +3,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import sqlite3
 
 from dotenv import load_dotenv
 
@@ -372,6 +373,30 @@ RAG_DEFAULT_CONTEXT_SIZE_PRESET = _nearest_preset_name(
     "medium",
 )
 
+
+def _runtime_setting_bool(value, default: bool) -> bool:
+    if value in (None, ""):
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _runtime_setting_int(value, default: int, minimum: int, maximum: int) -> int:
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        normalized = int(default)
+    return max(minimum, min(maximum, normalized))
+
+
+def _runtime_setting_float(value, default: float, minimum: float, maximum: float) -> float:
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        normalized = float(default)
+    return max(minimum, min(maximum, normalized))
+
 DEFAULT_SETTINGS = {
     "user_preferences": "",
     "general_instructions": "",
@@ -397,17 +422,31 @@ DEFAULT_SETTINGS = {
     "sub_agent_allowed_tool_names": json.dumps(SUB_AGENT_ALLOWED_TOOL_NAMES, ensure_ascii=False),
     "web_cache_ttl_hours": str(DEFAULT_WEB_CACHE_TTL_HOURS),
     "openrouter_prompt_cache_enabled": "true" if OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED else "false",
+    "openrouter_http_referer": OPENROUTER_HTTP_REFERER,
+    "openrouter_app_title": OPENROUTER_APP_TITLE,
+    "login_session_timeout_minutes": str(LOGIN_SESSION_TIMEOUT_MINUTES),
+    "login_max_failed_attempts": str(LOGIN_MAX_FAILED_ATTEMPTS),
+    "login_lockout_seconds": str(LOGIN_LOCKOUT_SECONDS),
+    "login_remember_session_days": str(LOGIN_REMEMBER_SESSION_DAYS),
     "custom_models": "[]",
     "visible_model_order": json.dumps(DEFAULT_VISIBLE_CHAT_MODEL_ORDER, ensure_ascii=False),
     "operation_model_preferences": json.dumps(DEFAULT_OPERATION_MODEL_PREFERENCES, ensure_ascii=False),
     "operation_model_fallback_preferences": json.dumps(DEFAULT_OPERATION_MODEL_FALLBACK_PREFERENCES, ensure_ascii=False),
     "image_processing_method": DEFAULT_IMAGE_PROCESSING_METHOD,
     "image_helper_model": "",
+    "conversation_memory_enabled": "true" if CONVERSATION_MEMORY_ENABLED else "false",
+    "ocr_enabled": "true" if OCR_ENABLED else "false",
+    "ocr_provider": OCR_PROVIDER,
+    "rag_enabled": "true" if RAG_ENABLED else "false",
+    "youtube_transcripts_enabled": "true" if YOUTUBE_TRANSCRIPTS_ENABLED else "false",
+    "youtube_transcript_model_size": YOUTUBE_TRANSCRIPT_MODEL_SIZE,
+    "youtube_transcript_language": YOUTUBE_TRANSCRIPT_DEFAULT_LANGUAGE,
     "active_tools": json.dumps(DEFAULT_ACTIVE_TOOL_NAMES, ensure_ascii=False),
     "proxy_enabled_operations": json.dumps(DEFAULT_PROXY_ENABLED_OPERATIONS, ensure_ascii=False),
     "rag_auto_inject": "true",
     "rag_sensitivity": RAG_DEFAULT_SENSITIVITY_PRESET,
     "rag_context_size": RAG_DEFAULT_CONTEXT_SIZE_PRESET,
+    "chat_summary_model": CHAT_SUMMARY_MODEL,
     "rag_source_types": json.dumps(
         [
             RAG_SOURCE_CONVERSATION,
@@ -431,9 +470,18 @@ DEFAULT_SETTINGS = {
     "fetch_url_clip_aggressiveness": "50",
     "fetch_url_summarized_max_input_chars": str(FETCH_SUMMARIZE_MAX_INPUT_CHARS),
     "fetch_url_summarized_max_output_tokens": str(FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS),
+    "fetch_raw_max_text_chars": str(FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS),
+    "fetch_summary_max_chars": str(FETCH_SUMMARY_MAX_CHARS),
     "fetch_url_to_canvas_chunk_threshold": str(FETCH_URL_TO_CANVAS_CHUNK_THRESHOLD),
     "fetch_url_to_canvas_chunk_chars": str(FETCH_URL_TO_CANVAS_CHUNK_CHARS),
     "fetch_url_to_canvas_max_chunks": str(FETCH_URL_TO_CANVAS_MAX_CHUNKS),
+    "rag_chunk_size": str(RAG_CHUNK_SIZE),
+    "rag_chunk_overlap": str(RAG_CHUNK_OVERLAP),
+    "rag_max_chunks_per_source": str(RAG_MAX_CHUNKS_PER_SOURCE),
+    "rag_search_top_k": str(RAG_SEARCH_DEFAULT_TOP_K),
+    "rag_search_min_similarity": str(RAG_SEARCH_MIN_SIMILARITY),
+    "rag_query_expansion_enabled": "true" if RAG_QUERY_EXPANSION_ENABLED else "false",
+    "rag_query_expansion_max_variants": str(RAG_QUERY_EXPANSION_MAX_VARIANTS),
     "prompt_max_input_tokens": str(PROMPT_MAX_INPUT_TOKENS),
     "prompt_response_token_reserve": str(PROMPT_RESPONSE_TOKEN_RESERVE),
     "prompt_recent_history_max_tokens": str(PROMPT_RECENT_HISTORY_MAX_TOKENS),
@@ -467,16 +515,353 @@ DEFAULT_SETTINGS = {
     "pruning_batch_size": "10",
     "pruning_target_reduction_ratio": str(PRUNING_TARGET_REDUCTION_RATIO),
     "pruning_min_target_tokens": str(PRUNING_MIN_TARGET_TOKENS),
+    "tool_memory_ttl_default_seconds": str(TOOL_MEMORY_TTL_DEFAULT_SECONDS),
+    "tool_memory_ttl_web_seconds": str(TOOL_MEMORY_TTL_WEB_SECONDS),
+    "tool_memory_ttl_news_seconds": str(TOOL_MEMORY_TTL_NEWS_SECONDS),
 }
 
 
-def get_feature_flags() -> dict:
+_RUNTIME_BASE_VALUES = {
+    "OPENROUTER_HTTP_REFERER": OPENROUTER_HTTP_REFERER,
+    "OPENROUTER_APP_TITLE": OPENROUTER_APP_TITLE,
+    "LOGIN_SESSION_TIMEOUT_MINUTES": LOGIN_SESSION_TIMEOUT_MINUTES,
+    "LOGIN_MAX_FAILED_ATTEMPTS": LOGIN_MAX_FAILED_ATTEMPTS,
+    "LOGIN_LOCKOUT_SECONDS": LOGIN_LOCKOUT_SECONDS,
+    "LOGIN_REMEMBER_SESSION_DAYS": LOGIN_REMEMBER_SESSION_DAYS,
+    "CONVERSATION_MEMORY_ENABLED": CONVERSATION_MEMORY_ENABLED,
+    "OCR_ENABLED": OCR_ENABLED,
+    "OCR_PROVIDER": OCR_PROVIDER,
+    "IMAGE_UPLOADS_ENABLED": IMAGE_UPLOADS_ENABLED,
+    "YOUTUBE_TRANSCRIPTS_ENABLED": YOUTUBE_TRANSCRIPTS_ENABLED,
+    "YOUTUBE_TRANSCRIPT_MODEL_SIZE": YOUTUBE_TRANSCRIPT_MODEL_SIZE,
+    "YOUTUBE_TRANSCRIPT_DEFAULT_LANGUAGE": YOUTUBE_TRANSCRIPT_DEFAULT_LANGUAGE,
+    "RAG_ENABLED": RAG_ENABLED,
+    "CHAT_SUMMARY_MODEL": CHAT_SUMMARY_MODEL,
+    "RAG_CHUNK_SIZE": RAG_CHUNK_SIZE,
+    "RAG_CHUNK_OVERLAP": RAG_CHUNK_OVERLAP,
+    "RAG_MAX_CHUNKS_PER_SOURCE": RAG_MAX_CHUNKS_PER_SOURCE,
+    "RAG_SEARCH_DEFAULT_TOP_K": RAG_SEARCH_DEFAULT_TOP_K,
+    "RAG_SEARCH_MIN_SIMILARITY": RAG_SEARCH_MIN_SIMILARITY,
+    "RAG_QUERY_EXPANSION_ENABLED": RAG_QUERY_EXPANSION_ENABLED,
+    "RAG_QUERY_EXPANSION_MAX_VARIANTS": RAG_QUERY_EXPANSION_MAX_VARIANTS,
+    "TOOL_MEMORY_TTL_DEFAULT_SECONDS": TOOL_MEMORY_TTL_DEFAULT_SECONDS,
+    "TOOL_MEMORY_TTL_WEB_SECONDS": TOOL_MEMORY_TTL_WEB_SECONDS,
+    "TOOL_MEMORY_TTL_NEWS_SECONDS": TOOL_MEMORY_TTL_NEWS_SECONDS,
+    "FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS": FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS,
+    "FETCH_SUMMARY_MAX_CHARS": FETCH_SUMMARY_MAX_CHARS,
+}
+
+
+def _read_persisted_runtime_settings(database_path: str | None = None) -> dict[str, str]:
+    resolved_database_path = str(database_path or DB_PATH or "").strip()
+    if not resolved_database_path or not os.path.exists(resolved_database_path):
+        return {}
+
+    try:
+        with sqlite3.connect(resolved_database_path, timeout=1) as conn:
+            rows = conn.execute("SELECT key, value FROM app_settings").fetchall()
+    except sqlite3.Error:
+        return {}
+
     return {
-        "rag_enabled": RAG_ENABLED,
-        "ocr_enabled": OCR_ENABLED,
-        "conversation_memory_enabled": CONVERSATION_MEMORY_ENABLED,
-        "image_uploads_enabled": IMAGE_UPLOADS_ENABLED,
-        "youtube_transcripts_enabled": YOUTUBE_TRANSCRIPTS_ENABLED,
+        str(key or ""): str(value or "")
+        for key, value in rows
+        if str(key or "").strip()
+    }
+
+
+def apply_persisted_runtime_settings(database_path: str | None = None) -> dict[str, str]:
+    persisted = _read_persisted_runtime_settings(database_path)
+
+    global OPENROUTER_HTTP_REFERER
+    global OPENROUTER_APP_TITLE
+    global LOGIN_SESSION_TIMEOUT_MINUTES
+    global LOGIN_MAX_FAILED_ATTEMPTS
+    global LOGIN_LOCKOUT_SECONDS
+    global LOGIN_REMEMBER_SESSION_DAYS
+    global CONVERSATION_MEMORY_ENABLED
+    global OCR_ENABLED
+    global OCR_PROVIDER
+    global IMAGE_UPLOADS_ENABLED
+    global YOUTUBE_TRANSCRIPTS_ENABLED
+    global YOUTUBE_TRANSCRIPT_MODEL_SIZE
+    global YOUTUBE_TRANSCRIPT_DEFAULT_LANGUAGE
+    global RAG_ENABLED
+    global CHAT_SUMMARY_MODEL
+    global RAG_CHUNK_SIZE
+    global RAG_CHUNK_OVERLAP
+    global RAG_MAX_CHUNKS_PER_SOURCE
+    global RAG_SEARCH_DEFAULT_TOP_K
+    global RAG_SEARCH_MIN_SIMILARITY
+    global RAG_QUERY_EXPANSION_ENABLED
+    global RAG_QUERY_EXPANSION_MAX_VARIANTS
+    global TOOL_MEMORY_TTL_DEFAULT_SECONDS
+    global TOOL_MEMORY_TTL_WEB_SECONDS
+    global TOOL_MEMORY_TTL_NEWS_SECONDS
+    global FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS
+    global FETCH_SUMMARY_MAX_CHARS
+
+    OPENROUTER_HTTP_REFERER = str(persisted.get("openrouter_http_referer", _RUNTIME_BASE_VALUES["OPENROUTER_HTTP_REFERER"]) or "").strip()
+    OPENROUTER_APP_TITLE = str(persisted.get("openrouter_app_title", _RUNTIME_BASE_VALUES["OPENROUTER_APP_TITLE"]) or "").strip()
+    LOGIN_SESSION_TIMEOUT_MINUTES = _runtime_setting_int(
+        persisted.get("login_session_timeout_minutes"),
+        _RUNTIME_BASE_VALUES["LOGIN_SESSION_TIMEOUT_MINUTES"],
+        1,
+        10_080,
+    )
+    LOGIN_MAX_FAILED_ATTEMPTS = _runtime_setting_int(
+        persisted.get("login_max_failed_attempts"),
+        _RUNTIME_BASE_VALUES["LOGIN_MAX_FAILED_ATTEMPTS"],
+        1,
+        50,
+    )
+    LOGIN_LOCKOUT_SECONDS = _runtime_setting_int(
+        persisted.get("login_lockout_seconds"),
+        _RUNTIME_BASE_VALUES["LOGIN_LOCKOUT_SECONDS"],
+        1,
+        86_400,
+    )
+    LOGIN_REMEMBER_SESSION_DAYS = _runtime_setting_int(
+        persisted.get("login_remember_session_days"),
+        _RUNTIME_BASE_VALUES["LOGIN_REMEMBER_SESSION_DAYS"],
+        1,
+        3_650,
+    )
+    CONVERSATION_MEMORY_ENABLED = _runtime_setting_bool(
+        persisted.get("conversation_memory_enabled"),
+        _RUNTIME_BASE_VALUES["CONVERSATION_MEMORY_ENABLED"],
+    )
+    OCR_ENABLED = _runtime_setting_bool(persisted.get("ocr_enabled"), _RUNTIME_BASE_VALUES["OCR_ENABLED"])
+    normalized_ocr_provider = str(persisted.get("ocr_provider", _RUNTIME_BASE_VALUES["OCR_PROVIDER"]) or "").strip().lower()
+    if normalized_ocr_provider in OCR_SUPPORTED_PROVIDERS:
+        OCR_PROVIDER = normalized_ocr_provider
+    YOUTUBE_TRANSCRIPTS_ENABLED = _runtime_setting_bool(
+        persisted.get("youtube_transcripts_enabled"),
+        _RUNTIME_BASE_VALUES["YOUTUBE_TRANSCRIPTS_ENABLED"],
+    )
+    YOUTUBE_TRANSCRIPT_MODEL_SIZE = (
+        str(persisted.get("youtube_transcript_model_size", _RUNTIME_BASE_VALUES["YOUTUBE_TRANSCRIPT_MODEL_SIZE"]) or "").strip()
+        or _RUNTIME_BASE_VALUES["YOUTUBE_TRANSCRIPT_MODEL_SIZE"]
+    )
+    YOUTUBE_TRANSCRIPT_DEFAULT_LANGUAGE = str(
+        persisted.get("youtube_transcript_language", _RUNTIME_BASE_VALUES["YOUTUBE_TRANSCRIPT_DEFAULT_LANGUAGE"]) or ""
+    ).strip()
+    RAG_ENABLED = _runtime_setting_bool(persisted.get("rag_enabled"), _RUNTIME_BASE_VALUES["RAG_ENABLED"])
+    CHAT_SUMMARY_MODEL = str(persisted.get("chat_summary_model", _RUNTIME_BASE_VALUES["CHAT_SUMMARY_MODEL"]) or "").strip() or DEFAULT_CHAT_MODEL
+    RAG_CHUNK_SIZE = _runtime_setting_int(
+        persisted.get("rag_chunk_size"),
+        _RUNTIME_BASE_VALUES["RAG_CHUNK_SIZE"],
+        300,
+        CONTENT_MAX_CHARS,
+    )
+    RAG_CHUNK_OVERLAP = _runtime_setting_int(
+        persisted.get("rag_chunk_overlap"),
+        _RUNTIME_BASE_VALUES["RAG_CHUNK_OVERLAP"],
+        0,
+        max(0, RAG_CHUNK_SIZE // 2),
+    )
+    RAG_MAX_CHUNKS_PER_SOURCE = _runtime_setting_int(
+        persisted.get("rag_max_chunks_per_source"),
+        _RUNTIME_BASE_VALUES["RAG_MAX_CHUNKS_PER_SOURCE"],
+        1,
+        20,
+    )
+    RAG_SEARCH_DEFAULT_TOP_K = _runtime_setting_int(
+        persisted.get("rag_search_top_k"),
+        _RUNTIME_BASE_VALUES["RAG_SEARCH_DEFAULT_TOP_K"],
+        1,
+        50,
+    )
+    RAG_SEARCH_MIN_SIMILARITY = _runtime_setting_float(
+        persisted.get("rag_search_min_similarity"),
+        _RUNTIME_BASE_VALUES["RAG_SEARCH_MIN_SIMILARITY"],
+        0.0,
+        1.0,
+    )
+    RAG_QUERY_EXPANSION_ENABLED = _runtime_setting_bool(
+        persisted.get("rag_query_expansion_enabled"),
+        _RUNTIME_BASE_VALUES["RAG_QUERY_EXPANSION_ENABLED"],
+    )
+    RAG_QUERY_EXPANSION_MAX_VARIANTS = _runtime_setting_int(
+        persisted.get("rag_query_expansion_max_variants"),
+        _RUNTIME_BASE_VALUES["RAG_QUERY_EXPANSION_MAX_VARIANTS"],
+        1,
+        10,
+    )
+    TOOL_MEMORY_TTL_DEFAULT_SECONDS = _runtime_setting_int(
+        persisted.get("tool_memory_ttl_default_seconds"),
+        _RUNTIME_BASE_VALUES["TOOL_MEMORY_TTL_DEFAULT_SECONDS"],
+        60,
+        31_536_000,
+    )
+    TOOL_MEMORY_TTL_WEB_SECONDS = _runtime_setting_int(
+        persisted.get("tool_memory_ttl_web_seconds"),
+        _RUNTIME_BASE_VALUES["TOOL_MEMORY_TTL_WEB_SECONDS"],
+        60,
+        31_536_000,
+    )
+    TOOL_MEMORY_TTL_NEWS_SECONDS = _runtime_setting_int(
+        persisted.get("tool_memory_ttl_news_seconds"),
+        _RUNTIME_BASE_VALUES["TOOL_MEMORY_TTL_NEWS_SECONDS"],
+        60,
+        31_536_000,
+    )
+    FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS = _runtime_setting_int(
+        persisted.get("fetch_raw_max_text_chars"),
+        _RUNTIME_BASE_VALUES["FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS"],
+        1_000,
+        CONTENT_MAX_CHARS,
+    )
+    FETCH_SUMMARY_MAX_CHARS = _runtime_setting_int(
+        persisted.get("fetch_summary_max_chars"),
+        _RUNTIME_BASE_VALUES["FETCH_SUMMARY_MAX_CHARS"],
+        500,
+        CONTENT_MAX_CHARS,
+    )
+    IMAGE_UPLOADS_ENABLED = OCR_ENABLED or bool(OPENROUTER_API_KEY) or bool(DEEPSEEK_API_KEY)
+
+    DEFAULT_SETTINGS.update(
+        {
+            "openrouter_http_referer": OPENROUTER_HTTP_REFERER,
+            "openrouter_app_title": OPENROUTER_APP_TITLE,
+            "login_session_timeout_minutes": str(LOGIN_SESSION_TIMEOUT_MINUTES),
+            "login_max_failed_attempts": str(LOGIN_MAX_FAILED_ATTEMPTS),
+            "login_lockout_seconds": str(LOGIN_LOCKOUT_SECONDS),
+            "login_remember_session_days": str(LOGIN_REMEMBER_SESSION_DAYS),
+            "conversation_memory_enabled": "true" if CONVERSATION_MEMORY_ENABLED else "false",
+            "ocr_enabled": "true" if OCR_ENABLED else "false",
+            "ocr_provider": OCR_PROVIDER,
+            "rag_enabled": "true" if RAG_ENABLED else "false",
+            "youtube_transcripts_enabled": "true" if YOUTUBE_TRANSCRIPTS_ENABLED else "false",
+            "youtube_transcript_model_size": YOUTUBE_TRANSCRIPT_MODEL_SIZE,
+            "youtube_transcript_language": YOUTUBE_TRANSCRIPT_DEFAULT_LANGUAGE,
+            "chat_summary_model": CHAT_SUMMARY_MODEL,
+            "rag_chunk_size": str(RAG_CHUNK_SIZE),
+            "rag_chunk_overlap": str(RAG_CHUNK_OVERLAP),
+            "rag_max_chunks_per_source": str(RAG_MAX_CHUNKS_PER_SOURCE),
+            "rag_search_top_k": str(RAG_SEARCH_DEFAULT_TOP_K),
+            "rag_search_min_similarity": str(RAG_SEARCH_MIN_SIMILARITY),
+            "rag_query_expansion_enabled": "true" if RAG_QUERY_EXPANSION_ENABLED else "false",
+            "rag_query_expansion_max_variants": str(RAG_QUERY_EXPANSION_MAX_VARIANTS),
+            "tool_memory_ttl_default_seconds": str(TOOL_MEMORY_TTL_DEFAULT_SECONDS),
+            "tool_memory_ttl_web_seconds": str(TOOL_MEMORY_TTL_WEB_SECONDS),
+            "tool_memory_ttl_news_seconds": str(TOOL_MEMORY_TTL_NEWS_SECONDS),
+            "fetch_raw_max_text_chars": str(FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS),
+            "fetch_summary_max_chars": str(FETCH_SUMMARY_MAX_CHARS),
+        }
+    )
+    return persisted
+
+
+_RUNTIME_PROPAGATION_NAMES = {
+    "CHAT_SUMMARY_MODEL",
+    "CONVERSATION_MEMORY_ENABLED",
+    "FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS",
+    "FETCH_SUMMARY_MAX_CHARS",
+    "IMAGE_UPLOADS_ENABLED",
+    "LOGIN_LOCKOUT_SECONDS",
+    "LOGIN_MAX_FAILED_ATTEMPTS",
+    "LOGIN_REMEMBER_SESSION_DAYS",
+    "LOGIN_SESSION_TIMEOUT_MINUTES",
+    "OCR_ENABLED",
+    "OCR_PROVIDER",
+    "OPENROUTER_APP_TITLE",
+    "OPENROUTER_HTTP_REFERER",
+    "RAG_CHUNK_OVERLAP",
+    "RAG_CHUNK_SIZE",
+    "RAG_ENABLED",
+    "RAG_MAX_CHUNKS_PER_SOURCE",
+    "RAG_QUERY_EXPANSION_ENABLED",
+    "RAG_QUERY_EXPANSION_MAX_VARIANTS",
+    "RAG_SEARCH_DEFAULT_TOP_K",
+    "RAG_SEARCH_MIN_SIMILARITY",
+    "TOOL_MEMORY_TTL_DEFAULT_SECONDS",
+    "TOOL_MEMORY_TTL_NEWS_SECONDS",
+    "TOOL_MEMORY_TTL_WEB_SECONDS",
+    "YOUTUBE_TRANSCRIPT_DEFAULT_LANGUAGE",
+    "YOUTUBE_TRANSCRIPT_MODEL_SIZE",
+    "YOUTUBE_TRANSCRIPTS_ENABLED",
+}
+
+_RUNTIME_PROPAGATION_MODULES = (
+    "agent",
+    "db",
+    "doc_service",
+    "image_service",
+    "messages",
+    "ocr_service",
+    "prune_service",
+    "rag_service",
+    "routes.chat",
+    "routes.conversations",
+    "routes.pages",
+    "tool_registry",
+    "video_transcript_service",
+)
+
+
+def propagate_runtime_settings_to_loaded_modules() -> None:
+    import sys
+
+    for module_name in _RUNTIME_PROPAGATION_MODULES:
+        module = sys.modules.get(module_name)
+        if module is None:
+            continue
+        for attr_name in _RUNTIME_PROPAGATION_NAMES:
+            if hasattr(module, attr_name):
+                setattr(module, attr_name, globals()[attr_name])
+
+    model_registry_module = sys.modules.get("model_registry")
+    refreshed_deepseek_client = None
+    if model_registry_module is not None:
+        get_provider_client = getattr(model_registry_module, "get_provider_client", None)
+        cache_clear = getattr(get_provider_client, "cache_clear", None)
+        if callable(cache_clear):
+            cache_clear()
+        deepseek_provider = getattr(model_registry_module, "DEEPSEEK_PROVIDER", None)
+        if callable(get_provider_client) and deepseek_provider:
+            try:
+                refreshed_deepseek_client = get_provider_client(deepseek_provider)
+            except Exception:
+                refreshed_deepseek_client = None
+
+    if refreshed_deepseek_client is not None:
+        for module_name in ("agent", "prune_service", "routes.conversations"):
+            module = sys.modules.get(module_name)
+            if module is not None and hasattr(module, "client"):
+                setattr(module, "client", refreshed_deepseek_client)
+
+    ocr_service_module = sys.modules.get("ocr_service")
+    if ocr_service_module is not None and hasattr(ocr_service_module, "_ocr_engine"):
+        ocr_service_module._ocr_engine = None
+
+    video_transcript_module = sys.modules.get("video_transcript_service")
+    if video_transcript_module is not None:
+        if hasattr(video_transcript_module, "_WHISPER_MODEL"):
+            video_transcript_module._WHISPER_MODEL = None
+        if hasattr(video_transcript_module, "_WHISPER_MODEL_KEY"):
+            video_transcript_module._WHISPER_MODEL_KEY = None
+
+
+def get_feature_flags(settings: dict | None = None) -> dict:
+    source = settings if isinstance(settings, dict) else {}
+    rag_enabled = _runtime_setting_bool(source.get("rag_enabled"), RAG_ENABLED)
+    ocr_enabled = _runtime_setting_bool(source.get("ocr_enabled"), OCR_ENABLED)
+    conversation_memory_enabled = _runtime_setting_bool(
+        source.get("conversation_memory_enabled"),
+        CONVERSATION_MEMORY_ENABLED,
+    )
+    youtube_transcripts_enabled = _runtime_setting_bool(
+        source.get("youtube_transcripts_enabled"),
+        YOUTUBE_TRANSCRIPTS_ENABLED,
+    )
+    image_uploads_enabled = ocr_enabled or bool(OPENROUTER_API_KEY) or bool(DEEPSEEK_API_KEY)
+    return {
+        "rag_enabled": rag_enabled,
+        "ocr_enabled": ocr_enabled,
+        "conversation_memory_enabled": conversation_memory_enabled,
+        "image_uploads_enabled": image_uploads_enabled,
+        "youtube_transcripts_enabled": youtube_transcripts_enabled,
         "deepseek_api_configured": bool(DEEPSEEK_API_KEY),
         "openrouter_api_configured": bool(OPENROUTER_API_KEY),
         "remote_image_provider_configured": bool(OPENROUTER_API_KEY or DEEPSEEK_API_KEY),

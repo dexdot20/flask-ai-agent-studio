@@ -7919,3 +7919,53 @@ body.login-page-body {
   border-color: var(--border-focus);
   box-shadow: 0 0 0 3px rgba(79, 110, 247, 0.12);
 }
+
+.settings-restart-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  margin: 0 0 16px;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(245, 158, 11, 0.14), rgba(245, 158, 11, 0.08));
+  color: var(--text-primary);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
+.settings-restart-banner strong {
+  color: #9a5b00;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.72rem;
+}
+
+.settings-restart-banner span {
+  color: var(--text-secondary);
+}
+
+.settings-restart-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  margin-left: 6px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.14);
+  color: #9a5b00;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
+.custom-model-row--editing {
+  border-color: rgba(79, 110, 247, 0.4);
+  background: rgba(79, 110, 247, 0.08);
+  box-shadow: 0 0 0 1px rgba(79, 110, 247, 0.12) inset;
+}
+
+.custom-model-row--editing .model-management-row__meta strong {
+  color: var(--accent);
+}

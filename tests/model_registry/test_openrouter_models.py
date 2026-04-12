@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from app import create_app
 import model_registry
 from db import save_app_settings
 from model_registry import get_operation_model, get_operation_model_candidates, resolve_model_target
@@ -12,6 +13,25 @@ from tests.support.app_harness import BaseAppRoutesTestCase
 
 
 class TestOpenRouterModelRegistry(BaseAppRoutesTestCase):
+    def test_create_app_refreshes_openrouter_headers_from_persisted_settings(self):
+        save_app_settings(
+            {
+                "openrouter_http_referer": "https://example.com/runtime",
+                "openrouter_app_title": "Runtime Header Test",
+            }
+        )
+
+        create_app(database_path=self.db_path)
+        client = model_registry.get_provider_client(model_registry.OPENROUTER_PROVIDER)
+
+        self.assertEqual(
+            client._base_kwargs.get("default_headers"),
+            {
+                "HTTP-Referer": "https://example.com/runtime",
+                "X-OpenRouter-Title": "Runtime Header Test",
+            },
+        )
+
     def test_settings_patch_rejects_invalid_openrouter_provider_slug(self):
         response = self.client.patch(
             "/api/settings",

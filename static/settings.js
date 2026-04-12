@@ -99,6 +99,7 @@ const customModelSupportsToolsEl = document.getElementById("custom-model-support
 const customModelSupportsVisionEl = document.getElementById("custom-model-supports-vision-toggle");
 const customModelSupportsStructuredEl = document.getElementById("custom-model-supports-structured-toggle");
 const addCustomModelBtn = document.getElementById("add-custom-model-btn");
+const customModelCancelEditBtn = document.getElementById("custom-model-cancel-edit-btn");
 const customModelStatusEl = document.getElementById("custom-model-status");
 const customModelListEl = document.getElementById("custom-model-list");
 const chatModelVisibilityListEl = document.getElementById("chat-model-visibility-list");
@@ -109,6 +110,7 @@ const fixTextModelPreferenceEl = document.getElementById("fix-text-model-prefere
 const titleModelPreferenceEl = document.getElementById("title-model-preference-select");
 const uploadMetadataModelPreferenceEl = document.getElementById("upload-metadata-model-preference-select");
 const subAgentModelPreferenceEl = document.getElementById("sub-agent-model-preference-select");
+const chatSummaryModelEl = document.getElementById("chat-summary-model-select");
 const imageHelperModelEl = document.getElementById("image-helper-model-select");
 const summaryModelFallbackListEl = document.getElementById("summary-model-fallback-list");
 const fetchSummarizeModelFallbackListEl = document.getElementById("fetch-summarize-model-fallback-list");
@@ -129,6 +131,31 @@ const ragInjectOptionsEl = document.getElementById("rag-inject-options");
 const ragSensitivityEl = document.getElementById("rag-sensitivity-select");
 const ragSensitivityHintEl = document.getElementById("rag-sensitivity-hint");
 const ragContextSizeEl = document.getElementById("rag-context-size-select");
+const ragEnabledEl = document.getElementById("rag-enabled-toggle");
+const ragChunkSizeEl = document.getElementById("rag-chunk-size-input");
+const ragChunkOverlapEl = document.getElementById("rag-chunk-overlap-input");
+const ragMaxChunksPerSourceEl = document.getElementById("rag-max-chunks-per-source-input");
+const ragSearchTopKEl = document.getElementById("rag-search-top-k-input");
+const ragSearchMinSimilarityEl = document.getElementById("rag-search-min-similarity-input");
+const ragQueryExpansionEnabledEl = document.getElementById("rag-query-expansion-enabled-toggle");
+const ragQueryExpansionMaxVariantsEl = document.getElementById("rag-query-expansion-max-variants-input");
+const openrouterHttpRefererEl = document.getElementById("openrouter-http-referer-input");
+const openrouterAppTitleEl = document.getElementById("openrouter-app-title-input");
+const conversationMemoryEnabledEl = document.getElementById("conversation-memory-enabled-toggle");
+const ocrEnabledEl = document.getElementById("ocr-enabled-toggle");
+const ocrProviderEl = document.getElementById("ocr-provider-select");
+const loginSessionTimeoutMinutesEl = document.getElementById("login-session-timeout-minutes-input");
+const loginMaxFailedAttemptsEl = document.getElementById("login-max-failed-attempts-input");
+const loginLockoutSecondsEl = document.getElementById("login-lockout-seconds-input");
+const loginRememberSessionDaysEl = document.getElementById("login-remember-session-days-input");
+const youtubeTranscriptsEnabledEl = document.getElementById("youtube-transcripts-enabled-toggle");
+const youtubeTranscriptLanguageEl = document.getElementById("youtube-transcript-language-input");
+const youtubeTranscriptModelSizeEl = document.getElementById("youtube-transcript-model-size-select");
+const toolMemoryTtlDefaultSecondsEl = document.getElementById("tool-memory-ttl-default-seconds-input");
+const toolMemoryTtlWebSecondsEl = document.getElementById("tool-memory-ttl-web-seconds-input");
+const toolMemoryTtlNewsSecondsEl = document.getElementById("tool-memory-ttl-news-seconds-input");
+const fetchRawMaxTextCharsEl = document.getElementById("fetch-raw-max-text-chars-input");
+const fetchSummaryMaxCharsEl = document.getElementById("fetch-summary-max-chars-input");
 const ragSourceTypeEls = Array.from(document.querySelectorAll("input[name='rag-source-type']"));
 const ragAutoInjectSourceTypeEls = Array.from(document.querySelectorAll("input[name='rag-auto-inject-source-type']"));
 const proxyOperationEls = Array.from(document.querySelectorAll("input[name='proxy-enabled-operation']"));
@@ -148,6 +175,8 @@ const kbSuggestBtn = document.getElementById("kb-suggest-btn");
 const kbUploadBtn = document.getElementById("kb-upload-btn");
 const kbUploadStatusEl = document.getElementById("kb-upload-status");
 const settingsStatus = document.getElementById("settings-status");
+const settingsRestartBannerEl = document.getElementById("settings-restart-banner");
+const settingsRestartBannerTextEl = document.getElementById("settings-restart-banner-text");
 const saveButtons = Array.from(document.querySelectorAll(".settings-save-trigger"));
 const dirtyPillEl = document.getElementById("settings-dirty-pill");
 const statScratchpadEl = document.getElementById("settings-stat-scratchpad");
@@ -279,6 +308,7 @@ let draftCustomModels = Array.isArray(appSettings.custom_models)
 let draftChatModelRows = [];
 let draftOperationFallbackRows = {};
 let fallbackRowSequence = 0;
+let editingCustomModelId = null;
 
 const OPERATION_MODEL_KEYS = ["summarize", "fetch_summarize", "prune", "fix_text", "generate_title", "upload_metadata", "sub_agent"];
 const OPERATION_FALLBACK_CONTROL_MAP = {
@@ -690,6 +720,66 @@ function setDirtyPill(message, tone = "muted") {
   }
   dirtyPillEl.textContent = message;
   dirtyPillEl.dataset.tone = tone;
+}
+
+const RESTART_REQUIRED_SETTING_KEYS = [
+  "openrouter_http_referer",
+  "openrouter_app_title",
+  "login_session_timeout_minutes",
+  "login_max_failed_attempts",
+  "login_lockout_seconds",
+  "login_remember_session_days",
+  "rag_enabled",
+  "ocr_enabled",
+  "ocr_provider",
+  "conversation_memory_enabled",
+  "youtube_transcripts_enabled",
+  "youtube_transcript_language",
+  "youtube_transcript_model_size",
+  "chat_summary_model",
+  "rag_chunk_size",
+  "rag_chunk_overlap",
+  "rag_max_chunks_per_source",
+  "rag_search_top_k",
+  "rag_search_min_similarity",
+  "rag_query_expansion_enabled",
+  "rag_query_expansion_max_variants",
+  "tool_memory_ttl_default_seconds",
+  "tool_memory_ttl_web_seconds",
+  "tool_memory_ttl_news_seconds",
+  "fetch_raw_max_text_chars",
+  "fetch_summary_max_chars",
+];
+
+function valueAsComparableString(value) {
+  if (Array.isArray(value) || (value && typeof value === "object")) {
+    return JSON.stringify(value);
+  }
+  if (value === null || value === undefined) {
+    return "";
+  }
+  return String(value);
+}
+
+function hasRestartRequiredChanges(payload, previousSettings) {
+  return RESTART_REQUIRED_SETTING_KEYS.some((key) => valueAsComparableString(payload[key]) !== valueAsComparableString(previousSettings?.[key]));
+}
+
+function showRestartWarning(message) {
+  if (!settingsRestartBannerEl) {
+    return;
+  }
+  if (settingsRestartBannerTextEl) {
+    settingsRestartBannerTextEl.textContent = message;
+  }
+  settingsRestartBannerEl.hidden = false;
+}
+
+function hideRestartWarning() {
+  if (!settingsRestartBannerEl) {
+    return;
+  }
+  settingsRestartBannerEl.hidden = true;
 }
 
 function updateDirtyIndicators() {
@@ -1350,6 +1440,9 @@ function renderCustomModelList() {
   for (const model of draftCustomModels) {
     const row = document.createElement("div");
     row.className = "model-management-row";
+    if (editingCustomModelId && editingCustomModelId === model.id) {
+      row.classList.add("custom-model-row--editing");
+    }
 
     const meta = document.createElement("div");
     meta.className = "model-management-row__meta";
@@ -1384,20 +1477,99 @@ function renderCustomModelList() {
 
     meta.append(title, subtitle, badges);
 
+    const actions = document.createElement("div");
+    actions.className = "settings-inline-actions";
+
+    const editBtn = document.createElement("button");
+    editBtn.type = "button";
+    editBtn.className = "btn-ghost";
+    editBtn.textContent = "Edit";
+    editBtn.addEventListener("click", () => {
+      startEditingCustomModel(model.id);
+    });
+
     const removeBtn = document.createElement("button");
     removeBtn.type = "button";
     removeBtn.className = "btn-ghost btn-ghost--danger";
     removeBtn.textContent = "Remove";
     removeBtn.addEventListener("click", () => {
+      const wasEditing = editingCustomModelId === model.id;
       draftCustomModels = draftCustomModels.filter((entry) => entry.id !== model.id);
+      if (wasEditing) {
+        cancelEditingCustomModel({ silent: true });
+      }
       syncDraftChatModelRows();
       renderModelManagementPanels();
       markDirty();
       setCustomModelStatus("Custom model removed. Save to apply.", "warning");
     });
 
-    row.append(meta, removeBtn);
+    actions.append(editBtn, removeBtn);
+    row.append(meta, actions);
     customModelListEl.append(row);
+  }
+}
+
+function fillCustomModelForm(model) {
+  if (customModelNameEl) {
+    customModelNameEl.value = String(model?.name || "");
+  }
+  if (customModelApiModelEl) {
+    customModelApiModelEl.value = String(model?.api_model || model?.id || "");
+  }
+  if (customModelRoutingModeEl) {
+    customModelRoutingModeEl.value = model?.provider_slug ? "specific" : "auto";
+  }
+  if (customModelProviderSlugEl) {
+    customModelProviderSlugEl.value = String(model?.provider_slug || "");
+  }
+  if (customModelReasoningModeEl) {
+    customModelReasoningModeEl.value = String(model?.reasoning_mode || "default");
+  }
+  if (customModelReasoningEffortEl) {
+    customModelReasoningEffortEl.value = String(model?.reasoning_effort || "");
+  }
+  if (customModelSupportsToolsEl) {
+    customModelSupportsToolsEl.checked = Boolean(model?.supports_tools ?? true);
+  }
+  if (customModelSupportsVisionEl) {
+    customModelSupportsVisionEl.checked = Boolean(model?.supports_vision ?? false);
+  }
+  if (customModelSupportsStructuredEl) {
+    customModelSupportsStructuredEl.checked = Boolean(model?.supports_structured_outputs ?? false);
+  }
+  syncCustomModelReasoningControls();
+  syncCustomModelProviderControls();
+}
+
+function updateCustomModelEditControls() {
+  if (addCustomModelBtn) {
+    addCustomModelBtn.textContent = editingCustomModelId ? "Update model" : "Add OpenRouter model";
+  }
+  if (customModelCancelEditBtn) {
+    customModelCancelEditBtn.hidden = !editingCustomModelId;
+  }
+}
+
+function startEditingCustomModel(modelId) {
+  const model = draftCustomModels.find((entry) => entry.id === modelId);
+  if (!model) {
+    return;
+  }
+  editingCustomModelId = model.id;
+  fillCustomModelForm(model);
+  updateCustomModelEditControls();
+  renderCustomModelList();
+  setCustomModelStatus(`Editing ${model.name || model.id}.`, "muted");
+}
+
+function cancelEditingCustomModel({ silent = false } = {}) {
+  editingCustomModelId = null;
+  resetCustomModelForm();
+  updateCustomModelEditControls();
+  renderCustomModelList();
+  if (!silent) {
+    setCustomModelStatus("No pending model changes", "muted");
   }
 }
 
@@ -1557,6 +1729,7 @@ function renderOperationModelSelects(preferences = null) {
   populateOperationModelSelect(titleModelPreferenceEl, currentSelections.generate_title);
   populateOperationModelSelect(uploadMetadataModelPreferenceEl, currentSelections.upload_metadata);
   populateOperationModelSelect(subAgentModelPreferenceEl, currentSelections.sub_agent);
+  populateOperationModelSelect(chatSummaryModelEl, appSettings.chat_summary_model || "", "Use default chat model");
   populateVisionModelSelect(imageHelperModelEl, appSettings.image_helper_model || "", "Use default chat model when needed");
 }
 
@@ -1566,6 +1739,7 @@ function renderModelManagementPanels({ preferVisibleId = "", operationPreference
   renderChatModelVisibilityList();
   renderOperationModelSelects(operationPreferences);
   renderOperationFallbackLists();
+  updateCustomModelEditControls();
 }
 
 function resetCustomModelForm() {
@@ -1612,14 +1786,17 @@ function addCustomModelFromInputs() {
     setCustomModelStatus("OpenRouter model id is invalid.", "error");
     return;
   }
-  if (draftCustomModels.some((model) => model.id === modelId)) {
+
+  const existingIndex = editingCustomModelId
+    ? draftCustomModels.findIndex((model) => model.id === editingCustomModelId)
+    : -1;
+  const duplicateIndex = draftCustomModels.findIndex((model, index) => model.id === modelId && index !== existingIndex);
+  if (duplicateIndex >= 0) {
     setCustomModelStatus("That OpenRouter model configuration is already configured.", "warning");
     return;
   }
 
-  draftCustomModels = [
-    ...draftCustomModels,
-    normalizeDraftCustomModel({
+  const normalizedModel = normalizeDraftCustomModel({
       id: modelId,
       name: String(customModelNameEl?.value || "").trim() || apiModel,
       provider: "openrouter",
@@ -1631,12 +1808,20 @@ function addCustomModelFromInputs() {
       supports_vision: Boolean(customModelSupportsVisionEl?.checked),
       supports_structured_outputs: Boolean(customModelSupportsStructuredEl?.checked),
       is_custom: true,
-    }),
-  ];
-  resetCustomModelForm();
+    });
+
+  if (existingIndex >= 0) {
+    const nextModels = [...draftCustomModels];
+    nextModels.splice(existingIndex, 1, normalizedModel);
+    draftCustomModels = nextModels;
+  } else {
+    draftCustomModels = [...draftCustomModels, normalizedModel];
+  }
+
+  cancelEditingCustomModel({ silent: true });
   renderModelManagementPanels({ preferVisibleId: modelId });
   markDirty();
-  setCustomModelStatus("OpenRouter model added. Save to apply.", "success");
+  setCustomModelStatus(existingIndex >= 0 ? "OpenRouter model updated. Save to apply." : "OpenRouter model added. Save to apply.", "success");
 }
 
 function flattenScratchpadSections(sectionMap) {
@@ -2081,6 +2266,12 @@ function applySettingsToForm() {
   if (subAgentMaxParallelToolsEl) subAgentMaxParallelToolsEl.value = String(appSettings.sub_agent_max_parallel_tools ?? appSettings.max_parallel_tools ?? 2);
   if (webCacheTtlHoursEl) webCacheTtlHoursEl.value = String(appSettings.web_cache_ttl_hours ?? 24);
   if (openrouterPromptCacheEnabledEl) openrouterPromptCacheEnabledEl.checked = Boolean(appSettings.openrouter_prompt_cache_enabled ?? true);
+  if (openrouterHttpRefererEl) openrouterHttpRefererEl.value = String(appSettings.openrouter_http_referer || "");
+  if (openrouterAppTitleEl) openrouterAppTitleEl.value = String(appSettings.openrouter_app_title || "");
+  if (loginSessionTimeoutMinutesEl) loginSessionTimeoutMinutesEl.value = String(appSettings.login_session_timeout_minutes ?? 30);
+  if (loginMaxFailedAttemptsEl) loginMaxFailedAttemptsEl.value = String(appSettings.login_max_failed_attempts ?? 3);
+  if (loginLockoutSecondsEl) loginLockoutSecondsEl.value = String(appSettings.login_lockout_seconds ?? 300);
+  if (loginRememberSessionDaysEl) loginRememberSessionDaysEl.value = String(appSettings.login_remember_session_days ?? 3650);
   if (clarificationMaxQuestionsEl) clarificationMaxQuestionsEl.value = String(appSettings.clarification_max_questions || 5);
   if (summaryModeEl) summaryModeEl.value = appSettings.chat_summary_mode || "auto";
   if (summaryDetailLevelEl) summaryDetailLevelEl.value = appSettings.chat_summary_detail_level || "balanced";
@@ -2123,6 +2314,26 @@ function applySettingsToForm() {
   if (canvasTextLineCharsEl) canvasTextLineCharsEl.value = String(appSettings.canvas_prompt_text_line_max_chars || 100);
   if (canvasExpandLinesEl) canvasExpandLinesEl.value = String(appSettings.canvas_expand_max_lines || 1600);
   if (canvasScrollLinesEl) canvasScrollLinesEl.value = String(appSettings.canvas_scroll_window_lines || 200);
+  if (conversationMemoryEnabledEl) conversationMemoryEnabledEl.checked = Boolean(appSettings.conversation_memory_enabled);
+  if (ocrEnabledEl) ocrEnabledEl.checked = Boolean(appSettings.ocr_enabled);
+  if (ocrProviderEl) ocrProviderEl.value = String(appSettings.ocr_provider || "paddleocr");
+  if (ragEnabledEl) ragEnabledEl.checked = Boolean(appSettings.rag_enabled);
+  if (youtubeTranscriptsEnabledEl) youtubeTranscriptsEnabledEl.checked = Boolean(appSettings.youtube_transcripts_enabled);
+  if (youtubeTranscriptLanguageEl) youtubeTranscriptLanguageEl.value = String(appSettings.youtube_transcript_language || "");
+  if (youtubeTranscriptModelSizeEl) youtubeTranscriptModelSizeEl.value = String(appSettings.youtube_transcript_model_size || "small");
+  if (chatSummaryModelEl) chatSummaryModelEl.value = String(appSettings.chat_summary_model || "");
+  if (ragChunkSizeEl) ragChunkSizeEl.value = String(appSettings.rag_chunk_size ?? 1800);
+  if (ragChunkOverlapEl) ragChunkOverlapEl.value = String(appSettings.rag_chunk_overlap ?? 250);
+  if (ragMaxChunksPerSourceEl) ragMaxChunksPerSourceEl.value = String(appSettings.rag_max_chunks_per_source ?? 2);
+  if (ragSearchTopKEl) ragSearchTopKEl.value = String(appSettings.rag_search_top_k ?? 5);
+  if (ragSearchMinSimilarityEl) ragSearchMinSimilarityEl.value = String(appSettings.rag_search_min_similarity ?? 0.35);
+  if (ragQueryExpansionEnabledEl) ragQueryExpansionEnabledEl.checked = Boolean(appSettings.rag_query_expansion_enabled ?? true);
+  if (ragQueryExpansionMaxVariantsEl) ragQueryExpansionMaxVariantsEl.value = String(appSettings.rag_query_expansion_max_variants ?? 2);
+  if (toolMemoryTtlDefaultSecondsEl) toolMemoryTtlDefaultSecondsEl.value = String(appSettings.tool_memory_ttl_default_seconds ?? 604800);
+  if (toolMemoryTtlWebSecondsEl) toolMemoryTtlWebSecondsEl.value = String(appSettings.tool_memory_ttl_web_seconds ?? 43200);
+  if (toolMemoryTtlNewsSecondsEl) toolMemoryTtlNewsSecondsEl.value = String(appSettings.tool_memory_ttl_news_seconds ?? 7200);
+  if (fetchRawMaxTextCharsEl) fetchRawMaxTextCharsEl.value = String(appSettings.fetch_raw_max_text_chars ?? 24000);
+  if (fetchSummaryMaxCharsEl) fetchSummaryMaxCharsEl.value = String(appSettings.fetch_summary_max_chars ?? 8000);
   applySelectedTools(appSettings.active_tools || []);
   applySelectedSubAgentTools(appSettings.sub_agent_allowed_tool_names || []);
   applySelectedProxyOperations(appSettings.proxy_enabled_operations || []);
@@ -2143,12 +2354,14 @@ function applySettingsToForm() {
   draftCustomModels = Array.isArray(appSettings.custom_models)
     ? appSettings.custom_models.map((model) => normalizeDraftCustomModel(model))
     : [];
+  editingCustomModelId = null;
   draftChatModelRows = [];
   initializeOperationFallbackDraftRows(appSettings.operation_model_fallback_preferences || {});
   renderModelManagementPanels({
     operationPreferences: appSettings.operation_model_preferences || {},
   });
   setCustomModelStatus("No pending model changes", "muted");
+  updateCustomModelEditControls();
   syncCustomModelReasoningControls();
   syncCustomModelProviderControls();
   updateRagSensitivityHint();
@@ -2227,6 +2440,12 @@ function applyServerSettingsData(data) {
   appSettings.sub_agent_max_parallel_tools = data.sub_agent_max_parallel_tools ?? data.max_parallel_tools ?? 2;
   appSettings.web_cache_ttl_hours = data.web_cache_ttl_hours ?? 24;
   appSettings.openrouter_prompt_cache_enabled = Boolean(data.openrouter_prompt_cache_enabled ?? true);
+  appSettings.openrouter_http_referer = data.openrouter_http_referer || "";
+  appSettings.openrouter_app_title = data.openrouter_app_title || "";
+  appSettings.login_session_timeout_minutes = data.login_session_timeout_minutes ?? 30;
+  appSettings.login_max_failed_attempts = data.login_max_failed_attempts ?? 3;
+  appSettings.login_lockout_seconds = data.login_lockout_seconds ?? 300;
+  appSettings.login_remember_session_days = data.login_remember_session_days ?? 3650;
   appSettings.temperature = data.temperature ?? 0.7;
   appSettings.clarification_max_questions = data.clarification_max_questions || 5;
   appSettings.available_models = Array.isArray(data.available_models) ? data.available_models : [];
@@ -2241,6 +2460,14 @@ function applyServerSettingsData(data) {
     : {};
   appSettings.image_processing_method = data.image_processing_method || "auto";
   appSettings.image_helper_model = data.image_helper_model || "";
+  appSettings.conversation_memory_enabled = Boolean(data.conversation_memory_enabled);
+  appSettings.ocr_enabled = Boolean(data.ocr_enabled);
+  appSettings.ocr_provider = data.ocr_provider || "paddleocr";
+  appSettings.rag_enabled = Boolean(data.rag_enabled);
+  appSettings.youtube_transcripts_enabled = Boolean(data.youtube_transcripts_enabled);
+  appSettings.youtube_transcript_language = data.youtube_transcript_language || "";
+  appSettings.youtube_transcript_model_size = data.youtube_transcript_model_size || "small";
+  appSettings.chat_summary_model = data.chat_summary_model || "";
   appSettings.chat_summary_mode = data.chat_summary_mode || "auto";
   appSettings.chat_summary_detail_level = data.chat_summary_detail_level || "balanced";
   appSettings.chat_summary_trigger_token_count = data.chat_summary_trigger_token_count || 80000;
@@ -2282,6 +2509,18 @@ function applyServerSettingsData(data) {
   appSettings.canvas_prompt_text_line_max_chars = data.canvas_prompt_text_line_max_chars || 100;
   appSettings.canvas_expand_max_lines = data.canvas_expand_max_lines || 1600;
   appSettings.canvas_scroll_window_lines = data.canvas_scroll_window_lines || 200;
+  appSettings.rag_chunk_size = data.rag_chunk_size ?? 1800;
+  appSettings.rag_chunk_overlap = data.rag_chunk_overlap ?? 250;
+  appSettings.rag_max_chunks_per_source = data.rag_max_chunks_per_source ?? 2;
+  appSettings.rag_search_top_k = data.rag_search_top_k ?? 5;
+  appSettings.rag_search_min_similarity = data.rag_search_min_similarity ?? 0.35;
+  appSettings.rag_query_expansion_enabled = Boolean(data.rag_query_expansion_enabled ?? true);
+  appSettings.rag_query_expansion_max_variants = data.rag_query_expansion_max_variants ?? 2;
+  appSettings.tool_memory_ttl_default_seconds = data.tool_memory_ttl_default_seconds ?? 604800;
+  appSettings.tool_memory_ttl_web_seconds = data.tool_memory_ttl_web_seconds ?? 43200;
+  appSettings.tool_memory_ttl_news_seconds = data.tool_memory_ttl_news_seconds ?? 7200;
+  appSettings.fetch_raw_max_text_chars = data.fetch_raw_max_text_chars ?? 24000;
+  appSettings.fetch_summary_max_chars = data.fetch_summary_max_chars ?? 8000;
   appSettings.sub_agent_allowed_tool_names = Array.isArray(data.sub_agent_allowed_tool_names) ? data.sub_agent_allowed_tool_names : [];
   appSettings.active_tools = Array.isArray(data.active_tools) ? data.active_tools : [];
   appSettings.proxy_enabled_operations = Array.isArray(data.proxy_enabled_operations) ? data.proxy_enabled_operations : [];
@@ -2322,6 +2561,8 @@ async function refreshSettings() {
 
 async function saveSettings() {
   const scratchpadSections = readScratchpadSectionsFromList();
+  const previousSettingsSnapshot = { ...appSettings };
+  const isRagEnabledDraft = Boolean(ragEnabledEl?.checked);
   const payload = {
     default_persona_id: defaultPersonaEl?.value || "",
     temperature: readFloatSetting(temperatureEl, 0.7, { min: 0, max: 2 }),
@@ -2334,6 +2575,12 @@ async function saveSettings() {
     sub_agent_max_parallel_tools: readNumericSetting(subAgentMaxParallelToolsEl, 2, { allowZero: false }),
     web_cache_ttl_hours: readNumericSetting(webCacheTtlHoursEl, 24),
     openrouter_prompt_cache_enabled: Boolean(openrouterPromptCacheEnabledEl?.checked),
+    openrouter_http_referer: String(openrouterHttpRefererEl?.value || "").trim(),
+    openrouter_app_title: String(openrouterAppTitleEl?.value || "").trim(),
+    login_session_timeout_minutes: readNumericSetting(loginSessionTimeoutMinutesEl, 30, { allowZero: false }),
+    login_max_failed_attempts: readNumericSetting(loginMaxFailedAttemptsEl, 3, { allowZero: false }),
+    login_lockout_seconds: readNumericSetting(loginLockoutSecondsEl, 300, { allowZero: false }),
+    login_remember_session_days: readNumericSetting(loginRememberSessionDaysEl, 3650, { allowZero: false }),
     clarification_max_questions: readNumericSetting(clarificationMaxQuestionsEl, 5, { allowZero: false }),
     chat_summary_mode: summaryModeEl?.value || "auto",
     chat_summary_detail_level: summaryDetailLevelEl?.value || "balanced",
@@ -2355,7 +2602,7 @@ async function saveSettings() {
     entropy_protect_code_blocks: Boolean(entropyProtectCodeBlocksEl?.checked),
     entropy_protect_tool_results: Boolean(entropyProtectToolResultsEl?.checked),
     entropy_reference_boost: Boolean(entropyReferenceBoostEl?.checked),
-    tool_memory_auto_inject: featureFlags.rag_enabled ? Boolean(toolMemoryAutoInjectEl?.checked) : false,
+    tool_memory_auto_inject: isRagEnabledDraft ? Boolean(toolMemoryAutoInjectEl?.checked) : false,
     pruning_enabled: Boolean(pruningEnabledEl?.checked),
     pruning_token_threshold: readNumericSetting(pruningTokenThresholdEl, 80000, { allowZero: false }),
     pruning_batch_size: readNumericSetting(pruningBatchSizeEl, 10, { allowZero: false }),
@@ -2375,6 +2622,26 @@ async function saveSettings() {
     canvas_prompt_text_line_max_chars: readNumericSetting(canvasTextLineCharsEl, 100, { allowZero: false }),
     canvas_expand_max_lines: readNumericSetting(canvasExpandLinesEl, 1600, { allowZero: false }),
     canvas_scroll_window_lines: readNumericSetting(canvasScrollLinesEl, 200, { allowZero: false }),
+    conversation_memory_enabled: Boolean(conversationMemoryEnabledEl?.checked),
+    ocr_enabled: Boolean(ocrEnabledEl?.checked),
+    ocr_provider: String(ocrProviderEl?.value || "paddleocr"),
+    rag_enabled: Boolean(ragEnabledEl?.checked),
+    youtube_transcripts_enabled: Boolean(youtubeTranscriptsEnabledEl?.checked),
+    youtube_transcript_language: String(youtubeTranscriptLanguageEl?.value || "").trim(),
+    youtube_transcript_model_size: String(youtubeTranscriptModelSizeEl?.value || "small"),
+    chat_summary_model: String(chatSummaryModelEl?.value || ""),
+    rag_chunk_size: readNumericSetting(ragChunkSizeEl, 1800, { allowZero: false, min: 100, max: 8000 }),
+    rag_chunk_overlap: readNumericSetting(ragChunkOverlapEl, 250, { min: 0, max: 4000 }),
+    rag_max_chunks_per_source: readNumericSetting(ragMaxChunksPerSourceEl, 2, { allowZero: false, min: 1, max: 20 }),
+    rag_search_top_k: readNumericSetting(ragSearchTopKEl, 5, { allowZero: false, min: 1, max: 50 }),
+    rag_search_min_similarity: readFloatSetting(ragSearchMinSimilarityEl, 0.35, { min: 0, max: 1 }),
+    rag_query_expansion_enabled: Boolean(ragQueryExpansionEnabledEl?.checked),
+    rag_query_expansion_max_variants: readNumericSetting(ragQueryExpansionMaxVariantsEl, 2, { allowZero: false, min: 1, max: 10 }),
+    tool_memory_ttl_default_seconds: readNumericSetting(toolMemoryTtlDefaultSecondsEl, 604800, { allowZero: false, min: 60 }),
+    tool_memory_ttl_web_seconds: readNumericSetting(toolMemoryTtlWebSecondsEl, 43200, { allowZero: false, min: 60 }),
+    tool_memory_ttl_news_seconds: readNumericSetting(toolMemoryTtlNewsSecondsEl, 7200, { allowZero: false, min: 60 }),
+    fetch_raw_max_text_chars: readNumericSetting(fetchRawMaxTextCharsEl, 24000, { allowZero: false, min: 1000 }),
+    fetch_summary_max_chars: readNumericSetting(fetchSummaryMaxCharsEl, 8000, { allowZero: false, min: 500 }),
     custom_models: draftCustomModels.map((model) => ({ ...model })),
     visible_model_order: getDraftVisibleModelOrder(),
     operation_model_preferences: getOperationModelPreferencesDraft(),
@@ -2384,11 +2651,11 @@ async function saveSettings() {
     active_tools: getSelectedTools(),
     sub_agent_allowed_tool_names: getSelectedSubAgentTools(),
     proxy_enabled_operations: getSelectedProxyOperations(),
-    rag_auto_inject: featureFlags.rag_enabled ? getSelectedRagAutoInjectSourceTypes().length > 0 : false,
+    rag_auto_inject: isRagEnabledDraft ? getSelectedRagAutoInjectSourceTypes().length > 0 : false,
     rag_sensitivity: ragSensitivityEl?.value || "normal",
     rag_context_size: ragContextSizeEl?.value || "medium",
-    rag_source_types: featureFlags.rag_enabled ? getSelectedRagSourceTypes() : [],
-    rag_auto_inject_source_types: featureFlags.rag_enabled ? getSelectedRagAutoInjectSourceTypes() : [],
+    rag_source_types: isRagEnabledDraft ? getSelectedRagSourceTypes() : [],
+    rag_auto_inject_source_types: isRagEnabledDraft ? getSelectedRagAutoInjectSourceTypes() : [],
     scratchpad: (scratchpadSections[DEFAULT_SCRATCHPAD_SECTION_ID] || []).join("\n"),
     scratchpad_sections: DEFAULT_SCRATCHPAD_SECTION_ORDER.reduce((acc, sectionId) => {
       acc[sectionId] = (scratchpadSections[sectionId] || []).join("\n");
@@ -2417,11 +2684,18 @@ async function saveSettings() {
       throw new Error(data.error || "Failed to save settings.");
     }
 
+    const restartNeeded = hasRestartRequiredChanges(payload, previousSettingsSnapshot);
     applyServerSettingsData(data);
 
     applySettingsToForm();
     applyFeatureAvailability();
     clearDirtyState();
+    if (restartNeeded) {
+      showRestartWarning("Some changes are saved but will take effect after restarting the server.");
+      setSettingsStatus("Saved — restart required for some changes.", "warning");
+    } else {
+      hideRestartWarning();
+    }
   } catch (error) {
     setSettingsStatus(error.message || "Failed to save settings.", "error");
     setDirtyPill("Save failed", "error");
@@ -2885,6 +3159,9 @@ personaDeleteBtn?.addEventListener("click", () => {
   void deleteActivePersona();
 });
 addCustomModelBtn?.addEventListener("click", addCustomModelFromInputs);
+  customModelCancelEditBtn?.addEventListener("click", () => {
+    cancelEditingCustomModel();
+  });
 customModelReasoningModeEl?.addEventListener("change", syncCustomModelReasoningControls);
 customModelRoutingModeEl?.addEventListener("change", syncCustomModelProviderControls);
 summaryModelFallbackAddBtn?.addEventListener("click", () => addOperationFallbackRow("summarize"));
@@ -2894,6 +3171,32 @@ fixTextModelFallbackAddBtn?.addEventListener("click", () => addOperationFallback
 titleModelFallbackAddBtn?.addEventListener("click", () => addOperationFallbackRow("generate_title"));
 uploadMetadataModelFallbackAddBtn?.addEventListener("click", () => addOperationFallbackRow("upload_metadata"));
 subAgentModelFallbackAddBtn?.addEventListener("click", () => addOperationFallbackRow("sub_agent"));
+  openrouterHttpRefererEl?.addEventListener("input", markDirty);
+  openrouterAppTitleEl?.addEventListener("input", markDirty);
+  loginSessionTimeoutMinutesEl?.addEventListener("input", markDirty);
+  loginMaxFailedAttemptsEl?.addEventListener("input", markDirty);
+  loginLockoutSecondsEl?.addEventListener("input", markDirty);
+  loginRememberSessionDaysEl?.addEventListener("input", markDirty);
+  conversationMemoryEnabledEl?.addEventListener("change", markDirty);
+  ocrEnabledEl?.addEventListener("change", markDirty);
+  ocrProviderEl?.addEventListener("change", markDirty);
+  ragEnabledEl?.addEventListener("change", markDirty);
+  youtubeTranscriptsEnabledEl?.addEventListener("change", markDirty);
+  youtubeTranscriptLanguageEl?.addEventListener("input", markDirty);
+  youtubeTranscriptModelSizeEl?.addEventListener("change", markDirty);
+  chatSummaryModelEl?.addEventListener("change", markDirty);
+  ragChunkSizeEl?.addEventListener("input", markDirty);
+  ragChunkOverlapEl?.addEventListener("input", markDirty);
+  ragMaxChunksPerSourceEl?.addEventListener("input", markDirty);
+  ragSearchTopKEl?.addEventListener("input", markDirty);
+  ragSearchMinSimilarityEl?.addEventListener("input", markDirty);
+  ragQueryExpansionEnabledEl?.addEventListener("change", markDirty);
+  ragQueryExpansionMaxVariantsEl?.addEventListener("input", markDirty);
+  toolMemoryTtlDefaultSecondsEl?.addEventListener("input", markDirty);
+  toolMemoryTtlWebSecondsEl?.addEventListener("input", markDirty);
+  toolMemoryTtlNewsSecondsEl?.addEventListener("input", markDirty);
+  fetchRawMaxTextCharsEl?.addEventListener("input", markDirty);
+  fetchSummaryMaxCharsEl?.addEventListener("input", markDirty);
 kbUploadFileEl?.addEventListener("change", () => {
   const filename = kbUploadFileEl.files?.[0]?.name || "";
   if (filename && kbUploadTitleEl && !kbUploadTitleEl.value.trim()) {

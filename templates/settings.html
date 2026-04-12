@@ -80,6 +80,11 @@
         </div>
       </div>
 
+      <div id="settings-restart-banner" class="settings-restart-banner" hidden>
+        <strong>Restart required</strong>
+        <span id="settings-restart-banner-text">Some saved runtime changes require a server restart before they take effect everywhere.</span>
+      </div>
+
       <div class="settings-tab-panels">
         <section class="settings-tab-panel active" data-settings-panel="general" aria-labelledby="general-tab">
           <div class="settings-page-grid settings-page-grid--two">
@@ -430,9 +435,24 @@
                 <section class="settings-subsection settings-subsection--compact">
                   <div class="settings-subsection__header">
                     <span class="settings-subsection__eyebrow">Preferred model</span>
+                    <h4 class="settings-subsection__title">Upload metadata</h4>
+                  </div>
+                  <select id="upload-metadata-model-preference-select"></select>
+                </section>
+                <section class="settings-subsection settings-subsection--compact">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Preferred model</span>
                     <h4 class="settings-subsection__title">Sub-agent</h4>
                   </div>
                   <select id="sub-agent-model-preference-select"></select>
+                </section>
+                <section class="settings-subsection settings-subsection--compact">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Runtime fallback</span>
+                    <h4 class="settings-subsection__title">Chat summary model <span class="settings-restart-badge">Restart</span></h4>
+                  </div>
+                  <select id="chat-summary-model-select"></select>
+                  <p class="settings-copy">Used as the runtime fallback summary model when no operation-specific summary preference is set.</p>
                 </section>
               </div>
               <details class="settings-collapsible">
@@ -494,6 +514,16 @@
                       <div id="title-model-fallback-list" class="model-management-list"></div>
                       <div class="settings-inline-actions">
                         <button class="btn-ghost" id="title-model-fallback-add-btn" type="button">Add fallback model</button>
+                      </div>
+                    </section>
+                    <section class="settings-subsection settings-subsection--compact">
+                      <div class="settings-subsection__header">
+                        <span class="settings-subsection__eyebrow">Fallback order</span>
+                        <h4 class="settings-subsection__title">Upload metadata</h4>
+                      </div>
+                      <div id="upload-metadata-model-fallback-list" class="model-management-list"></div>
+                      <div class="settings-inline-actions">
+                        <button class="btn-ghost" id="upload-metadata-model-fallback-add-btn" type="button">Add fallback model</button>
                       </div>
                     </section>
                     <section class="settings-subsection settings-subsection--compact">
@@ -1176,6 +1206,55 @@
             <div class="settings-page-section-card">
               <div class="settings-page-section-card__header">
                 <div>
+                  <span class="settings-section-kicker">Provider &amp; auth</span>
+                  <h3>Runtime identity and session policy <span class="settings-restart-badge">Restart</span></h3>
+                </div>
+                <p>These fields are saved in Settings so the runtime no longer has to lean on environment variables for routine provider attribution and session tuning.</p>
+              </div>
+              <div class="settings-subsection-grid settings-subsection-grid--two">
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">OpenRouter attribution</span>
+                    <h4 class="settings-subsection__title">HTTP headers</h4>
+                  </div>
+                  <label class="settings-label" for="openrouter-http-referer-input">HTTP referer</label>
+                  <input id="openrouter-http-referer-input" class="settings-text" type="url" placeholder="https://your-app.example.com" />
+                  <label class="settings-label" for="openrouter-app-title-input">Application title</label>
+                  <input id="openrouter-app-title-input" class="settings-text" type="text" placeholder="Flask RAG Vision Chatbot" />
+                  <p class="settings-copy">Sent only to OpenRouter requests for attribution and analytics-friendly routing headers.</p>
+                </section>
+
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Login sessions</span>
+                    <h4 class="settings-subsection__title">Timeout and lockout policy</h4>
+                  </div>
+                  <div class="settings-inline-grid">
+                    <div>
+                      <label class="settings-mini-label" for="login-session-timeout-minutes-input">Session timeout (minutes)</label>
+                      <input type="number" class="settings-number" id="login-session-timeout-minutes-input" min="1" max="10080" value="30" />
+                    </div>
+                    <div>
+                      <label class="settings-mini-label" for="login-max-failed-attempts-input">Max failed attempts</label>
+                      <input type="number" class="settings-number" id="login-max-failed-attempts-input" min="1" max="50" value="3" />
+                    </div>
+                    <div>
+                      <label class="settings-mini-label" for="login-lockout-seconds-input">Lockout (seconds)</label>
+                      <input type="number" class="settings-number" id="login-lockout-seconds-input" min="1" max="86400" value="300" />
+                    </div>
+                    <div>
+                      <label class="settings-mini-label" for="login-remember-session-days-input">Remember me (days)</label>
+                      <input type="number" class="settings-number" id="login-remember-session-days-input" min="1" max="3650" value="3650" />
+                    </div>
+                  </div>
+                  <p class="settings-copy">Useful when the app sits behind a PIN and you want session behavior to be adjustable without editing runtime files.</p>
+                </section>
+              </div>
+            </div>
+
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
                   <span class="settings-section-kicker">Sub-agent</span>
                   <h3>Runtime limits</h3>
                 </div>
@@ -1392,6 +1471,104 @@
                   </div>
                 </section>
               </div>
+            </div>
+          </div>
+
+          <div class="settings-page-section-card">
+            <div class="settings-page-section-card__header">
+              <div>
+                <span class="settings-section-kicker">Knowledge runtime</span>
+                <h3>Feature gates and ingestion defaults <span class="settings-restart-badge">Restart</span></h3>
+              </div>
+              <p>These switches now live in the Settings UI so document, OCR, transcript, and retrieval behavior can be tuned without editing `.env` for every operational change.</p>
+            </div>
+            <div class="settings-callout" data-tone="warning">These values are saved immediately, but core runtime modules may need a server restart before every change becomes active.</div>
+            <div class="settings-subsection-grid settings-subsection-grid--three">
+              <section class="settings-subsection settings-subsection--compact">
+                <div class="settings-subsection__header">
+                  <span class="settings-subsection__eyebrow">Core features</span>
+                  <h4 class="settings-subsection__title">Memory, OCR, and RAG</h4>
+                </div>
+                <label class="tool-toggle"><input type="checkbox" id="conversation-memory-enabled-toggle" /> <span>Enable conversation memory</span></label>
+                <label class="tool-toggle"><input type="checkbox" id="ocr-enabled-toggle" /> <span>Enable OCR pipeline</span></label>
+                <label class="tool-toggle"><input type="checkbox" id="rag-enabled-toggle" /> <span>Enable RAG and indexed retrieval</span></label>
+                <label class="settings-label" for="ocr-provider-select">OCR provider</label>
+                <select id="ocr-provider-select">
+                  <option value="paddleocr">PaddleOCR</option>
+                  <option value="easyocr">EasyOCR</option>
+                </select>
+              </section>
+
+              <section class="settings-subsection settings-subsection--compact">
+                <div class="settings-subsection__header">
+                  <span class="settings-subsection__eyebrow">YouTube transcripts</span>
+                  <h4 class="settings-subsection__title">Local transcript defaults</h4>
+                </div>
+                <label class="tool-toggle"><input type="checkbox" id="youtube-transcripts-enabled-toggle" /> <span>Enable local YouTube transcripts</span></label>
+                <label class="settings-label" for="youtube-transcript-language-input">Preferred language hint</label>
+                <input id="youtube-transcript-language-input" class="settings-text" type="text" placeholder="auto / tr / en" />
+                <label class="settings-label" for="youtube-transcript-model-size-select">Whisper model size</label>
+                <select id="youtube-transcript-model-size-select">
+                  <option value="tiny">Tiny</option>
+                  <option value="base">Base</option>
+                  <option value="small">Small</option>
+                  <option value="medium">Medium</option>
+                  <option value="large-v3">Large v3</option>
+                </select>
+              </section>
+
+              <section class="settings-subsection settings-subsection--compact">
+                <div class="settings-subsection__header">
+                  <span class="settings-subsection__eyebrow">RAG search</span>
+                  <h4 class="settings-subsection__title">Chunking and retrieval</h4>
+                </div>
+                <label class="settings-label" for="rag-chunk-size-input">Chunk size</label>
+                <input type="number" class="settings-number" id="rag-chunk-size-input" min="300" max="1000000" value="1800" />
+                <label class="settings-label" for="rag-chunk-overlap-input">Chunk overlap</label>
+                <input type="number" class="settings-number" id="rag-chunk-overlap-input" min="0" max="4000" value="250" />
+                <label class="settings-label" for="rag-max-chunks-per-source-input">Max chunks per source</label>
+                <input type="number" class="settings-number" id="rag-max-chunks-per-source-input" min="1" max="20" value="2" />
+                <label class="settings-label" for="rag-search-top-k-input">Search top K</label>
+                <input type="number" class="settings-number" id="rag-search-top-k-input" min="1" max="50" value="5" />
+                <label class="settings-label" for="rag-search-min-similarity-input">Min similarity</label>
+                <input type="number" class="settings-number" id="rag-search-min-similarity-input" min="0" max="1" step="0.01" value="0.35" />
+              </section>
+
+              <section class="settings-subsection settings-subsection--compact">
+                <div class="settings-subsection__header">
+                  <span class="settings-subsection__eyebrow">Query expansion</span>
+                  <h4 class="settings-subsection__title">Variant generation</h4>
+                </div>
+                <label class="tool-toggle"><input type="checkbox" id="rag-query-expansion-enabled-toggle" /> <span>Enable RAG query expansion</span></label>
+                <label class="settings-label" for="rag-query-expansion-max-variants-input">Max query variants</label>
+                <input type="number" class="settings-number" id="rag-query-expansion-max-variants-input" min="1" max="10" value="2" />
+                <p class="settings-copy">Higher values improve recall on fuzzy searches, but they also increase retrieval work and noise.</p>
+              </section>
+
+              <section class="settings-subsection settings-subsection--compact">
+                <div class="settings-subsection__header">
+                  <span class="settings-subsection__eyebrow">Tool memory retention</span>
+                  <h4 class="settings-subsection__title">Saved research TTL</h4>
+                </div>
+                <label class="settings-label" for="tool-memory-ttl-default-seconds-input">Default TTL (seconds)</label>
+                <input type="number" class="settings-number" id="tool-memory-ttl-default-seconds-input" min="60" value="604800" />
+                <label class="settings-label" for="tool-memory-ttl-web-seconds-input">Web TTL (seconds)</label>
+                <input type="number" class="settings-number" id="tool-memory-ttl-web-seconds-input" min="60" value="43200" />
+                <label class="settings-label" for="tool-memory-ttl-news-seconds-input">News TTL (seconds)</label>
+                <input type="number" class="settings-number" id="tool-memory-ttl-news-seconds-input" min="60" value="7200" />
+              </section>
+
+              <section class="settings-subsection settings-subsection--compact">
+                <div class="settings-subsection__header">
+                  <span class="settings-subsection__eyebrow">Fetch storage</span>
+                  <h4 class="settings-subsection__title">Persisted text caps</h4>
+                </div>
+                <label class="settings-label" for="fetch-raw-max-text-chars-input">Raw fetch max chars</label>
+                <input type="number" class="settings-number" id="fetch-raw-max-text-chars-input" min="1000" max="1000000" value="24000" />
+                <label class="settings-label" for="fetch-summary-max-chars-input">Summary memory max chars</label>
+                <input type="number" class="settings-number" id="fetch-summary-max-chars-input" min="500" max="1000000" value="8000" />
+                <p class="settings-copy">Controls how much fetched source text and distilled fetch memory survive for later reuse.</p>
+              </section>
             </div>
           </div>
         </section>

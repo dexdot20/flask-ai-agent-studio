@@ -919,22 +919,24 @@ def can_model_use_structured_outputs(model_id: str, settings: dict | None = None
 
 @lru_cache(maxsize=2)
 def get_provider_client(provider: str) -> OpenAI:
+    import config
+
     if provider == DEEPSEEK_PROVIDER:
         return OpenAI(
-            api_key=(os.getenv("DEEPSEEK_API_KEY") or "").strip(),
+            api_key=(config.DEEPSEEK_API_KEY or "").strip(),
             base_url="https://api.deepseek.com",
         )
     if provider == OPENROUTER_PROVIDER:
         default_headers: dict[str, str] = {}
-        http_referer = (os.getenv("OPENROUTER_HTTP_REFERER") or os.getenv("OPENROUTER_SITE_URL") or "").strip()
-        app_title = (os.getenv("OPENROUTER_APP_TITLE") or os.getenv("OPENROUTER_X_TITLE") or "").strip()
+        http_referer = str(config.OPENROUTER_HTTP_REFERER or "").strip()
+        app_title = str(config.OPENROUTER_APP_TITLE or "").strip()
         if http_referer:
             default_headers["HTTP-Referer"] = http_referer
         if app_title:
             default_headers["X-OpenRouter-Title"] = app_title
 
         kwargs: dict[str, Any] = {
-            "api_key": (os.getenv("OPENROUTER_API_KEY") or "").strip(),
+            "api_key": (config.OPENROUTER_API_KEY or "").strip(),
             "base_url": "https://openrouter.ai/api/v1",
         }
         if default_headers:

@@ -16,6 +16,7 @@ from config import (
     ENTROPY_PROFILE_PRESETS,
     MAX_PARALLEL_TOOLS_MAX,
     MAX_PARALLEL_TOOLS_MIN,
+    OCR_SUPPORTED_PROVIDERS,
     OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED,
     RAG_CONTEXT_SIZE_PRESETS,
     RAG_ENABLED,
@@ -47,10 +48,12 @@ from db import (
     get_canvas_prompt_max_tokens,
     get_canvas_prompt_text_line_max_chars,
     get_canvas_scroll_window_lines,
+    get_chat_summary_model,
     get_chat_summary_mode,
     get_chat_summary_detail_level,
     get_chat_summary_trigger_token_count,
     get_clarification_max_questions,
+    get_conversation_memory_enabled,
     get_context_compaction_keep_recent_rounds,
     get_context_compaction_threshold,
     get_context_selection_strategy,
@@ -61,6 +64,8 @@ from db import (
     get_entropy_protect_tool_results_enabled,
     get_entropy_rag_budget_ratio,
     get_entropy_reference_boost_enabled,
+    get_fetch_raw_max_text_chars,
+    get_fetch_summary_max_chars,
     get_fetch_url_clip_aggressiveness,
     get_fetch_url_summarized_max_input_chars,
     get_fetch_url_summarized_max_output_tokens,
@@ -68,8 +73,16 @@ from db import (
     get_fetch_url_to_canvas_chunk_chars,
     get_fetch_url_to_canvas_chunk_threshold,
     get_fetch_url_to_canvas_max_chunks,
+    get_login_lockout_seconds,
+    get_login_max_failed_attempts,
+    get_login_remember_session_days,
+    get_login_session_timeout_minutes,
     get_max_parallel_tools,
     get_model_temperature,
+    get_ocr_enabled,
+    get_ocr_provider,
+    get_openrouter_app_title,
+    get_openrouter_http_referer,
     get_openrouter_prompt_cache_enabled,
     get_prompt_max_input_tokens,
     get_prompt_rag_max_tokens,
@@ -87,7 +100,15 @@ from db import (
     get_reasoning_auto_collapse,
     get_rag_auto_inject_enabled,
     get_rag_auto_inject_source_types,
+    get_rag_chunk_overlap,
+    get_rag_chunk_size,
     get_rag_context_size,
+    get_rag_enabled,
+    get_rag_max_chunks_per_source,
+    get_rag_query_expansion_enabled,
+    get_rag_query_expansion_max_variants,
+    get_rag_search_min_similarity,
+    get_rag_search_top_k,
     get_rag_source_types,
     get_rag_sensitivity,
     get_sub_agent_allowed_tool_names,
@@ -98,10 +119,16 @@ from db import (
     get_sub_agent_timeout_seconds,
     get_summary_skip_first,
     get_summary_skip_last,
+    get_tool_memory_ttl_default_seconds,
+    get_tool_memory_ttl_news_seconds,
+    get_tool_memory_ttl_web_seconds,
     get_general_instructions,
     get_persona,
     get_tool_memory_auto_inject_enabled,
     get_web_cache_ttl_hours,
+    get_youtube_transcript_language,
+    get_youtube_transcript_model_size,
+    get_youtube_transcripts_enabled,
     list_personas,
     normalize_active_tool_names,
     normalize_rag_source_types,
@@ -366,6 +393,12 @@ def build_sub_agent_web_tool_sections() -> list[dict[str, object]]:
     return sections
 
 
+def _normalize_bool_setting_value(value) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return "true" if str(value or "").strip().lower() in {"1", "true", "yes", "on"} else "false"
+
+
 def build_settings_payload() -> dict:
     raw = get_app_settings()
     available_models = get_all_models(raw)
@@ -432,6 +465,32 @@ def build_settings_payload() -> dict:
         "sub_agent_allowed_tool_names": get_sub_agent_allowed_tool_names(raw),
         "web_cache_ttl_hours": get_web_cache_ttl_hours(raw),
         "openrouter_prompt_cache_enabled": get_openrouter_prompt_cache_enabled(raw),
+        "openrouter_http_referer": get_openrouter_http_referer(raw),
+        "openrouter_app_title": get_openrouter_app_title(raw),
+        "login_session_timeout_minutes": get_login_session_timeout_minutes(raw),
+        "login_max_failed_attempts": get_login_max_failed_attempts(raw),
+        "login_lockout_seconds": get_login_lockout_seconds(raw),
+        "login_remember_session_days": get_login_remember_session_days(raw),
+        "conversation_memory_enabled": get_conversation_memory_enabled(raw),
+        "ocr_enabled": get_ocr_enabled(raw),
+        "ocr_provider": get_ocr_provider(raw),
+        "rag_enabled": get_rag_enabled(raw),
+        "youtube_transcripts_enabled": get_youtube_transcripts_enabled(raw),
+        "youtube_transcript_language": get_youtube_transcript_language(raw),
+        "youtube_transcript_model_size": get_youtube_transcript_model_size(raw),
+        "chat_summary_model": get_chat_summary_model(raw),
+        "rag_chunk_size": get_rag_chunk_size(raw),
+        "rag_chunk_overlap": get_rag_chunk_overlap(raw),
+        "rag_max_chunks_per_source": get_rag_max_chunks_per_source(raw),
+        "rag_search_top_k": get_rag_search_top_k(raw),
+        "rag_search_min_similarity": get_rag_search_min_similarity(raw),
+        "rag_query_expansion_enabled": get_rag_query_expansion_enabled(raw),
+        "rag_query_expansion_max_variants": get_rag_query_expansion_max_variants(raw),
+        "tool_memory_ttl_default_seconds": get_tool_memory_ttl_default_seconds(raw),
+        "tool_memory_ttl_web_seconds": get_tool_memory_ttl_web_seconds(raw),
+        "tool_memory_ttl_news_seconds": get_tool_memory_ttl_news_seconds(raw),
+        "fetch_raw_max_text_chars": get_fetch_raw_max_text_chars(raw),
+        "fetch_summary_max_chars": get_fetch_summary_max_chars(raw),
         "chat_summary_detail_level": get_chat_summary_detail_level(raw),
         "chat_summary_mode": get_chat_summary_mode(raw),
         "chat_summary_trigger_token_count": get_chat_summary_trigger_token_count(raw),
@@ -465,7 +524,7 @@ def build_settings_payload() -> dict:
         "fetch_url_to_canvas_chunk_threshold": get_fetch_url_to_canvas_chunk_threshold(raw),
         "fetch_url_to_canvas_chunk_chars": get_fetch_url_to_canvas_chunk_chars(raw),
         "fetch_url_to_canvas_max_chunks": get_fetch_url_to_canvas_max_chunks(raw),
-        "features": get_feature_flags(),
+        "features": get_feature_flags(raw),
     }
 
 
@@ -602,6 +661,32 @@ def register_page_routes(app) -> None:
         sub_agent_allowed_tool_names_raw = data.get("sub_agent_allowed_tool_names")
         web_cache_ttl_hours_raw = data.get("web_cache_ttl_hours")
         openrouter_prompt_cache_enabled_raw = data.get("openrouter_prompt_cache_enabled")
+        openrouter_http_referer_raw = data.get("openrouter_http_referer")
+        openrouter_app_title_raw = data.get("openrouter_app_title")
+        login_session_timeout_minutes_raw = data.get("login_session_timeout_minutes")
+        login_max_failed_attempts_raw = data.get("login_max_failed_attempts")
+        login_lockout_seconds_raw = data.get("login_lockout_seconds")
+        login_remember_session_days_raw = data.get("login_remember_session_days")
+        conversation_memory_enabled_raw = data.get("conversation_memory_enabled")
+        ocr_enabled_raw = data.get("ocr_enabled")
+        ocr_provider_raw = data.get("ocr_provider")
+        rag_enabled_raw = data.get("rag_enabled")
+        youtube_transcripts_enabled_raw = data.get("youtube_transcripts_enabled")
+        youtube_transcript_language_raw = data.get("youtube_transcript_language")
+        youtube_transcript_model_size_raw = data.get("youtube_transcript_model_size")
+        chat_summary_model_raw = data.get("chat_summary_model")
+        rag_chunk_size_raw = data.get("rag_chunk_size")
+        rag_chunk_overlap_raw = data.get("rag_chunk_overlap")
+        rag_max_chunks_per_source_raw = data.get("rag_max_chunks_per_source")
+        rag_search_top_k_raw = data.get("rag_search_top_k")
+        rag_search_min_similarity_raw = data.get("rag_search_min_similarity")
+        rag_query_expansion_enabled_raw = data.get("rag_query_expansion_enabled")
+        rag_query_expansion_max_variants_raw = data.get("rag_query_expansion_max_variants")
+        tool_memory_ttl_default_seconds_raw = data.get("tool_memory_ttl_default_seconds")
+        tool_memory_ttl_web_seconds_raw = data.get("tool_memory_ttl_web_seconds")
+        tool_memory_ttl_news_seconds_raw = data.get("tool_memory_ttl_news_seconds")
+        fetch_raw_max_text_chars_raw = data.get("fetch_raw_max_text_chars")
+        fetch_summary_max_chars_raw = data.get("fetch_summary_max_chars")
         scratchpad = data.get("scratchpad")
         scratchpad_sections_raw = data.get("scratchpad_sections")
 
@@ -677,6 +762,32 @@ def register_page_routes(app) -> None:
             and sub_agent_allowed_tool_names_raw is None
             and web_cache_ttl_hours_raw is None
             and openrouter_prompt_cache_enabled_raw is None
+            and openrouter_http_referer_raw is None
+            and openrouter_app_title_raw is None
+            and login_session_timeout_minutes_raw is None
+            and login_max_failed_attempts_raw is None
+            and login_lockout_seconds_raw is None
+            and login_remember_session_days_raw is None
+            and conversation_memory_enabled_raw is None
+            and ocr_enabled_raw is None
+            and ocr_provider_raw is None
+            and rag_enabled_raw is None
+            and youtube_transcripts_enabled_raw is None
+            and youtube_transcript_language_raw is None
+            and youtube_transcript_model_size_raw is None
+            and chat_summary_model_raw is None
+            and rag_chunk_size_raw is None
+            and rag_chunk_overlap_raw is None
+            and rag_max_chunks_per_source_raw is None
+            and rag_search_top_k_raw is None
+            and rag_search_min_similarity_raw is None
+            and rag_query_expansion_enabled_raw is None
+            and rag_query_expansion_max_variants_raw is None
+            and tool_memory_ttl_default_seconds_raw is None
+            and tool_memory_ttl_web_seconds_raw is None
+            and tool_memory_ttl_news_seconds_raw is None
+            and fetch_raw_max_text_chars_raw is None
+            and fetch_summary_max_chars_raw is None
         ):
             return jsonify({"error": "No settings provided."}), 400
 
@@ -931,14 +1042,202 @@ def register_page_routes(app) -> None:
                 ensure_ascii=False,
             )
 
-        if rag_auto_inject is not None and RAG_ENABLED:
+        if openrouter_http_referer_raw is not None:
+            if not isinstance(openrouter_http_referer_raw, str):
+                return jsonify({"error": "openrouter_http_referer must be a string."}), 400
+            settings["openrouter_http_referer"] = openrouter_http_referer_raw.strip()[:500]
+
+        if openrouter_app_title_raw is not None:
+            if not isinstance(openrouter_app_title_raw, str):
+                return jsonify({"error": "openrouter_app_title must be a string."}), 400
+            settings["openrouter_app_title"] = openrouter_app_title_raw.strip()[:120]
+
+        if login_session_timeout_minutes_raw is not None:
+            try:
+                login_session_timeout_minutes = int(login_session_timeout_minutes_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "login_session_timeout_minutes must be an integer."}), 400
+            if not (1 <= login_session_timeout_minutes <= 10_080):
+                return jsonify({"error": "login_session_timeout_minutes must be between 1 and 10080."}), 400
+            settings["login_session_timeout_minutes"] = str(login_session_timeout_minutes)
+
+        if login_max_failed_attempts_raw is not None:
+            try:
+                login_max_failed_attempts = int(login_max_failed_attempts_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "login_max_failed_attempts must be an integer."}), 400
+            if not (1 <= login_max_failed_attempts <= 50):
+                return jsonify({"error": "login_max_failed_attempts must be between 1 and 50."}), 400
+            settings["login_max_failed_attempts"] = str(login_max_failed_attempts)
+
+        if login_lockout_seconds_raw is not None:
+            try:
+                login_lockout_seconds = int(login_lockout_seconds_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "login_lockout_seconds must be an integer."}), 400
+            if not (1 <= login_lockout_seconds <= 86_400):
+                return jsonify({"error": "login_lockout_seconds must be between 1 and 86400."}), 400
+            settings["login_lockout_seconds"] = str(login_lockout_seconds)
+
+        if login_remember_session_days_raw is not None:
+            try:
+                login_remember_session_days = int(login_remember_session_days_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "login_remember_session_days must be an integer."}), 400
+            if not (1 <= login_remember_session_days <= 3_650):
+                return jsonify({"error": "login_remember_session_days must be between 1 and 3650."}), 400
+            settings["login_remember_session_days"] = str(login_remember_session_days)
+
+        if conversation_memory_enabled_raw is not None:
+            settings["conversation_memory_enabled"] = _normalize_bool_setting_value(conversation_memory_enabled_raw)
+
+        if ocr_enabled_raw is not None:
+            settings["ocr_enabled"] = _normalize_bool_setting_value(ocr_enabled_raw)
+
+        if ocr_provider_raw is not None:
+            normalized_ocr_provider = str(ocr_provider_raw or "").strip().lower()
+            if normalized_ocr_provider not in OCR_SUPPORTED_PROVIDERS:
+                return jsonify({"error": f"ocr_provider must be one of {', '.join(sorted(OCR_SUPPORTED_PROVIDERS))}."}), 400
+            settings["ocr_provider"] = normalized_ocr_provider
+
+        if rag_enabled_raw is not None:
+            settings["rag_enabled"] = _normalize_bool_setting_value(rag_enabled_raw)
+
+        if youtube_transcripts_enabled_raw is not None:
+            settings["youtube_transcripts_enabled"] = _normalize_bool_setting_value(youtube_transcripts_enabled_raw)
+
+        if youtube_transcript_language_raw is not None:
+            if not isinstance(youtube_transcript_language_raw, str):
+                return jsonify({"error": "youtube_transcript_language must be a string."}), 400
+            settings["youtube_transcript_language"] = youtube_transcript_language_raw.strip()[:32]
+
+        if youtube_transcript_model_size_raw is not None:
+            if not isinstance(youtube_transcript_model_size_raw, str):
+                return jsonify({"error": "youtube_transcript_model_size must be a string."}), 400
+            normalized_model_size = youtube_transcript_model_size_raw.strip()
+            if not normalized_model_size:
+                return jsonify({"error": "youtube_transcript_model_size cannot be empty."}), 400
+            settings["youtube_transcript_model_size"] = normalized_model_size[:64]
+
+        if chat_summary_model_raw is not None:
+            candidate = canonicalize_model_id(chat_summary_model_raw)
+            if candidate and get_model_record(candidate, settings) is None:
+                return jsonify({"error": "chat_summary_model must reference a known model."}), 400
+            settings["chat_summary_model"] = candidate
+
+        if rag_chunk_size_raw is not None:
+            try:
+                rag_chunk_size = int(rag_chunk_size_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "rag_chunk_size must be an integer."}), 400
+            if not (300 <= rag_chunk_size <= CONTENT_MAX_CHARS):
+                return jsonify({"error": f"rag_chunk_size must be between 300 and {CONTENT_MAX_CHARS}."}), 400
+            settings["rag_chunk_size"] = str(rag_chunk_size)
+
+        if rag_chunk_overlap_raw is not None:
+            try:
+                rag_chunk_overlap = int(rag_chunk_overlap_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "rag_chunk_overlap must be an integer."}), 400
+            effective_rag_chunk_size = int(settings.get("rag_chunk_size") or get_rag_chunk_size(settings))
+            if not (0 <= rag_chunk_overlap <= max(0, effective_rag_chunk_size // 2)):
+                return jsonify({"error": "rag_chunk_overlap must be between 0 and half of rag_chunk_size."}), 400
+            settings["rag_chunk_overlap"] = str(rag_chunk_overlap)
+
+        if rag_max_chunks_per_source_raw is not None:
+            try:
+                rag_max_chunks_per_source = int(rag_max_chunks_per_source_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "rag_max_chunks_per_source must be an integer."}), 400
+            if not (1 <= rag_max_chunks_per_source <= 20):
+                return jsonify({"error": "rag_max_chunks_per_source must be between 1 and 20."}), 400
+            settings["rag_max_chunks_per_source"] = str(rag_max_chunks_per_source)
+
+        if rag_search_top_k_raw is not None:
+            try:
+                rag_search_top_k = int(rag_search_top_k_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "rag_search_top_k must be an integer."}), 400
+            if not (1 <= rag_search_top_k <= 50):
+                return jsonify({"error": "rag_search_top_k must be between 1 and 50."}), 400
+            settings["rag_search_top_k"] = str(rag_search_top_k)
+
+        if rag_search_min_similarity_raw is not None:
+            try:
+                rag_search_min_similarity = float(rag_search_min_similarity_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "rag_search_min_similarity must be a number."}), 400
+            if not (0.0 <= rag_search_min_similarity <= 1.0):
+                return jsonify({"error": "rag_search_min_similarity must be between 0.0 and 1.0."}), 400
+            settings["rag_search_min_similarity"] = str(rag_search_min_similarity)
+
+        if rag_query_expansion_enabled_raw is not None:
+            settings["rag_query_expansion_enabled"] = _normalize_bool_setting_value(rag_query_expansion_enabled_raw)
+
+        if rag_query_expansion_max_variants_raw is not None:
+            try:
+                rag_query_expansion_max_variants = int(rag_query_expansion_max_variants_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "rag_query_expansion_max_variants must be an integer."}), 400
+            if not (1 <= rag_query_expansion_max_variants <= 10):
+                return jsonify({"error": "rag_query_expansion_max_variants must be between 1 and 10."}), 400
+            settings["rag_query_expansion_max_variants"] = str(rag_query_expansion_max_variants)
+
+        if tool_memory_ttl_default_seconds_raw is not None:
+            try:
+                tool_memory_ttl_default_seconds = int(tool_memory_ttl_default_seconds_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "tool_memory_ttl_default_seconds must be an integer."}), 400
+            if not (60 <= tool_memory_ttl_default_seconds <= 31_536_000):
+                return jsonify({"error": "tool_memory_ttl_default_seconds must be between 60 and 31536000."}), 400
+            settings["tool_memory_ttl_default_seconds"] = str(tool_memory_ttl_default_seconds)
+
+        if tool_memory_ttl_web_seconds_raw is not None:
+            try:
+                tool_memory_ttl_web_seconds = int(tool_memory_ttl_web_seconds_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "tool_memory_ttl_web_seconds must be an integer."}), 400
+            if not (60 <= tool_memory_ttl_web_seconds <= 31_536_000):
+                return jsonify({"error": "tool_memory_ttl_web_seconds must be between 60 and 31536000."}), 400
+            settings["tool_memory_ttl_web_seconds"] = str(tool_memory_ttl_web_seconds)
+
+        if tool_memory_ttl_news_seconds_raw is not None:
+            try:
+                tool_memory_ttl_news_seconds = int(tool_memory_ttl_news_seconds_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "tool_memory_ttl_news_seconds must be an integer."}), 400
+            if not (60 <= tool_memory_ttl_news_seconds <= 31_536_000):
+                return jsonify({"error": "tool_memory_ttl_news_seconds must be between 60 and 31536000."}), 400
+            settings["tool_memory_ttl_news_seconds"] = str(tool_memory_ttl_news_seconds)
+
+        if fetch_raw_max_text_chars_raw is not None:
+            try:
+                fetch_raw_max_text_chars = int(fetch_raw_max_text_chars_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "fetch_raw_max_text_chars must be an integer."}), 400
+            if not (1_000 <= fetch_raw_max_text_chars <= CONTENT_MAX_CHARS):
+                return jsonify({"error": f"fetch_raw_max_text_chars must be between 1000 and {CONTENT_MAX_CHARS}."}), 400
+            settings["fetch_raw_max_text_chars"] = str(fetch_raw_max_text_chars)
+
+        if fetch_summary_max_chars_raw is not None:
+            try:
+                fetch_summary_max_chars = int(fetch_summary_max_chars_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "fetch_summary_max_chars must be an integer."}), 400
+            if not (500 <= fetch_summary_max_chars <= CONTENT_MAX_CHARS):
+                return jsonify({"error": f"fetch_summary_max_chars must be between 500 and {CONTENT_MAX_CHARS}."}), 400
+            settings["fetch_summary_max_chars"] = str(fetch_summary_max_chars)
+
+        effective_rag_enabled = get_rag_enabled(settings)
+
+        if rag_auto_inject is not None and effective_rag_enabled:
             if isinstance(rag_auto_inject, bool):
                 settings["rag_auto_inject"] = "true" if rag_auto_inject else "false"
             else:
                 settings["rag_auto_inject"] = (
                     "true" if str(rag_auto_inject).strip().lower() in {"1", "true", "yes", "on"} else "false"
                 )
-        elif not RAG_ENABLED:
+        elif not effective_rag_enabled:
             settings["rag_auto_inject"] = "false"
 
         if rag_sensitivity is not None:
@@ -971,14 +1270,14 @@ def register_page_routes(app) -> None:
                 return jsonify({"error": "rag_auto_inject_source_types contains unsupported source types."}), 400
             settings["rag_auto_inject_source_types"] = json.dumps(normalized_rag_auto_inject_source_types, ensure_ascii=False)
 
-        if tool_memory_auto_inject is not None and RAG_ENABLED:
+        if tool_memory_auto_inject is not None and effective_rag_enabled:
             if isinstance(tool_memory_auto_inject, bool):
                 settings["tool_memory_auto_inject"] = "true" if tool_memory_auto_inject else "false"
             else:
                 settings["tool_memory_auto_inject"] = (
                     "true" if str(tool_memory_auto_inject).strip().lower() in {"1", "true", "yes", "on"} else "false"
                 )
-        elif not RAG_ENABLED:
+        elif not effective_rag_enabled:
             settings["tool_memory_auto_inject"] = "false"
             settings["rag_auto_inject_source_types"] = json.dumps([], ensure_ascii=False)
 

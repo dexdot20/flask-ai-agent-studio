@@ -896,7 +896,7 @@ def _normalize_rag_hits(
 def search_knowledge_base_tool(
     query: str,
     category: str | None = None,
-    top_k: int = RAG_SEARCH_DEFAULT_TOP_K,
+    top_k: int | None = None,
     allowed_source_types: set[str] | list[str] | tuple[str, ...] | None = None,
     min_similarity: float | int | str | None = None,
 ) -> dict:
@@ -904,6 +904,8 @@ def search_knowledge_base_tool(
     query = str(query or "").strip()
     if not query:
         return {"query": "", "matches": [], "count": 0}
+
+    top_k = RAG_SEARCH_DEFAULT_TOP_K if top_k is None else top_k
 
     ensure_supported_rag_sources()
     normalized_category = normalize_rag_category(category, default=None) if category else None
@@ -983,13 +985,15 @@ def upsert_tool_memory_result(tool_name: str, args_preview: str, result_content:
 
 def search_tool_memory(
     query: str,
-    top_k: int = RAG_SEARCH_DEFAULT_TOP_K,
+    top_k: int | None = None,
     min_similarity: float | int | str | None = None,
 ) -> dict:
     _require_rag_enabled()
     query = str(query or "").strip()
     if not query:
         return {"query": "", "count": 0, "matches": []}
+
+    top_k = RAG_SEARCH_DEFAULT_TOP_K if top_k is None else top_k
 
     ensure_supported_rag_sources()
     similarity_threshold = _coerce_similarity_threshold(min_similarity)
