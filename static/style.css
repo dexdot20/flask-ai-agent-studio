@@ -7858,7 +7858,7 @@ body.login-page-body {
   }
 
   .settings-page-toolbar__actions,
-  .header-controls {
+  body[data-page="settings"] .header-controls {
     flex-wrap: wrap;
   }
 
@@ -7879,7 +7879,7 @@ body.login-page-body {
 
   .settings-page-pill,
   .settings-save-trigger,
-  .header-controls > .btn-ghost {
+  body[data-page="settings"] .header-controls > .btn-ghost {
     width: 100%;
   }
 
@@ -7968,4 +7968,94 @@ body.login-page-body {
 
 .custom-model-row--editing .model-management-row__meta strong {
   color: var(--accent);
+}
+
+/* ── Chat Page: Final Mobile Overrides ─────────────────── */
+@media (max-width: 980px) {
+  body[data-page="chat"] header {
+    gap: 10px;
+  }
+
+  body[data-page="chat"] .header-brand {
+    gap: 8px;
+  }
+
+  body[data-page="chat"] .header-controls {
+    flex-wrap: nowrap;
+    gap: 6px;
+    min-width: max-content;
+    margin-left: auto;
+  }
+
+  body[data-page="chat"] #summary-toggle-btn,
+  body[data-page="chat"] #prune-toggle-btn {
+    display: none;
+  }
+
+  body[data-page="chat"] .btn-canvas,
+  body[data-page="chat"] .btn-memory,
+  body[data-page="chat"] .mobile-tools-toggle {
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    padding: 0;
+    gap: 0;
+    justify-content: center;
+  }
+
+  body[data-page="chat"] .btn-canvas::before,
+  body[data-page="chat"] .btn-memory::before {
+    display: inline-flex;
+  }
+
+  body[data-page="chat"] .btn-canvas__label {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  body[data-page="chat"] header {
+    padding: calc(var(--safe-top) + 8px) 10px 8px;
+  }
+
+  body[data-page="chat"] .header-left {
+    gap: 6px;
+  }
+
+  body[data-page="chat"] .header-brand h1 {
+    display: none;
+  }
+
+  body[data-page="chat"] .header-controls {
+    flex-shrink: 0;
+  }
+
+  body[data-page="chat"] .btn-canvas,
+  body[data-page="chat"] .btn-memory,
+  body[data-page="chat"] .mobile-tools-toggle {
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    border-radius: 12px;
+  }
+
+  body[data-page="chat"] #messages {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  body[data-page="chat"] .empty-state {
+    min-height: clamp(220px, 34vh, 300px);
+    padding-bottom: 12px;
+  }
+
+  body[data-page="chat"] #input-area {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  body[data-page="chat"] .input-wrapper {
+    padding: 8px 9px;
+    gap: 6px;
+  }
 }
