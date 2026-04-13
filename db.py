@@ -842,10 +842,14 @@ def get_conversation_memory(conversation_id: int, limit: int = 40) -> list[dict]
     with get_db() as conn:
         rows = conn.execute(
             """SELECT id, conversation_id, message_id, entry_type, key, value, created_at
-               FROM conversation_memory
-               WHERE conversation_id = ?
-               ORDER BY created_at ASC, id ASC
-               LIMIT ?""",
+               FROM (
+                   SELECT id, conversation_id, message_id, entry_type, key, value, created_at
+                   FROM conversation_memory
+                   WHERE conversation_id = ?
+                   ORDER BY created_at DESC, id DESC
+                   LIMIT ?
+               ) AS recent_conversation_memory
+               ORDER BY created_at ASC, id ASC""",
             (normalized_conversation_id, normalized_limit),
         ).fetchall()
     return [entry for entry in (_conversation_memory_row_to_dict(row) for row in rows) if entry]
@@ -883,6 +887,186 @@ def delete_conversation_memory_entry(
             after_value=None,
         )
     return deleted
+
+
+def _list_conversation_memory_entries_with_conn(conn, conversation_id: int) -> list[dict]:
+    rows = conn.execute(
+        """SELECT id, conversation_id, message_id, entry_type, key, value, created_at
+           FROM conversation_memory
+           WHERE conversation_id = ?
+           ORDER BY created_at ASC, id ASC""",
+        (int(conversation_id),),
+    ).fetchall()
+    return [entry for entry in (_conversation_memory_row_to_dict(row) for row in rows) if entry]
+
+
+def _normalize_conversation_memory_snapshot_entries(entries, conversation_id: int) -> list[dict]:
+    normalized_conversation_id = int(conversation_id or 0)
+    if normalized_conversation_id <= 0:
+        return []
+
+    normalized_entries_by_key: dict[str, dict] = {}
+    ordered_keys: list[str] = []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        normalized_entry = {
+            "id": _coerce_positive_int(entry.get("id")),
+            "conversation_id": normalized_conversation_id,
+            "message_id": _coerce_positive_int(entry.get("message_id")),
+            "entry_type": _normalize_conversation_memory_entry_type(entry.get("entry_type") or "task_context"),
+            "key": _normalize_conversation_memory_key(entry.get("key") or ""),
+            "value": _normalize_conversation_memory_value(entry.get("value") or ""),
+            "created_at": str(entry.get("created_at") or "").strip() or datetime_utc_now_iso(),
+        }
+        normalized_key = normalized_entry["key"].casefold()
+        if normalized_key not in normalized_entries_by_key:
+            ordered_keys.append(normalized_key)
+        normalized_entries_by_key[normalized_key] = normalized_entry
+
+    return [normalized_entries_by_key[key] for key in ordered_keys]
+
+
+def replace_conversation_memory_snapshot(
+    conversation_id: int,
+    entries,
+    *,
+    mutation_context: dict | None = None,
+    conn=None,
+) -> dict:
+    normalized_conversation_id = int(conversation_id or 0)
+    if normalized_conversation_id <= 0:
+        raise ValueError("conversation_id is required.")
+
+    normalized_source_message_id = _normalize_state_mutation_source_message_id(
+        (mutation_context or {}).get("source_message_id")
+    )
+
+    def _apply(connection) -> dict:
+        current_entries = _list_conversation_memory_entries_with_conn(connection, normalized_conversation_id)
+        current_by_key = {
+            str(entry.get("key") or "").casefold(): entry
+            for entry in current_entries
+            if str(entry.get("key") or "").strip()
+        }
+        snapshot_entries = _normalize_conversation_memory_snapshot_entries(entries, normalized_conversation_id)
+        snapshot_by_key = {entry["key"].casefold(): entry for entry in snapshot_entries}
+
+        inserted_count = 0
+        updated_count = 0
+        deleted_count = 0
+
+        for normalized_key, current_entry in current_by_key.items():
+            if normalized_key in snapshot_by_key:
+                continue
+            connection.execute(
+                "DELETE FROM conversation_memory WHERE conversation_id = ? AND lower(key) = lower(?)",
+                (normalized_conversation_id, current_entry["key"]),
+            )
+            _record_conversation_state_mutation_with_conn(
+                connection,
+                normalized_conversation_id,
+                source_message_id=normalized_source_message_id,
+                target_kind=STATE_MUTATION_TARGET_CONVERSATION_MEMORY,
+                target_key=current_entry["key"],
+                operation=STATE_MUTATION_OPERATION_DELETE,
+                before_value=dict(current_entry),
+                after_value=None,
+            )
+            deleted_count += 1
+
+        for snapshot_entry in snapshot_entries:
+            normalized_key = snapshot_entry["key"].casefold()
+            current_entry = current_by_key.get(normalized_key)
+            if current_entry == snapshot_entry:
+                continue
+
+            if current_entry is None:
+                connection.execute(
+                    """INSERT INTO conversation_memory (id, conversation_id, message_id, entry_type, key, value, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        snapshot_entry["id"],
+                        snapshot_entry["conversation_id"],
+                        snapshot_entry["message_id"],
+                        snapshot_entry["entry_type"],
+                        snapshot_entry["key"],
+                        snapshot_entry["value"],
+                        snapshot_entry["created_at"],
+                    ),
+                )
+                _record_conversation_state_mutation_with_conn(
+                    connection,
+                    normalized_conversation_id,
+                    source_message_id=normalized_source_message_id,
+                    target_kind=STATE_MUTATION_TARGET_CONVERSATION_MEMORY,
+                    target_key=snapshot_entry["key"],
+                    operation=STATE_MUTATION_OPERATION_UPSERT,
+                    before_value=None,
+                    after_value=dict(snapshot_entry),
+                )
+                inserted_count += 1
+                continue
+
+            if current_entry.get("id") == snapshot_entry.get("id"):
+                connection.execute(
+                    """UPDATE conversation_memory
+                       SET message_id = ?, entry_type = ?, key = ?, value = ?, created_at = ?
+                       WHERE id = ? AND conversation_id = ?""",
+                    (
+                        snapshot_entry["message_id"],
+                        snapshot_entry["entry_type"],
+                        snapshot_entry["key"],
+                        snapshot_entry["value"],
+                        snapshot_entry["created_at"],
+                        current_entry["id"],
+                        normalized_conversation_id,
+                    ),
+                )
+            else:
+                connection.execute(
+                    "DELETE FROM conversation_memory WHERE conversation_id = ? AND lower(key) = lower(?)",
+                    (normalized_conversation_id, snapshot_entry["key"]),
+                )
+                connection.execute(
+                    """INSERT INTO conversation_memory (id, conversation_id, message_id, entry_type, key, value, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        snapshot_entry["id"],
+                        snapshot_entry["conversation_id"],
+                        snapshot_entry["message_id"],
+                        snapshot_entry["entry_type"],
+                        snapshot_entry["key"],
+                        snapshot_entry["value"],
+                        snapshot_entry["created_at"],
+                    ),
+                )
+
+            _record_conversation_state_mutation_with_conn(
+                connection,
+                normalized_conversation_id,
+                source_message_id=normalized_source_message_id,
+                target_kind=STATE_MUTATION_TARGET_CONVERSATION_MEMORY,
+                target_key=snapshot_entry["key"],
+                operation=STATE_MUTATION_OPERATION_UPSERT,
+                before_value=dict(current_entry),
+                after_value=dict(snapshot_entry),
+            )
+            updated_count += 1
+
+        return {
+            "conversation_id": normalized_conversation_id,
+            "entry_count": len(snapshot_entries),
+            "inserted_count": inserted_count,
+            "updated_count": updated_count,
+            "deleted_count": deleted_count,
+        }
+
+    if conn is not None:
+        return _apply(conn)
+
+    with get_db() as connection:
+        return _apply(connection)
 
 
 def _normalize_state_mutation_target_kind(value: str) -> str:
@@ -944,7 +1128,8 @@ def parse_state_mutation_value(raw_value):
         return str(raw_value)
 
 
-def record_conversation_state_mutation(
+def _record_conversation_state_mutation_with_conn(
+    conn,
     conversation_id: int,
     *,
     source_message_id: int | None = None,
@@ -963,22 +1148,21 @@ def record_conversation_state_mutation(
     normalized_operation = _normalize_state_mutation_operation(operation)
     normalized_source_message_id = _normalize_state_mutation_source_message_id(source_message_id)
 
-    with get_db() as conn:
-        cursor = conn.execute(
-            """INSERT INTO conversation_state_mutations (
-                   conversation_id, source_message_id, target_kind, target_key,
-                   operation, before_value, after_value
-               ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (
-                normalized_conversation_id,
-                normalized_source_message_id,
-                normalized_target_kind,
-                normalized_target_key,
-                normalized_operation,
-                serialize_state_mutation_value(before_value),
-                serialize_state_mutation_value(after_value),
-            ),
-        )
+    cursor = conn.execute(
+        """INSERT INTO conversation_state_mutations (
+               conversation_id, source_message_id, target_kind, target_key,
+               operation, before_value, after_value
+           ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (
+            normalized_conversation_id,
+            normalized_source_message_id,
+            normalized_target_kind,
+            normalized_target_key,
+            normalized_operation,
+            serialize_state_mutation_value(before_value),
+            serialize_state_mutation_value(after_value),
+        ),
+    )
     return {
         "id": int(cursor.lastrowid or 0),
         "conversation_id": normalized_conversation_id,
@@ -987,6 +1171,29 @@ def record_conversation_state_mutation(
         "target_key": normalized_target_key,
         "operation": normalized_operation,
     }
+
+
+def record_conversation_state_mutation(
+    conversation_id: int,
+    *,
+    source_message_id: int | None = None,
+    target_kind: str,
+    target_key: str,
+    operation: str,
+    before_value=None,
+    after_value=None,
+) -> dict | None:
+    with get_db() as conn:
+        return _record_conversation_state_mutation_with_conn(
+            conn,
+            conversation_id,
+            source_message_id=source_message_id,
+            target_kind=target_kind,
+            target_key=target_key,
+            operation=operation,
+            before_value=before_value,
+            after_value=after_value,
+        )
 
 
 def _state_mutation_target_identity(row) -> tuple:

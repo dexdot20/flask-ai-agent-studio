@@ -120,6 +120,7 @@ from db import (
     insert_model_invocation,
     parse_message_metadata,
     restore_soft_deleted_messages,
+    replace_conversation_memory_snapshot,
     sanitize_edited_user_message_metadata,
     serialize_message_metadata,
     serialize_message_tool_calls,
@@ -632,23 +633,12 @@ def _rollback_edit_replay_snapshot(
                 (conversation_id, max_message_id),
             )
 
-        conn.execute("DELETE FROM conversation_memory WHERE conversation_id = ?", (conversation_id,))
-        for row in conversation_memory_rows:
-            if not isinstance(row, dict):
-                continue
-            conn.execute(
-                """INSERT INTO conversation_memory (id, conversation_id, message_id, entry_type, key, value, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    int(row.get("id") or 0) or None,
-                    int(row.get("conversation_id") or conversation_id),
-                    int(row.get("message_id")) if row.get("message_id") not in (None, "") else None,
-                    str(row.get("entry_type") or "task_context"),
-                    str(row.get("key") or ""),
-                    str(row.get("value") or ""),
-                    str(row.get("created_at") or datetime.now().astimezone().isoformat(timespec="seconds")),
-                ),
-            )
+        replace_conversation_memory_snapshot(
+            conversation_id,
+            conversation_memory_rows,
+            mutation_context={"source_message_id": None},
+            conn=conn,
+        )
 
         conn.execute("DELETE FROM user_profile")
         for row in user_profile_rows:
@@ -2840,7 +2830,7 @@ def _build_clarification_rag_query(message_content: str, clarification_response:
     return " ".join(query_parts).strip()
 
 
-_RAG_QUERY_ENRICHMENT_ENTRY_TYPES = {"task_context", "topic"}
+_RAG_QUERY_ENRICHMENT_ENTRY_TYPES = {"task_context", "decision"}
 _RAG_QUERY_ENRICHMENT_MAX_CHARS = 500
 _RAG_QUERY_ENRICHMENT_MAX_MEMORY_ENTRIES = 3
 _RAG_QUERY_ENRICHMENT_MAX_MEMORY_CHARS = 200
@@ -2856,7 +2846,7 @@ def _enrich_rag_query_with_context(
     meaningful RAG vector searches."""
     parts: list[str] = []
 
-    # 1. Collect relevant conversation-memory entries (task_context, topic),
+    # 1. Collect relevant conversation-memory entries (task_context, decision),
     #    capped to avoid query drift from overly broad context injection.
     _memory_chars = 0
     _memory_count = 0

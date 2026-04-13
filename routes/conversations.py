@@ -1351,8 +1351,10 @@ def register_conversation_routes(app) -> None:
                 return jsonify({"error": "Not found."}), 404
 
         revert_conversation_state_mutations(conv_id)
-        if RAG_ENABLED:
+        try:
             purge_conversation_rag_sources(conv_id, include_archived=True)
+        except Exception:
+            current_app.logger.exception("Conversation RAG cleanup failed for conversation_id=%s", conv_id)
         delete_conversation_image_assets(conv_id)
         delete_conversation_file_assets(conv_id)
         delete_conversation_video_assets(conv_id)

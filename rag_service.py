@@ -428,7 +428,8 @@ def update_rag_document_record_metadata(source_key: str, metadata: dict | None, 
 
 
 def delete_rag_source_record(source_key: str) -> int:
-    _require_rag_enabled()
+    # Cleanup must still work even when RAG is currently disabled so that stale
+    # vector-store artifacts do not outlive deleted conversations.
     deleted_chunks = rag_delete_source(source_key)
     delete_rag_document_record(source_key)
     return deleted_chunks

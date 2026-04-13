@@ -161,6 +161,7 @@ from routes.chat import (
     OMITTED_TOOL_OUTPUT_TEXT,
     _cancel_chat_run,
     _build_budgeted_prompt_messages,
+    _enrich_rag_query_with_context,
     _build_tool_trace_context,
     _collect_answered_clarification_rounds,
     _count_prunable_message_tokens,
@@ -929,6 +930,58 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         delete_payload = delete_response.get_json()
         self.assertEqual(delete_payload["memory_count"], 0)
         self.assertEqual(get_conversation_memory(conversation_id), [])
+
+    def test_get_conversation_memory_returns_latest_window_in_chronological_order(self):
+        conversation_id = self._create_conversation()
+
+        for index in range(45):
+            insert_conversation_memory_entry(
+                conversation_id,
+                "task_context",
+                f"Entry {index:02d}",
+                f"Value {index:02d}",
+            )
+
+        entries = get_conversation_memory(conversation_id)
+
+        self.assertEqual(len(entries), 40)
+        self.assertEqual(entries[0]["key"], "Entry 05")
+        self.assertEqual(entries[-1]["key"], "Entry 44")
+        self.assertEqual(
+            [entry["key"] for entry in entries[:3]],
+            ["Entry 05", "Entry 06", "Entry 07"],
+        )
+
+    def test_rag_query_enrichment_uses_task_context_and_decision_entries(self):
+        enriched = _enrich_rag_query_with_context(
+            "Fix the bug",
+            [
+                {
+                    "entry_type": "user_info",
+                    "key": "Locale",
+                    "value": "Turkish",
+                    "created_at": "2026-04-08 10:00:00",
+                },
+                {
+                    "entry_type": "task_context",
+                    "key": "Goal",
+                    "value": "Repair the RAG memory flow",
+                    "created_at": "2026-04-08 10:01:00",
+                },
+                {
+                    "entry_type": "decision",
+                    "key": "Constraint",
+                    "value": "Keep the schema unchanged",
+                    "created_at": "2026-04-08 10:02:00",
+                },
+            ],
+            [],
+        )
+
+        self.assertIn("Goal: Repair the RAG memory flow", enriched)
+        self.assertIn("Constraint: Keep the schema unchanged", enriched)
+        self.assertNotIn("Locale: Turkish", enriched)
+        self.assertTrue(enriched.endswith("Fix the bug"))
 
     def test_custom_openrouter_models_can_share_the_same_base_model_id_with_different_profiles(self):
         response = self.client.patch(
@@ -1997,6 +2050,21 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIsNotNone(later_row)
         self.assertIsNone(later_row["deleted_at"])
         self.assertEqual(max_after, max_before)
+
+        with get_db() as conn:
+            mutation_rows = conn.execute(
+                """SELECT source_message_id, before_value, after_value
+                   FROM conversation_state_mutations
+                   WHERE conversation_id = ? AND target_kind = ? AND target_key = ?
+                   ORDER BY id ASC""",
+                (conversation_id, "conversation_memory", "critical-plan"),
+            ).fetchall()
+
+        self.assertGreaterEqual(len(mutation_rows), 3)
+        latest_mutation = mutation_rows[-1]
+        self.assertIsNone(latest_mutation["source_message_id"])
+        self.assertEqual(json.loads(latest_mutation["before_value"])["value"], "mutated memory")
+        self.assertEqual(json.loads(latest_mutation["after_value"])["value"], "baseline memory")
 
         scratchpad_sections = get_all_scratchpad_sections(get_app_settings())
         self.assertIn("Baseline scratchpad", scratchpad_sections.get("notes", ""))
@@ -5329,6 +5397,29 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertNotIn("fact:conversation-delete", {entry["key"] for entry in get_user_profile_entries()})
         self.assertEqual(self.client.get(f"/api/conversations/{conversation_id}").status_code, 404)
         mocked_purge.assert_called_once_with(conversation_id, include_archived=True)
+
+    def test_delete_conversation_purges_rag_sources_even_when_rag_is_disabled(self):
+        conversation_id = self._create_conversation()
+
+        with patch("routes.conversations.RAG_ENABLED", False), patch(
+            "routes.conversations.purge_conversation_rag_sources"
+        ) as mocked_purge:
+            response = self.client.delete(f"/api/conversations/{conversation_id}")
+
+        self.assertEqual(response.status_code, 204)
+        mocked_purge.assert_called_once_with(conversation_id, include_archived=True)
+
+    def test_delete_conversation_continues_when_rag_cleanup_fails(self):
+        conversation_id = self._create_conversation()
+
+        with patch(
+            "routes.conversations.purge_conversation_rag_sources",
+            side_effect=RuntimeError("cleanup failed"),
+        ):
+            response = self.client.delete(f"/api/conversations/{conversation_id}")
+
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(self.client.get(f"/api/conversations/{conversation_id}").status_code, 404)
 
     def test_delete_conversation_removes_persisted_image_files(self):
         conversation_id = self._create_conversation()
