@@ -1,3 +1,4 @@
+# ruff: noqa: I001
 from __future__ import annotations
 
 import io
@@ -23,7 +24,6 @@ import rag_service
 import request_security
 import web_tools
 from agent import (
-    CANVAS_MUTATION_RETRY_MARKER,
     CANVAS_MUTATION_TOOL_NAMES,
     CANVAS_TOOL_NAMES,
     CONTEXT_OVERFLOW_RECOVERY_ERROR_TEXT,
@@ -36,9 +36,7 @@ from agent import (
     _build_reasoning_replay_instruction,
     _build_sub_agent_messages,
     _build_tool_execution_result_message,
-    _canvas_mutation_skipped_structurally,
     _conversation_has_clarification_tool_call,
-    _conversation_has_prior_canvas_mutations,
     _estimate_input_breakdown,
     _estimate_message_breakdown,
     _execute_tool,
@@ -48,7 +46,6 @@ from agent import (
     _iter_agent_exchange_blocks,
     _lookup_cross_turn_tool_memory,
     _prepare_tool_result_for_transcript,
-    _response_mentions_canvas,
     _run_fetch_url_summarized,
     _run_fetch_url_to_canvas,
     _run_sub_agent_stream,
@@ -5368,7 +5365,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             fh.write("workspace state")
 
         with get_db() as conn:
-            user_message_id = insert_message(conn, conversation_id, "user", "Conversation prompt")
+            insert_message(conn, conversation_id, "user", "Conversation prompt")
             assistant_message_id = insert_message(conn, conversation_id, "assistant", "Conversation answer")
 
         append_to_scratchpad(
@@ -7396,10 +7393,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("If work remains unfinished, say so explicitly", instruction["content"])
         self.assertIn("Do not include stray JSON objects", instruction["content"])
 
-    def test_run_agent_stream_retries_when_user_requests_canvas_write_but_no_tool_called(self):
-        # User explicitly requests canvas write; model hallucinates success without calling any
-        # canvas tool. The retry hook must fire exactly once. On the retry turn the model still
-        # produces no tool call (guard prevents a third attempt via _has_canvas_mutation_retry_instruction).
+    def test_run_agent_stream_does_not_force_canvas_write_retry_when_no_tool_is_called(self):
+        # Even if the user asks for a canvas write, the orchestrator should no longer
+        # hard-force a retry. Tool choice is left to the model.
         hallucinated_response = SimpleNamespace(
             choices=[
                 SimpleNamespace(
@@ -7412,21 +7408,8 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ],
             usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2),
         )
-        retry_response = SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(
-                        reasoning_content="",
-                        content="Tamamlandı.",
-                        tool_calls=[],
-                    )
-                )
-            ],
-            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2),
-        )
-        responses = [hallucinated_response, retry_response]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create:
+        with patch("agent.client.chat.completions.create", return_value=hallucinated_response) as mocked_create:
             events = list(
                 run_agent_stream(
                     [{"role": "user", "content": "Promptu İngilizceye çevirip Canvas'a yaz."}],
@@ -7436,13 +7419,13 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 )
             )
 
-        # Retry fires once: first hallucinated turn + one retry turn = 2 model calls.
-        self.assertEqual(mocked_create.call_count, 2)
-        # The hallucinated text must NOT be emitted to the client; only the retry-turn answer is.
+        self.assertEqual(mocked_create.call_count, 1)
         answer_deltas = [e["text"] for e in events if e["type"] == "answer_delta"]
-        self.assertNotIn("Canvas'ı İngilizceye çevirdim.", answer_deltas)
-        self.assertIn("Tamamlandı.", answer_deltas)
+        self.assertIn("Canvas'ı İngilizceye çevirdim.", answer_deltas)
         self.assertFalse(any(event["type"] == "clarification_request" for event in events))
+        usage_event = next(event for event in events if event["type"] == "usage")
+        self.assertEqual(usage_event["model_call_count"], 1)
+        self.assertFalse(any(call["is_retry"] for call in usage_event["model_calls"]))
 
     def test_build_reasoning_replay_instruction_marks_reasoning_as_non_execution_evidence(self):
         instruction = _build_reasoning_replay_instruction(
@@ -13693,82 +13676,53 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("MISSING FINAL ANSWER", retry_content)
         self.assertIn("assistant content only", retry_content)
 
-    def test_run_agent_stream_retries_hallucinated_canvas_update_before_emitting_answer(self):
+    def test_run_agent_stream_does_not_force_canvas_retry_when_answer_mentions_canvas_context(self):
         responses = [
             iter(
                 [
-                    self._stream_chunk(content="Belgeyi güncelledim ve önemli noktaları ekledim."),
-                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=3, total_tokens=5)),
-                ]
-            ),
-            iter(
-                [
-                    self._tool_call_chunk(
-                        "rewrite_canvas_document",
-                        {
-                            "document_id": "canvas-1",
-                            "content": "# Yeni Taslak\n\n- Güncellendi",
-                            "format": "markdown",
-                            "language": "markdown",
-                        },
-                        call_id="tool-call-1",
-                    ),
-                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=3, total_tokens=5)),
-                ]
-            ),
-            iter(
-                [
-                    self._stream_chunk(content="Canvas gerçekten güncellendi."),
+                    self._stream_chunk(content="Tamam, şimdilik Canvas'a dokunmuyorum. Shoulder press için 12.5-15 kg ile başla."),
                     self._stream_chunk(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=4, total_tokens=6)),
                 ]
             ),
         ]
 
-        initial_canvas_documents = [
+        prior_turn_messages = [
             {
-                "id": "canvas-1",
-                "title": "Taslak.md",
-                "format": "markdown",
-                "language": "markdown",
-                "content": "# Eski Taslak\n\n- Bekliyor",
-            }
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "tc1",
+                        "type": "function",
+                        "function": {
+                            "name": "batch_canvas_edits",
+                            "arguments": '{"document_id":"canvas-1","operations":[]}',
+                        },
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "tc1", "content": '{"status":"ok"}'},
+            {"role": "user", "content": "Şimdilik Canvas'ı elleme, sadece ağırlık önerisi ver."},
         ]
 
         with patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create:
             events = list(
                 run_agent_stream(
-                    [{"role": "user", "content": "Canvas üzerindeki aktif belgeyi güncelle."}],
+                    prior_turn_messages,
                     "deepseek-chat",
                     3,
                     ["rewrite_canvas_document"],
-                    initial_canvas_documents=initial_canvas_documents,
-                    initial_canvas_active_document_id="canvas-1",
                 )
             )
 
         answer_deltas = [event["text"] for event in events if event["type"] == "answer_delta"]
-        self.assertEqual(answer_deltas, ["Canvas gerçekten güncellendi."])
-        self.assertTrue(any(event["type"] == "tool_result" and event["tool"] == "rewrite_canvas_document" for event in events))
+        self.assertEqual(answer_deltas, ["Tamam, şimdilik Canvas'a dokunmuyorum. Shoulder press için 12.5-15 kg ile başla."])
+        self.assertFalse(any(event["type"] == "tool_result" for event in events))
 
         usage_event = next(event for event in events if event["type"] == "usage")
-        self.assertEqual(usage_event["model_call_count"], 3)
-        self.assertTrue(usage_event["model_calls"][1]["is_retry"])
-        self.assertEqual(usage_event["model_calls"][1]["retry_reason"], "canvas_mutation_skipped")
-
-        second_call_messages = mocked_create.call_args_list[1].kwargs["messages"]
-        retry_messages = [
-            message
-            for message in second_call_messages
-            if CANVAS_MUTATION_RETRY_MARKER in str(message.get("content") or "")
-        ]
-        self.assertEqual(len(retry_messages), 1)
-
-        tool_capture_event = next(event for event in events if event["type"] == "tool_capture")
-        self.assertTrue(tool_capture_event["successful_canvas_mutation"])
-        self.assertEqual(tool_capture_event["canvas_documents"][0]["content"], "# Yeni Taslak\n\n- Güncellendi")
-        first_tool_capture_index = next(index for index, event in enumerate(events) if event["type"] == "tool_capture")
-        first_answer_index = next(index for index, event in enumerate(events) if event["type"] == "answer_delta")
-        self.assertLess(first_tool_capture_index, first_answer_index)
+        self.assertEqual(usage_event["model_call_count"], 1)
+        self.assertFalse(any(call["is_retry"] for call in usage_event["model_calls"]))
+        self.assertEqual(mocked_create.call_count, 1)
 
     def test_run_agent_stream_accepts_python_literal_tool_call_arguments(self):
         responses = [
@@ -19302,104 +19256,6 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             self.assertNotIn("message_id", result)
             self.assertNotIn("created_at", result)
             self.assertIn("saved", summary)
-
-    # ------------------------------------------------------------------
-    # Canvas mutation structural skip detection
-    # ------------------------------------------------------------------
-    def _canvas_prior_mutation_messages(self, user_text="Hepsini ekleyelim", assistant_text=""):
-        """Build a minimal message list where a canvas mutation tool was called before the latest user."""
-        prior_assistant = {
-            "role": "assistant",
-            "tool_calls": [{"function": {"name": "batch_canvas_edits"}, "id": "tc1"}],
-        }
-        tool_result = {"role": "tool", "content": '{"status": "ok"}', "tool_call_id": "tc1"}
-        msgs = [prior_assistant, tool_result, {"role": "user", "content": user_text}]
-        if assistant_text:
-            msgs.append({"role": "assistant", "content": assistant_text})
-        return msgs
-
-    def test_canvas_mutation_skipped_structurally_detects_hallucination(self):
-        # Prior canvas mutations + response mentions canvas + no tool called this turn → True
-        messages = self._canvas_prior_mutation_messages(
-            assistant_text="Canvas'taki sistem promptu tamamen yeniden yapılandırıldı."
-        )
-        self.assertTrue(_canvas_mutation_skipped_structurally(
-            "Canvas'taki sistem promptu tamamen yeniden yapılandırıldı.",
-            messages,
-            list(CANVAS_MUTATION_TOOL_NAMES),
-        ))
-
-    def test_canvas_mutation_skipped_structurally_exact_screenshot_text(self):
-        # Reproduce the exact failing pattern from the exported conversation
-        text = "Yapıldı. Canvas\u2019taki Kimya Manyağı Sistem Promptu tamamen yeniden yapılandırıldı ve Rick & House esintili tüm öneriler dahil edildi."
-        messages = self._canvas_prior_mutation_messages(assistant_text=text)
-        self.assertTrue(_canvas_mutation_skipped_structurally(
-            text, messages, list(CANVAS_MUTATION_TOOL_NAMES),
-        ))
-
-    def test_canvas_mutation_skipped_structurally_no_prior_mutations(self):
-        # No prior canvas mutations in the conversation → False even if canvas is mentioned
-        messages = [
-            {"role": "user", "content": "Canvas düzenle"},
-            {"role": "assistant", "content": "Canvas'a ekledim."},
-        ]
-        self.assertFalse(_canvas_mutation_skipped_structurally(
-            "Canvas'a ekledim.", messages, list(CANVAS_MUTATION_TOOL_NAMES),
-        ))
-
-    def test_canvas_mutation_skipped_structurally_no_canvas_in_response(self):
-        # Prior mutations exist but model response does not mention canvas → False
-        messages = self._canvas_prior_mutation_messages(assistant_text="Tamam, eklendi.")
-        self.assertFalse(_canvas_mutation_skipped_structurally(
-            "Tamam, eklendi.", messages, list(CANVAS_MUTATION_TOOL_NAMES),
-        ))
-
-    def test_canvas_mutation_skipped_structurally_tool_was_called_this_turn(self):
-        # Prior mutations exist, canvas mentioned, but a mutation tool was also called this turn → False
-        prior_assistant = {
-            "role": "assistant",
-            "tool_calls": [{"function": {"name": "batch_canvas_edits"}, "id": "tc1"}],
-        }
-        tool_result = {"role": "tool", "content": '{"status": "ok"}', "tool_call_id": "tc1"}
-        this_turn_assistant = {
-            "role": "assistant",
-            "tool_calls": [{"function": {"name": "batch_canvas_edits"}, "id": "tc2"}],
-        }
-        messages = [
-            prior_assistant, tool_result,
-            {"role": "user", "content": "Ekleyelim"},
-            this_turn_assistant,
-            {"role": "tool", "content": '{"status": "ok"}', "tool_call_id": "tc2"},
-        ]
-        self.assertFalse(_canvas_mutation_skipped_structurally(
-            "Canvas güncellendi.", messages, list(CANVAS_MUTATION_TOOL_NAMES),
-        ))
-
-    def test_canvas_mutation_skipped_structurally_no_tools_in_prompt(self):
-        # No canvas mutation tools available in prompt → False regardless of history
-        messages = self._canvas_prior_mutation_messages(assistant_text="Canvas güncellendi.")
-        self.assertFalse(_canvas_mutation_skipped_structurally(
-            "Canvas güncellendi.", messages, [],
-        ))
-
-    def test_conversation_has_prior_canvas_mutations_positive(self):
-        messages = self._canvas_prior_mutation_messages()
-        self.assertTrue(_conversation_has_prior_canvas_mutations(messages))
-
-    def test_conversation_has_prior_canvas_mutations_negative(self):
-        # No tool calls at all
-        messages = [
-            {"role": "assistant", "content": "Merhaba"},
-            {"role": "user", "content": "Ekleyelim"},
-        ]
-        self.assertFalse(_conversation_has_prior_canvas_mutations(messages))
-
-    def test_response_mentions_canvas(self):
-        self.assertTrue(_response_mentions_canvas("Canvas'taki belge güncellendi."))
-        self.assertTrue(_response_mentions_canvas("I updated the canvas."))
-        self.assertFalse(_response_mentions_canvas("No changes here."))
-        self.assertFalse(_response_mentions_canvas(""))
-
 
 class TestConversationHasClarificationToolCall(unittest.TestCase):
     """Tests for the fixed _conversation_has_clarification_tool_call.
