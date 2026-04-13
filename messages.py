@@ -313,6 +313,31 @@ def _normalize_conversation_memory_entries(entries) -> list[dict]:
     return normalized_entries
 
 
+def _normalize_persona_memory_entries(entries) -> list[dict]:
+    normalized_entries: list[dict] = []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        key = str(entry.get("key") or "").strip()
+        value = str(entry.get("value") or "").strip()
+        created_at = str(entry.get("created_at") or "").strip()
+        try:
+            entry_id = int(entry.get("id"))
+        except (TypeError, ValueError):
+            entry_id = None
+        if not key or not value:
+            continue
+        normalized_entries.append(
+            {
+                "id": entry_id,
+                "key": key,
+                "value": value,
+                "created_at": created_at,
+            }
+        )
+    return normalized_entries
+
+
 def build_conversation_memory_section(entries) -> list[str]:
     normalized_entries = _normalize_conversation_memory_entries(entries)
     if not normalized_entries:
@@ -336,6 +361,30 @@ def build_conversation_memory_section(entries) -> list[str]:
         entry_prefix = f"#{entry_id}" if isinstance(entry_id, int) and entry_id > 0 else "#?"
         parts.append(
             f"- {entry_prefix} [{entry['entry_type']}] {_format_conversation_memory_timestamp(entry.get('created_at'))} - {entry['key']}: {entry['value']}"
+        )
+    parts.append("")
+    return parts
+
+
+def build_persona_memory_section(entries) -> list[str]:
+    normalized_entries = _normalize_persona_memory_entries(entries)
+    if not normalized_entries:
+        return []
+
+    seen: dict[str, int] = {}
+    for index, entry in enumerate(normalized_entries):
+        seen[entry["key"]] = index
+    normalized_entries = [entry for index, entry in enumerate(normalized_entries) if seen.get(entry["key"]) == index]
+
+    parts = [
+        "## Persona Memory",
+        "*Shared durable memory for the currently active persona. It persists across conversations that use this same persona. Prefer saving stable persona-scoped facts here rather than chat-only details.*\n",
+    ]
+    for entry in normalized_entries:
+        entry_id = entry.get("id")
+        entry_prefix = f"#{entry_id}" if isinstance(entry_id, int) and entry_id > 0 else "#?"
+        parts.append(
+            f"- {entry_prefix} {_format_conversation_memory_timestamp(entry.get('created_at'))} - {entry['key']}: {entry['value']}"
         )
     parts.append("")
     return parts
@@ -2096,6 +2145,7 @@ def _build_runtime_dynamic_state_parts(
     *,
     runtime_tool_names: list[str],
     user_profile_context=None,
+    persona_memory=None,
     conversation_memory=None,
     scratchpad: str = "",
     scratchpad_sections=None,
@@ -2148,6 +2198,10 @@ def _build_runtime_dynamic_state_parts(
             )
         parts.append("")
 
+    persona_memory_section = build_persona_memory_section(persona_memory)
+    if persona_memory_section:
+        parts.extend(persona_memory_section)
+
     conversation_memory_section = build_conversation_memory_section(conversation_memory)
     if conversation_memory_section:
         parts.extend(conversation_memory_section)
@@ -2172,6 +2226,10 @@ def _build_runtime_static_parts(
     workspace_root: str | None = None,
 ) -> list[str]:
     preferences_text = (user_preferences or "").strip()
+    persona_memory_tools_enabled = any(
+        name in {"save_to_persona_memory", "delete_persona_memory_entry"}
+        for name in runtime_tool_names
+    )
     conversation_memory_tools_enabled = any(
         name in {"save_to_conversation_memory", "delete_conversation_memory_entry"}
         for name in runtime_tool_names
@@ -2224,6 +2282,19 @@ def _build_runtime_static_parts(
     if policies:
         parts.append("## Important Policies\n" + "\n".join(f"- {policy}" for policy in policies) + "\n")
 
+    if persona_memory_tools_enabled:
+        parts.append("## Persona Memory Write Policy")
+        parts.append(
+            "- **Use save_to_persona_memory** for stable persona-scoped facts that should persist across future conversations using this same persona.\n"
+            "- **DO save**: standing persona preferences, recurring conventions, reusable repo or domain facts tied to this persona's work, and durable details broader than one chat but narrower than global scratchpad memory.\n"
+            "- **Default away from persona memory**: if the detail only matters for the current chat, save it to conversation memory instead.\n"
+            "- **Use scratchpad instead** for truly cross-persona, cross-conversation durable user memory.\n"
+            "- **DO NOT save**: one-off tasks, temporary plans, raw tool outputs, or volatile chat state.\n"
+            "- **Style**: `key` should be a short label and `value` should be one compact factual line.\n"
+            "- **Cleanup**: If an entry becomes wrong or obsolete, remove it with delete_persona_memory_entry."
+        )
+        parts.append("")
+
     if conversation_memory_tools_enabled:
         parts.append("## Conversation Memory Write Policy")
         parts.append(
@@ -2262,6 +2333,7 @@ def build_runtime_context_injection(
     tool_trace_context=None,
     tool_memory_context=None,
     user_profile_context=None,
+    persona_memory=None,
     conversation_memory=None,
     now=None,
     scratchpad="",
@@ -2296,6 +2368,7 @@ def build_runtime_context_injection(
             _build_runtime_dynamic_state_parts(
                 runtime_tool_names=resolved_tool_names,
                 user_profile_context=user_profile_context,
+                persona_memory=persona_memory,
                 conversation_memory=conversation_memory,
                 scratchpad=scratchpad,
                 scratchpad_sections=scratchpad_sections,
@@ -2335,6 +2408,7 @@ def build_runtime_system_message(
     all_clarification_rounds: list[dict] | None = None,
     retrieved_context=None,
     user_profile_context=None,
+    persona_memory=None,
     conversation_memory=None,
     tool_trace_context=None,
     tool_memory_context=None,
@@ -2370,10 +2444,6 @@ def build_runtime_system_message(
             workspace_root=workspace_root,
         )
     runtime_tool_names = resolved_runtime_tool_names
-    conversation_memory_tools_enabled = any(
-        name in {"save_to_conversation_memory", "delete_conversation_memory_entry"}
-        for name in runtime_tool_names
-    )
     if canvas_payload is None:
         canvas_payload = _build_canvas_prompt_payload(
             canvas_documents,
@@ -2400,6 +2470,7 @@ def build_runtime_system_message(
             _build_runtime_dynamic_state_parts(
                 runtime_tool_names=runtime_tool_names,
                 user_profile_context=user_profile_context,
+                persona_memory=persona_memory,
                 conversation_memory=conversation_memory,
                 scratchpad=scratchpad,
                 scratchpad_sections=scratchpad_sections,
@@ -2448,6 +2519,7 @@ def prepend_runtime_context(
     all_clarification_rounds: list[dict] | None = None,
     retrieved_context=None,
     user_profile_context=None,
+    persona_memory=None,
     conversation_memory=None,
     tool_trace_context=None,
     tool_memory_context=None,
@@ -2506,6 +2578,7 @@ def prepend_runtime_context(
             all_clarification_rounds=all_clarification_rounds,
             retrieved_context=retrieved_context,
             user_profile_context=user_profile_context,
+            persona_memory=persona_memory,
             conversation_memory=conversation_memory,
             tool_trace_context=tool_trace_context,
             tool_memory_context=tool_memory_context,
@@ -2551,6 +2624,7 @@ def prepend_runtime_context(
             tool_trace_context=tool_trace_context,
             tool_memory_context=tool_memory_context,
             user_profile_context=user_profile_context,
+            persona_memory=persona_memory,
             conversation_memory=conversation_memory,
             scratchpad=scratchpad,
             scratchpad_sections=scratchpad_sections,

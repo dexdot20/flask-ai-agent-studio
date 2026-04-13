@@ -108,6 +108,7 @@ from db import (
     get_db,
     get_file_asset,
     get_image_asset,
+    get_persona_memory,
     get_user_profile_entries,
     get_video_asset,
     insert_conversation_memory_entry,
@@ -119,6 +120,7 @@ from db import (
     read_image_asset_bytes,
     save_app_settings,
     serialize_message_metadata,
+    revert_conversation_state_mutations,
     upsert_user_profile_entry,
 )
 from doc_service import (
@@ -745,6 +747,134 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             build_conversation_assistant_behavior(conversation_id, get_app_settings()),
             build_persona_preferences(analyst_persona),
         )
+
+    def test_persona_memory_api_crud(self):
+        response = self.client.post(
+            "/api/personas",
+            json={
+                "name": "Builder",
+                "general_instructions": "Stay practical.",
+                "ai_personality": "Sound steady.",
+            },
+        )
+        self.assertEqual(response.status_code, 201)
+        persona = response.get_json()["persona"]
+
+        response = self.client.post(
+            f"/api/personas/{persona['id']}/memory",
+            json={"key": "Repo style", "value": "Prefer concise progress updates."},
+        )
+        self.assertEqual(response.status_code, 201)
+        payload = response.get_json()
+        entry = payload["entry"]
+        self.assertEqual(payload["persona_memory_count"], 1)
+        self.assertEqual(payload["persona_memory"][0]["key"], "Repo style")
+
+        response = self.client.patch(
+            f"/api/personas/{persona['id']}/memory/{entry['id']}",
+            json={"value": "Prefer terse progress updates."},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["entry"]["value"], "Prefer terse progress updates.")
+
+        response = self.client.get(f"/api/personas/{persona['id']}/memory")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["persona_memory_count"], 1)
+        self.assertEqual(payload["persona_memory"][0]["value"], "Prefer terse progress updates.")
+
+        response = self.client.delete(f"/api/personas/{persona['id']}/memory/{entry['id']}")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["persona_memory_count"], 0)
+        self.assertEqual(payload["persona_memory"], [])
+        self.assertEqual(get_persona_memory(persona["id"]), [])
+
+    def test_execute_tool_saves_persona_memory_and_chat_route_injects_it_for_same_persona(self):
+        response = self.client.post(
+            "/api/personas",
+            json={
+                "name": "Planner",
+                "general_instructions": "Track progress carefully.",
+                "ai_personality": "Sound calm.",
+            },
+        )
+        self.assertEqual(response.status_code, 201)
+        persona = response.get_json()["persona"]
+
+        response = self.client.post(
+            "/api/conversations",
+            json={"title": "Persona Source", "model": "deepseek-chat", "persona_id": persona["id"]},
+        )
+        self.assertEqual(response.status_code, 201)
+        source_conversation_id = response.get_json()["id"]
+
+        response = self.client.post(
+            "/api/conversations",
+            json={"title": "Persona Target", "model": "deepseek-chat", "persona_id": persona["id"]},
+        )
+        self.assertEqual(response.status_code, 201)
+        target_conversation_id = response.get_json()["id"]
+
+        result, summary = _execute_tool(
+            "save_to_persona_memory",
+            {
+                "key": "Repo style",
+                "value": "Prefer terse progress updates.",
+            },
+            runtime_state={"agent_context": {"conversation_id": source_conversation_id}},
+        )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["persona_id"], persona["id"])
+        self.assertEqual(summary, "Persona memory saved: Repo style")
+        self.assertEqual(get_persona_memory(persona["id"])[0]["value"], "Prefer terse progress updates.")
+
+        save_app_settings(
+            {
+                "user_preferences": "",
+                "max_steps": "1",
+                "active_tools": json.dumps(["save_to_persona_memory", "delete_persona_memory_entry"], ensure_ascii=False),
+                "rag_auto_inject": "false",
+            }
+        )
+
+        captured = {}
+
+        def fake_run_agent_stream(api_messages, *args, **kwargs):
+            captured["api_messages"] = api_messages
+            return iter(
+                [
+                    {"type": "answer_start"},
+                    {"type": "answer_delta", "text": "OK"},
+                    {"type": "tool_capture", "tool_results": []},
+                    {"type": "done"},
+                ]
+            )
+
+        with patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream), patch(
+            "routes.chat.sync_conversations_to_rag_safe"
+        ):
+            response = self.client.post(
+                "/chat",
+                json={
+                    "conversation_id": target_conversation_id,
+                    "model": "deepseek-chat",
+                    "messages": [{"role": "user", "content": "Merhaba"}],
+                },
+            )
+            response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        system_text = "\n\n".join(
+            str(message.get("content") or "")
+            for message in captured["api_messages"]
+            if message.get("role") == "system"
+        )
+        self.assertIn("## Persona Memory", system_text)
+        self.assertIn("Repo style: Prefer terse progress updates.", system_text)
+        self.assertIn("## Persona Memory Write Policy", system_text)
 
     def test_delete_conversation_message_soft_deletes_it_and_returns_filtered_history(self):
         conversation_id = self._create_conversation()
@@ -3848,6 +3978,10 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn('id="openrouter-app-title-input"', html)
         self.assertIn('id="login-session-timeout-minutes-input"', html)
         self.assertIn('id="conversation-memory-enabled-toggle"', html)
+        self.assertIn('id="persona-memory-list"', html)
+        self.assertIn('id="persona-memory-key-input"', html)
+        self.assertIn('id="persona-memory-value-input"', html)
+        self.assertIn('id="persona-memory-save-btn"', html)
         self.assertIn('id="ocr-enabled-toggle"', html)
         self.assertIn('id="rag-enabled-toggle"', html)
         self.assertIn('id="youtube-transcript-model-size-select"', html)
@@ -3879,6 +4013,8 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         self.assertIn("save_to_conversation_memory", [tool["name"] for tool in assistant_tools])
         self.assertIn("delete_conversation_memory_entry", [tool["name"] for tool in assistant_tools])
+        self.assertIn("save_to_persona_memory", [tool["name"] for tool in assistant_tools])
+        self.assertIn("delete_persona_memory_entry", [tool["name"] for tool in assistant_tools])
 
         self.assertIn("read_file", [tool["name"] for tool in workspace_tools])
         self.assertIn("validate_project_workspace", [tool["name"] for tool in workspace_tools])
@@ -3897,6 +4033,8 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         self.assertEqual(assistant_labels["save_to_conversation_memory"], "Save chat memory")
         self.assertEqual(assistant_labels["delete_conversation_memory_entry"], "Delete chat memory")
+        self.assertEqual(assistant_labels["save_to_persona_memory"], "Save persona memory")
+        self.assertEqual(assistant_labels["delete_persona_memory_entry"], "Delete persona memory")
         self.assertEqual(assistant_labels["sub_agent"], "Web research helper")
         self.assertEqual(assistant_labels["search_tool_memory"], "Search remembered research")
         self.assertEqual(research_labels["fetch_url_summarized"], "Summarize URL")
@@ -19256,6 +19394,101 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             self.assertNotIn("message_id", result)
             self.assertNotIn("created_at", result)
             self.assertIn("saved", summary)
+
+    def test_save_to_persona_memory_result_excludes_internal_fields(self):
+        """The tool result for save_to_persona_memory should not include
+        verbose internal DB fields like id, message_id, or created_at."""
+        from agent import _run_save_to_persona_memory
+
+        with self.app.app_context():
+            response = self.client.post(
+                "/api/personas",
+                json={
+                    "name": "Persona Tool",
+                    "general_instructions": "Stay practical.",
+                    "ai_personality": "Sound calm.",
+                },
+            )
+            persona = response.get_json()["persona"]
+            response = self.client.post(
+                "/api/conversations",
+                json={"title": "Persona Memory Tool", "model": "deepseek-chat", "persona_id": persona["id"]},
+            )
+            conv_id = response.get_json()["id"]
+            runtime_state = {
+                "agent_context": {"conversation_id": conv_id, "source_message_id": None},
+            }
+            result, summary = _run_save_to_persona_memory(
+                {"key": "style", "value": "Prefer terse updates."},
+                runtime_state,
+            )
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result["key"], "style")
+            self.assertEqual(result["persona_id"], persona["id"])
+            self.assertFalse(result.get("updated_existing", False))
+            self.assertNotIn("entry", result)
+            self.assertNotIn("id", result)
+            self.assertNotIn("message_id", result)
+            self.assertNotIn("created_at", result)
+            self.assertIn("saved", summary)
+
+    def test_persona_memory_persists_through_conversation_state_reverts(self):
+        response = self.client.post(
+            "/api/personas",
+            json={
+                "name": "Rollback Safe Persona",
+                "general_instructions": "Stay practical.",
+                "ai_personality": "Sound calm.",
+            },
+        )
+        self.assertEqual(response.status_code, 201)
+        persona = response.get_json()["persona"]
+
+        response = self.client.post(
+            "/api/conversations",
+            json={"title": "Rollback Conversation", "model": "deepseek-chat", "persona_id": persona["id"]},
+        )
+        self.assertEqual(response.status_code, 201)
+        conversation_id = response.get_json()["id"]
+
+        with self.app.app_context():
+            with get_db() as conn:
+                baseline_message_id = insert_message(conn, conversation_id, "assistant", "Baseline memory message")
+                later_message_id = insert_message(conn, conversation_id, "assistant", "Mutated memory message")
+
+            insert_conversation_memory_entry(
+                conversation_id,
+                "task_context",
+                "critical-plan",
+                "baseline memory",
+                mutation_context={"source_message_id": baseline_message_id},
+            )
+            insert_conversation_memory_entry(
+                conversation_id,
+                "task_context",
+                "critical-plan",
+                "mutated memory",
+                mutation_context={"source_message_id": later_message_id},
+            )
+
+        response = self.client.post(
+            f"/api/personas/{persona['id']}/memory",
+            json={"key": "Repo style", "value": "Prefer concise progress updates."},
+        )
+        self.assertEqual(response.status_code, 201)
+
+        rollback_result = revert_conversation_state_mutations(conversation_id, source_message_ids=[later_message_id])
+        self.assertGreaterEqual(rollback_result["reverted_count"], 1)
+
+        memory_entries = get_conversation_memory(conversation_id)
+        baseline_entry = next((entry for entry in memory_entries if entry.get("key") == "critical-plan"), None)
+        self.assertIsNotNone(baseline_entry)
+        self.assertEqual(baseline_entry["value"], "baseline memory")
+
+        persona_memory = get_persona_memory(persona["id"])
+        self.assertEqual(len(persona_memory), 1)
+        self.assertEqual(persona_memory[0]["key"], "Repo style")
+        self.assertEqual(persona_memory[0]["value"], "Prefer concise progress updates.")
 
 class TestConversationHasClarificationToolCall(unittest.TestCase):
     """Tests for the fixed _conversation_has_clarification_tool_call.

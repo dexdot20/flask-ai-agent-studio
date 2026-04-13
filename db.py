@@ -295,6 +295,16 @@ def init_db() -> None:
                 FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
                 FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE SET NULL
             );
+            CREATE TABLE IF NOT EXISTS persona_memory (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                persona_id INTEGER NOT NULL,
+                message_id INTEGER,
+                key        TEXT NOT NULL,
+                value      TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (persona_id) REFERENCES personas(id) ON DELETE CASCADE,
+                FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE SET NULL
+            );
             CREATE TABLE IF NOT EXISTS model_invocations (
                 id                   INTEGER PRIMARY KEY AUTOINCREMENT,
                 conversation_id      INTEGER NOT NULL,
@@ -406,6 +416,8 @@ def init_db() -> None:
             ON video_assets(conversation_id, created_at, video_id);
             CREATE INDEX IF NOT EXISTS idx_conversation_memory_conversation_created
             ON conversation_memory(conversation_id, created_at, id);
+            CREATE INDEX IF NOT EXISTS idx_persona_memory_persona_created
+            ON persona_memory(persona_id, created_at, id);
             CREATE INDEX IF NOT EXISTS idx_model_invocations_conversation_created
             ON model_invocations(conversation_id, created_at, id);
             CREATE INDEX IF NOT EXISTS idx_model_invocations_assistant_message
@@ -1067,6 +1079,219 @@ def replace_conversation_memory_snapshot(
 
     with get_db() as connection:
         return _apply(connection)
+
+
+def _persona_memory_row_to_dict(row) -> dict | None:
+    if not row:
+        return None
+    return {
+        "id": int(row["id"]),
+        "persona_id": int(row["persona_id"]),
+        "message_id": int(row["message_id"]) if row["message_id"] is not None else None,
+        "key": str(row["key"] or "").strip(),
+        "value": str(row["value"] or "").strip(),
+        "created_at": str(row["created_at"] or "").strip(),
+    }
+
+
+def _normalize_persona_memory_key(value: str, max_length: int = 120) -> str:
+    normalized = " ".join(str(value or "").strip().split())[:max_length]
+    if not normalized:
+        raise ValueError("Persona memory key is required.")
+    return normalized
+
+
+def _normalize_persona_memory_value(value: str, max_length: int = 1500) -> str:
+    normalized = " ".join(str(value or "").strip().split())[:max_length]
+    if not normalized:
+        raise ValueError("Persona memory value is required.")
+    return normalized
+
+
+def _find_persona_memory_entry_by_key(persona_id: int, key: str) -> dict | None:
+    normalized_persona_id = int(persona_id or 0)
+    normalized_key = _normalize_persona_memory_key(key)
+    if normalized_persona_id <= 0 or not normalized_key:
+        return None
+
+    with get_db() as conn:
+        row = conn.execute(
+            """SELECT id, persona_id, message_id, key, value, created_at
+               FROM persona_memory
+               WHERE persona_id = ?
+                 AND lower(key) = lower(?)
+               ORDER BY created_at DESC, id DESC
+               LIMIT 1""",
+            (normalized_persona_id, normalized_key),
+        ).fetchone()
+    return _persona_memory_row_to_dict(row)
+
+
+def insert_persona_memory_entry(
+    persona_id: int,
+    key: str,
+    value: str,
+    message_id: int | None = None,
+    *,
+    mutation_context: dict | None = None,
+) -> dict:
+    normalized_persona_id = int(persona_id or 0)
+    if normalized_persona_id <= 0:
+        raise ValueError("persona_id is required.")
+
+    normalized_key = _normalize_persona_memory_key(key)
+    normalized_value = _normalize_persona_memory_value(value)
+    normalized_message_id = int(message_id) if message_id not in (None, "") and int(message_id) > 0 else None
+    existing_entry = _find_persona_memory_entry_by_key(normalized_persona_id, normalized_key)
+
+    with get_db() as conn:
+        if existing_entry:
+            entry_id = int(existing_entry["id"])
+            conn.execute(
+                """UPDATE persona_memory
+                   SET message_id = ?, key = ?, value = ?, created_at = datetime('now')
+                   WHERE id = ? AND persona_id = ?""",
+                (
+                    normalized_message_id,
+                    normalized_key,
+                    normalized_value,
+                    entry_id,
+                    normalized_persona_id,
+                ),
+            )
+        else:
+            cursor = conn.execute(
+                """INSERT INTO persona_memory (persona_id, message_id, key, value)
+                   VALUES (?, ?, ?, ?)""",
+                (
+                    normalized_persona_id,
+                    normalized_message_id,
+                    normalized_key,
+                    normalized_value,
+                ),
+            )
+            entry_id = int(cursor.lastrowid)
+        row = conn.execute(
+            """SELECT id, persona_id, message_id, key, value, created_at
+               FROM persona_memory
+               WHERE id = ?""",
+            (entry_id,),
+        ).fetchone()
+
+    entry = _persona_memory_row_to_dict(row) or {}
+    entry["updated_existing"] = existing_entry is not None
+    return entry
+
+
+def get_persona_memory_entry(entry_id: int, persona_id: int | None = None) -> dict | None:
+    normalized_entry_id = int(entry_id or 0)
+    if normalized_entry_id <= 0:
+        return None
+
+    normalized_persona_id = int(persona_id or 0) if persona_id not in (None, "") else None
+    query = [
+        "SELECT id, persona_id, message_id, key, value, created_at",
+        "FROM persona_memory",
+        "WHERE id = ?",
+    ]
+    params: list[int] = [normalized_entry_id]
+    if normalized_persona_id is not None and normalized_persona_id > 0:
+        query.append("AND persona_id = ?")
+        params.append(normalized_persona_id)
+
+    with get_db() as conn:
+        row = conn.execute("\n".join(query), tuple(params)).fetchone()
+    return _persona_memory_row_to_dict(row)
+
+
+def update_persona_memory_entry(
+    entry_id: int,
+    persona_id: int,
+    key: str,
+    value: str,
+    message_id: int | None = None,
+    *,
+    mutation_context: dict | None = None,
+) -> dict | None:
+    normalized_entry_id = int(entry_id or 0)
+    normalized_persona_id = int(persona_id or 0)
+    if normalized_entry_id <= 0 or normalized_persona_id <= 0:
+        return None
+
+    current_entry = get_persona_memory_entry(normalized_entry_id, normalized_persona_id)
+    if not current_entry:
+        return None
+
+    normalized_key = _normalize_persona_memory_key(key)
+    normalized_value = _normalize_persona_memory_value(value)
+    normalized_message_id = (
+        int(message_id)
+        if message_id not in (None, "") and int(message_id) > 0
+        else current_entry.get("message_id")
+    )
+
+    with get_db() as conn:
+        conn.execute(
+            """UPDATE persona_memory
+               SET key = ?, value = ?, message_id = ?
+               WHERE id = ? AND persona_id = ?""",
+            (
+                normalized_key,
+                normalized_value,
+                normalized_message_id,
+                normalized_entry_id,
+                normalized_persona_id,
+            ),
+        )
+
+    updated_entry = get_persona_memory_entry(normalized_entry_id, normalized_persona_id)
+    return updated_entry
+
+
+def get_persona_memory(persona_id: int, limit: int = 200) -> list[dict]:
+    normalized_persona_id = int(persona_id or 0)
+    if normalized_persona_id <= 0:
+        return []
+
+    normalized_limit = max(1, min(500, int(limit or 200)))
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT id, persona_id, message_id, key, value, created_at
+               FROM (
+                   SELECT id, persona_id, message_id, key, value, created_at
+                   FROM persona_memory
+                   WHERE persona_id = ?
+                   ORDER BY created_at DESC, id DESC
+                   LIMIT ?
+               ) AS recent_persona_memory
+               ORDER BY created_at ASC, id ASC""",
+            (normalized_persona_id, normalized_limit),
+        ).fetchall()
+    return [entry for entry in (_persona_memory_row_to_dict(row) for row in rows) if entry]
+
+
+def delete_persona_memory_entry(
+    entry_id: int,
+    persona_id: int,
+    *,
+    mutation_context: dict | None = None,
+) -> bool:
+    normalized_entry_id = int(entry_id or 0)
+    normalized_persona_id = int(persona_id or 0)
+    if normalized_entry_id <= 0 or normalized_persona_id <= 0:
+        return False
+
+    current_entry = get_persona_memory_entry(normalized_entry_id, normalized_persona_id)
+    if not current_entry:
+        return False
+
+    with get_db() as conn:
+        cursor = conn.execute(
+            "DELETE FROM persona_memory WHERE id = ? AND persona_id = ?",
+            (normalized_entry_id, normalized_persona_id),
+        )
+    deleted = int(cursor.rowcount or 0) > 0
+    return deleted
 
 
 def _normalize_state_mutation_target_kind(value: str) -> str:

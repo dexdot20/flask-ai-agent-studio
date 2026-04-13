@@ -442,6 +442,67 @@ TOOL_SPECS = [
                 "guidance": "Use this when an earlier conversation-memory entry is no longer valid, was superseded, or should not keep influencing later turns.",
             },
         },
+        {
+            "name": "save_to_persona_memory",
+            "description": (
+                "Save one compact persona-scoped memory entry for the currently active persona. "
+                "This memory is shared across conversations that use the same persona. "
+                "If the same key already exists, the entry is refreshed instead of duplicated."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "string",
+                        "description": "Short label for the stable persona-scoped fact. Keep it compact and specific.",
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": "Single-line micro-summary of the information to remember across future conversations that use this persona.",
+                    },
+                },
+                "required": ["key", "value"],
+            },
+            "prompt": {
+                "purpose": "Writes one short persona-scoped memory entry that will be auto-injected in later conversations using this same persona.",
+                "inputs": {
+                    "key": "short label",
+                    "value": "one compact factual line",
+                },
+                "guidance": (
+                    "Use this for stable persona-scoped facts that should survive beyond the current chat, but are not broad enough for the global scratchpad. "
+                    "Prefer this for recurring conventions, reusable repo or domain facts tied to this persona's work, and other durable persona-level context. "
+                    "If the detail only matters for this current chat, save it to conversation memory instead. "
+                    "Do NOT save raw tool outputs, temporary plans, or one-off task state here. "
+                    "Reuse the same key when updating the same fact so persona memory stays compact."
+                ),
+            },
+        },
+        {
+            "name": "delete_persona_memory_entry",
+            "description": (
+                "Delete one outdated or incorrect persona memory entry by id. "
+                "Use this to clean up stale persona-scoped memory."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entry_id": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Persona memory entry id to remove.",
+                    },
+                },
+                "required": ["entry_id"],
+            },
+            "prompt": {
+                "purpose": "Removes one obsolete persona-scoped memory entry.",
+                "inputs": {
+                    "entry_id": "id shown in the Persona Memory prompt section",
+                },
+                "guidance": "Use this when an earlier persona-memory entry is no longer valid, was superseded, or should stop influencing future conversations for this persona.",
+            },
+        },
     {
         "name": "ask_clarifying_question",
         "description": (

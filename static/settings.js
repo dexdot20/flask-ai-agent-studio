@@ -83,6 +83,14 @@ const personaDeleteBtn = document.getElementById("persona-delete-btn");
 const personaNewBtn = document.getElementById("persona-new-btn");
 const personaStatusEl = document.getElementById("persona-status");
 const personaEditorTitleEl = document.getElementById("persona-editor-title");
+const personaMemoryListEl = document.getElementById("persona-memory-list");
+const personaMemoryKeyEl = document.getElementById("persona-memory-key-input");
+const personaMemoryValueEl = document.getElementById("persona-memory-value-input");
+const personaMemorySaveBtn = document.getElementById("persona-memory-save-btn");
+const personaMemoryCancelBtn = document.getElementById("persona-memory-cancel-btn");
+const personaMemoryDeleteBtn = document.getElementById("persona-memory-delete-btn");
+const personaMemoryStatusEl = document.getElementById("persona-memory-status");
+const personaMemoryNoteEl = document.getElementById("persona-memory-note");
 const temperatureEl = document.getElementById("temperature-input");
 const scratchpadListEl = document.getElementById("scratchpad-list");
 const scratchpadAddBtn = document.getElementById("scratchpad-add-btn");
@@ -357,6 +365,9 @@ let hasUnsavedChanges = false;
 let hasUnsavedSettingsChanges = false;
 let hasUnsavedPersonaChanges = false;
 let activePersonaId = null;
+let activePersonaMemoryEntryId = null;
+let isPersonaMemoryLoading = false;
+let personaMemoryByPersonaId = {};
 let draftCustomModels = Array.isArray(appSettings.custom_models)
   ? appSettings.custom_models.map((model) => normalizeDraftCustomModel(model))
   : [];
@@ -499,6 +510,355 @@ function setPersonaActionsDisabled(disabled) {
   }
 }
 
+function normalizePersonaMemoryEntryId(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const parsed = Number.parseInt(String(value), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function normalizePersonaMemoryEntries(entries) {
+  return (Array.isArray(entries) ? entries : [])
+    .map((entry) => {
+      const entryId = normalizePersonaMemoryEntryId(entry?.id);
+      const key = String(entry?.key || "").trim();
+      const value = String(entry?.value || "").trim();
+      const createdAt = String(entry?.created_at || "").trim();
+      if (!entryId || !key || !value) {
+        return null;
+      }
+      return {
+        id: entryId,
+        key,
+        value,
+        created_at: createdAt,
+      };
+    })
+    .filter(Boolean);
+}
+
+function getPersonaMemoryEntries(personaId = activePersonaId) {
+  const normalizedPersonaId = normalizePersonaId(personaId);
+  if (!normalizedPersonaId) {
+    return [];
+  }
+  return Array.isArray(personaMemoryByPersonaId[normalizedPersonaId])
+    ? personaMemoryByPersonaId[normalizedPersonaId]
+    : [];
+}
+
+function setPersonaMemoryEntries(personaId, entries) {
+  const normalizedPersonaId = normalizePersonaId(personaId);
+  if (!normalizedPersonaId) {
+    return [];
+  }
+  const normalizedEntries = normalizePersonaMemoryEntries(entries);
+  personaMemoryByPersonaId[normalizedPersonaId] = normalizedEntries;
+  return normalizedEntries;
+}
+
+function findPersonaMemoryEntryById(entryId, personaId = activePersonaId) {
+  const normalizedEntryId = normalizePersonaMemoryEntryId(entryId);
+  if (!normalizedEntryId) {
+    return null;
+  }
+  return getPersonaMemoryEntries(personaId).find((entry) => entry.id === normalizedEntryId) || null;
+}
+
+function setPersonaMemoryStatus(message, tone = "muted") {
+  if (!personaMemoryStatusEl) {
+    return;
+  }
+  personaMemoryStatusEl.textContent = message;
+  personaMemoryStatusEl.dataset.tone = tone;
+}
+
+function setPersonaMemoryControlsDisabled(disabled) {
+  const noPersonaSelected = !normalizePersonaId(activePersonaId);
+  if (personaMemoryKeyEl) {
+    personaMemoryKeyEl.disabled = disabled || noPersonaSelected;
+  }
+  if (personaMemoryValueEl) {
+    personaMemoryValueEl.disabled = disabled || noPersonaSelected;
+  }
+  if (personaMemorySaveBtn) {
+    personaMemorySaveBtn.disabled = disabled || noPersonaSelected;
+  }
+  if (personaMemoryCancelBtn) {
+    personaMemoryCancelBtn.disabled = disabled || noPersonaSelected || !activePersonaMemoryEntryId;
+  }
+  if (personaMemoryDeleteBtn) {
+    personaMemoryDeleteBtn.disabled = disabled || noPersonaSelected || !activePersonaMemoryEntryId;
+  }
+}
+
+function fillPersonaMemoryForm(entry) {
+  if (personaMemoryKeyEl) {
+    personaMemoryKeyEl.value = String(entry?.key || "");
+  }
+  if (personaMemoryValueEl) {
+    personaMemoryValueEl.value = String(entry?.value || "");
+    autoResize(personaMemoryValueEl);
+  }
+}
+
+function resetPersonaMemoryEditor({ preserveStatus = false } = {}) {
+  activePersonaMemoryEntryId = null;
+  fillPersonaMemoryForm(null);
+  if (personaMemorySaveBtn) {
+    personaMemorySaveBtn.textContent = "Save memory";
+  }
+  if (personaMemoryCancelBtn) {
+    personaMemoryCancelBtn.hidden = true;
+  }
+  if (personaMemoryDeleteBtn) {
+    personaMemoryDeleteBtn.hidden = true;
+  }
+  if (!preserveStatus) {
+    if (normalizePersonaId(activePersonaId)) {
+      setPersonaMemoryStatus("Ready to add shared persona memory", "muted");
+    } else {
+      setPersonaMemoryStatus("Save the persona first to manage shared memory.", "muted");
+    }
+  }
+  setPersonaMemoryControlsDisabled(isPersonaMemoryLoading);
+}
+
+function selectPersonaMemoryEntry(entryId) {
+  const entry = findPersonaMemoryEntryById(entryId);
+  if (!entry) {
+    resetPersonaMemoryEditor();
+    renderPersonaMemoryList();
+    return;
+  }
+
+  activePersonaMemoryEntryId = entry.id;
+  fillPersonaMemoryForm(entry);
+  if (personaMemorySaveBtn) {
+    personaMemorySaveBtn.textContent = "Update memory";
+  }
+  if (personaMemoryCancelBtn) {
+    personaMemoryCancelBtn.hidden = false;
+  }
+  if (personaMemoryDeleteBtn) {
+    personaMemoryDeleteBtn.hidden = false;
+  }
+  setPersonaMemoryStatus(`Editing memory: ${entry.key}`, "muted");
+  renderPersonaMemoryList();
+  setPersonaMemoryControlsDisabled(isPersonaMemoryLoading);
+}
+
+function renderPersonaMemoryList() {
+  if (!personaMemoryListEl) {
+    return;
+  }
+
+  const normalizedPersonaId = normalizePersonaId(activePersonaId);
+  personaMemoryListEl.innerHTML = "";
+  if (!normalizedPersonaId) {
+    personaMemoryListEl.innerHTML = '<p class="settings-copy">Create or select a saved persona before editing shared persona memory.</p>';
+    if (personaMemoryNoteEl) {
+      personaMemoryNoteEl.textContent = "Use this for stable persona-scoped facts shared across conversations. Stored entries are not auto-pruned.";
+    }
+    return;
+  }
+
+  const entries = getPersonaMemoryEntries(normalizedPersonaId);
+  if (!entries.length) {
+    personaMemoryListEl.innerHTML = '<p class="settings-copy">No persona memory yet. Add short key-value entries that should follow this persona across conversations.</p>';
+    if (personaMemoryNoteEl) {
+      personaMemoryNoteEl.textContent = "Use this for stable persona-scoped facts shared across conversations. Stored entries are not auto-pruned.";
+    }
+    return;
+  }
+
+  if (personaMemoryNoteEl) {
+    personaMemoryNoteEl.textContent = `${entries.length} shared persona memory entr${entries.length === 1 ? "y" : "ies"} currently stored. These entries are not auto-pruned.`;
+  }
+
+  entries.forEach((entry) => {
+    const row = document.createElement("div");
+    row.className = "model-management-row";
+    if (entry.id === activePersonaMemoryEntryId) {
+      row.classList.add("persona-row--active");
+    }
+
+    const meta = document.createElement("div");
+    meta.className = "model-management-row__meta";
+
+    const title = document.createElement("strong");
+    title.textContent = entry.key;
+
+    const subtitle = document.createElement("div");
+    subtitle.className = "model-management-row__subtitle";
+    subtitle.textContent = entry.value;
+
+    meta.append(title, subtitle);
+
+    const actions = document.createElement("div");
+    actions.className = "settings-inline-actions";
+
+    const editBtn = document.createElement("button");
+    editBtn.type = "button";
+    editBtn.className = "btn-ghost";
+    editBtn.textContent = "Edit";
+    editBtn.addEventListener("click", () => {
+      selectPersonaMemoryEntry(entry.id);
+    });
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "btn-ghost btn-ghost--danger";
+    deleteBtn.textContent = "Delete";
+    deleteBtn.addEventListener("click", () => {
+      void deleteActivePersonaMemoryEntry(entry.id);
+    });
+
+    actions.append(editBtn, deleteBtn);
+    row.append(meta, actions);
+    personaMemoryListEl.append(row);
+  });
+}
+
+async function loadPersonaMemory(personaId, { force = false } = {}) {
+  const normalizedPersonaId = normalizePersonaId(personaId);
+  if (!normalizedPersonaId) {
+    resetPersonaMemoryEditor();
+    renderPersonaMemoryList();
+    return [];
+  }
+
+  if (!force && Array.isArray(personaMemoryByPersonaId[normalizedPersonaId])) {
+    renderPersonaMemoryList();
+    if (normalizePersonaId(activePersonaId) === normalizedPersonaId) {
+      const entries = getPersonaMemoryEntries(normalizedPersonaId);
+      setPersonaMemoryStatus(entries.length ? "Persona memory ready" : "No persona memory yet", "muted");
+    }
+    setPersonaMemoryControlsDisabled(false);
+    return getPersonaMemoryEntries(normalizedPersonaId);
+  }
+
+  isPersonaMemoryLoading = true;
+  renderPersonaMemoryList();
+  setPersonaMemoryControlsDisabled(true);
+  setPersonaMemoryStatus("Loading persona memory...", "warning");
+
+  try {
+    const response = await fetch(`/api/personas/${normalizedPersonaId}/memory`);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || "Failed to load persona memory.");
+    }
+
+    const entries = setPersonaMemoryEntries(normalizedPersonaId, data.persona_memory);
+    if (normalizePersonaId(activePersonaId) === normalizedPersonaId) {
+      renderPersonaMemoryList();
+      setPersonaMemoryStatus(entries.length ? "Persona memory loaded" : "No persona memory yet", "muted");
+    }
+    return entries;
+  } catch (error) {
+    if (normalizePersonaId(activePersonaId) === normalizedPersonaId) {
+      setPersonaMemoryStatus(error.message || "Failed to load persona memory.", "error");
+    }
+    return [];
+  } finally {
+    isPersonaMemoryLoading = false;
+    setPersonaMemoryControlsDisabled(false);
+  }
+}
+
+async function saveActivePersonaMemoryEntry() {
+  const normalizedPersonaId = normalizePersonaId(activePersonaId);
+  if (!normalizedPersonaId) {
+    setPersonaMemoryStatus("Save the persona first to manage shared memory.", "warning");
+    return false;
+  }
+
+  const payload = {
+    key: personaMemoryKeyEl?.value.trim() || "",
+    value: personaMemoryValueEl?.value.trim() || "",
+  };
+  const isUpdate = Boolean(activePersonaMemoryEntryId);
+  if (!payload.key || !payload.value) {
+    setPersonaMemoryStatus("Both memory key and value are required.", "error");
+    return false;
+  }
+
+  setPersonaMemoryControlsDisabled(true);
+  setPersonaMemoryStatus(isUpdate ? "Updating persona memory..." : "Saving persona memory...", "warning");
+
+  try {
+    const response = await fetch(
+      isUpdate
+        ? `/api/personas/${normalizedPersonaId}/memory/${activePersonaMemoryEntryId}`
+        : `/api/personas/${normalizedPersonaId}/memory`,
+      {
+        method: isUpdate ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      },
+    );
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || "Persona memory save failed.");
+    }
+
+    setPersonaMemoryEntries(normalizedPersonaId, data.persona_memory);
+    if (isUpdate && data.entry?.id) {
+      selectPersonaMemoryEntry(data.entry.id);
+    } else {
+      resetPersonaMemoryEditor({ preserveStatus: true });
+      renderPersonaMemoryList();
+    }
+    setPersonaMemoryStatus(isUpdate ? "Persona memory updated" : "Persona memory saved", "success");
+    return true;
+  } catch (error) {
+    setPersonaMemoryStatus(error.message || "Persona memory save failed.", "error");
+    return false;
+  } finally {
+    setPersonaMemoryControlsDisabled(false);
+  }
+}
+
+async function deleteActivePersonaMemoryEntry(entryId = activePersonaMemoryEntryId) {
+  const normalizedPersonaId = normalizePersonaId(activePersonaId);
+  const entry = findPersonaMemoryEntryById(entryId, normalizedPersonaId);
+  if (!normalizedPersonaId || !entry) {
+    setPersonaMemoryStatus("Select a persona memory entry first.", "warning");
+    return false;
+  }
+
+  if (!window.confirm(`Delete persona memory "${entry.key}"?`)) {
+    return false;
+  }
+
+  setPersonaMemoryControlsDisabled(true);
+  setPersonaMemoryStatus("Deleting persona memory...", "warning");
+
+  try {
+    const response = await fetch(`/api/personas/${normalizedPersonaId}/memory/${entry.id}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || "Persona memory delete failed.");
+    }
+
+    setPersonaMemoryEntries(normalizedPersonaId, data.persona_memory);
+    resetPersonaMemoryEditor({ preserveStatus: true });
+    renderPersonaMemoryList();
+    setPersonaMemoryStatus(`Deleted persona memory: ${entry.key}`, "success");
+    return true;
+  } catch (error) {
+    setPersonaMemoryStatus(error.message || "Persona memory delete failed.", "error");
+    return false;
+  } finally {
+    setPersonaMemoryControlsDisabled(false);
+  }
+}
+
 function renderDefaultPersonaSelect() {
   if (!defaultPersonaEl) {
     return;
@@ -568,6 +928,16 @@ function selectPersonaForEditing(personaId) {
   clearPersonaDirty();
   renderPersonaList();
   setPersonaActionsDisabled(false);
+
+  resetPersonaMemoryEditor({ preserveStatus: true });
+  renderPersonaMemoryList();
+  if (activePersonaId) {
+    setPersonaMemoryStatus("Loading persona memory...", "warning");
+    void loadPersonaMemory(activePersonaId);
+  } else {
+    setPersonaMemoryStatus("Save the persona first to manage shared memory.", "muted");
+    setPersonaMemoryControlsDisabled(true);
+  }
 }
 
 function renderPersonaList() {
@@ -657,6 +1027,16 @@ function renderPersonaList() {
 function applyPersonaResponseData(data, { preserveSelection = true } = {}) {
   appSettings.personas = Array.isArray(data?.personas) ? data.personas : [];
   appSettings.default_persona_id = normalizePersonaId(data?.default_persona_id);
+  const availablePersonaIds = new Set(
+    getPersonas()
+      .map((persona) => normalizePersonaId(persona?.id))
+      .filter(Boolean),
+  );
+  Object.keys(personaMemoryByPersonaId).forEach((personaId) => {
+    if (!availablePersonaIds.has(normalizePersonaId(personaId))) {
+      delete personaMemoryByPersonaId[personaId];
+    }
+  });
   renderDefaultPersonaSelect();
 
   const responsePersonaId = normalizePersonaId(data?.persona?.id);
@@ -2476,6 +2856,9 @@ function applyFeatureAvailability() {
 }
 
 function applyServerSettingsData(data) {
+  personaMemoryByPersonaId = {};
+  activePersonaMemoryEntryId = null;
+  isPersonaMemoryLoading = false;
   appSettings.general_instructions = data.general_instructions || data.user_preferences || "";
   appSettings.ai_personality = data.ai_personality || "";
   appSettings.user_preferences = appSettings.general_instructions;
@@ -3212,6 +3595,19 @@ personaSaveBtn?.addEventListener("click", () => {
 });
 personaDeleteBtn?.addEventListener("click", () => {
   void deleteActivePersona();
+});
+personaMemoryValueEl?.addEventListener("input", () => {
+  autoResize(personaMemoryValueEl);
+});
+personaMemorySaveBtn?.addEventListener("click", () => {
+  void saveActivePersonaMemoryEntry();
+});
+personaMemoryCancelBtn?.addEventListener("click", () => {
+  resetPersonaMemoryEditor();
+  renderPersonaMemoryList();
+});
+personaMemoryDeleteBtn?.addEventListener("click", () => {
+  void deleteActivePersonaMemoryEntry();
 });
 addCustomModelBtn?.addEventListener("click", addCustomModelFromInputs);
   customModelCancelEditBtn?.addEventListener("click", () => {

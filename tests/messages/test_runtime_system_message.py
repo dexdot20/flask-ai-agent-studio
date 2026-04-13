@@ -861,11 +861,14 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
     def test_memory_tool_specs_separate_scratchpad_and_conversation_memory(self):
         scratchpad_guidance = TOOL_SPEC_BY_NAME["append_scratchpad"]["prompt"]["guidance"]
         conversation_guidance = TOOL_SPEC_BY_NAME["save_to_conversation_memory"]["prompt"]["guidance"]
+        persona_guidance = TOOL_SPEC_BY_NAME["save_to_persona_memory"]["prompt"]["guidance"]
 
         self.assertIn("conversation memory instead", scratchpad_guidance)
         self.assertIn("future responses or behavior across conversations", scratchpad_guidance)
         self.assertIn("default to conversation memory", conversation_guidance)
         self.assertIn("Multiple compact entries are better than one overloaded summary", conversation_guidance)
+        self.assertIn("current chat", persona_guidance)
+        self.assertIn("global scratchpad", persona_guidance)
 
     def test_search_tool_specs_allow_optional_conversation_memory_promotion(self):
         knowledge_base_spec = TOOL_SPEC_BY_NAME["search_knowledge_base"]
@@ -877,3 +880,24 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         self.assertIn("memory_key", tool_memory_spec["parameters"]["properties"])
         self.assertIn("survive later turns in this chat", knowledge_base_spec["prompt"]["guidance"])
         self.assertIn("survive later turns in this chat", tool_memory_spec["prompt"]["guidance"])
+
+    def test_runtime_system_message_renders_persona_memory_and_policy(self):
+        message = build_runtime_system_message(
+            active_tool_names=["save_to_persona_memory", "delete_persona_memory_entry"],
+            persona_memory=[
+                {
+                    "id": 5,
+                    "key": "Repo style",
+                    "value": "Prefer concise progress updates.",
+                    "created_at": "2026-04-08 09:15:00",
+                }
+            ],
+        )
+
+        content = message["content"]
+        self.assertIn("## Persona Memory", content)
+        self.assertIn("#5 09:15 - Repo style: Prefer concise progress updates.", content)
+        self.assertIn("Shared durable memory for the currently active persona", content)
+        self.assertIn("## Persona Memory Write Policy", content)
+        self.assertIn("save_to_persona_memory", content)
+        self.assertIn("conversation memory instead", content)

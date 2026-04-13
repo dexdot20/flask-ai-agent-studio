@@ -171,6 +171,8 @@ from tool_registry import TOOL_SPEC_BY_NAME
 TOOL_PERMISSION_LABELS = {
     "save_to_conversation_memory": "Save chat memory",
     "delete_conversation_memory_entry": "Delete chat memory",
+    "save_to_persona_memory": "Save persona memory",
+    "delete_persona_memory_entry": "Delete persona memory",
     "append_scratchpad": "Append persistent scratchpad",
     "replace_scratchpad": "Rewrite persistent scratchpad section",
     "read_scratchpad": "Read persistent scratchpad",
@@ -218,6 +220,8 @@ TOOL_PERMISSION_LABELS = {
 TOOL_PERMISSION_DESCRIPTIONS = {
     "save_to_conversation_memory": "Save a short chat-scoped memory entry for later turns in this conversation.",
     "delete_conversation_memory_entry": "Remove one outdated chat-scoped memory entry.",
+    "save_to_persona_memory": "Save a short persona-scoped memory entry shared across conversations using that persona.",
+    "delete_persona_memory_entry": "Remove one outdated persona-scoped memory entry.",
     "append_scratchpad": "Append durable facts to a named persistent memory section.",
     "replace_scratchpad": "Fully rewrite one persistent memory section.",
     "read_scratchpad": "Read the current persistent memory before editing.",
@@ -316,7 +320,7 @@ PROXY_OPERATION_OPTIONS = [
 
 
 def _get_tool_permission_section_key(name: str) -> str:
-    if name in {"save_to_conversation_memory", "delete_conversation_memory_entry", "append_scratchpad", "replace_scratchpad", "read_scratchpad", "ask_clarifying_question", "sub_agent", "image_explain", "search_knowledge_base", "search_tool_memory"}:
+    if name in {"save_to_conversation_memory", "delete_conversation_memory_entry", "save_to_persona_memory", "delete_persona_memory_entry", "append_scratchpad", "replace_scratchpad", "read_scratchpad", "ask_clarifying_question", "sub_agent", "image_explain", "search_knowledge_base", "search_tool_memory"}:
         return "assistant"
     if name in {"search_web", "fetch_url", "fetch_url_summarized", "fetch_url_to_canvas", "grep_fetched_content", "search_news_ddgs", "search_news_google"}:
         return "research"

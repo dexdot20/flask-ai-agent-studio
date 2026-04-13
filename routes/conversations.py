@@ -43,6 +43,7 @@ from db import (
     delete_persona,
     delete_conversation_file_assets,
     delete_conversation_memory_entry,
+    delete_persona_memory_entry,
     delete_conversation_image_assets,
     delete_conversation_video_assets,
     extract_message_attachments,
@@ -53,12 +54,15 @@ from db import (
     get_pruning_batch_size,
     get_pruning_token_threshold,
     get_conversation_persona,
+    get_persona_memory,
+    get_persona_memory_entry,
     get_rag_source_types,
     get_conversation_message_rows,
     get_conversation_messages,
     get_db,
     insert_message,
     insert_conversation_memory_entry,
+    insert_persona_memory_entry,
     get_conversation_memory,
     get_conversation_memory_entry,
     list_conversation_model_invocations,
@@ -72,6 +76,7 @@ from db import (
     serialize_message_metadata,
     list_personas,
     update_conversation_memory_entry,
+    update_persona_memory_entry,
     update_persona,
 )
 from doc_service import build_canvas_markdown, extract_document_text, infer_canvas_format, infer_canvas_language, read_uploaded_document
@@ -172,6 +177,15 @@ def _load_conversation_memory_payload(conv_id: int, limit: int = 200) -> dict:
         "conversation_memory_enabled": CONVERSATION_MEMORY_ENABLED,
         "memory": memory_entries,
         "memory_count": len(memory_entries),
+    }
+
+
+def _load_persona_memory_payload(persona_id: int, limit: int = 200) -> dict:
+    memory_entries = get_persona_memory(persona_id, limit=limit)
+    return {
+        "persona_id": persona_id,
+        "persona_memory": memory_entries,
+        "persona_memory_count": len(memory_entries),
     }
 
 
@@ -541,6 +555,107 @@ def register_conversation_routes(app) -> None:
         if not deleted:
             return jsonify({"error": "Persona not found."}), 404
         return jsonify(_build_persona_response_payload(deleted_persona_id=persona_id))
+
+    @app.route("/api/personas/<int:persona_id>/memory", methods=["GET"])
+    def list_persona_memory_route(persona_id):
+        persona = get_persona(persona_id)
+        if not persona:
+            return jsonify({"error": "Persona not found."}), 404
+        payload = _load_persona_memory_payload(persona_id)
+        payload["persona"] = persona
+        return jsonify(payload)
+
+    @app.route("/api/personas/<int:persona_id>/memory", methods=["POST"])
+    def create_persona_memory_route(persona_id):
+        persona = get_persona(persona_id)
+        if not persona:
+            return jsonify({"error": "Persona not found."}), 404
+
+        data = request.get_json(silent=True) or {}
+        key = str(data.get("key") or "").strip()
+        value = str(data.get("value") or "").strip()
+        message_id = _parse_optional_int(data.get("message_id"))
+
+        try:
+            entry = insert_persona_memory_entry(
+                persona_id,
+                key,
+                value,
+                message_id=message_id,
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE personas SET updated_at = datetime('now') WHERE id = ?",
+                (persona_id,),
+            )
+
+        payload = _load_persona_memory_payload(persona_id)
+        payload.update({"entry": entry, "persona": get_persona(persona_id)})
+        return jsonify(payload), 201
+
+    @app.route("/api/personas/<int:persona_id>/memory/<int:entry_id>", methods=["PATCH"])
+    def update_persona_memory_route(persona_id, entry_id):
+        persona = get_persona(persona_id)
+        if not persona:
+            return jsonify({"error": "Persona not found."}), 404
+
+        data = request.get_json(silent=True) or {}
+        current_entry = get_persona_memory_entry(entry_id, persona_id)
+        if not current_entry:
+            return jsonify({"error": "Memory entry not found."}), 404
+
+        key = str(data.get("key") or current_entry["key"]).strip()
+        value = str(data.get("value") or current_entry["value"]).strip()
+        message_id = _parse_optional_int(data.get("message_id"))
+        if message_id is None:
+            message_id = current_entry["message_id"]
+
+        try:
+            entry = update_persona_memory_entry(
+                entry_id,
+                persona_id,
+                key,
+                value,
+                message_id=message_id,
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        if not entry:
+            return jsonify({"error": "Memory entry not found."}), 404
+
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE personas SET updated_at = datetime('now') WHERE id = ?",
+                (persona_id,),
+            )
+
+        payload = _load_persona_memory_payload(persona_id)
+        payload.update({"entry": entry, "persona": get_persona(persona_id)})
+        return jsonify(payload)
+
+    @app.route("/api/personas/<int:persona_id>/memory/<int:entry_id>", methods=["DELETE"])
+    def delete_persona_memory_route(persona_id, entry_id):
+        persona = get_persona(persona_id)
+        if not persona:
+            return jsonify({"error": "Persona not found."}), 404
+
+        deleted = delete_persona_memory_entry(entry_id, persona_id)
+        if not deleted:
+            return jsonify({"error": "Memory entry not found."}), 404
+
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE personas SET updated_at = datetime('now') WHERE id = ?",
+                (persona_id,),
+            )
+
+        payload = _load_persona_memory_payload(persona_id)
+        payload.update({"deleted_entry_id": entry_id, "persona": get_persona(persona_id)})
+        return jsonify(payload)
 
     @app.route("/api/conversations", methods=["POST"])
     def create_conversation():

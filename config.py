@@ -246,6 +246,8 @@ DEFAULT_ACTIVE_TOOL_NAMES = [
     "read_scratchpad",
     "save_to_conversation_memory",
     "delete_conversation_memory_entry",
+    "save_to_persona_memory",
+    "delete_persona_memory_entry",
     "ask_clarifying_question",
     "sub_agent",
     "image_explain",

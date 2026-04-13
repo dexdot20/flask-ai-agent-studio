@@ -262,6 +262,41 @@
 
                 <section class="settings-subsection settings-subsection--full">
                   <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Shared memory</span>
+                    <h4 class="settings-subsection__title">Persona memory</h4>
+                    <p class="settings-subsection__copy">Short key-value memory shared across all conversations using this persona. Stored entries are not auto-pruned.</p>
+                  </div>
+                  <p id="persona-memory-note" class="settings-callout" data-tone="info">Use this for stable persona-scoped facts. Keep current-chat-only details in conversation memory instead.</p>
+                  <div id="persona-memory-list" class="model-management-list model-management-list--spaced"></div>
+                  <div class="settings-subsection-grid settings-subsection-grid--two">
+                    <section class="settings-subsection settings-subsection--compact">
+                      <div class="settings-subsection__header">
+                        <span class="settings-subsection__eyebrow">Key</span>
+                        <h4 class="settings-subsection__title">Memory label</h4>
+                      </div>
+                      <label class="settings-label" for="persona-memory-key-input">Memory key</label>
+                      <input id="persona-memory-key-input" class="settings-text" type="text" placeholder="Example: Preferred repo style" />
+                    </section>
+
+                    <section class="settings-subsection">
+                      <div class="settings-subsection__header">
+                        <span class="settings-subsection__eyebrow">Value</span>
+                        <h4 class="settings-subsection__title">Compact shared fact</h4>
+                      </div>
+                      <label class="settings-label" for="persona-memory-value-input">Memory value</label>
+                      <textarea id="persona-memory-value-input" rows="3" placeholder="One compact factual line shared across this persona's future conversations."></textarea>
+                    </section>
+                  </div>
+                  <div class="settings-inline-actions">
+                    <button class="btn-primary" id="persona-memory-save-btn" type="button">Save memory</button>
+                    <button class="btn-ghost" id="persona-memory-cancel-btn" type="button" hidden>Cancel edit</button>
+                    <button class="btn-ghost btn-ghost--danger" id="persona-memory-delete-btn" type="button" hidden>Delete memory</button>
+                    <span id="persona-memory-status" class="settings-status" data-tone="muted">Save the persona first to manage shared memory.</span>
+                  </div>
+                </section>
+
+                <section class="settings-subsection settings-subsection--full">
+                  <div class="settings-subsection__header">
                     <span class="settings-subsection__eyebrow">Editor actions</span>
                     <h4 class="settings-subsection__title">Save or remove persona</h4>
                   </div>

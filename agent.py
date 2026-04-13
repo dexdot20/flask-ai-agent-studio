@@ -96,8 +96,10 @@ from db import (
     append_to_scratchpad,
     count_scratchpad_notes,
     delete_conversation_memory_entry,
+    delete_persona_memory_entry,
     get_context_compaction_keep_recent_rounds,
     get_context_compaction_threshold,
+    get_effective_conversation_persona,
     get_fetch_url_clip_aggressiveness,
     get_fetch_url_summarized_max_input_chars,
     get_fetch_url_summarized_max_output_tokens,
@@ -118,6 +120,7 @@ from db import (
     get_sub_agent_retry_delay_seconds,
     get_sub_agent_timeout_seconds,
     insert_conversation_memory_entry,
+    insert_persona_memory_entry,
     parse_message_tool_calls,
     read_image_asset_bytes,
     replace_scratchpad,
@@ -4587,6 +4590,64 @@ def _run_delete_conversation_memory_entry(tool_args: dict, runtime_state: dict):
     }, (f"Conversation memory deleted: {entry_id}" if deleted else f"Conversation memory not found: {entry_id}")
 
 
+def _run_save_to_persona_memory(tool_args: dict, runtime_state: dict):
+    agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
+    conversation_id = int(agent_context.get("conversation_id") or 0)
+    if conversation_id <= 0:
+        return {"status": "error", "error": "No active conversation context was provided."}, "Persona memory unavailable"
+
+    persona = get_effective_conversation_persona(conversation_id)
+    if not isinstance(persona, dict) or int(persona.get("id") or 0) <= 0:
+        return {"status": "error", "error": "No active persona is available for this conversation."}, "Persona memory unavailable"
+
+    source_message_id = agent_context.get("source_message_id")
+    message_id = int(source_message_id) if source_message_id not in (None, "") else None
+    entry = insert_persona_memory_entry(
+        int(persona["id"]),
+        tool_args.get("key", ""),
+        tool_args.get("value", ""),
+        message_id=message_id,
+        mutation_context={"conversation_id": conversation_id, "source_message_id": message_id},
+    )
+    updated = entry.get("updated_existing") is True
+    return {
+        "status": "ok",
+        "persona_id": int(persona["id"]),
+        "key": entry.get("key") or tool_args.get("key", ""),
+        "updated_existing": updated,
+    }, (
+        f"Persona memory updated: {entry['key']}"
+        if updated
+        else f"Persona memory saved: {entry['key']}"
+    )
+
+
+def _run_delete_persona_memory_entry(tool_args: dict, runtime_state: dict):
+    agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
+    conversation_id = int(agent_context.get("conversation_id") or 0)
+    if conversation_id <= 0:
+        return {"status": "error", "error": "No active conversation context was provided."}, "Persona memory unavailable"
+
+    persona = get_effective_conversation_persona(conversation_id)
+    if not isinstance(persona, dict) or int(persona.get("id") or 0) <= 0:
+        return {"status": "error", "error": "No active persona is available for this conversation."}, "Persona memory unavailable"
+
+    source_message_id = agent_context.get("source_message_id")
+    message_id = int(source_message_id) if source_message_id not in (None, "") else None
+    entry_id = int(tool_args.get("entry_id") or 0)
+    deleted = delete_persona_memory_entry(
+        entry_id,
+        int(persona["id"]),
+        mutation_context={"conversation_id": conversation_id, "source_message_id": message_id},
+    )
+    return {
+        "status": "ok" if deleted else "not_found",
+        "deleted": deleted,
+        "entry_id": entry_id,
+        "persona_id": int(persona["id"]),
+    }, (f"Persona memory deleted: {entry_id}" if deleted else f"Persona memory not found: {entry_id}")
+
+
 def _run_ask_clarifying_question(tool_args: dict, runtime_state: dict):
     del runtime_state
     payload = _normalize_clarification_payload(tool_args)
@@ -5929,6 +5990,8 @@ _TOOL_EXECUTORS = {
     "read_scratchpad": _run_read_scratchpad,
     "save_to_conversation_memory": _run_save_to_conversation_memory,
     "delete_conversation_memory_entry": _run_delete_conversation_memory_entry,
+    "save_to_persona_memory": _run_save_to_persona_memory,
+    "delete_persona_memory_entry": _run_delete_persona_memory_entry,
     "ask_clarifying_question": _run_ask_clarifying_question,
     "sub_agent": _run_sub_agent,
     "image_explain": _run_image_explain,
@@ -6097,7 +6160,7 @@ def collect_agent_response(
 def _tool_input_preview(tool_name: str, tool_args: dict) -> str:
     tool_name = _normalize_tool_name(tool_name)
     tool_args = tool_args if isinstance(tool_args, dict) else {}
-    if tool_name == "save_to_conversation_memory":
+    if tool_name in {"save_to_conversation_memory", "save_to_persona_memory"}:
         entry_type = str(tool_args.get("entry_type") or "").strip()
         key = str(tool_args.get("key") or "").strip()
         value = str(tool_args.get("value") or "").strip()
@@ -6105,7 +6168,7 @@ def _tool_input_preview(tool_name: str, tool_args: dict) -> str:
         if entry_type and compact:
             return f"{entry_type} | {compact}"[:300]
         return (compact or entry_type)[:300]
-    if tool_name == "delete_conversation_memory_entry":
+    if tool_name in {"delete_conversation_memory_entry", "delete_persona_memory_entry"}:
         return str(tool_args.get("entry_id") or "").strip()[:300]
     if tool_name in {"search_web", "search_news_ddgs", "search_news_google"}:
         values = _get_search_tool_queries(tool_args)

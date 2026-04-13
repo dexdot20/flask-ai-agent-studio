@@ -82,6 +82,7 @@ from db import (
     get_chat_summary_trigger_token_count,
     get_conversation_memory,
     get_conversation_messages,
+    get_effective_conversation_persona,
     get_context_selection_strategy,
     get_db,
     get_entropy_profile,
@@ -97,6 +98,7 @@ from db import (
     get_pruning_batch_size,
     get_pruning_enabled,
     get_pruning_token_threshold,
+    get_persona_memory,
     get_prompt_max_input_tokens,
     get_prompt_preflight_summary_token_count,
     get_prompt_rag_max_tokens,
@@ -2480,6 +2482,7 @@ def _build_budgeted_prompt_messages(
     all_clarification_rounds: list[dict] | None = None,
     retrieved_context: dict | None = None,
     tool_memory_context: str | None = None,
+    persona_memory: list[dict] | None = None,
     conversation_memory: list[dict] | None = None,
     canvas_documents: list[dict] | None = None,
     canvas_active_document_id: str | None = None,
@@ -2517,6 +2520,7 @@ def _build_budgeted_prompt_messages(
         all_clarification_rounds=all_clarification_rounds,
         retrieved_context=None,
         user_profile_context=user_profile_context,
+        persona_memory=persona_memory,
         conversation_memory=conversation_memory,
         tool_trace_context=None,
         tool_memory_context=None,
@@ -2547,6 +2551,7 @@ def _build_budgeted_prompt_messages(
         tool_trace_context=None,
         tool_memory_context=None,
         user_profile_context=user_profile_context,
+        persona_memory=persona_memory,
         conversation_memory=conversation_memory,
         scratchpad_sections=scratchpad_sections,
         canvas_documents=canvas_documents,
@@ -2654,6 +2659,7 @@ def _build_budgeted_prompt_messages(
         tool_trace_context=trimmed_tool_trace,
         tool_memory_context=trimmed_tool_memory,
         user_profile_context=user_profile_context,
+        persona_memory=persona_memory,
         conversation_memory=conversation_memory,
         scratchpad_sections=scratchpad_sections,
         canvas_documents=canvas_documents,
@@ -2681,6 +2687,7 @@ def _build_budgeted_prompt_messages(
         all_clarification_rounds=all_clarification_rounds,
         retrieved_context=rag_context,
         user_profile_context=user_profile_context,
+        persona_memory=persona_memory,
         conversation_memory=conversation_memory,
         tool_trace_context=trimmed_tool_trace,
         tool_memory_context=trimmed_tool_memory,
@@ -2717,6 +2724,7 @@ def _build_budgeted_prompt_messages(
         all_clarification_rounds=all_clarification_rounds,
         retrieved_context=rag_context,
         user_profile_context=user_profile_context,
+        persona_memory=persona_memory,
         conversation_memory=conversation_memory,
         tool_trace_context=trimmed_tool_trace,
         tool_memory_context=trimmed_tool_memory,
@@ -4696,6 +4704,12 @@ def register_chat_routes(app) -> None:
                         "open_canvas": uploaded_canvas_auto_open,
                     }
                 )
+        effective_persona = get_effective_conversation_persona(conv_id, settings)
+        persona_memory = (
+            get_persona_memory(int(effective_persona.get("id") or 0))
+            if isinstance(effective_persona, dict) and int(effective_persona.get("id") or 0) > 0
+            else []
+        )
         conversation_memory = get_conversation_memory(conv_id) if conv_id and CONVERSATION_MEMORY_ENABLED else []
         clarification_rounds_for_prompt = _collect_answered_clarification_rounds(canonical_messages)
         previous_canvas_content_hash = _extract_previous_canvas_content_hash(canonical_messages)
@@ -4709,6 +4723,7 @@ def register_chat_routes(app) -> None:
             retrieved_context,
             tool_memory_context,
             model_id=model,
+            persona_memory=persona_memory,
             conversation_memory=conversation_memory,
             canvas_documents=initial_canvas_documents,
             canvas_active_document_id=initial_canvas_active_document_id,
