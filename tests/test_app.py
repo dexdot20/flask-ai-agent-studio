@@ -158,6 +158,7 @@ from rag_service import (
 from routes.auth import AUTH_LAST_SEEN_KEY, AUTH_REMEMBER_KEY, AUTH_SESSION_KEY
 from routes.chat import (
     OMITTED_TOOL_OUTPUT_TEXT,
+    _cancel_chat_run,
     _build_budgeted_prompt_messages,
     _build_tool_trace_context,
     _collect_answered_clarification_rounds,
@@ -166,8 +167,10 @@ from routes.chat import (
     _get_effective_summary_trigger_token_count,
     _is_failed_tool_summary,
     _persist_streaming_assistant_message,
+    _register_chat_run,
     _select_recent_prompt_window,
     _select_summary_source_messages_by_token_budget,
+    _unregister_chat_run,
     _validate_clarification_response_against_messages,
     build_summary_prompt_messages,
     preload_dependencies,
@@ -5861,6 +5864,21 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("vertical-align: text-bottom;", style_text)
         self.assertIn("@keyframes streamCursorBlink", style_text)
 
+    def test_frontend_streaming_render_includes_loading_shell_and_server_cancel_hook(self):
+        script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
+        script_text = script_path.read_text(encoding="utf-8")
+        style_path = Path(__file__).resolve().parent.parent / "static" / "style.css"
+        style_text = style_path.read_text(encoding="utf-8")
+
+        self.assertIn("function renderAssistantLoadingBubble(bubbleEl, label = \"Yanıt hazırlanıyor…\", detail = \"\")", script_text)
+        self.assertIn("const streamRequestId = createStreamRequestId();", script_text)
+        self.assertIn("stream_request_id: streamRequestId", script_text)
+        self.assertIn('fetch(`/api/chat-runs/${encodeURIComponent(runId)}/cancel`', script_text)
+        self.assertIn("STREAM_ANSWER_RENDER_INTERVAL_MS = 42", script_text)
+        self.assertIn(".assistant-loading", style_text)
+        self.assertIn(".bubble.bubble--loading", style_text)
+        self.assertIn("@keyframes assistantLoadingBounce", style_text)
+
     def test_frontend_canvas_streaming_defers_panel_and_preview_renders(self):
         script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
         script_text = script_path.read_text(encoding="utf-8")
@@ -5873,6 +5891,22 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("flushDeferredCanvasRenderWork();", script_text)
         self.assertIn('requestCanvasPanelRender({ deferForStreaming: options.deferPanelRender !== false });', script_text)
         self.assertIn('messagesEl.style.scrollBehavior = active ? "auto" : "";', script_text)
+
+    def test_frontend_canvas_mobile_viewport_controls_are_wired(self):
+        html = self.client.get("/").get_data(as_text=True)
+        script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
+        script_text = script_path.read_text(encoding="utf-8")
+        style_path = Path(__file__).resolve().parent.parent / "static" / "style.css"
+        style_text = style_path.read_text(encoding="utf-8")
+
+        self.assertIn('id="canvas-zoom-out-btn"', html)
+        self.assertIn('id="canvas-zoom-in-btn"', html)
+        self.assertIn('id="canvas-fullscreen-toggle"', html)
+        self.assertIn("const CANVAS_ZOOM_LEVELS = Object.freeze([1, 1.12, 1.25, 1.4, 1.55]);", script_text)
+        self.assertIn("function syncCanvasViewportControls()", script_text)
+        self.assertIn("function toggleCanvasFullscreen(force = null)", script_text)
+        self.assertIn(".canvas-viewport-toggle", style_text)
+        self.assertIn(".canvas-panel.canvas-panel--fullscreen", style_text)
 
     def test_settings_ui_exposes_fetch_threshold_input(self):
         html = self.client.get("/settings").get_data(as_text=True)
@@ -8911,6 +8945,46 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         messages = conversation_response.get_json()["messages"]
         assistant_messages = [message for message in messages if message["role"] == "assistant"]
         self.assertEqual(assistant_messages, [])
+
+    def test_persist_streaming_assistant_message_keeps_tool_only_partial_output(self):
+        conversation_id = self._create_conversation()
+
+        assistant_message_id = _persist_streaming_assistant_message(
+            conversation_id,
+            None,
+            content="",
+            reasoning="",
+            usage_data=None,
+            tool_results=[],
+            sub_agent_traces=[{"status": "running", "task": "Inspect README.md"}],
+            canvas_documents=[],
+            active_document_id=None,
+            canvas_cleared=False,
+            tool_trace_entries=[{"tool_name": "sub_agent", "state": "running", "step": 1}],
+            pending_clarification=None,
+        )
+
+        self.assertIsInstance(assistant_message_id, int)
+
+        conversation_response = self.client.get(f"/api/conversations/{conversation_id}")
+        messages = conversation_response.get_json()["messages"]
+        assistant_messages = [message for message in messages if message["role"] == "assistant"]
+        self.assertEqual(len(assistant_messages), 1)
+        self.assertEqual(assistant_messages[0]["content"], "")
+        self.assertTrue(assistant_messages[0]["metadata"]["tool_trace"])
+        self.assertTrue(assistant_messages[0]["metadata"]["sub_agent_traces"])
+
+    def test_cancel_chat_run_endpoint_sets_registered_run_state(self):
+        run_id = "test-chat-run-cancel"
+        run_state = _register_chat_run(run_id, conversation_id=123)
+        self.addCleanup(lambda: _unregister_chat_run(run_id))
+
+        response = self.client.post(f"/api/chat-runs/{run_id}/cancel")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {"cancelled": True, "active": True})
+        self.assertTrue(run_state["cancel_event"].is_set())
+        self.assertTrue(_cancel_chat_run(run_id))
 
     def test_uploaded_document_prompts_before_opening_canvas(self):
         conversation_id = self._create_conversation()

@@ -152,6 +152,7 @@ CONTEXT_OVERFLOW_RECOVERY_ERROR_TEXT = (
     "Context window is full and cannot be compacted further. "
     "Try starting a new conversation, disabling RAG or large canvas content, or reducing the request size."
 )
+USER_CANCELLED_ERROR_TEXT = "Cancelled by user."
 MISSING_FINAL_ANSWER_MARKER = "[INSTRUCTION: MISSING FINAL ANSWER"
 CLARIFICATION_RETRY_MARKER = "[INSTRUCTION: CLARIFICATION TOOL REQUIRED"
 CLARIFICATION_TOOL_REPAIR_MARKER = "[INSTRUCTION: CLARIFICATION TOOL REPAIR"
@@ -1183,9 +1184,41 @@ _TOOL_NAME_ALIASES = {
 }
 
 
+class AgentRunCancelledError(Exception):
+    """Raised when the current agent run is cancelled by the user."""
+
+
 def _normalize_tool_name(tool_name: str) -> str:
     name = str(tool_name or "").strip()
     return _TOOL_NAME_ALIASES.get(name, name)
+
+
+def _is_agent_cancel_event_set(cancel_event) -> bool:
+    is_set = getattr(cancel_event, "is_set", None)
+    return bool(callable(is_set) and is_set())
+
+
+def _get_agent_cancel_reason(agent_context: dict | None) -> str:
+    if not isinstance(agent_context, dict):
+        return USER_CANCELLED_ERROR_TEXT
+    reason = str(agent_context.get("cancel_reason") or "").strip()
+    return reason or USER_CANCELLED_ERROR_TEXT
+
+
+def _raise_if_agent_cancelled(agent_context: dict | None) -> None:
+    if not isinstance(agent_context, dict):
+        return
+    if _is_agent_cancel_event_set(agent_context.get("cancel_event")):
+        raise AgentRunCancelledError(_get_agent_cancel_reason(agent_context))
+
+
+def _sleep_with_agent_cancel(agent_context: dict | None, delay_seconds: float) -> None:
+    remaining_seconds = max(0.0, float(delay_seconds or 0.0))
+    while remaining_seconds > 0:
+        _raise_if_agent_cancelled(agent_context)
+        sleep_slice = min(0.25, remaining_seconds)
+        time.sleep(sleep_slice)
+        remaining_seconds = max(0.0, remaining_seconds - sleep_slice)
 
 
 def _is_session_cacheable_tool(tool_name: str) -> bool:
@@ -4836,6 +4869,7 @@ def _execute_streaming_tool_with_event_buffer(tool_name: str, tool_args: dict, r
 
 def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
     agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
+    _raise_if_agent_cancelled(agent_context)
     sub_agent_depth = _coerce_int_range(agent_context.get("sub_agent_depth"), 0, 0, 4)
     if sub_agent_depth >= 1:
         error = "Recursive sub-agent delegation is disabled."
@@ -4879,10 +4913,12 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
     latest_fallback_note = ""
 
     for attempt_index, child_model in enumerate(child_model_candidates, start=1):
+        _raise_if_agent_cancelled(agent_context)
         retry_messages = [*child_messages, *resume_messages]
         retry_count = 0
 
         while True:
+            _raise_if_agent_cancelled(agent_context)
             attempt_messages = list(retry_messages)
             attempt_started_at = time.monotonic()
             remaining_overall_seconds = max(0.0, overall_deadline - attempt_started_at)
@@ -4950,11 +4986,14 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
                         "sub_agent_depth": sub_agent_depth + 1,
                         "conversation_id": agent_context.get("conversation_id"),
                         "source_message_id": agent_context.get("source_message_id"),
+                        "cancel_event": agent_context.get("cancel_event"),
+                        "cancel_reason": agent_context.get("cancel_reason"),
                     },
                     invocation_log_sink=(runtime_state.get("invocation_log_sink") if isinstance(runtime_state.get("invocation_log_sink"), list) else None),
                 )
                 try:
                     for event in child_events:
+                        _raise_if_agent_cancelled(agent_context)
                         if time.monotonic() >= attempt_deadline:
                             timed_out = True
                             child_errors.append(f"Sub-agent timed out after {attempt_timeout_seconds} seconds.")
@@ -5064,7 +5103,7 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
                 retry_count += 1
                 sleep_for = min(float(retry_delay_seconds), max(0.0, overall_deadline - time.monotonic()))
                 if sleep_for > 0:
-                    time.sleep(sleep_for)
+                    _sleep_with_agent_cancel(agent_context, sleep_for)
                 retry_messages = [*child_messages, *resume_messages]
                 continue
 
@@ -7143,7 +7182,10 @@ def run_agent_stream(
         "sub_agent_depth": _coerce_int_range((agent_context or {}).get("sub_agent_depth"), 0, 0, 8),
         "conversation_id": _coerce_int_range((agent_context or {}).get("conversation_id"), 0, 0, 2_147_483_647),
         "source_message_id": _coerce_int_range((agent_context or {}).get("source_message_id"), 0, 0, 2_147_483_647),
+        "cancel_event": (agent_context or {}).get("cancel_event"),
+        "cancel_reason": str((agent_context or {}).get("cancel_reason") or "").strip() or USER_CANCELLED_ERROR_TEXT,
     }
+    _raise_if_agent_cancelled(runtime_state.get("agent_context"))
     working_state = {
         "current_goal": _extract_initial_goal(messages),
         "steps_tried": [],
@@ -7463,6 +7505,7 @@ def run_agent_stream(
             message_count=len(messages_to_send),
             messages=_summarize_messages_for_log(messages_to_send),
         )
+        _raise_if_agent_cancelled(runtime_state.get("agent_context"))
 
         def emit_turn_reasoning(reasoning_text: str):
             nonlocal turn_reasoning_emitted
@@ -7524,6 +7567,7 @@ def run_agent_stream(
             )
 
         try:
+            _raise_if_agent_cancelled(runtime_state.get("agent_context"))
             response = model_target["client"].chat.completions.create(**request_kwargs)
         except Exception as exc:
             append_turn_invocation(
@@ -7701,6 +7745,7 @@ def run_agent_stream(
 
             try:
                 for chunk in response:
+                    _raise_if_agent_cancelled(runtime_state.get("agent_context"))
                     reasoning_delta, content_delta, reasoning_details_delta = _extract_stream_delta_texts(chunk)
                     if reasoning_details_delta:
                         turn_reasoning_details = _merge_reasoning_details(turn_reasoning_details, reasoning_details_delta)
@@ -7846,6 +7891,7 @@ def run_agent_stream(
 
     pending_step_retry_reason: str | None = None
     while step < max_steps:
+        _raise_if_agent_cancelled(runtime_state.get("agent_context"))
         step += 1
         runtime_state["agent_context"]["current_step"] = step
         yield {"type": "step_started", "step": step, "max_steps": max_steps}
@@ -8205,6 +8251,7 @@ def run_agent_stream(
         # ---- Phase 2: execute pending slots (parallel for safe read-only tools, sequential for mutators) ----
         pending_slots = [s for s in slots if s["kind"] == "execute"]
         if pending_slots:
+            _raise_if_agent_cancelled(runtime_state.get("agent_context"))
             parallel_slots = [s for s in pending_slots if _is_parallel_safe_tool_call(s["tool_name"], s.get("tool_args") or {})]
             sequential_slots = [s for s in pending_slots if not _is_parallel_safe_tool_call(s["tool_name"], s.get("tool_args") or {})]
 
@@ -8274,6 +8321,7 @@ def run_agent_stream(
 
             for s in sequential_slots:
                 try:
+                    _raise_if_agent_cancelled(runtime_state.get("agent_context"))
                     _tool_name = s["tool_name"]
                     _tool_args = s.get("tool_args") or {}
 
@@ -8311,6 +8359,7 @@ def run_agent_stream(
 
         # ---- Phase 3: post-process all slots in original order ----
         for slot in slots:
+            _raise_if_agent_cancelled(runtime_state.get("agent_context"))
             kind = slot["kind"]
             tool_name = slot["tool_name"]
             tool_args = slot["tool_args"]

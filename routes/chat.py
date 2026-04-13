@@ -6,15 +6,17 @@ import math
 import logging
 import json
 import os
+from queue import SimpleQueue
 import re
 import shutil
 import tempfile
 from datetime import datetime
-from threading import Lock
+from threading import Event, Lock
+from uuid import uuid4
 
 from flask import Response, current_app, jsonify, request, stream_with_context
 
-from agent import FINAL_ANSWER_ERROR_TEXT, FINAL_ANSWER_MISSING_TEXT, collect_agent_response, run_agent_stream
+from agent import AgentRunCancelledError, FINAL_ANSWER_ERROR_TEXT, FINAL_ANSWER_MISSING_TEXT, USER_CANCELLED_ERROR_TEXT, collect_agent_response, run_agent_stream
 from agent import WEB_TOOL_NAMES
 from canvas_service import (
     create_canvas_document,
@@ -224,8 +226,12 @@ TITLE_REJECTED_SUBSTRINGS = (
 SUMMARY_MIN_TEXT_LENGTH = 100
 SUMMARY_EXECUTOR = ThreadPoolExecutor(max_workers=2)
 POST_RESPONSE_EXECUTOR = ThreadPoolExecutor(max_workers=2)
+CHAT_STREAM_EXECUTOR = ThreadPoolExecutor(max_workers=4)
 _SUMMARY_LOCKS: dict[int, Lock] = {}
 _SUMMARY_LOCKS_GUARD = Lock()
+_CHAT_RUNS: dict[str, dict] = {}
+_CHAT_RUNS_GUARD = Lock()
+_CHAT_RUN_STREAM_SENTINEL = object()
 LOGGER = logging.getLogger(__name__)
 SUMMARY_TOOL_RESULT_LIMIT = 3
 SUMMARY_TOOL_RESULT_TEXT_LIMIT = 280
@@ -305,6 +311,94 @@ SUMMARY_FOCUS_STOPWORDS = {
     "with",
     "your",
 }
+
+
+def _register_chat_run(run_id: str, *, conversation_id: int | None = None) -> dict:
+    normalized_run_id = str(run_id or "").strip()[:120] or uuid4().hex
+    with _CHAT_RUNS_GUARD:
+        run_state = {
+            "run_id": normalized_run_id,
+            "conversation_id": int(conversation_id) if conversation_id is not None else None,
+            "cancel_event": Event(),
+            "cancel_reason": USER_CANCELLED_ERROR_TEXT,
+            "attached": True,
+            "queue": None,
+        }
+        _CHAT_RUNS[normalized_run_id] = run_state
+        return run_state
+
+
+def _detach_chat_run(run_id: str) -> None:
+    normalized_run_id = str(run_id or "").strip()
+    if not normalized_run_id:
+        return
+    with _CHAT_RUNS_GUARD:
+        run_state = _CHAT_RUNS.get(normalized_run_id)
+        if run_state is not None:
+            run_state["attached"] = False
+
+
+def _unregister_chat_run(run_id: str) -> None:
+    normalized_run_id = str(run_id or "").strip()
+    if not normalized_run_id:
+        return
+    with _CHAT_RUNS_GUARD:
+        _CHAT_RUNS.pop(normalized_run_id, None)
+
+
+def _cancel_chat_run(run_id: str, *, reason: str = USER_CANCELLED_ERROR_TEXT) -> bool:
+    normalized_run_id = str(run_id or "").strip()
+    if not normalized_run_id:
+        return False
+    with _CHAT_RUNS_GUARD:
+        run_state = _CHAT_RUNS.get(normalized_run_id)
+        if run_state is None:
+            return False
+        run_state["cancel_reason"] = str(reason or "").strip() or USER_CANCELLED_ERROR_TEXT
+        cancel_event = run_state.get("cancel_event")
+        if isinstance(cancel_event, Event):
+            cancel_event.set()
+        return True
+
+
+def _finalize_running_tool_trace_entries(entries: list[dict] | None, interruption_message: str) -> list[dict]:
+    normalized_message = str(interruption_message or "").strip() or USER_CANCELLED_ERROR_TEXT
+    finalized_entries: list[dict] = []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        next_entry = dict(entry)
+        if str(next_entry.get("state") or "").strip() == "running":
+            next_entry["state"] = "error"
+            next_entry["summary"] = str(next_entry.get("summary") or "").strip() or normalized_message
+        finalized_entries.append(next_entry)
+    return finalized_entries
+
+
+def _finalize_running_sub_agent_traces(entries: list[dict] | None, interruption_message: str) -> list[dict]:
+    normalized_message = str(interruption_message or "").strip() or USER_CANCELLED_ERROR_TEXT
+    finalized_traces: list[dict] = []
+    for entry in extract_sub_agent_traces({"sub_agent_traces": entries or []}):
+        next_entry = dict(entry)
+        next_tool_trace = _finalize_running_tool_trace_entries(
+            next_entry.get("tool_trace") if isinstance(next_entry.get("tool_trace"), list) else [],
+            normalized_message,
+        )
+        if next_tool_trace:
+            next_entry["tool_trace"] = next_tool_trace
+        if str(next_entry.get("status") or "").strip() == "running":
+            has_progress = bool(
+                str(next_entry.get("summary") or "").strip()
+                or next_tool_trace
+                or next_entry.get("messages")
+                or next_entry.get("artifacts")
+            )
+            next_entry["status"] = "partial" if has_progress else "error"
+            if not str(next_entry.get("summary") or "").strip():
+                next_entry["summary"] = normalized_message
+            next_entry["error"] = normalized_message
+        finalized_traces.append(next_entry)
+    return finalized_traces
 
 
 def _schedule_rag_conversation_sync(conversation_id: int | None, *, force: bool = False) -> None:
@@ -676,6 +770,9 @@ def _persist_streaming_assistant_message(
     has_meaningful_output = bool(
         normalized_content.strip()
         or pending_clarification
+        or tool_results
+        or sub_agent_traces
+        or tool_trace_entries
         or canvas_documents
         or canvas_cleared
     )
@@ -3733,6 +3830,7 @@ def parse_chat_request_payload():
             "model": normalize_model_id(request.form.get("model"), default=default_model),
             "conversation_id": parse_optional_int(request.form.get("conversation_id")),
             "edited_message_id": parse_optional_int(request.form.get("edited_message_id")),
+            "stream_request_id": request.form.get("stream_request_id", ""),
             "user_content": request.form.get("user_content", ""),
             "youtube_url": request.form.get("youtube_url", ""),
             "images": image_files,
@@ -3750,6 +3848,7 @@ def parse_chat_request_payload():
         "model": normalize_model_id(data.get("model"), default=default_model),
         "conversation_id": parse_optional_int(data.get("conversation_id")),
         "edited_message_id": parse_optional_int(data.get("edited_message_id")),
+        "stream_request_id": data.get("stream_request_id", ""),
         "user_content": data.get("user_content", ""),
         "youtube_url": data.get("youtube_url", ""),
         "images": [],
@@ -4004,6 +4103,7 @@ def register_chat_routes(app) -> None:
         model = payload["model"]
         conv_id = payload["conversation_id"]
         edited_message_id = payload["edited_message_id"]
+        stream_request_id = str(payload.get("stream_request_id") or "").strip()[:120] or uuid4().hex
         user_content = payload["user_content"]
         youtube_url = str(payload.get("youtube_url") or "").strip()
         uploaded_images = payload["images"]
@@ -4639,6 +4739,7 @@ def register_chat_routes(app) -> None:
 
         app_obj = current_app._get_current_object()
         defer_post_response_tasks = not current_app.testing
+        chat_run_state = _register_chat_run(stream_request_id, conversation_id=conv_id)
 
         def generate():
             full_response = ""
@@ -4690,6 +4791,8 @@ def register_chat_routes(app) -> None:
                 agent_context={
                     "conversation_id": conv_id,
                     "source_message_id": persisted_user_message_id,
+                    "cancel_event": chat_run_state.get("cancel_event"),
+                    "cancel_reason": chat_run_state.get("cancel_reason") or USER_CANCELLED_ERROR_TEXT,
                 },
                 invocation_log_sink=captured_model_invocations,
             )
@@ -4789,6 +4892,14 @@ def register_chat_routes(app) -> None:
                 if isinstance(edit_replay_snapshot, dict):
                     _cleanup_workspace_snapshot(edit_replay_snapshot.get("workspace_snapshot"))
 
+            def current_cancel_reason() -> str:
+                return str(chat_run_state.get("cancel_reason") or USER_CANCELLED_ERROR_TEXT).strip() or USER_CANCELLED_ERROR_TEXT
+
+            def finalize_interrupted_progress(interruption_message: str) -> None:
+                nonlocal stored_sub_agent_traces, tool_trace_entries
+                stored_sub_agent_traces = _finalize_running_sub_agent_traces(stored_sub_agent_traces, interruption_message)
+                tool_trace_entries = _finalize_running_tool_trace_entries(tool_trace_entries, interruption_message)
+
             for vision_event in vision_events:
                 yield json.dumps(vision_event, ensure_ascii=False) + "\n"
 
@@ -4855,6 +4966,9 @@ def register_chat_routes(app) -> None:
 
             try:
                 for event in agent_stream:
+                    cancel_event = chat_run_state.get("cancel_event")
+                    if isinstance(cancel_event, Event) and cancel_event.is_set():
+                        raise AgentRunCancelledError(current_cancel_reason())
                     if event["type"] == "answer_delta":
                         full_response += event["text"]
                         if len(full_response) - last_persisted_response_length >= 150:
@@ -4968,6 +5082,79 @@ def register_chat_routes(app) -> None:
                             ) + "\n"
                         continue
                     yield json.dumps(event, ensure_ascii=False) + "\n"
+            except AgentRunCancelledError as exc:
+                interruption_message = str(exc or current_cancel_reason()).strip() or current_cancel_reason()
+                finalize_interrupted_progress(interruption_message)
+                rollback_edited_replay_state("stream_cancelled")
+                if isinstance(edit_replay_snapshot, dict):
+                    yield json.dumps(
+                        {
+                            "type": "tool_error",
+                            "step": 1,
+                            "tool": "chat",
+                            "error": "Edited replay was cancelled. Previous state restored.",
+                        },
+                        ensure_ascii=False,
+                    ) + "\n"
+                    if conv_id:
+                        yield json.dumps(
+                            {
+                                "type": "history_sync",
+                                "messages": get_conversation_messages(conv_id),
+                            },
+                            ensure_ascii=False,
+                        ) + "\n"
+                    yield json.dumps({"type": "done"}, ensure_ascii=False) + "\n"
+                    finalize_edited_replay_snapshot()
+                    LOGGER.info("Edited replay cancelled for conversation=%s", conv_id)
+                    return
+                with app_obj.app_context():
+                    cancelled_assistant_message_id = _persist_streaming_assistant_message(
+                        conv_id,
+                        persisted_assistant_message_id,
+                        content=full_response,
+                        reasoning=full_reasoning,
+                        usage_data=usage_data,
+                        tool_results=stored_tool_results,
+                        sub_agent_traces=stored_sub_agent_traces,
+                        canvas_documents=canvas_documents,
+                        active_document_id=active_document_id,
+                        canvas_viewports=canvas_viewports,
+                        canvas_cleared=canvas_cleared,
+                        tool_trace_entries=tool_trace_entries,
+                        pending_clarification=pending_clarification,
+                    )
+                    persist_model_invocations(cancelled_assistant_message_id)
+                yield json.dumps(
+                    {
+                        "type": "tool_error",
+                        "step": max(1, int((tool_trace_entries[-1].get("step") if tool_trace_entries else 1) or 1)),
+                        "tool": "chat",
+                        "error": interruption_message,
+                    },
+                    ensure_ascii=False,
+                ) + "\n"
+                if cancelled_assistant_message_id is not None or persisted_user_message_id is not None:
+                    yield json.dumps(
+                        {
+                            "type": "message_ids",
+                            "user_message_id": persisted_user_message_id,
+                            "assistant_message_id": cancelled_assistant_message_id,
+                        },
+                        ensure_ascii=False,
+                    ) + "\n"
+                if conv_id:
+                    yield json.dumps(
+                        {
+                            "type": "history_sync",
+                            "messages": get_conversation_messages(conv_id),
+                        },
+                        ensure_ascii=False,
+                    ) + "\n"
+                yield json.dumps({"type": "done"}, ensure_ascii=False) + "\n"
+                finalize_edited_replay_snapshot()
+                LOGGER.info("Chat stream cancelled for conversation=%s", conv_id)
+                return
             except GeneratorExit:
                 stream_aborted = True
                 rollback_edited_replay_state("stream_aborted")
@@ -5193,14 +5380,67 @@ def register_chat_routes(app) -> None:
 
             finalize_edited_replay_snapshot()
 
+        event_queue = SimpleQueue()
+        chat_run_state["queue"] = event_queue
+        chat_run_state["attached"] = True
+
+        def stream_chat_events():
+            try:
+                while True:
+                    next_chunk = event_queue.get()
+                    if next_chunk is _CHAT_RUN_STREAM_SENTINEL:
+                        break
+                    yield next_chunk
+            except GeneratorExit:
+                _detach_chat_run(stream_request_id)
+                raise
+
+        def run_chat_stream_in_background() -> None:
+            try:
+                with app_obj.app_context():
+                    for chunk in generate():
+                        if chat_run_state.get("attached"):
+                            event_queue.put(chunk)
+            except Exception:
+                LOGGER.exception(
+                    "Background chat stream failed for conversation=%s stream_request_id=%s",
+                    conv_id,
+                    stream_request_id,
+                )
+                if chat_run_state.get("attached"):
+                    event_queue.put(
+                        json.dumps(
+                            {
+                                "type": "tool_error",
+                                "step": 1,
+                                "tool": "chat",
+                                "error": "Background chat stream failed before completion.",
+                            },
+                            ensure_ascii=False,
+                        ) + "\n"
+                    )
+                    event_queue.put(json.dumps({"type": "done"}, ensure_ascii=False) + "\n")
+            finally:
+                if chat_run_state.get("attached"):
+                    event_queue.put(_CHAT_RUN_STREAM_SENTINEL)
+                _unregister_chat_run(stream_request_id)
+
+        CHAT_STREAM_EXECUTOR.submit(run_chat_stream_in_background)
+
         return Response(
-            stream_with_context(generate()),
+            stream_with_context(stream_chat_events()),
             content_type="application/x-ndjson; charset=utf-8",
             headers={
                 "Cache-Control": "no-cache",
                 "X-Accel-Buffering": "no",
             },
         )
+
+
+    @app.route("/api/chat-runs/<string:run_id>/cancel", methods=["POST"])
+    def cancel_chat_run(run_id):
+        cancelled = _cancel_chat_run(run_id, reason=USER_CANCELLED_ERROR_TEXT)
+        return jsonify({"cancelled": cancelled, "active": cancelled})
 
 
     @app.route("/api/conversations/<int:conv_id>/generate-title", methods=["POST"])

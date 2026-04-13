@@ -64,6 +64,10 @@ const canvasTreePanel = document.getElementById("canvas-tree-panel");
 const canvasTreeCount = document.getElementById("canvas-tree-count");
 const canvasTreeEl = document.getElementById("canvas-tree");
 const canvasTreeToggleBtn = document.getElementById("canvas-tree-toggle");
+const canvasZoomOutBtn = document.getElementById("canvas-zoom-out-btn");
+const canvasZoomInBtn = document.getElementById("canvas-zoom-in-btn");
+const canvasFullscreenToggleBtn = document.getElementById("canvas-fullscreen-toggle");
+const canvasViewportActionsGroupEl = document.getElementById("canvas-actions-viewport");
 const canvasSubtitle = document.getElementById("canvas-subtitle");
 const canvasStatus = document.getElementById("canvas-status");
 const canvasHint = document.getElementById("canvas-hint");
@@ -905,6 +909,8 @@ let currentConversationPersonaId = null;
 let conversationMemoryEntries = [];
 let conversationMemoryEnabled = false;
 let activeAbortController = null;
+let activeChatRunId = null;
+let activeUserCancelRequested = false;
 let activeAssistantStreamingBubble = null;
 let activeAssistantStreamingHasVisibleAnswer = false;
 let selectedImageFiles = [];
@@ -1445,6 +1451,8 @@ let nextToastId = 1;
 let activeToastTimers = new Map();
 let chatDragDepth = 0;
 let isCanvasMobileTreeOpen = false;
+let isCanvasFullscreen = false;
+let canvasZoomLevelIndex = 0;
 const featureFlags = bootstrapData.features || appSettings.features || {};
 conversationMemoryEnabled = featureFlags.conversation_memory_enabled !== false;
 if (youtubeUrlBtn && !Boolean(featureFlags.youtube_transcripts_enabled)) {
@@ -1463,6 +1471,7 @@ const ALLOWED_DOCUMENT_TYPES = new Set([
 const DOCUMENT_EXTENSIONS = new Set([".docx", ".pdf", ".txt", ".csv", ".md"]);
 const VISUAL_PDF_PAGE_LIMIT = 3;
 const STREAM_RENDER_FALLBACK_INTERVAL_MS = 16;
+const STREAM_ANSWER_RENDER_INTERVAL_MS = 42;
 const CANVAS_PANEL_WIDTH_STORAGE_KEY = "chatbot.canvasPanelWidth";
 const MODEL_PREFERENCE_STORAGE_KEY = "chatbot.selectedModel";
 const CANVAS_PANEL_DEFAULT_WIDTH = 620;
@@ -1472,6 +1481,7 @@ const CANVAS_ROOT_PATH_FILTER = "__root__";
 const CANVAS_PREVIEW_RENDER_INTERVAL_MS = 32;
 const CANVAS_STREAMING_RENDER_DEFER_INTERVAL_MS = 48;
 const CANVAS_STREAMING_PREVIEW_THROTTLE_MS = 96;
+const CANVAS_ZOOM_LEVELS = Object.freeze([1, 1.12, 1.25, 1.4, 1.55]);
 const CANVAS_CODE_FILE_EXTENSIONS = new Set([
   ".bat",
   ".c",
@@ -5256,6 +5266,74 @@ function syncCanvasTreeToggleButton() {
   canvasTreeToggleBtn.textContent = isAvailable && isCanvasMobileTreeOpen ? "Hide files" : "Files";
 }
 
+function getCanvasZoomLevel() {
+  const boundedIndex = Math.max(0, Math.min(CANVAS_ZOOM_LEVELS.length - 1, canvasZoomLevelIndex));
+  return CANVAS_ZOOM_LEVELS[boundedIndex] || 1;
+}
+
+function applyCanvasViewportPreferences() {
+  if (!canvasPanel) {
+    return;
+  }
+  canvasPanel.style.setProperty("--canvas-doc-zoom", String(getCanvasZoomLevel()));
+  canvasPanel.classList.toggle("canvas-panel--fullscreen", Boolean(isCanvasFullscreen));
+}
+
+function syncCanvasViewportControls() {
+  applyCanvasViewportPreferences();
+  const hasActiveDocument = Boolean(getActiveCanvasDocument());
+  const showViewportControls = Boolean(isMobileViewport() && isCanvasOpen() && hasActiveDocument);
+  const zoomPercent = Math.round(getCanvasZoomLevel() * 100);
+
+  if (canvasViewportActionsGroupEl) {
+    canvasViewportActionsGroupEl.hidden = !showViewportControls;
+  }
+
+  [canvasZoomOutBtn, canvasZoomInBtn, canvasFullscreenToggleBtn].forEach((button) => {
+    if (!button) {
+      return;
+    }
+    button.hidden = !showViewportControls;
+    button.disabled = !showViewportControls;
+  });
+
+  if (canvasZoomOutBtn) {
+    canvasZoomOutBtn.disabled = !showViewportControls || canvasZoomLevelIndex <= 0;
+    canvasZoomOutBtn.title = `Zoom out (${zoomPercent}%)`;
+  }
+  if (canvasZoomInBtn) {
+    canvasZoomInBtn.disabled = !showViewportControls || canvasZoomLevelIndex >= CANVAS_ZOOM_LEVELS.length - 1;
+    canvasZoomInBtn.title = `Zoom in (${zoomPercent}%)`;
+  }
+  if (canvasFullscreenToggleBtn) {
+    canvasFullscreenToggleBtn.setAttribute("aria-pressed", isCanvasFullscreen ? "true" : "false");
+    canvasFullscreenToggleBtn.setAttribute("data-icon", isCanvasFullscreen ? "⤡" : "⤢");
+    canvasFullscreenToggleBtn.textContent = isCanvasFullscreen ? "Exit full screen" : "Full screen";
+    canvasFullscreenToggleBtn.title = isCanvasFullscreen ? "Exit full screen" : "Full screen";
+  }
+}
+
+function setCanvasZoomLevelIndex(nextIndex) {
+  const boundedIndex = Math.max(0, Math.min(CANVAS_ZOOM_LEVELS.length - 1, Number(nextIndex) || 0));
+  if (boundedIndex === canvasZoomLevelIndex) {
+    syncCanvasViewportControls();
+    return;
+  }
+  canvasZoomLevelIndex = boundedIndex;
+  syncCanvasViewportControls();
+}
+
+function toggleCanvasFullscreen(force = null) {
+  const nextValue = force === null ? !isCanvasFullscreen : Boolean(force);
+  if (nextValue === isCanvasFullscreen) {
+    syncCanvasViewportControls();
+    return;
+  }
+  isCanvasFullscreen = nextValue;
+  syncCanvasViewportControls();
+  requestCanvasPanelRender({ deferForStreaming: false });
+}
+
 function setCanvasMobileTreeOpen(isOpen) {
   const shouldOpen = Boolean(canToggleCanvasTreeOnMobile() && isOpen);
   isCanvasMobileTreeOpen = shouldOpen;
@@ -5339,6 +5417,8 @@ function renderCanvasPanel() {
     return;
   }
 
+  syncCanvasViewportControls();
+
   flushStreamingCanvasPreviewDeltas();
   const documents = getCanvasRenderableDocuments();
   syncCanvasFilterControls(documents);
@@ -5362,6 +5442,7 @@ function renderCanvasPanel() {
       enableFilters: false,
       clearSearchStatus: true,
     });
+    syncCanvasViewportControls();
     return;
   }
 
@@ -5375,11 +5456,13 @@ function renderCanvasPanel() {
       enableFilters: true,
     });
     updateCanvasSearchFeedback(renderState, 0);
+    syncCanvasViewportControls();
     return;
   }
 
   updateCanvasActiveDocumentDisplay(renderState);
   renderCanvasDocumentTabs(visibleDocuments);
+  syncCanvasViewportControls();
 }
 
 function openCanvas(triggerEl = null, options = {}) {
@@ -5404,6 +5487,7 @@ function openCanvas(triggerEl = null, options = {}) {
   applyCanvasPanelWidth(readCanvasWidthPreference(), false);
   closeCanvasOverflowMenu();
   requestCanvasPanelRender({ deferForStreaming: options.deferPanelRender !== false });
+  syncCanvasViewportControls();
   if (shouldFocusPanel) {
     canvasClose?.focus();
   }
@@ -5417,11 +5501,13 @@ function closeCanvas() {
   canvasEditorEl?.classList.remove("canvas-editor--editing");
   canvasDocumentEl?.classList.remove("canvas-document--editing-preview");
   setCanvasMobileTreeOpen(false);
+  isCanvasFullscreen = false;
   canvasPanel?.classList.remove("open");
   canvasOverlay?.classList.remove("open");
   canvasPanel?.setAttribute("aria-hidden", "true");
   closeCanvasOverflowMenu();
   syncCanvasToggleButton();
+  syncCanvasViewportControls();
   if (canvasCopyBtn) {
     canvasCopyBtn.hidden = true;
   }
@@ -6246,8 +6332,10 @@ function renderBubbleWithCursor(bubbleEl, text) {
     return;
   }
 
+  clearAssistantLoadingBubble(bubbleEl);
   bubbleEl.hidden = false;
   bubbleEl.classList.add("streaming-text");
+  bubbleEl.classList.add("streaming-live");
   bubbleEl.innerHTML = renderStreamingMarkdown(text);
 
   const findStreamingCursorContainer = (rootEl) => {
@@ -6283,8 +6371,10 @@ function renderBubbleMarkdown(bubbleEl, text) {
     return;
   }
 
+  clearAssistantLoadingBubble(bubbleEl);
   bubbleEl.hidden = false;
   bubbleEl.classList.remove("streaming-text");
+  bubbleEl.classList.remove("streaming-live");
   bubbleEl.innerHTML = renderMarkdown(text);
 }
 
@@ -6299,8 +6389,10 @@ function finalizeAssistantBubble(asstBubble, text) {
     return;
   }
 
+  clearAssistantLoadingBubble(asstBubble);
   asstBubble.classList.remove("thinking");
   asstBubble.classList.remove("cursor");
+  asstBubble.classList.remove("streaming-live");
   renderBubbleMarkdown(asstBubble, normalizedText);
 }
 
@@ -8537,6 +8629,36 @@ function rebuildTokenStatsFromHistory() {
   });
 }
 
+function renderAssistantLoadingBubble(bubbleEl, label = "Yanıt hazırlanıyor…", detail = "") {
+  if (!bubbleEl) {
+    return;
+  }
+
+  const normalizedLabel = String(label || "").trim() || "Yanıt hazırlanıyor…";
+  const normalizedDetail = String(detail || "").trim();
+  bubbleEl.hidden = false;
+  bubbleEl.classList.add("bubble--loading");
+  bubbleEl.classList.remove("streaming-text");
+  bubbleEl.classList.remove("streaming-live");
+  bubbleEl.innerHTML =
+    `<div class="assistant-loading" aria-live="polite">` +
+      `<span class="assistant-loading__dots" aria-hidden="true">` +
+        `<span></span><span></span><span></span>` +
+      `</span>` +
+      `<span class="assistant-loading__copy">` +
+        `<strong>${escHtml(normalizedLabel)}</strong>` +
+        (normalizedDetail ? `<small>${escHtml(normalizedDetail)}</small>` : "") +
+      `</span>` +
+    `</div>`;
+}
+
+function clearAssistantLoadingBubble(bubbleEl) {
+  if (!bubbleEl) {
+    return;
+  }
+  bubbleEl.classList.remove("bubble--loading");
+}
+
 function createAssistantStreamingGroup() {
   const asstGroup = document.createElement("div");
   asstGroup.className = "msg-group assistant";
@@ -8557,6 +8679,7 @@ function createAssistantStreamingGroup() {
   const asstBubble = document.createElement("div");
   asstBubble.className = "bubble";
   asstBubble.hidden = true;
+  renderAssistantLoadingBubble(asstBubble);
 
   activeAssistantStreamingBubble = asstBubble;
   activeAssistantStreamingHasVisibleAnswer = false;
@@ -9478,6 +9601,21 @@ if (canvasClose) {
 if (canvasOverlay) {
   canvasOverlay.addEventListener("click", closeCanvas);
 }
+if (canvasZoomOutBtn) {
+  canvasZoomOutBtn.addEventListener("click", () => {
+    setCanvasZoomLevelIndex(canvasZoomLevelIndex - 1);
+  });
+}
+if (canvasZoomInBtn) {
+  canvasZoomInBtn.addEventListener("click", () => {
+    setCanvasZoomLevelIndex(canvasZoomLevelIndex + 1);
+  });
+}
+if (canvasFullscreenToggleBtn) {
+  canvasFullscreenToggleBtn.addEventListener("click", () => {
+    toggleCanvasFullscreen();
+  });
+}
 if (canvasEditBtn) {
   canvasEditBtn.addEventListener("click", () => setCanvasEditing(true));
 }
@@ -9854,11 +9992,14 @@ window.addEventListener("resize", () => {
   updateHeaderOffset();
   if (!isMobileViewport()) {
     closeMobileTools();
+    isCanvasFullscreen = false;
+    canvasZoomLevelIndex = 0;
   }
   setCanvasMobileTreeOpen(false);
   closeCanvasOverflowMenu();
   applyCanvasPanelWidth(readCanvasWidthPreference(), false);
   syncCanvasToggleButton();
+  syncCanvasViewportControls();
 }, { passive: true });
 
 if (canvasResizeHandle) {
@@ -10608,12 +10749,24 @@ inputEl.addEventListener("keydown", (event) => {
   }
 });
 
-cancelBtn.addEventListener("click", () => {
+async function requestActiveChatCancellation() {
+  activeUserCancelRequested = true;
+  const runId = String(activeChatRunId || "").trim();
+  if (runId) {
+    fetch(`/api/chat-runs/${encodeURIComponent(runId)}/cancel`, {
+      method: "POST",
+      keepalive: true,
+    }).catch(() => {});
+  }
   if (activeAbortController) {
     activeAbortController.abort();
   }
   clearEmptyAssistantStreamingBubble();
   scrollToBottom();
+}
+
+cancelBtn.addEventListener("click", () => {
+  void requestActiveChatCancellation();
 });
 
 editBannerCancelBtn.addEventListener("click", () => {
@@ -12454,6 +12607,13 @@ async function fixMessage() {
   }
 }
 
+function createStreamRequestId() {
+  if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  return `chat-run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 async function sendMessage(options = {}) {
   const forcedText = typeof options.forcedText === "string" ? options.forcedText.trim() : "";
   const forcedMetadata = options.forcedMetadata && typeof options.forcedMetadata === "object"
@@ -12584,7 +12744,10 @@ async function sendMessage(options = {}) {
   }
 
   const controller = new AbortController();
+  const streamRequestId = createStreamRequestId();
   activeAbortController = controller;
+  activeChatRunId = streamRequestId;
+  activeUserCancelRequested = false;
   conversationRefreshGeneration += 1;
   pendingConversationRefreshTimers.forEach((timerId) => window.clearTimeout(timerId));
   pendingConversationRefreshTimers.clear();
@@ -12611,8 +12774,34 @@ async function sendMessage(options = {}) {
   const assistantTraceByKey = {};
   let latestStepInfo = { step: 1, maxSteps: null };
   let pendingAnswerRenderTimer = null;
+  let pendingAnswerRenderTimerKind = "";
   let pendingReasoningRenderTimer = null;
   let visibleAnswer = "";
+  let lastAnswerRenderAt = 0;
+
+  const clearPendingAnswerRender = () => {
+    if (pendingAnswerRenderTimer === null) {
+      return;
+    }
+    if (pendingAnswerRenderTimerKind === "frame" && typeof window.cancelAnimationFrame === "function") {
+      window.cancelAnimationFrame(pendingAnswerRenderTimer);
+    } else {
+      window.clearTimeout(pendingAnswerRenderTimer);
+    }
+    pendingAnswerRenderTimer = null;
+    pendingAnswerRenderTimerKind = "";
+  };
+
+  const queueAnswerAnimationFrame = (flushStreamingAnswerFrame) => {
+    if (typeof window.requestAnimationFrame === "function") {
+      pendingAnswerRenderTimerKind = "frame";
+      pendingAnswerRenderTimer = window.requestAnimationFrame(flushStreamingAnswerFrame);
+      return;
+    }
+
+    pendingAnswerRenderTimerKind = "timeout";
+    pendingAnswerRenderTimer = window.setTimeout(flushStreamingAnswerFrame, STREAM_RENDER_FALLBACK_INTERVAL_MS);
+  };
 
   const scheduleAnswerRender = () => {
     if (pendingAnswerRenderTimer !== null) {
@@ -12623,7 +12812,11 @@ async function sendMessage(options = {}) {
 
     const flushStreamingAnswerFrame = () => {
       pendingAnswerRenderTimer = null;
+      pendingAnswerRenderTimerKind = "";
       activeAnswerRenderPending = false;
+      lastAnswerRenderAt = typeof performance !== "undefined" && typeof performance.now === "function"
+        ? performance.now()
+        : Date.now();
       if (visibleAnswer === fullAnswer) {
         flushDeferredCanvasRenderWork();
         return;
@@ -12643,24 +12836,29 @@ async function sendMessage(options = {}) {
       flushDeferredCanvasRenderWork();
     };
 
-    if (typeof window.requestAnimationFrame === "function") {
-      pendingAnswerRenderTimer = window.requestAnimationFrame(flushStreamingAnswerFrame);
+    const now = typeof performance !== "undefined" && typeof performance.now === "function"
+      ? performance.now()
+      : Date.now();
+    const elapsed = Math.max(0, now - lastAnswerRenderAt);
+    if (elapsed < STREAM_ANSWER_RENDER_INTERVAL_MS) {
+      pendingAnswerRenderTimerKind = "timeout";
+      pendingAnswerRenderTimer = window.setTimeout(() => {
+        pendingAnswerRenderTimer = null;
+        pendingAnswerRenderTimerKind = "";
+        queueAnswerAnimationFrame(flushStreamingAnswerFrame);
+      }, STREAM_ANSWER_RENDER_INTERVAL_MS - elapsed);
       return;
     }
 
-    pendingAnswerRenderTimer = window.setTimeout(flushStreamingAnswerFrame, STREAM_RENDER_FALLBACK_INTERVAL_MS);
+    queueAnswerAnimationFrame(flushStreamingAnswerFrame);
   };
 
   const flushAnswerRender = () => {
-    if (pendingAnswerRenderTimer !== null) {
-      if (typeof window.cancelAnimationFrame === "function") {
-        window.cancelAnimationFrame(pendingAnswerRenderTimer);
-      } else {
-        window.clearTimeout(pendingAnswerRenderTimer);
-      }
-      pendingAnswerRenderTimer = null;
-    }
+    clearPendingAnswerRender();
     activeAnswerRenderPending = false;
+    lastAnswerRenderAt = typeof performance !== "undefined" && typeof performance.now === "function"
+      ? performance.now()
+      : Date.now();
     if (!String(fullAnswer || "").trim()) {
       visibleAnswer = fullAnswer;
       flushDeferredCanvasRenderWork();
@@ -12716,6 +12914,7 @@ async function sendMessage(options = {}) {
       formData.append("model", modelSel.value);
       formData.append("conversation_id", String(currentConvId));
       formData.append("user_content", text);
+      formData.append("stream_request_id", streamRequestId);
       if (editedMessageId !== null) {
         formData.append("edited_message_id", String(editedMessageId));
       }
@@ -12746,6 +12945,7 @@ async function sendMessage(options = {}) {
           messages: requestMessages,
           model: modelSel.value,
           conversation_id: currentConvId,
+          stream_request_id: streamRequestId,
           edited_message_id: editedMessageId,
           user_content: text,
           document_canvas_action: documentCanvasAction,
@@ -12763,8 +12963,10 @@ async function sendMessage(options = {}) {
 
     await streamNdjsonResponse(response, (event) => {
       if (event.type === "status" && event.status === "compacting") {
-        if (activeAssistantStreamingHasVisibleAnswer) {
-          const compactingMessage = String(event.message || "Compacting conversation...").trim() || "Compacting conversation...";
+        const compactingMessage = String(event.message || "Compacting conversation...").trim() || "Compacting conversation...";
+        if (!activeAssistantStreamingHasVisibleAnswer) {
+          renderAssistantLoadingBubble(asstBubble, compactingMessage);
+        } else {
           asstBubble.hidden = false;
           asstBubble.classList.add("thinking");
           asstBubble.classList.add("cursor");
@@ -12830,6 +13032,10 @@ async function sendMessage(options = {}) {
         }
         scrollToBottom();
       } else if (event.type === "step_update") {
+        if (!activeAssistantStreamingHasVisibleAnswer) {
+          const detailParts = [String(event.tool || "").replaceAll("_", " ").trim(), String(event.preview || "").trim()].filter(Boolean);
+          renderAssistantLoadingBubble(asstBubble, "Yanıt hazırlanıyor…", detailParts.join(" • "));
+        }
         stepLog.style.display = "";
         const toolKey = event.call_id || event.tool || "__generic__";
         const sectionItems = ensureToolStepSection(
@@ -12968,6 +13174,7 @@ async function sendMessage(options = {}) {
         }
         scrollToBottom();
       } else if (event.type === "answer_start") {
+        clearAssistantLoadingBubble(asstBubble);
         asstBubble.classList.remove("thinking");
         asstBubble.classList.remove("cursor");
       } else if (event.type === "reasoning_start") {
@@ -13026,6 +13233,13 @@ async function sendMessage(options = {}) {
         scrollToBottom();
       } else if (event.type === "assistant_sub_agent_trace_update") {
         assistantSubAgentTraces = mergeAssistantSubAgentTraceEntry(assistantSubAgentTraces, event.entry);
+        if (!activeAssistantStreamingHasVisibleAnswer && event.entry?.status === "running") {
+          renderAssistantLoadingBubble(
+            asstBubble,
+            "Araştırma ajanı çalışıyor…",
+            String(event.entry?.task || event.entry?.summary || "").trim(),
+          );
+        }
         updateAssistantSubAgentTrace(asstGroup, { sub_agent_traces: assistantSubAgentTraces });
         scrollToBottom();
       } else if (event.type === "assistant_tool_history") {
@@ -13227,6 +13441,7 @@ async function sendMessage(options = {}) {
     sendSucceeded = true;
   } catch (error) {
     sendErrorCode = String(error?.code || "").trim();
+    const wasCancelledByUser = error?.name === "AbortError" && activeUserCancelRequested;
     if (pendingAnswerRenderTimer !== null) {
       flushAnswerRender();
     }
@@ -13268,22 +13483,31 @@ async function sendMessage(options = {}) {
       renderSummaryInspector();
       loadSidebar();
 
-      if (error.name !== "AbortError") {
+      if (wasCancelledByUser) {
+        showToast("Yanıt durduruldu. Kaydedilen kısım korunuyor…", "warning");
+      } else if (error.name !== "AbortError") {
         showError("Connection was interrupted. The partial answer was preserved.");
       }
       lastConversationSignature = getConversationSignature(history);
       scheduleConversationRefreshAfterStream();
     } else {
-      if (currentConvId) {
+      if (wasCancelledByUser) {
+        showToast("Yanıt durduruluyor. Son durum arka planda kaydediliyor…", "warning");
+        scheduleConversationRefreshAfterStream();
+      } else if (currentConvId) {
         await openConversation(currentConvId);
       } else {
         startNewChat();
       }
-      if (error.name !== "AbortError") {
+      if (!wasCancelledByUser && error.name !== "AbortError") {
         showError(error.message);
       }
     }
   } finally {
+    if (activeChatRunId === streamRequestId) {
+      activeChatRunId = null;
+    }
+    activeUserCancelRequested = false;
     activeAbortController = null;
     setStreaming(false);
     renderConversationHistory({ preserveScroll: true });
@@ -13314,6 +13538,7 @@ clearEditTarget();
 updateHeaderOffset();
 applyCanvasPanelWidth(readCanvasWidthPreference(), false);
 syncCanvasToggleButton();
+syncCanvasViewportControls();
 syncSummaryToggleButton();
 syncPruneToggleButton();
 renderHistorySelectionBar();
