@@ -388,10 +388,13 @@ def format_knowledge_base_auto_context(retrieved_context) -> str:
             continue
         source_name = str(match.get("source_name") or match.get("source") or f"Match {index}").strip() or f"Match {index}"
         similarity = match.get("similarity")
-        heading = f"## [{index}] {source_name}"
-        meta = f"Similarity: {float(similarity):.2f}" if isinstance(similarity, (int, float)) else ""
         excerpt = str(match.get("text") or match.get("excerpt") or "").strip()
-        sections.append("\n".join(part for part in (heading, meta, excerpt) if part))
+        block_parts = [f"Source: {source_name}"]
+        if isinstance(similarity, (int, float)):
+            block_parts.append(f"Similarity: {float(similarity):.2f}")
+        if excerpt:
+            block_parts.append(excerpt)
+        sections.append("\n".join(block_parts))
 
     return "\n\n".join(section for section in sections if section).strip()
 
@@ -1902,6 +1905,9 @@ def _build_runtime_volatile_parts(
 ) -> list[str]:
     volatile_parts: list[str] = []
 
+    if include_time_context:
+        volatile_parts.append(_build_current_time_context(now))
+
     tool_memory_payload = _build_tool_memory_payload(tool_memory_context, active_tool_names)
     if tool_memory_payload:
         volatile_parts.append("## Tool Memory")
@@ -2082,9 +2088,6 @@ def _build_runtime_volatile_parts(
     active_tools_context = _build_active_tools_context(active_tool_names)
     if active_tools_context:
         volatile_parts.extend(active_tools_context)
-
-    if include_time_context:
-        volatile_parts.append(_build_current_time_context(now))
 
     return volatile_parts
 

@@ -4,6 +4,7 @@ from threading import Lock
 from flask import Flask
 
 import config
+from request_security import install_request_security
 
 
 _RAG_STARTUP_SYNC_LOCK = Lock()
@@ -38,6 +39,8 @@ def create_app(database_path: str | None = None, *, load_persisted_runtime_setti
     app.config["DATABASE_PATH"] = resolved_database_path
     app.config["SECRET_KEY"] = config.SECRET_KEY
     app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=config.LOGIN_REMEMBER_SESSION_DAYS)
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
     @app.before_request
     def _sync_rag_once_before_request():
@@ -54,6 +57,7 @@ def create_app(database_path: str | None = None, *, load_persisted_runtime_setti
     initialize_database()
     register_auth_routes(app)
     install_auth_guard(app)
+    install_request_security(app)
     register_page_routes(app)
     register_conversation_routes(app)
     register_chat_routes(app)

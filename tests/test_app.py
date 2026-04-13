@@ -20,6 +20,7 @@ import model_registry
 import ocr_service
 import prune_service
 import rag_service
+import request_security
 import web_tools
 from agent import (
     CANVAS_MUTATION_RETRY_MARKER,
@@ -195,6 +196,10 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
     _stream_chunk = staticmethod(build_stream_chunk)
     _stream_chunk_openrouter = staticmethod(build_stream_chunk_openrouter)
     _tool_call_chunk = staticmethod(build_tool_call_chunk)
+
+    def _get_session_csrf_token(self) -> str:
+        with self.client.session_transaction() as session_data:
+            return str(session_data.get(request_security.CSRF_TOKEN_SESSION_KEY) or "")
 
     def test_settings_roundtrip(self):
         response = self.client.get("/api/settings")
@@ -1164,6 +1169,114 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             response = self.client.get("/")
             self.assertEqual(response.status_code, 200)
 
+    def test_api_mutations_require_csrf_token_outside_testing_even_with_werkzeug_user_agent(self):
+        previous_testing = self.app.config.get("TESTING", False)
+        self.app.config["TESTING"] = False
+        try:
+            self.client.get("/")
+            csrf_token = self._get_session_csrf_token()
+            self.assertTrue(csrf_token)
+
+            response = self.client.post(
+                "/api/conversations",
+                json={"title": "Blocked", "model": "deepseek-chat"},
+                headers={"User-Agent": "Werkzeug/3.1.0"},
+            )
+            self.assertEqual(response.status_code, 403)
+            self.assertEqual(response.get_json()["error"], "Security check failed. Refresh the page and try again.")
+
+            response = self.client.post(
+                "/api/conversations",
+                json={"title": "Allowed", "model": "deepseek-chat"},
+                headers={
+                    "User-Agent": "Werkzeug/3.1.0",
+                    "X-CSRF-Token": csrf_token,
+                },
+            )
+            self.assertEqual(response.status_code, 201)
+        finally:
+            self.app.config["TESTING"] = previous_testing
+
+    def test_login_requires_csrf_token_outside_testing(self):
+        with patch("config.LOGIN_PIN", "2468"):
+            previous_testing = self.app.config.get("TESTING", False)
+            self.app.config["TESTING"] = False
+            try:
+                response = self.client.get("/login")
+                self.assertEqual(response.status_code, 200)
+                self.assertIn('name="csrf_token"', response.get_data(as_text=True))
+
+                csrf_token = self._get_session_csrf_token()
+                self.assertTrue(csrf_token)
+
+                response = self.client.post("/login", data={"pin": "2468"})
+                self.assertEqual(response.status_code, 403)
+
+                response = self.client.post(
+                    "/login",
+                    data={"pin": "2468", "csrf_token": csrf_token},
+                )
+                self.assertEqual(response.status_code, 302)
+                self.assertEqual(response.headers["Location"], "/")
+            finally:
+                self.app.config["TESTING"] = previous_testing
+
+    def test_logout_requires_csrf_token_outside_testing(self):
+        previous_testing = self.app.config.get("TESTING", False)
+        self.app.config["TESTING"] = False
+        try:
+            self.client.get("/")
+            csrf_token = self._get_session_csrf_token()
+            self.assertTrue(csrf_token)
+
+            response = self.client.post("/logout")
+            self.assertEqual(response.status_code, 403)
+
+            response = self.client.post("/logout", data={"csrf_token": csrf_token})
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(response.headers["Location"], "/")
+        finally:
+            self.app.config["TESTING"] = previous_testing
+
+    def test_rate_limit_ignores_spoofed_x_forwarded_for_header(self):
+        previous_testing = self.app.config.get("TESTING", False)
+        previous_request_count = request_security._RATE_LIMIT_REQUEST_COUNT
+        self.app.config["TESTING"] = False
+        request_security._RATE_LIMIT_STATE.clear()
+        request_security._RATE_LIMIT_REQUEST_COUNT = 0
+        try:
+            self.client.get("/")
+            csrf_token = self._get_session_csrf_token()
+            self.assertTrue(csrf_token)
+
+            with patch("request_security._get_rate_limit_rule", return_value=("api-write", 1, 60)):
+                response = self.client.post(
+                    "/api/conversations",
+                    json={"title": "First", "model": "deepseek-chat"},
+                    headers={
+                        "X-CSRF-Token": csrf_token,
+                        "X-Forwarded-For": "1.1.1.1",
+                    },
+                )
+                self.assertEqual(response.status_code, 201)
+
+                response = self.client.post(
+                    "/api/conversations",
+                    json={"title": "Second", "model": "deepseek-chat"},
+                    headers={
+                        "X-CSRF-Token": csrf_token,
+                        "X-Forwarded-For": "2.2.2.2",
+                    },
+                )
+                self.assertEqual(response.status_code, 429)
+                self.assertEqual(response.get_json()["error"], "Too many requests. Please try again shortly.")
+                self.assertGreaterEqual(int(response.headers["Retry-After"]), 1)
+                self.assertLessEqual(int(response.headers["Retry-After"]), 60)
+        finally:
+            request_security._RATE_LIMIT_STATE.clear()
+            request_security._RATE_LIMIT_REQUEST_COUNT = previous_request_count
+            self.app.config["TESTING"] = previous_testing
+
     def test_pages_render_html_lang_from_accept_language(self):
         headers = {"Accept-Language": "tr-TR,tr;q=0.9,en;q=0.8"}
 
@@ -2118,6 +2231,10 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.app.config["TESTING"] = False
 
         try:
+            self.client.get("/")
+            csrf_token = self._get_session_csrf_token()
+            self.assertTrue(csrf_token)
+
             with patch("routes.chat.run_agent_stream", return_value=fake_events), patch(
                 "routes.chat.POST_RESPONSE_EXECUTOR.submit"
             ) as mocked_submit, patch("routes.chat.SUMMARY_EXECUTOR.submit") as mocked_summary_submit:
@@ -2129,6 +2246,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                         "user_content": "Hello",
                         "messages": [{"role": "user", "content": "Hello"}],
                     },
+                    headers={"X-CSRF-Token": csrf_token},
                 )
                 response.get_data(as_text=True)
         finally:
@@ -3156,7 +3274,8 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("## Conversation Summaries", content)
         self.assertIn("authoritative compressed history for earlier deleted turns", content)
         self.assertIn("## Current Date and Time", content)
-        self.assertGreater(content.index("## Current Date and Time"), content.index("## Conversation Summaries"))
+        self.assertTrue(content.startswith("## Current Date and Time"))
+        self.assertLess(content.index("## Current Date and Time"), content.index("## Conversation Summaries"))
         self.assertNotIn("id", messages[2])
 
     def test_runtime_system_message_places_datetime_before_tool_history(self):
@@ -3182,10 +3301,10 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("## Tool Execution History", content)
         self.assertIn("## Current Date and Time", content)
         self.assertIn("> **AUTHORITATIVE CURRENT TIME:**", content)
+        self.assertLess(content.index("## Current Date and Time"), content.index("## Tool Memory"))
         self.assertLess(content.index("## Tool Memory"), content.index("## Tool Execution History"))
         self.assertLess(content.index("## Active Canvas Document"), content.index("## Tool Execution History"))
-        self.assertGreater(content.index("## Current Date and Time"), content.index("## Tool Memory"))
-        self.assertGreater(content.index("## Current Date and Time"), content.index("## Tool Execution History"))
+        self.assertLess(content.index("## Current Date and Time"), content.index("## Tool Execution History"))
 
     def test_runtime_system_message_includes_workspace_sandbox(self):
         message = build_runtime_system_message(
@@ -5134,7 +5253,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         with patch("routes.chat.YOUTUBE_TRANSCRIPTS_ENABLED", True), patch(
             "routes.chat.read_youtube_video_reference",
-            side_effect=ValueError("Geçerli bir YouTube URL girin."),
+            side_effect=ValueError("Enter a valid YouTube URL."),
         ):
             response = self.client.post(
                 "/chat",
@@ -5870,7 +5989,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         style_path = Path(__file__).resolve().parent.parent / "static" / "style.css"
         style_text = style_path.read_text(encoding="utf-8")
 
-        self.assertIn("function renderAssistantLoadingBubble(bubbleEl, label = \"Yanıt hazırlanıyor…\", detail = \"\")", script_text)
+        self.assertIn("function renderAssistantLoadingBubble(bubbleEl, label = \"Preparing response…\", detail = \"\")", script_text)
         self.assertIn("const streamRequestId = createStreamRequestId();", script_text)
         self.assertIn("stream_request_id: streamRequestId", script_text)
         self.assertIn('fetch(`/api/chat-runs/${encodeURIComponent(runId)}/cancel`', script_text)

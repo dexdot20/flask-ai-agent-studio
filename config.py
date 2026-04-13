@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import json
 import os
@@ -20,14 +21,45 @@ from proxy_settings import DEFAULT_PROXY_ENABLED_OPERATIONS
 
 load_dotenv()
 
+_INSECURE_SECRET_KEY_VALUES = {
+    "dev-only-change-me",
+    "change-me",
+    "replace-me",
+    "your-secret-key",
+    "secret",
+}
+
 BASE_DIR = os.path.dirname(__file__)
 DB_PATH = os.path.join(BASE_DIR, "chatbot.db")
 IMAGE_STORAGE_DIR = (os.getenv("IMAGE_STORAGE_DIR") or os.path.join(BASE_DIR, "data", "images")).strip()
 PROJECT_WORKSPACE_ROOT = (os.getenv("PROJECT_WORKSPACE_ROOT") or os.path.join(BASE_DIR, "data", "workspaces")).strip()
 PROXIES_PATH = os.path.join(BASE_DIR, "proxies.txt")
 AGENT_TRACE_LOG_PATH = (os.getenv("AGENT_TRACE_LOG_PATH") or os.path.join(BASE_DIR, "logs", "agent-trace.log")).strip()
-SECRET_KEY = (os.getenv("FLASK_SECRET_KEY") or os.getenv("SECRET_KEY") or "dev-only-change-me").strip()
-LOGIN_PIN = (os.getenv("LOGIN_PIN") or "").strip()
+
+
+def _hash_sensitive_value(value: str) -> str:
+    return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
+
+
+def hash_login_pin_value(value: str) -> str:
+    return _hash_sensitive_value(value)
+
+
+def _read_secret_key() -> str:
+    secret_value = (os.getenv("FLASK_SECRET_KEY") or os.getenv("SECRET_KEY") or "").strip()
+    if not secret_value or secret_value.lower() in _INSECURE_SECRET_KEY_VALUES:
+        raise RuntimeError(
+            "FLASK_SECRET_KEY must be configured with a strong non-default value. "
+            "Set it in .env or the environment before starting the app."
+        )
+    return secret_value
+
+
+SECRET_KEY = _read_secret_key()
+_login_pin_env = (os.getenv("LOGIN_PIN") or "").strip()
+LOGIN_PIN_HASH = _hash_sensitive_value(_login_pin_env) if _login_pin_env else ""
+LOGIN_PIN = None
+del _login_pin_env
 DEEPSEEK_API_KEY = (os.getenv("DEEPSEEK_API_KEY") or "").strip()
 OPENROUTER_API_KEY = (os.getenv("OPENROUTER_API_KEY") or "").strip()
 OPENROUTER_HTTP_REFERER = (os.getenv("OPENROUTER_HTTP_REFERER") or os.getenv("OPENROUTER_SITE_URL") or "").strip()
@@ -35,6 +67,18 @@ OPENROUTER_APP_TITLE = (os.getenv("OPENROUTER_APP_TITLE") or os.getenv("OPENROUT
 
 AVAILABLE_MODELS = [{"id": model["id"], "name": model["name"]} for model in BUILTIN_MODELS]
 AVAILABLE_MODEL_IDS = set(BUILTIN_MODEL_IDS)
+
+
+def get_login_pin_hash() -> str:
+    raw_override = globals().get("LOGIN_PIN")
+    if raw_override is not None:
+        raw_value = str(raw_override or "").strip()
+        return _hash_sensitive_value(raw_value) if raw_value else ""
+    return str(globals().get("LOGIN_PIN_HASH") or "").strip()
+
+
+def is_login_pin_configured() -> bool:
+    return bool(get_login_pin_hash())
 
 
 def _parse_int_env(name: str, default: int) -> int:
@@ -241,6 +285,7 @@ PRIVATE_NETWORKS = [
     ipaddress.ip_network("127.0.0.0/8"),
     ipaddress.ip_network("::1/128"),
     ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
     ipaddress.ip_network("169.254.0.0/16"),
     ipaddress.ip_network("0.0.0.0/8"),
 ]
@@ -866,5 +911,5 @@ def get_feature_flags(settings: dict | None = None) -> dict:
         "openrouter_api_configured": bool(OPENROUTER_API_KEY),
         "remote_image_provider_configured": bool(OPENROUTER_API_KEY or DEEPSEEK_API_KEY),
         "scratchpad_admin_editing": SCRATCHPAD_ADMIN_EDITING_ENABLED,
-        "login_pin_enabled": bool(LOGIN_PIN),
+        "login_pin_enabled": is_login_pin_configured(),
     }

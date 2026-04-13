@@ -1421,6 +1421,7 @@ def register_conversation_routes(app) -> None:
             top_k = int(request.args.get("top_k") or RAG_SEARCH_DEFAULT_TOP_K)
         except (TypeError, ValueError):
             top_k = RAG_SEARCH_DEFAULT_TOP_K
+        top_k = max(1, min(100, top_k))
         try:
             min_similarity = request.args.get("min_similarity")
             min_similarity = float(min_similarity) if min_similarity not in (None, "") else None
@@ -1445,8 +1446,9 @@ def register_conversation_routes(app) -> None:
                     min_similarity=min_similarity,
                 )
             )
-        except Exception as exc:
-            return jsonify({"error": str(exc)}), 500
+        except Exception:
+            current_app.logger.exception("Knowledge base search failed for query=%s", query)
+            return jsonify({"error": "Knowledge base search failed."}), 500
 
     @app.route("/api/rag/ingest", methods=["POST"])
     def ingest_rag_document():
@@ -1502,8 +1504,9 @@ def register_conversation_routes(app) -> None:
             )
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
-        except Exception as exc:
-            return jsonify({"error": str(exc)}), 500
+        except Exception:
+            current_app.logger.exception("RAG document ingestion failed for filename=%s", filename)
+            return jsonify({"error": "Document ingestion failed."}), 500
 
         return jsonify(
             {
@@ -1555,8 +1558,9 @@ def register_conversation_routes(app) -> None:
         try:
             ensure_supported_rag_sources(force=True)
             synced = sync_conversations_to_rag(conversation_id=conversation_id, force=True)
-        except Exception as exc:
-            return jsonify({"error": str(exc)}), 500
+        except Exception:
+            current_app.logger.exception("Conversation-to-RAG sync failed for conversation_id=%s", conversation_id)
+            return jsonify({"error": "Conversation sync failed."}), 500
 
         return jsonify({"count": len(synced), "documents": synced})
 
@@ -1570,8 +1574,9 @@ def register_conversation_routes(app) -> None:
 
         try:
             deleted_chunks = rag_delete_source(source_key)
-        except Exception as exc:
-            return jsonify({"error": str(exc)}), 500
+        except Exception:
+            current_app.logger.exception("RAG source deletion failed for source_key=%s", source_key)
+            return jsonify({"error": "Knowledge base deletion failed."}), 500
 
         delete_rag_document_record(source_key)
         return jsonify(

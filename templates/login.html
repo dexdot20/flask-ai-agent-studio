@@ -24,6 +24,7 @@
 
       <form class="login-form" method="post" action="/login">
         <input type="hidden" name="next" value="{{ next_url or '' }}" />
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
         <label class="login-field" for="pin-input">
           <span class="settings-label">PIN</span>
           <input id="pin-input" name="pin" type="password" inputmode="numeric" autocomplete="one-time-code" autofocus required />

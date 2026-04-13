@@ -96,6 +96,7 @@
     <a class="mobile-tools-action" id="mobile-settings-btn" href="/settings">Settings</a>
     {% if auth_enabled %}
     <form action="/logout" method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
       <button class="mobile-tools-action mobile-tools-action--danger" id="mobile-logout-btn" type="submit">Sign out</button>
     </form>
     {% endif %}
@@ -535,9 +536,9 @@
       <button class="btn-ghost canvas-action-button" id="canvas-copy-btn" type="button" data-icon="⧉" title="Copy current document" aria-label="Copy current document" hidden>Copy</button>
     </div>
     <div id="canvas-actions-viewport" class="canvas-action-group" role="group" aria-label="Canvas viewport controls" hidden>
-      <button class="btn-ghost canvas-action-button" id="canvas-zoom-out-btn" type="button" data-icon="A−" title="Zoom out" aria-label="Zoom out canvas document" hidden>Zoom out</button>
-      <button class="btn-ghost canvas-action-button" id="canvas-zoom-in-btn" type="button" data-icon="A+" title="Zoom in" aria-label="Zoom in canvas document" hidden>Zoom in</button>
-      <button class="btn-ghost canvas-action-button" id="canvas-fullscreen-toggle" type="button" data-icon="⤢" aria-pressed="false" title="Full screen" aria-label="Toggle full screen canvas" hidden>Full screen</button>
+      <button class="btn-ghost canvas-action-button canvas-viewport-toggle" id="canvas-zoom-out-btn" type="button" data-icon="A−" title="Zoom out" aria-label="Zoom out canvas document" hidden>Zoom out</button>
+      <button class="btn-ghost canvas-action-button canvas-viewport-toggle" id="canvas-zoom-in-btn" type="button" data-icon="A+" title="Zoom in" aria-label="Zoom in canvas document" hidden>Zoom in</button>
+      <button class="btn-ghost canvas-action-button canvas-viewport-toggle" id="canvas-fullscreen-toggle" type="button" data-icon="⤢" aria-pressed="false" title="Full screen" aria-label="Toggle full screen canvas" hidden>Full screen</button>
     </div>
     <div class="canvas-actions-overflow">
       <button class="btn-ghost canvas-actions-overflow__toggle" id="canvas-more-btn" type="button" data-icon="⋯" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false" aria-controls="canvas-overflow-menu">
@@ -716,7 +717,7 @@
 
   <div id="sidebar-overlay" class="sidebar-overlay"></div>
 
-<script id="app-bootstrap" type="application/json">{{ {"settings": settings, "features": settings.features}|tojson }}</script>
+<script id="app-bootstrap" type="application/json">{{ {"settings": settings, "features": settings.features, "csrf_token": csrf_token}|tojson }}</script>
 <script src="/static/app.js?v={{ app_js_version }}"></script>
 </body>
 </html>

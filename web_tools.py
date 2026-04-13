@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
 import ipaddress
 import json
+import logging
 import os
 import random
 import re
 import socket
+from threading import Lock
 import unicodedata
 import warnings
-import xml.etree.ElementTree as ET
 from io import BytesIO
 from urllib.parse import quote as url_quote
 from urllib.parse import urljoin
@@ -24,6 +26,11 @@ import requests as http_requests
 from bs4 import BeautifulSoup, NavigableString, Tag
 from ddgs import DDGS
 from urllib3.exceptions import InsecureRequestWarning
+
+try:
+    from defusedxml import ElementTree as ET
+except ImportError:  # pragma: no cover - compatibility fallback for older local envs
+    import xml.etree.ElementTree as ET
 
 from config import (
     CONTENT_MAX_CHARS,
@@ -177,6 +184,51 @@ _HTML_PARAGRAPH_TAGS = {
     "address",
 }
 _ZERO_WIDTH_TRANSLATION = dict.fromkeys(map(ord, "\u200b\u200c\u200d\ufeff"), None)
+_ORIGINAL_SOCKET_GETADDRINFO = socket.getaddrinfo
+_DNS_RESOLUTION_GUARD = Lock()
+LOGGER = logging.getLogger(__name__)
+
+
+def _validate_resolved_ip_address(address: str) -> None:
+    ip = ipaddress.ip_address(str(address or "").strip())
+    for network in PRIVATE_NETWORKS:
+        if ip in network:
+            raise socket.gaierror(f"Private/local network address prohibited: {address}")
+
+
+def _resolve_safe_address_info(hostname: str, port=None, *args, **kwargs):
+    infos = _ORIGINAL_SOCKET_GETADDRINFO(hostname, port, *args, **kwargs)
+    validated_infos = []
+    for info in infos:
+        sockaddr = info[4] if len(info) > 4 else ()
+        resolved_address = str(sockaddr[0] if sockaddr else "").strip()
+        if not resolved_address:
+            continue
+        _validate_resolved_ip_address(resolved_address)
+        validated_infos.append(info)
+    if not validated_infos:
+        raise socket.gaierror(f"DNS resolution failed: {hostname}")
+    return validated_infos
+
+
+@contextmanager
+def _guarded_dns_resolution(*, enabled: bool):
+    if not enabled:
+        yield
+        return
+
+    def _safe_getaddrinfo(host, port, *args, **kwargs):
+        if not isinstance(host, str) or not host.strip():
+            return _ORIGINAL_SOCKET_GETADDRINFO(host, port, *args, **kwargs)
+        return _resolve_safe_address_info(host, port, *args, **kwargs)
+
+    with _DNS_RESOLUTION_GUARD:
+        previous_getaddrinfo = socket.getaddrinfo
+        socket.getaddrinfo = _safe_getaddrinfo
+        try:
+            yield
+        finally:
+            socket.getaddrinfo = previous_getaddrinfo
 
 
 def _build_browser_headers(
@@ -302,12 +354,7 @@ def _is_safe_url(url: str) -> tuple[bool, str]:
     if hostname.lower() in ("localhost", "localhost."):
         return False, "Local addresses are prohibited"
     try:
-        for info in socket.getaddrinfo(hostname, None):
-            addr = info[4][0]
-            ip = ipaddress.ip_address(addr)
-            for net in PRIVATE_NETWORKS:
-                if ip in net:
-                    return False, f"Private/local network address prohibited: {addr}"
+        _resolve_safe_address_info(hostname, None)
     except socket.gaierror:
         return False, f"DNS resolution failed: {hostname}"
     return True, ""
@@ -1056,27 +1103,33 @@ def fetch_url_tool(
                     session.proxies.update(proxy_map)
                 bypassed_ssl_verification = False
                 try:
-                    resp = session.get(
-                        url,
-                        timeout=FETCH_TIMEOUT,
-                        headers=headers,
-                        stream=True,
-                        allow_redirects=True,
-                    )
-                except http_requests.exceptions.SSLError as exc:
-                    if not _should_retry_without_ssl_verification(exc):
-                        raise
-                    bypassed_ssl_verification = True
-                    with warnings.catch_warnings():
-                        warnings.simplefilter("ignore", InsecureRequestWarning)
+                    with _guarded_dns_resolution(enabled=proxy_map is None):
                         resp = session.get(
                             url,
                             timeout=FETCH_TIMEOUT,
                             headers=headers,
                             stream=True,
                             allow_redirects=True,
-                            verify=False,
                         )
+                except http_requests.exceptions.SSLError as exc:
+                    if not _should_retry_without_ssl_verification(exc):
+                        raise
+                    bypassed_ssl_verification = True
+                    LOGGER.warning(
+                        "SSL verification failed for url=%s; retrying without certificate verification.",
+                        url,
+                    )
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore", InsecureRequestWarning)
+                        with _guarded_dns_resolution(enabled=proxy_map is None):
+                            resp = session.get(
+                                url,
+                                timeout=FETCH_TIMEOUT,
+                                headers=headers,
+                                stream=True,
+                                allow_redirects=True,
+                                verify=False,
+                            )
                 raw = b""
                 partial_error = None
                 try:
@@ -1189,8 +1242,9 @@ def search_web_tool(queries: list) -> list:
             last_error = None
             for proxy in get_proxy_candidates_for_operation(PROXY_OPERATION_SEARCH_WEB, include_direct_fallback=True):
                 try:
-                    with DDGS(proxy=proxy) as ddgs:
-                        hits = list(ddgs.text(query, max_results=SEARCH_MAX_RESULTS))
+                    with _guarded_dns_resolution(enabled=proxy is None):
+                        with DDGS(proxy=proxy) as ddgs:
+                            hits = list(ddgs.text(query, max_results=SEARCH_MAX_RESULTS))
                     break
                 except Exception as exc:
                     last_error = exc
@@ -1243,16 +1297,17 @@ def search_news_ddgs_tool(queries: list, lang: str = "tr", when: str | None = No
             last_error = None
             for proxy in get_proxy_candidates_for_operation(PROXY_OPERATION_SEARCH_NEWS_DDGS, include_direct_fallback=True):
                 try:
-                    with DDGS(proxy=proxy) as ddgs:
-                        hits = list(
-                            ddgs.news(
-                                query,
-                                region=region,
-                                safesearch="off",
-                                timelimit=timelimit,
-                                max_results=SEARCH_MAX_RESULTS,
+                    with _guarded_dns_resolution(enabled=proxy is None):
+                        with DDGS(proxy=proxy) as ddgs:
+                            hits = list(
+                                ddgs.news(
+                                    query,
+                                    region=region,
+                                    safesearch="off",
+                                    timelimit=timelimit,
+                                    max_results=SEARCH_MAX_RESULTS,
+                                )
                             )
-                        )
                     break
                 except Exception as exc:
                     last_error = exc
@@ -1311,15 +1366,16 @@ def search_news_google_tool(queries: list, lang: str = "tr", when: str | None = 
             last_error = None
             for proxy in get_proxy_candidates_for_operation(PROXY_OPERATION_SEARCH_NEWS_GOOGLE, include_direct_fallback=True):
                 try:
-                    resp = http_requests.get(
-                        rss_url,
-                        headers=_build_browser_headers(
-                            accept="application/rss+xml, application/xml, text/xml, */*;q=0.8"
-                        ),
-                        timeout=15,
-                        proxies=_requests_proxy_dict(proxy),
-                    )
-                    resp.raise_for_status()
+                    with _guarded_dns_resolution(enabled=proxy is None):
+                        resp = http_requests.get(
+                            rss_url,
+                            headers=_build_browser_headers(
+                                accept="application/rss+xml, application/xml, text/xml, */*;q=0.8"
+                            ),
+                            timeout=15,
+                            proxies=_requests_proxy_dict(proxy),
+                        )
+                        resp.raise_for_status()
                     break
                 except Exception as exc:
                     last_error = exc
@@ -1352,7 +1408,6 @@ def search_news_google_tool(queries: list, lang: str = "tr", when: str | None = 
             results.append({"error": str(exc), "query": raw_query})
 
     return results
-
 
 _GREP_CONTEXT_MAX_LINES = 5
 _GREP_MAX_MATCHES = 30

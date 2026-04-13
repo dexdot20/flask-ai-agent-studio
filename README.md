@@ -341,7 +341,7 @@ At least one provider key is required.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `FLASK_SECRET_KEY` | `dev-only-change-me` | Secret key used for Flask sessions; also accepts `SECRET_KEY`; override in production |
+| `FLASK_SECRET_KEY` | required | Secret key used for Flask sessions; also accepts `SECRET_KEY`; must be set to a strong non-default value before startup |
 | `LOGIN_PIN` | empty | Enables the login gate when set |
 | `LOGIN_SESSION_TIMEOUT_MINUTES` | `30` | Inactivity timeout for normal sessions |
 | `LOGIN_MAX_FAILED_ATTEMPTS` | `3` | Failed PIN attempts before temporary lockout |

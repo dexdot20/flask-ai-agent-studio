@@ -3650,9 +3650,9 @@ def build_effective_user_preferences(settings: dict | None = None) -> str:
     ai_personality = get_ai_personality(settings)
     parts = []
     if general_instructions:
-        parts.append(f"## General Instructions\n{general_instructions}")
+        parts.append(f"General instructions:\n{general_instructions}")
     if ai_personality:
-        parts.append(f"## AI Personality\n{ai_personality}")
+        parts.append(f"AI personality:\n{ai_personality}")
     return "\n\n".join(parts).strip()
 
 

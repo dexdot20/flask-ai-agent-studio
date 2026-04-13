@@ -11,7 +11,62 @@ const bootstrapData = (() => {
 })();
 
 const appSettings = bootstrapData.settings || {};
+const csrfToken = String(bootstrapData.csrf_token || "").trim();
 const knownModelOptions = Array.isArray(appSettings.available_models) ? appSettings.available_models : [];
+
+const nativeFetch = typeof globalThis.fetch === "function" ? globalThis.fetch.bind(globalThis) : null;
+const CSRF_SAFE_HTTP_METHODS = new Set(["GET", "HEAD", "OPTIONS", "TRACE"]);
+
+function resolveFetchMethod(input, init) {
+  const explicitMethod = String(init?.method || "").trim();
+  if (explicitMethod) {
+    return explicitMethod.toUpperCase();
+  }
+  if (input instanceof Request) {
+    return String(input.method || "GET").trim().toUpperCase() || "GET";
+  }
+  return "GET";
+}
+
+function resolveFetchUrl(input) {
+  if (input instanceof Request) {
+    return input.url;
+  }
+  return String(input || "").trim();
+}
+
+function shouldAttachCsrfHeader(input, init) {
+  if (!nativeFetch || !csrfToken) {
+    return false;
+  }
+  const method = resolveFetchMethod(input, init);
+  if (CSRF_SAFE_HTTP_METHODS.has(method)) {
+    return false;
+  }
+  const rawUrl = resolveFetchUrl(input);
+  if (!rawUrl) {
+    return true;
+  }
+  try {
+    const resolvedUrl = new URL(rawUrl, window.location.href);
+    return resolvedUrl.origin === window.location.origin;
+  } catch (_) {
+    return true;
+  }
+}
+
+if (nativeFetch) {
+  globalThis.fetch = (input, init = undefined) => {
+    if (!shouldAttachCsrfHeader(input, init)) {
+      return nativeFetch(input, init);
+    }
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+    if (!headers.has("X-CSRF-Token")) {
+      headers.set("X-CSRF-Token", csrfToken);
+    }
+    return nativeFetch(input, { ...(init || {}), headers });
+  };
+}
 
 const messagesEl = document.getElementById("messages");
 const inputEl = document.getElementById("user-input");
@@ -2874,7 +2929,39 @@ function sanitizeHtml(html) {
   if (sanitizer && typeof sanitizer.sanitize === "function") {
     return sanitizer.sanitize(rawHtml);
   }
-  return rawHtml;
+
+  const template = document.createElement("template");
+  template.innerHTML = rawHtml;
+  const blockedTags = new Set(["script", "style", "iframe", "object", "embed", "link", "meta", "img", "svg"]);
+  const urlAttributes = new Set(["href", "src", "xlink:href"]);
+  const nodes = [template.content];
+
+  while (nodes.length) {
+    const node = nodes.pop();
+    Array.from(node.children || []).forEach((element) => {
+      const tagName = String(element.tagName || "").trim().toLowerCase();
+      if (blockedTags.has(tagName)) {
+        element.remove();
+        return;
+      }
+
+      Array.from(element.attributes).forEach((attribute) => {
+        const attrName = String(attribute.name || "").trim().toLowerCase();
+        const attrValue = String(attribute.value || "").trim();
+        if (attrName.startsWith("on") || attrName === "srcdoc" || attrName === "style") {
+          element.removeAttribute(attribute.name);
+          return;
+        }
+        if (urlAttributes.has(attrName) && /^(?:javascript:|data:text\/html)/i.test(attrValue)) {
+          element.removeAttribute(attribute.name);
+        }
+      });
+
+      nodes.push(element);
+    });
+  }
+
+  return template.innerHTML;
 }
 
 function closeUnclosedCodeFences(text) {
@@ -4545,7 +4632,12 @@ function setCanvasEmptyState(stateKey = "no_documents") {
 
   const state = CANVAS_EMPTY_STATES[stateKey] || CANVAS_EMPTY_STATES.no_documents;
   canvasEmptyState.hidden = false;
-  canvasEmptyState.innerHTML = `<h3>${state.title}</h3><p>${state.message}</p>`;
+  canvasEmptyState.replaceChildren();
+  const titleEl = document.createElement("h3");
+  titleEl.textContent = String(state.title || "").trim();
+  const messageEl = document.createElement("p");
+  messageEl.textContent = String(state.message || "").trim();
+  canvasEmptyState.append(titleEl, messageEl);
 }
 
 function syncCanvasFormControls({
@@ -7287,7 +7379,7 @@ function normalizeClarificationQuestion(question, index) {
       return {
         label: optionLabel,
         value: optionValue,
-        ...(optionDescription ? { description: optionDescription } : {}),
+        description: optionDescription,
       };
     })
     .filter(Boolean);
@@ -7789,7 +7881,7 @@ async function saveEditedHistoryMessage(messageId, nextContent, options = {}) {
 
   const message = getHistoryMessage(messageId);
   if (!isEditableHistoryMessage(message)) {
-    showError("Mesaj artık düzenlenemiyor.");
+    showError("This message can no longer be edited.");
     clearInlineEditingTarget();
     renderConversationHistory({ preserveScroll: true });
     return;
@@ -8629,12 +8721,12 @@ function rebuildTokenStatsFromHistory() {
   });
 }
 
-function renderAssistantLoadingBubble(bubbleEl, label = "Yanıt hazırlanıyor…", detail = "") {
+function renderAssistantLoadingBubble(bubbleEl, label = "Preparing response…", detail = "") {
   if (!bubbleEl) {
     return;
   }
 
-  const normalizedLabel = String(label || "").trim() || "Yanıt hazırlanıyor…";
+  const normalizedLabel = String(label || "").trim() || "Preparing response…";
   const normalizedDetail = String(detail || "").trim();
   bubbleEl.hidden = false;
   bubbleEl.classList.add("bubble--loading");
@@ -13034,7 +13126,7 @@ async function sendMessage(options = {}) {
       } else if (event.type === "step_update") {
         if (!activeAssistantStreamingHasVisibleAnswer) {
           const detailParts = [String(event.tool || "").replaceAll("_", " ").trim(), String(event.preview || "").trim()].filter(Boolean);
-          renderAssistantLoadingBubble(asstBubble, "Yanıt hazırlanıyor…", detailParts.join(" • "));
+          renderAssistantLoadingBubble(asstBubble, "Preparing response…", detailParts.join(" • "));
         }
         stepLog.style.display = "";
         const toolKey = event.call_id || event.tool || "__generic__";
@@ -13236,7 +13328,7 @@ async function sendMessage(options = {}) {
         if (!activeAssistantStreamingHasVisibleAnswer && event.entry?.status === "running") {
           renderAssistantLoadingBubble(
             asstBubble,
-            "Araştırma ajanı çalışıyor…",
+            "Research agent is running…",
             String(event.entry?.task || event.entry?.summary || "").trim(),
           );
         }
@@ -13484,7 +13576,7 @@ async function sendMessage(options = {}) {
       loadSidebar();
 
       if (wasCancelledByUser) {
-        showToast("Yanıt durduruldu. Kaydedilen kısım korunuyor…", "warning");
+        showToast("Response stopped. The saved portion was preserved…", "warning");
       } else if (error.name !== "AbortError") {
         showError("Connection was interrupted. The partial answer was preserved.");
       }
@@ -13492,7 +13584,7 @@ async function sendMessage(options = {}) {
       scheduleConversationRefreshAfterStream();
     } else {
       if (wasCancelledByUser) {
-        showToast("Yanıt durduruluyor. Son durum arka planda kaydediliyor…", "warning");
+          showToast("Stopping response. Final state is being saved in the background…", "warning");
         scheduleConversationRefreshAfterStream();
       } else if (currentConvId) {
         await openConversation(currentConvId);

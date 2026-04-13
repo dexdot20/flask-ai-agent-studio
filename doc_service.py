@@ -156,7 +156,7 @@ def _looks_like_real_table(data: list[list]) -> bool:
     multi-column table when character X-positions happen to align.  Two checks:
 
     1. Header row must have ≥50% non-trivial cells (≥2 chars) — rejects headings
-       like "SONUÇ: | | |" where only the first cell is populated.
+         like "RESULT: | | |" where only the first cell is populated.
     2. Fill-rate variance (CV) of all rows must be low — real tables have
        consistent cell density across rows; flowing paragraph text produces
        alternating fully-packed rows and near-empty rows (high CV).

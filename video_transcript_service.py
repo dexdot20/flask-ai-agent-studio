@@ -60,7 +60,7 @@ def extract_youtube_video_id(url: str) -> str | None:
 def normalize_youtube_url(url: str) -> str:
     video_id = extract_youtube_video_id(url)
     if not video_id:
-        raise ValueError("Geçerli bir YouTube URL girin.")
+        raise ValueError("Enter a valid YouTube URL.")
     return f"https://www.youtube.com/watch?v={video_id}"
 
 
@@ -71,21 +71,21 @@ def read_youtube_video_reference(raw_url: str) -> tuple[str, str]:
     normalized_url = normalize_youtube_url(raw_url)
     video_id = extract_youtube_video_id(normalized_url)
     if not video_id:
-        raise ValueError("Geçerli bir YouTube video kimliği bulunamadı.")
+        raise ValueError("No valid YouTube video ID was found.")
     return normalized_url, video_id
 
 
 def _require_transcript_runtime() -> tuple[object, object]:
     if shutil.which("ffmpeg") is None:
-        raise RuntimeError("YouTube transkripsiyonu için ffmpeg kurulu olmalıdır.")
+        raise RuntimeError("ffmpeg must be installed for YouTube transcription.")
     try:
         import yt_dlp
     except ImportError as exc:
-        raise RuntimeError("YouTube transkripsiyonu için `yt-dlp` paketi kurulu olmalıdır.") from exc
+        raise RuntimeError("The `yt-dlp` package must be installed for YouTube transcription.") from exc
     try:
         from faster_whisper import WhisperModel
     except ImportError as exc:
-        raise RuntimeError("Yerel transkripsiyon için `faster-whisper` paketi kurulu olmalıdır.") from exc
+        raise RuntimeError("The `faster-whisper` package must be installed for local transcription.") from exc
     return yt_dlp, WhisperModel
 
 
@@ -127,7 +127,7 @@ def _resolve_downloaded_media_path(info: dict, temp_dir: str) -> str:
 
     downloaded_files = [path for path in Path(temp_dir).glob("*") if path.is_file()]
     if not downloaded_files:
-        raise RuntimeError("İndirilen video sesi bulunamadı.")
+        raise RuntimeError("No downloaded audio file was found.")
     downloaded_files.sort(key=lambda path: path.stat().st_size, reverse=True)
     return str(downloaded_files[0])
 
@@ -213,7 +213,7 @@ def transcribe_youtube_video(source_url: str) -> dict:
 
         transcript_text = "\n".join(transcript_lines).strip()
         if not transcript_text:
-            raise ValueError("Videodan çözümlenebilir bir konuşma metni çıkarılamadı.")
+            raise ValueError("A readable speech transcript could not be extracted from the video.")
 
         title = str(info.get("title") or "").strip() or f"YouTube video {video_id}"
         duration_value = info.get("duration")

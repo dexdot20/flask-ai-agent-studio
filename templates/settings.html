@@ -28,6 +28,7 @@
       <a class="btn-ghost" href="/">Back to chat</a>
       {% if auth_enabled %}
       <form action="/logout" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
         <button class="btn-ghost btn-auth-link" type="submit">Sign out</button>
       </form>
       {% endif %}
@@ -1576,7 +1577,7 @@
     </section>
   </main>
 
-  <script id="app-bootstrap" type="application/json">{{ {"settings": settings, "features": settings.features}|tojson }}</script>
+  <script id="app-bootstrap" type="application/json">{{ {"settings": settings, "features": settings.features, "csrf_token": csrf_token}|tojson }}</script>
   <script src="/static/settings.js?v={{ settings_js_version }}"></script>
 </body>
 </html>

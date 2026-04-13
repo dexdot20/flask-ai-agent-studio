@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from flask import jsonify, redirect, render_template, request, session, url_for
 
 import config
+from request_security import rotate_csrf_token
 
 AUTH_SESSION_KEY = "auth_authenticated"
 AUTH_LAST_SEEN_KEY = "auth_last_seen"
@@ -15,7 +16,7 @@ AUTH_LOCKED_UNTIL_KEY = "auth_locked_until"
 
 
 def is_login_pin_enabled() -> bool:
-    return bool((config.LOGIN_PIN or "").strip())
+    return config.is_login_pin_configured()
 
 
 def _utc_now() -> datetime:
@@ -134,9 +135,10 @@ def register_auth_routes(app) -> None:
 
         provided_pin = str(request.form.get("pin") or "").strip()
         remember = str(request.form.get("remember") or "").strip().lower() in {"1", "true", "yes", "on"}
-        expected_pin = str(config.LOGIN_PIN or "").strip()
+        expected_pin_hash = config.get_login_pin_hash()
+        provided_pin_hash = config.hash_login_pin_value(provided_pin) if provided_pin else ""
 
-        if expected_pin and secrets.compare_digest(provided_pin, expected_pin):
+        if expected_pin_hash and provided_pin_hash and secrets.compare_digest(provided_pin_hash, expected_pin_hash):
             _clear_auth_state()
             session[AUTH_SESSION_KEY] = True
             session[AUTH_LAST_SEEN_KEY] = _utc_now().isoformat()
@@ -144,6 +146,7 @@ def register_auth_routes(app) -> None:
             session[AUTH_FAILED_ATTEMPTS_KEY] = 0
             session[AUTH_LOCKED_UNTIL_KEY] = None
             session.permanent = remember
+            rotate_csrf_token()
             session.modified = True
             return redirect(next_url or url_for("index"))
 
@@ -167,6 +170,7 @@ def register_auth_routes(app) -> None:
     @app.route("/logout", methods=["POST"])
     def logout():
         _clear_auth_state()
+        rotate_csrf_token()
         session.permanent = False
         session.modified = True
         if not is_login_pin_enabled():
