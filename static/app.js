@@ -9663,7 +9663,8 @@ function getDefaultPersonaId() {
 
 function buildDefaultPersonaLabel() {
   const defaultPersona = findPersonaById(getDefaultPersonaId());
-  return defaultPersona ? `Default: ${defaultPersona.name}` : "No persona";
+  const defaultPersonaName = String(defaultPersona?.name || "").trim();
+  return defaultPersonaName ? `Use app default (${defaultPersonaName})` : "Use app default";
 }
 
 function populatePersonaSelectors() {

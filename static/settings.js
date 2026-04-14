@@ -3588,9 +3588,6 @@ function registerDirtyListeners() {
   fetchAggressivenessEl?.addEventListener("input", markDirty);
   fetchSummarizeMaxInputCharsEl?.addEventListener("input", markDirty);
   fetchSummarizeMaxOutputTokensEl?.addEventListener("input", markDirty);
-  fetchToCanvasThresholdEl?.addEventListener("input", markDirty);
-  fetchToCanvasChunkCharsEl?.addEventListener("input", markDirty);
-  fetchToCanvasMaxChunksEl?.addEventListener("input", markDirty);
   canvasPromptLinesEl?.addEventListener("input", markDirty);
   canvasPromptTokensEl?.addEventListener("input", markDirty);
   canvasPromptCharsEl?.addEventListener("input", markDirty);
