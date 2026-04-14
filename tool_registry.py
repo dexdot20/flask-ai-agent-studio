@@ -8,7 +8,10 @@ from config import (
     CLARIFICATION_QUESTION_LIMIT_MAX,
     CLARIFICATION_QUESTION_LIMIT_MIN,
     CONVERSATION_MEMORY_ENABLED,
+    DEFAULT_SEARCH_TOOL_QUERY_LIMIT,
     RAG_ENABLED,
+    SEARCH_TOOL_QUERY_LIMIT_MAX,
+    SEARCH_TOOL_QUERY_LIMIT_MIN,
     SCRATCHPAD_SECTION_METADATA,
     SCRATCHPAD_SECTION_ORDER,
 )
@@ -810,9 +813,9 @@ TOOL_SPECS = [
                 "queries": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of search queries to run (1–5 queries).",
+                    "description": f"List of search queries to run (1–{DEFAULT_SEARCH_TOOL_QUERY_LIMIT} queries).",
                     "minItems": 1,
-                    "maxItems": 5,
+                    "maxItems": DEFAULT_SEARCH_TOOL_QUERY_LIMIT,
                 }
             },
             "additionalProperties": False,
@@ -820,10 +823,10 @@ TOOL_SPECS = [
         },
         "prompt": {
             "purpose": "Runs a general web search and returns recent results.",
-            "inputs": {"queries": "1-5 search queries"},
+            "inputs": {"queries": f"1-{DEFAULT_SEARCH_TOOL_QUERY_LIMIT} search queries"},
             "guidance": (
                 "search_web accepts only the queries array. Do not pass max_results, top_k, limit, or any other control arguments; the runtime already caps results. "
-                "Never pass more than 5 queries in a single call. If you need more search terms, split them across multiple search_web calls. "
+                f"Never pass more than {DEFAULT_SEARCH_TOOL_QUERY_LIMIT} queries in a single call. If you need more search terms, split them across multiple search_web calls. "
                 "If the answer is already available from the current context or does not require external verification, do not search."
             ),
         },
@@ -1010,9 +1013,9 @@ TOOL_SPECS = [
                 "queries": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of news search queries (1–5).",
+                    "description": f"List of news search queries (1–{DEFAULT_SEARCH_TOOL_QUERY_LIMIT}).",
                     "minItems": 1,
-                    "maxItems": 5,
+                    "maxItems": DEFAULT_SEARCH_TOOL_QUERY_LIMIT,
                 },
                 "lang": {
                     "type": "string",
@@ -1029,11 +1032,11 @@ TOOL_SPECS = [
         },
         "prompt": {
             "purpose": "Searches news headlines/links/dates/sources with DuckDuckGo News.",
-            "inputs": {"queries": "1-5 news queries", "lang": "tr|en", "when": "d|w|m|y"},
+            "inputs": {"queries": f"1-{DEFAULT_SEARCH_TOOL_QUERY_LIMIT} news queries", "lang": "tr|en", "when": "d|w|m|y"},
             "guidance": (
                 "Use this for broad recent-news discovery when you actually need headlines, sources, and timestamps before reading full articles. "
                 "Prefer this over search_news_google for generic international topics or the first pass on a topic. "
-                "Never pass more than 5 queries in one call. If you need article details, follow up with fetch_url on the most relevant links instead of widening the same news query repeatedly. "
+                f"Never pass more than {DEFAULT_SEARCH_TOOL_QUERY_LIMIT} queries in one call. If you need article details, follow up with fetch_url on the most relevant links instead of widening the same news query repeatedly. "
                 "If the answer is already known or does not require current news verification, do not search."
             ),
         },
@@ -1051,9 +1054,9 @@ TOOL_SPECS = [
                 "queries": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of news search queries (1–5).",
+                    "description": f"List of news search queries (1–{DEFAULT_SEARCH_TOOL_QUERY_LIMIT}).",
                     "minItems": 1,
-                    "maxItems": 5,
+                    "maxItems": DEFAULT_SEARCH_TOOL_QUERY_LIMIT,
                 },
                 "lang": {
                     "type": "string",
@@ -1070,10 +1073,10 @@ TOOL_SPECS = [
         },
         "prompt": {
             "purpose": "Searches news headlines/links/dates/sources with Google News RSS.",
-            "inputs": {"queries": "1-5 news queries", "lang": "tr|en", "when": "d|w|m|y"},
+            "inputs": {"queries": f"1-{DEFAULT_SEARCH_TOOL_QUERY_LIMIT} news queries", "lang": "tr|en", "when": "d|w|m|y"},
             "guidance": (
                 "Use this when Google News coverage is likely stronger than DuckDuckGo News for the topic or locale and the request genuinely needs current news verification. "
-                "Never pass more than 5 queries in one call. After scanning the feed, fetch only the few links that are actually needed."
+                f"Never pass more than {DEFAULT_SEARCH_TOOL_QUERY_LIMIT} queries in one call. After scanning the feed, fetch only the few links that are actually needed."
             ),
         },
     },
@@ -2100,6 +2103,7 @@ TOOL_SPECS = [
 ]
 
 TOOL_SPEC_BY_NAME = {tool["name"]: tool for tool in TOOL_SPECS}
+SEARCH_QUERY_LIMITED_TOOL_NAMES = {"search_web", "search_news_ddgs", "search_news_google"}
 
 
 def _normalize_clarification_max_questions(value: int | None) -> int:
@@ -2108,6 +2112,14 @@ def _normalize_clarification_max_questions(value: int | None) -> int:
     except (TypeError, ValueError):
         normalized = CLARIFICATION_DEFAULT_MAX_QUESTIONS
     return max(CLARIFICATION_QUESTION_LIMIT_MIN, min(CLARIFICATION_QUESTION_LIMIT_MAX, normalized))
+
+
+def _normalize_search_tool_query_limit(value: int | None) -> int:
+    try:
+        normalized = int(value) if value is not None else DEFAULT_SEARCH_TOOL_QUERY_LIMIT
+    except (TypeError, ValueError):
+        normalized = DEFAULT_SEARCH_TOOL_QUERY_LIMIT
+    return max(SEARCH_TOOL_QUERY_LIMIT_MIN, min(SEARCH_TOOL_QUERY_LIMIT_MAX, normalized))
 
 
 def _build_clarification_spec(tool: dict, clarification_max_questions: int | None = None) -> dict:
@@ -2139,7 +2151,68 @@ def _build_clarification_spec(tool: dict, clarification_max_questions: int | Non
     return spec
 
 
-def get_enabled_tool_specs(active_tool_names: list[str], clarification_max_questions: int | None = None) -> list[dict]:
+def _build_search_query_limit_spec(tool: dict, search_tool_query_limit: int | None = None) -> dict:
+    spec = copy.deepcopy(tool)
+    tool_name = str(spec.get("name") or "").strip()
+    if tool_name not in SEARCH_QUERY_LIMITED_TOOL_NAMES:
+        return spec
+
+    limit = _normalize_search_tool_query_limit(search_tool_query_limit)
+    limit_range = f"1-{limit}"
+    parameters = spec.get("parameters") if isinstance(spec.get("parameters"), dict) else {}
+    properties = parameters.get("properties") if isinstance(parameters.get("properties"), dict) else {}
+    queries_schema = properties.get("queries") if isinstance(properties.get("queries"), dict) else {}
+    queries_schema["maxItems"] = limit
+
+    if tool_name == "search_web":
+        queries_schema["description"] = f"List of search queries to run ({limit_range} queries)."
+    else:
+        queries_schema["description"] = f"List of news search queries ({limit_range})."
+
+    properties["queries"] = queries_schema
+    parameters["properties"] = properties
+    spec["parameters"] = parameters
+
+    prompt = spec.get("prompt") if isinstance(spec.get("prompt"), dict) else {}
+    prompt_inputs = prompt.get("inputs") if isinstance(prompt.get("inputs"), dict) else {}
+    if tool_name == "search_web":
+        prompt_inputs["queries"] = f"{limit_range} search queries"
+    elif tool_name in {"search_news_ddgs", "search_news_google"}:
+        prompt_inputs["queries"] = f"{limit_range} news queries"
+    prompt["inputs"] = prompt_inputs
+
+    guidance = str(prompt.get("guidance") or "").strip()
+    replacements = {
+        "search_web": (
+            "Never pass more than 5 queries in a single call. If you need more search terms, split them across multiple search_web calls. ",
+            f"Never pass more than {limit} queries in a single call. If you need more search terms, split them across multiple search_web calls. ",
+        ),
+        "search_news_ddgs": (
+            "Never pass more than 5 queries in one call. If you need article details, follow up with fetch_url on the most relevant links instead of widening the same news query repeatedly. ",
+            f"Never pass more than {limit} queries in one call. If you need article details, follow up with fetch_url on the most relevant links instead of widening the same news query repeatedly. ",
+        ),
+        "search_news_google": (
+            "Never pass more than 5 queries in one call. After scanning the feed, fetch only the few links that are actually needed.",
+            f"Never pass more than {limit} queries in one call. After scanning the feed, fetch only the few links that are actually needed.",
+        ),
+    }
+    old_text, new_text = replacements.get(tool_name, ("", ""))
+    if old_text and old_text in guidance:
+        guidance = guidance.replace(old_text, new_text)
+    else:
+        limit_note = f" Stay within the configured {limit_range} query limit for a single call."
+        if limit_note.strip() not in guidance:
+            guidance = f"{guidance}{limit_note}".strip()
+    prompt["guidance"] = guidance
+    spec["prompt"] = prompt
+    return spec
+
+
+def get_enabled_tool_specs(
+    active_tool_names: list[str],
+    clarification_max_questions: int | None = None,
+    search_tool_query_limit: int | None = None,
+) -> list[dict]:
     active_set = set(active_tool_names or [])
     specs = [tool for tool in TOOL_SPECS if tool["name"] in active_set]
     if not RAG_ENABLED:
@@ -2150,7 +2223,13 @@ def get_enabled_tool_specs(active_tool_names: list[str], clarification_max_quest
             for tool in specs
             if tool["name"] not in {"save_to_conversation_memory", "delete_conversation_memory_entry"}
         ]
-    return [_build_clarification_spec(tool, clarification_max_questions) for tool in specs]
+    return [
+        _build_search_query_limit_spec(
+            _build_clarification_spec(tool, clarification_max_questions),
+            search_tool_query_limit,
+        )
+        for tool in specs
+    ]
 
 
 def resolve_runtime_tool_names(
@@ -2201,6 +2280,7 @@ def get_openai_tool_specs(
     active_tool_names: list[str],
     canvas_documents: list[dict] | None = None,
     clarification_max_questions: int | None = None,
+    search_tool_query_limit: int | None = None,
     *,
     workspace_root: str | None = None,
 ) -> list[dict]:
@@ -2210,7 +2290,11 @@ def get_openai_tool_specs(
         canvas_documents=canvas_documents,
         workspace_root=workspace_root,
     )
-    for tool in get_enabled_tool_specs(runtime_tool_names, clarification_max_questions=clarification_max_questions):
+    for tool in get_enabled_tool_specs(
+        runtime_tool_names,
+        clarification_max_questions=clarification_max_questions,
+        search_tool_query_limit=search_tool_query_limit,
+    ):
         parameters = copy.deepcopy(tool.get("parameters") or {})
         if parameters.get("type") == "object":
             parameters.setdefault("additionalProperties", False)
@@ -2241,6 +2325,7 @@ def get_prompt_tool_context(
     active_tool_names: list[str],
     canvas_documents: list[dict] | None = None,
     clarification_max_questions: int | None = None,
+    search_tool_query_limit: int | None = None,
     *,
     workspace_root: str | None = None,
 ) -> list[dict] | None:
@@ -2250,7 +2335,11 @@ def get_prompt_tool_context(
         canvas_documents=canvas_documents,
         workspace_root=workspace_root,
     )
-    for tool in get_enabled_tool_specs(runtime_tool_names, clarification_max_questions=clarification_max_questions):
+    for tool in get_enabled_tool_specs(
+        runtime_tool_names,
+        clarification_max_questions=clarification_max_questions,
+        search_tool_query_limit=search_tool_query_limit,
+    ):
         parameters = tool.get("parameters") if isinstance(tool.get("parameters"), dict) else {}
         properties = parameters.get("properties") if isinstance(parameters.get("properties"), dict) else {}
         required = parameters.get("required") if isinstance(parameters.get("required"), list) else []

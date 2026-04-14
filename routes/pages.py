@@ -21,6 +21,8 @@ from config import (
     RAG_CONTEXT_SIZE_PRESETS,
     RAG_ENABLED,
     RAG_SENSITIVITY_PRESETS,
+    SEARCH_TOOL_QUERY_LIMIT_MAX,
+    SEARCH_TOOL_QUERY_LIMIT_MIN,
     SCRATCHPAD_DEFAULT_SECTION,
     SCRATCHPAD_SECTION_METADATA,
     SCRATCHPAD_SECTION_ORDER,
@@ -86,6 +88,7 @@ from db import (
     get_prompt_rag_max_tokens,
     get_prompt_recent_history_max_tokens,
     get_prompt_response_token_reserve,
+    get_search_tool_query_limit,
     get_prompt_summary_max_tokens,
     get_prompt_tool_memory_max_tokens,
     get_prompt_tool_trace_max_tokens,
@@ -466,6 +469,7 @@ def build_settings_payload() -> dict:
         "max_parallel_tools": get_max_parallel_tools(raw),
         "temperature": get_model_temperature(raw),
         "clarification_max_questions": get_clarification_max_questions(raw),
+        "search_tool_query_limit": get_search_tool_query_limit(raw),
         "available_models": available_models,
         "custom_model_contract": get_custom_model_contract(),
         "custom_models": normalize_custom_models(raw.get("custom_models")),
@@ -632,6 +636,7 @@ def register_page_routes(app) -> None:
         max_parallel_tools_raw = data.get("max_parallel_tools")
         temperature_raw = data.get("temperature")
         clarification_max_questions_raw = data.get("clarification_max_questions")
+        search_tool_query_limit_raw = data.get("search_tool_query_limit")
         custom_models_raw = data.get("custom_models")
         visible_model_order_raw = data.get("visible_model_order")
         operation_model_preferences_raw = data.get("operation_model_preferences")
@@ -734,6 +739,7 @@ def register_page_routes(app) -> None:
             and max_parallel_tools_raw is None
             and temperature_raw is None
             and clarification_max_questions_raw is None
+            and search_tool_query_limit_raw is None
             and custom_models_raw is None
             and visible_model_order_raw is None
             and operation_model_preferences_raw is None
@@ -942,6 +948,15 @@ def register_page_routes(app) -> None:
             if not (CLARIFICATION_QUESTION_LIMIT_MIN <= clarification_max_questions <= CLARIFICATION_QUESTION_LIMIT_MAX):
                 return jsonify({"error": f"clarification_max_questions must be between {CLARIFICATION_QUESTION_LIMIT_MIN} and {CLARIFICATION_QUESTION_LIMIT_MAX}."}), 400
             settings["clarification_max_questions"] = str(clarification_max_questions)
+
+        if search_tool_query_limit_raw is not None:
+            try:
+                search_tool_query_limit = int(search_tool_query_limit_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "search_tool_query_limit must be an integer."}), 400
+            if not (SEARCH_TOOL_QUERY_LIMIT_MIN <= search_tool_query_limit <= SEARCH_TOOL_QUERY_LIMIT_MAX):
+                return jsonify({"error": f"search_tool_query_limit must be between {SEARCH_TOOL_QUERY_LIMIT_MIN} and {SEARCH_TOOL_QUERY_LIMIT_MAX}."}), 400
+            settings["search_tool_query_limit"] = str(search_tool_query_limit)
 
         if custom_models_raw is not None:
             if not isinstance(custom_models_raw, list):

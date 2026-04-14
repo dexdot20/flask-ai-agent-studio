@@ -1152,6 +1152,9 @@
                   <input type="number" class="settings-number" id="max-steps-input" min="1" max="50" value="5" />
                   <label class="settings-label" for="max-parallel-tools-input">Parent model max parallel tools (1-12)</label>
                   <input type="number" class="settings-number" id="max-parallel-tools-input" min="1" max="12" value="4" />
+                  <label class="settings-label" for="search-tool-query-limit-input">Search queries per call (1-20)</label>
+                  <input type="number" class="settings-number" id="search-tool-query-limit-input" min="1" max="20" value="5" />
+                  <p class="settings-copy">Applies to <code>search_web</code>, <code>search_news_ddgs</code>, and <code>search_news_google</code>. The assistant sees this cap in its tool guidance and splits broader search plans automatically.</p>
                 </section>
 
                 <section class="settings-subsection">

@@ -106,6 +106,7 @@ from db import (
     get_prompt_rag_max_tokens,
     get_prompt_recent_history_max_tokens,
     get_prompt_response_token_reserve,
+    get_search_tool_query_limit,
     get_prompt_summary_max_tokens,
     get_prompt_tool_trace_max_tokens,
     get_prompt_tool_memory_max_tokens,
@@ -2768,6 +2769,7 @@ def _build_budgeted_prompt_messages(
     assistant_behavior = build_conversation_assistant_behavior(conversation_id, settings)
     max_parallel_tools = get_max_parallel_tools(settings)
     clarification_max_questions = get_clarification_max_questions(settings)
+    search_tool_query_limit = get_search_tool_query_limit(settings)
     runtime_tool_names = resolve_runtime_tool_names(
         active_tool_names,
         canvas_documents=canvas_documents,
@@ -2797,6 +2799,7 @@ def _build_budgeted_prompt_messages(
         canvas_prompt_text_line_max_chars=canvas_prompt_text_line_max_chars,
         workspace_root=workspace_root,
         clarification_max_questions=clarification_max_questions,
+        search_tool_query_limit=search_tool_query_limit,
         max_parallel_tools=max_parallel_tools,
         include_time_context=False,
         include_volatile_context=False,
@@ -2970,6 +2973,7 @@ def _build_budgeted_prompt_messages(
         canvas_prompt_text_line_max_chars=canvas_prompt_text_line_max_chars,
         workspace_root=workspace_root,
         clarification_max_questions=clarification_max_questions,
+        search_tool_query_limit=search_tool_query_limit,
         max_parallel_tools=max_parallel_tools,
         current_context_injection=current_context_injection,
         runtime_tool_names=runtime_tool_names,
@@ -3009,6 +3013,7 @@ def _build_budgeted_prompt_messages(
         canvas_prompt_text_line_max_chars=canvas_prompt_text_line_max_chars,
         workspace_root=workspace_root,
         clarification_max_questions=clarification_max_questions,
+        search_tool_query_limit=search_tool_query_limit,
         max_parallel_tools=max_parallel_tools,
         current_context_injection=current_context_injection,
         runtime_tool_names=runtime_tool_names,

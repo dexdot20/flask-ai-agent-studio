@@ -98,6 +98,7 @@ const scratchpadCountEl = document.getElementById("scratchpad-count");
 const scratchpadReadonlyNoteEl = document.getElementById("scratchpad-readonly-note");
 const maxStepsEl = document.getElementById("max-steps-input");
 const maxParallelToolsEl = document.getElementById("max-parallel-tools-input");
+const searchToolQueryLimitEl = document.getElementById("search-tool-query-limit-input");
 const subAgentMaxStepsEl = document.getElementById("sub-agent-max-steps-input");
 const subAgentTimeoutSecondsEl = document.getElementById("sub-agent-timeout-seconds-input");
 const subAgentRetryAttemptsEl = document.getElementById("sub-agent-retry-attempts-input");
@@ -2747,6 +2748,7 @@ function applySettingsToForm() {
   if (temperatureEl) temperatureEl.value = String(appSettings.temperature ?? 0.7);
   if (maxStepsEl) maxStepsEl.value = String(appSettings.max_steps || 5);
   if (maxParallelToolsEl) maxParallelToolsEl.value = String(appSettings.max_parallel_tools ?? 4);
+  if (searchToolQueryLimitEl) searchToolQueryLimitEl.value = String(appSettings.search_tool_query_limit ?? 5);
   if (subAgentMaxStepsEl) subAgentMaxStepsEl.value = String(appSettings.sub_agent_max_steps ?? 6);
   if (subAgentTimeoutSecondsEl) subAgentTimeoutSecondsEl.value = String(appSettings.sub_agent_timeout_seconds ?? 240);
   if (subAgentRetryAttemptsEl) subAgentRetryAttemptsEl.value = String(appSettings.sub_agent_retry_attempts ?? 2);
@@ -2930,6 +2932,7 @@ function applyServerSettingsData(data) {
     : {};
   appSettings.max_steps = data.max_steps || 5;
   appSettings.max_parallel_tools = data.max_parallel_tools ?? 4;
+  appSettings.search_tool_query_limit = data.search_tool_query_limit ?? 5;
   appSettings.sub_agent_max_steps = data.sub_agent_max_steps ?? 6;
   appSettings.sub_agent_timeout_seconds = data.sub_agent_timeout_seconds ?? 240;
   appSettings.sub_agent_retry_attempts = data.sub_agent_retry_attempts ?? 2;
@@ -3068,6 +3071,7 @@ async function saveSettings() {
     temperature: readFloatSetting(temperatureEl, 0.7, { min: 0, max: 2 }),
     max_steps: readNumericSetting(maxStepsEl, 5, { allowZero: false }),
     max_parallel_tools: readNumericSetting(maxParallelToolsEl, 4, { allowZero: false }),
+    search_tool_query_limit: readNumericSetting(searchToolQueryLimitEl, 5, { allowZero: false, min: 1, max: 20 }),
     sub_agent_max_steps: readNumericSetting(subAgentMaxStepsEl, 6, { allowZero: false }),
     sub_agent_timeout_seconds: readNumericSetting(subAgentTimeoutSecondsEl, 240, { allowZero: false }),
     sub_agent_retry_attempts: readNumericSetting(subAgentRetryAttemptsEl, 2),
@@ -3540,6 +3544,7 @@ function registerDirtyListeners() {
   defaultPersonaEl?.addEventListener("change", markDirty);
   maxStepsEl?.addEventListener("input", markDirty);
   maxParallelToolsEl?.addEventListener("input", markDirty);
+  searchToolQueryLimitEl?.addEventListener("input", markDirty);
   subAgentMaxStepsEl?.addEventListener("input", markDirty);
   subAgentTimeoutSecondsEl?.addEventListener("input", markDirty);
   subAgentRetryAttemptsEl?.addEventListener("input", markDirty);

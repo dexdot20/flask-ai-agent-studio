@@ -35,6 +35,7 @@ from config import (
     CONVERSATION_MEMORY_ENABLED,
     DB_PATH,
     DEEPSEEK_API_KEY,
+    DEFAULT_SEARCH_TOOL_QUERY_LIMIT,
     DEFAULT_WEB_CACHE_TTL_HOURS,
     DEFAULT_SETTINGS,
     OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED,
@@ -92,6 +93,8 @@ from config import (
     RAG_SENSITIVITY_PRESETS,
     RAG_TOOL_RESULT_MAX_TEXT_CHARS,
     RAG_TOOL_RESULT_SUMMARY_MAX_CHARS,
+    SEARCH_TOOL_QUERY_LIMIT_MAX,
+    SEARCH_TOOL_QUERY_LIMIT_MIN,
     SUMMARY_RETRY_MIN_SOURCE_TOKENS,
     SUMMARY_SOURCE_TARGET_TOKENS,
     TOOL_MEMORY_TTL_DEFAULT_SECONDS,
@@ -4783,6 +4786,16 @@ def get_clarification_max_questions(settings: dict | None = None) -> int:
     except (TypeError, ValueError):
         value = CLARIFICATION_DEFAULT_MAX_QUESTIONS
     return max(CLARIFICATION_QUESTION_LIMIT_MIN, min(CLARIFICATION_QUESTION_LIMIT_MAX, value))
+
+
+def get_search_tool_query_limit(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get("search_tool_query_limit", DEFAULT_SETTINGS["search_tool_query_limit"])
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        value = DEFAULT_SEARCH_TOOL_QUERY_LIMIT
+    return max(SEARCH_TOOL_QUERY_LIMIT_MIN, min(SEARCH_TOOL_QUERY_LIMIT_MAX, value))
 
 
 def get_canvas_prompt_max_lines(settings: dict | None = None) -> int:

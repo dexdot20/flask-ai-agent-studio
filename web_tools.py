@@ -34,6 +34,7 @@ except ImportError:  # pragma: no cover - compatibility fallback for older local
 
 from config import (
     CONTENT_MAX_CHARS,
+    DEFAULT_SEARCH_TOOL_QUERY_LIMIT,
     FETCH_MAX_REDIRECTS,
     FETCH_MAX_SIZE,
     FETCH_TIMEOUT,
@@ -41,7 +42,7 @@ from config import (
     PROXIES_PATH,
     SEARCH_MAX_RESULTS,
 )
-from db import cache_get, cache_set, get_proxy_enabled_operations
+from db import cache_get, cache_set, get_proxy_enabled_operations, get_search_tool_query_limit as load_search_tool_query_limit
 from proxy_settings import (
     PROXY_OPERATION_FETCH_URL,
     PROXY_OPERATION_SEARCH_NEWS_DDGS,
@@ -1216,6 +1217,19 @@ def fetch_url_tool(
     return {"url": url, "error": last_error or "Could not fetch URL", "content": ""}
 
 
+def _get_search_tool_query_limit_value() -> int:
+    try:
+        return int(load_search_tool_query_limit())
+    except Exception:
+        return DEFAULT_SEARCH_TOOL_QUERY_LIMIT
+
+
+def _iter_limited_search_queries(queries: list):
+    limit = _get_search_tool_query_limit_value()
+    for raw_query in list(queries or [])[:limit]:
+        yield raw_query
+
+
 def search_web_tool(queries: list) -> list:
     if not queries:
         return []
@@ -1223,7 +1237,7 @@ def search_web_tool(queries: list) -> list:
     results = []
     seen_urls = set()
 
-    for raw_query in queries[:5]:
+    for raw_query in _iter_limited_search_queries(queries):
         query = str(raw_query).strip()
         if not query:
             continue
@@ -1278,7 +1292,7 @@ def search_news_ddgs_tool(queries: list, lang: str = "tr", when: str | None = No
     results = []
     seen_urls = set()
 
-    for raw_query in queries[:5]:
+    for raw_query in _iter_limited_search_queries(queries):
         query = str(raw_query).strip()
         if not query:
             continue
@@ -1341,7 +1355,7 @@ def search_news_google_tool(queries: list, lang: str = "tr", when: str | None = 
     results = []
     seen_urls = set()
 
-    for raw_query in queries[:5]:
+    for raw_query in _iter_limited_search_queries(queries):
         query = str(raw_query).strip()
         if not query:
             continue

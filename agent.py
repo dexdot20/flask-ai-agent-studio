@@ -111,6 +111,7 @@ from db import (
     get_model_temperature,
     get_prompt_max_input_tokens,
     get_rag_source_types,
+    get_search_tool_query_limit,
     get_sub_agent_allowed_tool_names,
     get_sub_agent_max_steps,
     get_sub_agent_max_parallel_tools,
@@ -284,7 +285,6 @@ SEARCH_QUERY_ARGUMENT_ALIASES = (
     "search_query",
     "q",
 )
-SEARCH_TOOL_QUERY_BATCH_SIZE = 5
 SEARCH_MEMORY_PROMOTION_MATCH_LIMIT = 2
 SEARCH_MEMORY_PROMOTION_EXCERPT_LIMIT = 180
 PARALLEL_SAFE_TOOL_NAMES = WEB_TOOL_NAMES | {
@@ -1114,12 +1114,25 @@ def _normalize_search_queries(raw_queries) -> list[str]:
     return normalized_queries
 
 
-def _iter_search_query_batches(raw_queries, *, batch_size: int = SEARCH_TOOL_QUERY_BATCH_SIZE):
+def _resolve_search_query_batch_size(batch_size: int | None = None) -> int:
+    if batch_size is not None:
+        try:
+            resolved_batch_size = int(batch_size)
+        except (TypeError, ValueError):
+            resolved_batch_size = 0
+    else:
+        resolved_batch_size = get_search_tool_query_limit(get_app_settings())
+
+    if resolved_batch_size <= 0:
+        resolved_batch_size = get_search_tool_query_limit(get_app_settings())
+    return max(1, resolved_batch_size)
+
+
+def _iter_search_query_batches(raw_queries, *, batch_size: int | None = None):
     normalized_queries = _normalize_search_queries(raw_queries)
-    if batch_size <= 0:
-        batch_size = SEARCH_TOOL_QUERY_BATCH_SIZE
-    for index in range(0, len(normalized_queries), batch_size):
-        yield normalized_queries[index:index + batch_size]
+    resolved_batch_size = _resolve_search_query_batch_size(batch_size)
+    for index in range(0, len(normalized_queries), resolved_batch_size):
+        yield normalized_queries[index:index + resolved_batch_size]
 
 
 def _get_search_tool_queries(tool_args: dict):
@@ -1632,8 +1645,12 @@ def _build_sub_agent_messages(
     task: str,
     allowed_tools: list[str],
     max_parallel_tools: int | None = None,
+    search_tool_query_limit: int | None = None,
     now: datetime | None = None,
 ) -> list[dict]:
+    normalized_search_tool_query_limit = get_search_tool_query_limit(
+        {"search_tool_query_limit": search_tool_query_limit}
+    )
     parts = [
         "You are an advanced delegated helper agent for a larger AI assistant system.",
         "Complete the delegated task using only the tools that are exposed to you. Read-only still includes web search and URL fetch tools when they are available.",
@@ -1642,7 +1659,7 @@ def _build_sub_agent_messages(
         "Do not infer, restate, or rely on hidden user background, personal details, prior conversation summaries, or canvas context unless they are explicitly written in that task text.",
         "If the task text is not in English, first rewrite it into clear English working notes for yourself, then continue in English.",
         "Use English for tool planning, reasoning, status updates, and the final answer unless told otherwise.",
-        "When using read-only search tools like search_web or search_news, batch queries between 1 and 5 items per list and split broader searches into multiple calls.",
+        f"When using read-only search tools like search_web or search_news, batch queries between 1 and {normalized_search_tool_query_limit} items per list and split broader searches into multiple calls.",
         "Synthesize your findings and return a concise, definitive final answer that directly helps the parent assistant continue."
     ]
     parts.append(build_current_time_context(now))
@@ -4918,6 +4935,7 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
     parent_model = str(agent_context.get("model") or "").strip()
     child_model_candidates = get_operation_model_candidates("sub_agent", settings, fallback_model_id=parent_model)
     child_max_parallel_tools = get_sub_agent_max_parallel_tools(settings)
+    search_tool_query_limit = get_search_tool_query_limit(settings)
     timeout_seconds = get_sub_agent_timeout_seconds(settings)
     retry_attempts = get_sub_agent_retry_attempts(settings)
     retry_delay_seconds = get_sub_agent_retry_delay_seconds(settings)
@@ -4933,6 +4951,7 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
         task,
         child_tool_names,
         max_parallel_tools=child_max_parallel_tools,
+        search_tool_query_limit=search_tool_query_limit,
         now=now,
     )
     resume_messages: list[dict] = []
@@ -5334,7 +5353,8 @@ def _run_search_tool_memory(tool_args: dict, runtime_state: dict):
 
 def _run_search_web(tool_args: dict, runtime_state: dict):
     del runtime_state
-    query_batches = list(_iter_search_query_batches(_get_search_tool_queries(tool_args)))
+    query_limit = get_search_tool_query_limit(get_app_settings())
+    query_batches = list(_iter_search_query_batches(_get_search_tool_queries(tool_args), batch_size=query_limit))
     if not query_batches:
         return [], "search_web skipped: no queries provided"
     result = _merge_batched_search_results([search_web_tool(batch) for batch in query_batches])
@@ -5344,7 +5364,8 @@ def _run_search_web(tool_args: dict, runtime_state: dict):
 
 def _run_search_news_ddgs(tool_args: dict, runtime_state: dict):
     del runtime_state
-    query_batches = list(_iter_search_query_batches(_get_search_tool_queries(tool_args)))
+    query_limit = get_search_tool_query_limit(get_app_settings())
+    query_batches = list(_iter_search_query_batches(_get_search_tool_queries(tool_args), batch_size=query_limit))
     if not query_batches:
         return [], "search_news_ddgs skipped: no queries provided"
     result = _merge_batched_search_results(
@@ -5363,7 +5384,8 @@ def _run_search_news_ddgs(tool_args: dict, runtime_state: dict):
 
 def _run_search_news_google(tool_args: dict, runtime_state: dict):
     del runtime_state
-    query_batches = list(_iter_search_query_batches(_get_search_tool_queries(tool_args)))
+    query_limit = get_search_tool_query_limit(get_app_settings())
+    query_batches = list(_iter_search_query_batches(_get_search_tool_queries(tool_args), batch_size=query_limit))
     if not query_batches:
         return [], "search_news_google skipped: no queries provided"
     result = _merge_batched_search_results(
@@ -7431,6 +7453,7 @@ def run_agent_stream(
                 prompt_enabled_tool_names,
                 canvas_documents=current_canvas_documents,
                 clarification_max_questions=get_clarification_max_questions(model_settings),
+                search_tool_query_limit=get_search_tool_query_limit(model_settings),
                 workspace_root=workspace_root,
             )
             if turn_tools:

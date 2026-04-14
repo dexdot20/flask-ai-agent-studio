@@ -25,10 +25,13 @@ from config import (
     CLARIFICATION_DEFAULT_MAX_QUESTIONS,
     CLARIFICATION_QUESTION_LIMIT_MAX,
     CLARIFICATION_QUESTION_LIMIT_MIN,
+    DEFAULT_SEARCH_TOOL_QUERY_LIMIT,
     DEFAULT_MAX_PARALLEL_TOOLS,
     MAX_PARALLEL_TOOLS_MAX,
     MAX_PARALLEL_TOOLS_MIN,
     RAG_ENABLED,
+    SEARCH_TOOL_QUERY_LIMIT_MAX,
+    SEARCH_TOOL_QUERY_LIMIT_MIN,
     SCRATCHPAD_DEFAULT_SECTION,
     SCRATCHPAD_SECTION_METADATA,
     SCRATCHPAD_SECTION_ORDER,
@@ -2064,6 +2067,7 @@ def _build_active_tools_context(active_tool_names: list[str]) -> list[str]:
 def build_tool_call_contract(
     active_tool_names: list[str],
     clarification_max_questions: int | None = None,
+    search_tool_query_limit: int | None = None,
     max_parallel_tools: int | None = None,
 ) -> dict | None:
     normalized_tool_names = _normalize_tool_name_list(active_tool_names)
@@ -2087,6 +2091,12 @@ def build_tool_call_contract(
     if any(name in normalized_tool_names for name in web_research_tool_names):
         rules.append(
             "Use web-research tools only when the task genuinely needs current facts, external verification, or exact source text. If the answer is already available from the current context, do not search or fetch anything."
+        )
+
+    normalized_search_tool_query_limit = _normalize_search_tool_query_limit(search_tool_query_limit)
+    if any(name in normalized_tool_names for name in {"search_web", "search_news_ddgs", "search_news_google"}):
+        rules.append(
+            f"Each search_web/search_news call may include between 1 and {normalized_search_tool_query_limit} queries in its queries array. If you need more queries, split them across multiple calls."
         )
 
     if "search_web" in normalized_tool_names:
@@ -2387,6 +2397,7 @@ def _build_runtime_static_parts(
     user_preferences: str = "",
     runtime_tool_names: list[str],
     clarification_max_questions: int | None = None,
+    search_tool_query_limit: int | None = None,
     max_parallel_tools: int | None = None,
     canvas_payload: dict | None = None,
     workspace_root: str | None = None,
@@ -2419,6 +2430,7 @@ def _build_runtime_static_parts(
     contract = build_tool_call_contract(
         runtime_tool_names,
         clarification_max_questions=clarification_max_questions,
+        search_tool_query_limit=search_tool_query_limit,
         max_parallel_tools=max_parallel_tools,
     )
     if contract:
@@ -2595,6 +2607,7 @@ def build_runtime_system_message(
     canvas_prompt_text_line_max_chars: int | None = None,
     workspace_root: str | None = None,
     clarification_max_questions: int | None = None,
+    search_tool_query_limit: int | None = None,
     max_parallel_tools: int | None = None,
     include_time_context: bool = True,
     include_volatile_context: bool = True,
@@ -2632,6 +2645,7 @@ def build_runtime_system_message(
         user_preferences=user_preferences,
         runtime_tool_names=runtime_tool_names,
         clarification_max_questions=clarification_max_questions,
+        search_tool_query_limit=search_tool_query_limit,
         max_parallel_tools=max_parallel_tools,
         canvas_payload=canvas_payload,
         workspace_root=workspace_root,
@@ -2709,6 +2723,7 @@ def prepend_runtime_context(
     canvas_prompt_text_line_max_chars: int | None = None,
     workspace_root: str | None = None,
     clarification_max_questions: int | None = None,
+    search_tool_query_limit: int | None = None,
     max_parallel_tools: int | None = None,
     runtime_tool_names: list[str] | None = None,
     current_context_injection: str | None = None,
@@ -2772,6 +2787,7 @@ def prepend_runtime_context(
             canvas_prompt_text_line_max_chars=canvas_prompt_text_line_max_chars,
             workspace_root=workspace_root,
             clarification_max_questions=clarification_max_questions,
+            search_tool_query_limit=search_tool_query_limit,
             max_parallel_tools=max_parallel_tools,
             include_time_context=False,
             include_volatile_context=False,
@@ -2844,3 +2860,11 @@ def prepend_runtime_context(
         },
         *messages[insertion_index:],
     ]
+
+
+def _normalize_search_tool_query_limit(value: int | None) -> int:
+    try:
+        normalized = int(value) if value is not None else DEFAULT_SEARCH_TOOL_QUERY_LIMIT
+    except (TypeError, ValueError):
+        normalized = DEFAULT_SEARCH_TOOL_QUERY_LIMIT
+    return max(SEARCH_TOOL_QUERY_LIMIT_MIN, min(SEARCH_TOOL_QUERY_LIMIT_MAX, normalized))

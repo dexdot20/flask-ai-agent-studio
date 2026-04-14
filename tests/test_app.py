@@ -44,6 +44,7 @@ from agent import (
     _format_tool_execution_error,
     _is_context_overflow_error,
     _iter_agent_exchange_blocks,
+    _iter_search_query_batches,
     _lookup_cross_turn_tool_memory,
     _prepare_tool_result_for_transcript,
     _run_fetch_url_summarized,
@@ -5838,6 +5839,14 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertGreater(tool_schema_tokens, 0)
         self.assertEqual(breakdown["tool_specs"], tool_schema_tokens)
 
+    def test_get_openai_tool_specs_apply_configured_search_query_limit(self):
+        tools = get_openai_tool_specs(["search_web"], search_tool_query_limit=8)
+
+        queries_schema = tools[0]["function"]["parameters"]["properties"]["queries"]
+
+        self.assertEqual(queries_schema["maxItems"], 8)
+        self.assertIn("1-8", queries_schema["description"])
+
     def test_estimate_input_breakdown_includes_message_wrapper_overhead(self):
         message = {"role": "user", "content": "Find the release notes."}
 
@@ -6376,6 +6385,8 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("Tool step limit (1-50)", html)
         self.assertIn("Parent model max parallel tools (1-12)", html)
         self.assertIn('id="max-parallel-tools-input"', html)
+        self.assertIn("Search queries per call (1-20)", html)
+        self.assertIn('id="search-tool-query-limit-input"', html)
         self.assertIn('id="sub-agent-max-parallel-tools-input"', html)
         self.assertIn("Max clarification questions (1-25)", html)
         self.assertIn('id="clarification-max-questions-input"', html)
@@ -6425,6 +6436,14 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
         script_text = script_path.read_text(encoding="utf-8")
         self.assertIn("const RAG_SENSITIVITY_HINTS = {", script_text)
+
+    def test_settings_api_persists_search_tool_query_limit(self):
+        response = self.client.patch("/api/settings", json={"search_tool_query_limit": 9})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["search_tool_query_limit"], 9)
+        self.assertEqual(get_app_settings()["search_tool_query_limit"], "9")
 
     def test_run_agent_stream_executes_append_scratchpad_tool(self):
         responses = [
@@ -6979,6 +6998,29 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         mocked_search.assert_not_called()
         self.assertEqual(result, [])
         self.assertEqual(summary, "search_web skipped: no queries provided")
+
+    def test_execute_tool_batches_search_queries_using_configured_limit(self):
+        with patch("agent.get_app_settings", return_value={"search_tool_query_limit": 2}), patch(
+            "agent.search_web_tool",
+            side_effect=[
+                [{"title": "A", "url": "https://example.com/a", "snippet": "alpha"}],
+                [{"title": "B", "url": "https://example.com/b", "snippet": "beta"}],
+            ],
+        ) as mocked_search:
+            result, summary = _execute_tool("search_web", {"queries": ["alpha", "beta", "gamma"]})
+
+        self.assertEqual(
+            [call.args[0] for call in mocked_search.call_args_list],
+            [["alpha", "beta"], ["gamma"]],
+        )
+        self.assertEqual(summary, "2 web results found")
+        self.assertEqual(len(result), 2)
+
+    def test_iter_search_query_batches_defaults_to_configured_limit(self):
+        with patch("agent.get_app_settings", return_value={"search_tool_query_limit": 3}):
+            batches = list(_iter_search_query_batches(["alpha", "beta", "gamma", "delta"]))
+
+        self.assertEqual(batches, [["alpha", "beta", "gamma"], ["delta"]])
 
     def test_execute_tool_blocks_recursive_sub_agent_calls(self):
         result, summary = _execute_tool(
@@ -7574,6 +7616,11 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("1 and 5 items", messages[0]["content"])
         self.assertIn("split broader searches into multiple calls", messages[0]["content"])
         self.assertIn("## Current Date and Time", messages[0]["content"])
+
+    def test_build_sub_agent_messages_uses_configured_web_query_limit(self):
+        messages = _build_sub_agent_messages("Inspect the web", ["search_web"], search_tool_query_limit=8)
+
+        self.assertIn("1 and 8 items", messages[0]["content"])
 
     def test_build_sub_agent_messages_includes_fixed_current_time_context(self):
         now = datetime(2026, 4, 7, 14, 23, 45, tzinfo=timezone(timedelta(hours=3)))
