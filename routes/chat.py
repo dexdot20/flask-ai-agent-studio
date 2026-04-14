@@ -163,13 +163,11 @@ from image_utils import read_uploaded_image
 from model_registry import (
     apply_model_target_request_options,
     can_model_process_images,
-    DEEPSEEK_PROVIDER,
-    OPENROUTER_PROVIDER,
     DEFAULT_CHAT_MODEL,
-    build_openrouter_cache_estimate_context,
     get_default_chat_model_id,
     get_model_record,
     get_operation_model,
+    model_prefers_cache_friendly_prefix,
     normalize_image_processing_method,
     resolve_model_target,
 )
@@ -2522,20 +2520,6 @@ def _select_prefix_prompt_window(
     return selected_messages
 
 
-def _model_prefers_cache_friendly_prefix(model_id: str | None, settings: dict | None) -> bool:
-    record = get_model_record(str(model_id or "").strip(), settings)
-    if not isinstance(record, dict):
-        return False
-
-    provider = str(record.get("provider") or "").strip()
-    if provider == DEEPSEEK_PROVIDER:
-        return True
-    if provider == OPENROUTER_PROVIDER:
-        cache_context = build_openrouter_cache_estimate_context([], record, settings)
-        return bool(isinstance(cache_context, dict) and cache_context.get("supports_prompt_cache") is True)
-    return False
-
-
 def _build_budgeted_prompt_messages(
     canonical_messages: list[dict],
     settings: dict,
@@ -2651,7 +2635,7 @@ def _build_budgeted_prompt_messages(
     history_budget = max(1_000, prompt_budget - base_system_tokens - rag_budget_reserve)
 
     prefix_anchor_budget = 0
-    cache_friendly_prefix = _model_prefers_cache_friendly_prefix(model_id, settings)
+    cache_friendly_prefix = model_prefers_cache_friendly_prefix(model_id, settings)
     if history_budget >= 1_500:
         if cache_friendly_prefix:
             prefix_anchor_budget = min(8_192, max(2_048, history_budget // 3))

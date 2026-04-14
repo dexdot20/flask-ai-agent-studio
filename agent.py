@@ -129,15 +129,17 @@ from messages import _build_canvas_prompt_payload, _build_pending_clarification_
 from image_service import answer_image_question
 from model_registry import (
     DEEPSEEK_PROVIDER,
-    OPENROUTER_PROVIDER,
     apply_model_target_request_options,
+    build_model_target_tool_choice_fallback_request,
     build_openrouter_cache_estimate_context,
+    model_target_supports_native_reasoning_continuation,
     get_operation_model_candidates,
     get_operation_model,
     get_model_pricing as lookup_model_pricing,
     get_provider_client,
     has_known_model_pricing as lookup_has_known_model_pricing,
     resolve_model_target,
+    should_retry_model_target_tool_choice_with_auto,
 )
 from rag_service import get_exact_tool_memory_match, search_knowledge_base_tool, search_tool_memory, upsert_tool_memory_result
 from tool_registry import TOOL_SPEC_BY_NAME, get_openai_tool_specs
@@ -1777,30 +1779,6 @@ def _build_retry_tool_choice(retry_reason: str | None, prompt_tool_names: list[s
             "name": "ask_clarifying_question",
         },
     }
-
-
-def _is_openrouter_unsupported_tool_choice_error(error: Exception | str, request_kwargs: dict, target: dict | None) -> bool:
-    if not isinstance(request_kwargs.get("tool_choice"), dict):
-        return False
-    record = target.get("record") if isinstance(target, dict) else None
-    if str((record or {}).get("provider") or "").strip() != OPENROUTER_PROVIDER:
-        return False
-
-    normalized_error = str(error or "").strip().lower()
-    if not normalized_error:
-        return False
-    return (
-        "tool_choice" in normalized_error
-        and "no endpoints found" in normalized_error
-        and "support the provided" in normalized_error
-    )
-
-
-def _build_openrouter_tool_choice_fallback_request(request_kwargs: dict) -> dict:
-    fallback_request_kwargs = dict(request_kwargs)
-    fallback_request_kwargs["tool_choice"] = "auto"
-    fallback_request_kwargs.pop("parallel_tool_calls", None)
-    return fallback_request_kwargs
 
 
 def _is_tool_execution_result_message(message: dict) -> bool:
@@ -7093,7 +7071,7 @@ def run_agent_stream(
         else get_context_compaction_keep_recent_rounds(model_settings)
     )
     model_target = resolve_model_target(model, model_settings)
-    native_reasoning_continuation = str(model_target["record"].get("provider") or "").strip() == OPENROUTER_PROVIDER
+    native_reasoning_continuation = model_target_supports_native_reasoning_continuation(model_target)
     pricing = get_model_pricing(model, model_settings)
     pricing_known = has_known_model_pricing(model, model_settings)
 
@@ -7447,9 +7425,11 @@ def run_agent_stream(
                     "usage": {"missing_provider_usage": True},
                 }
             )
-            if not _is_openrouter_unsupported_tool_choice_error(exc, request_kwargs, model_target):
+            if not should_retry_model_target_tool_choice_with_auto(exc, request_kwargs, model_target):
                 raise
-            fallback_request_kwargs = _build_openrouter_tool_choice_fallback_request(request_kwargs)
+            fallback_request_kwargs = build_model_target_tool_choice_fallback_request(request_kwargs, model_target)
+            if fallback_request_kwargs is None:
+                raise
             _trace_agent_event(
                 "openrouter_tool_choice_fallback",
                 trace_id=trace_id,

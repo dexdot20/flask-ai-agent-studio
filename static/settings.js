@@ -357,6 +357,28 @@ const DEFAULT_SCRATCHPAD_SECTION_META = {
   },
 };
 
+function getCustomModelContract() {
+  const contract = appSettings.custom_model_contract && typeof appSettings.custom_model_contract === "object"
+    ? appSettings.custom_model_contract
+    : {};
+
+  return {
+    provider: String(contract.provider || "openrouter"),
+    model_prefix: String(contract.model_prefix || "openrouter:"),
+    client_uid_prefix: String(contract.client_uid_prefix || "draft-custom-model:"),
+    variant_separator: String(contract.variant_separator || "@@"),
+    variant_part_separator: String(contract.variant_part_separator || ";"),
+    variant_key_value_separator: String(contract.variant_key_value_separator || "="),
+    provider_slug_pattern: String(contract.provider_slug_pattern || "^[a-z0-9][a-z0-9._/-]{0,199}$"),
+    reasoning_modes: Array.isArray(contract.reasoning_modes) && contract.reasoning_modes.length
+      ? contract.reasoning_modes.map((value) => String(value))
+      : ["default", "enabled", "disabled"],
+    reasoning_efforts: Array.isArray(contract.reasoning_efforts) && contract.reasoning_efforts.length
+      ? contract.reasoning_efforts.map((value) => String(value))
+      : ["minimal", "low", "medium", "high", "xhigh"],
+  };
+}
+
 const builtinModelCatalog = Array.isArray(appSettings.available_models)
   ? appSettings.available_models.filter((model) => !Boolean(model?.is_custom))
   : [];
@@ -374,7 +396,8 @@ let draftCustomModels = Array.isArray(appSettings.custom_models)
 let draftChatModelRows = [];
 let draftOperationFallbackRows = {};
 let fallbackRowSequence = 0;
-let editingCustomModelId = null;
+let customModelClientUidSequence = 0;
+let editingCustomModelClientUid = null;
 
 const OPERATION_MODEL_KEYS = ["summarize", "fetch_summarize", "prune", "fix_text", "generate_title", "upload_metadata", "sub_agent"];
 const OPERATION_FALLBACK_CONTROL_MAP = {
@@ -1377,8 +1400,9 @@ function normalizeOpenRouterApiModel(value) {
   if (!rawValue) {
     return "";
   }
-  if (rawValue.startsWith("openrouter:")) {
-    return rawValue.slice("openrouter:".length).replace(/^\/+/, "").trim();
+  const { model_prefix: modelPrefix } = getCustomModelContract();
+  if (rawValue.startsWith(modelPrefix)) {
+    return rawValue.slice(modelPrefix.length).replace(/^\/+/, "").trim();
   }
   return rawValue.replace(/^\/+/, "").trim();
 }
@@ -1389,25 +1413,23 @@ function splitOpenRouterModelId(value) {
     return { apiModel: "", variantSuffix: "" };
   }
 
-  const separatorIndex = normalizedValue.indexOf("@@");
+  const { variant_separator: variantSeparator } = getCustomModelContract();
+  const separatorIndex = normalizedValue.indexOf(variantSeparator);
   if (separatorIndex < 0) {
     return { apiModel: normalizedValue, variantSuffix: "" };
   }
 
   return {
     apiModel: normalizedValue.slice(0, separatorIndex),
-    variantSuffix: normalizedValue.slice(separatorIndex + 2),
+    variantSuffix: normalizedValue.slice(separatorIndex + variantSeparator.length),
   };
 }
 
-function normalizeOpenRouterVariantBool(value, defaultValue) {
-  if (value === undefined || value === null || value === "") {
-    return defaultValue;
-  }
-  return Boolean(value);
-}
-
 function parseOpenRouterModelVariantSuffix(value) {
+  const {
+    variant_part_separator: variantPartSeparator,
+    variant_key_value_separator: variantKeyValueSeparator,
+  } = getCustomModelContract();
   const parsed = {
     reasoning_mode: "default",
     reasoning_effort: "",
@@ -1422,8 +1444,8 @@ function parseOpenRouterModelVariantSuffix(value) {
     return parsed;
   }
 
-  rawValue.split(";").forEach((part) => {
-    const separatorIndex = part.indexOf("=");
+  rawValue.split(variantPartSeparator).forEach((part) => {
+    const separatorIndex = part.indexOf(variantKeyValueSeparator);
     if (separatorIndex < 0) {
       return;
     }
@@ -1451,69 +1473,39 @@ function parseOpenRouterModelVariantSuffix(value) {
 
   return parsed;
 }
-
-function buildOpenRouterModelVariantSuffix(variant = {}) {
-  const parts = [];
-  const reasoning = normalizeOpenRouterReasoningConfig(variant.reasoning_mode ?? variant.reasoning_enabled, variant.reasoning_effort);
-
-  if (reasoning.mode !== "default" || reasoning.effort) {
-    parts.push(`r=${reasoning.effort ? `${reasoning.mode}:${reasoning.effort}` : reasoning.mode}`);
-  }
-
-  const providerSlug = normalizeOpenRouterProviderSlug(variant.provider_slug || variant.openrouter_provider || "");
-  if (providerSlug) {
-    parts.push(`p=${providerSlug}`);
-  }
-
-  if (normalizeOpenRouterVariantBool(variant.supports_tools, true) === false) {
-    parts.push("t=0");
-  }
-  if (normalizeOpenRouterVariantBool(variant.supports_vision, false) === true) {
-    parts.push("v=1");
-  }
-  if (normalizeOpenRouterVariantBool(variant.supports_structured_outputs, false) === true) {
-    parts.push("s=1");
-  }
-
-  return parts.length ? `@@${parts.join(";")}` : "";
-}
-
-function buildOpenRouterModelId(apiModel, variant = {}) {
-  const normalizedApiModel = normalizeOpenRouterApiModel(apiModel);
-  if (!normalizedApiModel) {
-    return "";
-  }
-
-  const split = splitOpenRouterModelId(normalizedApiModel);
-  const variantSuffix = buildOpenRouterModelVariantSuffix(variant) || (split.variantSuffix ? `@@${split.variantSuffix}` : "");
-  return `openrouter:${split.apiModel || normalizedApiModel}${variantSuffix}`;
-}
-
 function normalizeOpenRouterProviderSlug(value) {
   const rawValue = String(value || "").trim().replace(/^\/+|\/+$/g, "").toLowerCase();
   if (!rawValue) {
     return "";
   }
-  return /^[a-z0-9][a-z0-9._/-]{0,199}$/.test(rawValue) ? rawValue : "";
+  try {
+    const pattern = new RegExp(getCustomModelContract().provider_slug_pattern);
+    return pattern.test(rawValue) ? rawValue : "";
+  } catch {
+    return /^[a-z0-9][a-z0-9._/-]{0,199}$/.test(rawValue) ? rawValue : "";
+  }
 }
 
 function normalizeOpenRouterReasoningMode(value) {
+  const { reasoning_modes: reasoningModes } = getCustomModelContract();
+  const fallbackMode = reasoningModes.includes("default") ? "default" : (reasoningModes[0] || "default");
   if (typeof value === "boolean") {
-    return value ? "enabled" : "disabled";
+    const boolMode = value ? "enabled" : "disabled";
+    return reasoningModes.includes(boolMode) ? boolMode : fallbackMode;
   }
   const rawValue = String(value || "").trim().toLowerCase();
   if (["enabled", "1", "true", "yes", "on"].includes(rawValue)) {
-    return "enabled";
+    return reasoningModes.includes("enabled") ? "enabled" : fallbackMode;
   }
   if (["disabled", "0", "false", "no", "off"].includes(rawValue)) {
-    return "disabled";
+    return reasoningModes.includes("disabled") ? "disabled" : fallbackMode;
   }
-  return "default";
+  return reasoningModes.includes(rawValue) ? rawValue : fallbackMode;
 }
 
 function normalizeOpenRouterReasoningEffort(value) {
   const rawValue = String(value || "").trim().toLowerCase();
-  return ["minimal", "low", "medium", "high", "xhigh"].includes(rawValue) ? rawValue : "";
+  return getCustomModelContract().reasoning_efforts.includes(rawValue) ? rawValue : "";
 }
 
 function normalizeOpenRouterReasoningConfig(modeValue, effortValue) {
@@ -1534,10 +1526,60 @@ function normalizeOpenRouterReasoningConfig(modeValue, effortValue) {
   return { mode, effort };
 }
 
+function normalizeCustomModelClientUid(value) {
+  const rawValue = String(value || "").trim();
+  if (!rawValue) {
+    return "";
+  }
+
+  const { client_uid_prefix: clientUidPrefix } = getCustomModelContract();
+  return rawValue.startsWith(clientUidPrefix) ? rawValue : "";
+}
+
+function createCustomModelClientUid() {
+  const { client_uid_prefix: clientUidPrefix } = getCustomModelContract();
+  customModelClientUidSequence += 1;
+  return `${clientUidPrefix}${customModelClientUidSequence}`;
+}
+
+function getDraftCustomModelReference(model) {
+  return String(model?.client_uid || model?.id || "").trim();
+}
+
+function getDraftCustomModelSignature(model) {
+  const normalizedModel = normalizeDraftCustomModel(model);
+  return JSON.stringify({
+    api_model: String(normalizedModel?.api_model || ""),
+    provider_slug: String(normalizedModel?.provider_slug || ""),
+    reasoning_mode: String(normalizedModel?.reasoning_mode || "default"),
+    reasoning_effort: String(normalizedModel?.reasoning_effort || ""),
+    supports_tools: Boolean(normalizedModel?.supports_tools ?? true),
+    supports_vision: Boolean(normalizedModel?.supports_vision ?? false),
+    supports_structured_outputs: Boolean(normalizedModel?.supports_structured_outputs ?? false),
+  });
+}
+
 function normalizeDraftCustomModel(model) {
-  const parsedIdentity = splitOpenRouterModelId(model?.id || model?.api_model || model?.model || "");
-  const parsedVariant = parseOpenRouterModelVariantSuffix(parsedIdentity.variantSuffix);
-  const apiModel = normalizeOpenRouterApiModel(model?.api_model || model?.model || parsedIdentity.apiModel || "");
+  const persistedModelId = String(model?.id || "").trim();
+  const explicitApiModel = normalizeOpenRouterApiModel(model?.api_model || model?.model || "");
+  const shouldParseLegacyIdentity = (
+    !explicitApiModel
+    || model?.reasoning_mode === undefined
+    || model?.reasoning_enabled === undefined
+    || model?.reasoning_effort === undefined
+    || model?.provider_slug === undefined
+    || model?.openrouter_provider === undefined
+    || model?.supports_tools === undefined
+    || model?.supports_vision === undefined
+    || model?.supports_structured_outputs === undefined
+  );
+  const parsedIdentity = shouldParseLegacyIdentity
+    ? splitOpenRouterModelId(model?.id || model?.api_model || model?.model || "")
+    : { apiModel: "", variantSuffix: "" };
+  const parsedVariant = shouldParseLegacyIdentity
+    ? parseOpenRouterModelVariantSuffix(parsedIdentity.variantSuffix)
+    : {};
+  const apiModel = explicitApiModel || normalizeOpenRouterApiModel(parsedIdentity.apiModel || "");
   const reasoning = normalizeOpenRouterReasoningConfig(
     model?.reasoning_mode ?? model?.reasoning_enabled ?? parsedVariant.reasoning_mode,
     model?.reasoning_effort ?? parsedVariant.reasoning_effort
@@ -1548,19 +1590,13 @@ function normalizeDraftCustomModel(model) {
   const supportsStructuredOutputs = model?.supports_structured_outputs !== undefined
     ? Boolean(model.supports_structured_outputs)
     : (parsedVariant.supports_structured_outputs ?? false);
-  const modelId = buildOpenRouterModelId(apiModel, {
-    reasoning_mode: reasoning.mode,
-    reasoning_effort: reasoning.effort,
-    provider_slug: providerSlug,
-    supports_tools: supportsTools,
-    supports_vision: supportsVision,
-    supports_structured_outputs: supportsStructuredOutputs,
-  }) || String(model?.id || "").trim();
+  const clientUid = normalizeCustomModelClientUid(model?.client_uid) || persistedModelId || createCustomModelClientUid();
   return {
     ...model,
-    id: modelId,
-    name: String(model?.name || apiModel || modelId).trim() || apiModel || modelId,
-    provider: "openrouter",
+    id: persistedModelId,
+    client_uid: clientUid,
+    name: String(model?.name || apiModel || persistedModelId || clientUid).trim() || apiModel || persistedModelId || clientUid,
+    provider: String(model?.provider || getCustomModelContract().provider || "openrouter"),
     api_model: apiModel,
     provider_slug: providerSlug,
     reasoning_mode: reasoning.mode,
@@ -1569,6 +1605,21 @@ function normalizeDraftCustomModel(model) {
     supports_vision: supportsVision,
     supports_structured_outputs: supportsStructuredOutputs,
     is_custom: true,
+  };
+}
+
+function serializeDraftCustomModel(model) {
+  const normalizedModel = normalizeDraftCustomModel(model);
+  return {
+    client_uid: getDraftCustomModelReference(normalizedModel),
+    name: String(normalizedModel?.name || normalizedModel?.api_model || "").trim(),
+    api_model: String(normalizedModel?.api_model || "").trim(),
+    provider_slug: String(normalizedModel?.provider_slug || "").trim(),
+    reasoning_mode: String(normalizedModel?.reasoning_mode || "default"),
+    reasoning_effort: String(normalizedModel?.reasoning_effort || ""),
+    supports_tools: Boolean(normalizedModel?.supports_tools ?? true),
+    supports_vision: Boolean(normalizedModel?.supports_vision ?? false),
+    supports_structured_outputs: Boolean(normalizedModel?.supports_structured_outputs ?? false),
   };
 }
 
@@ -1627,7 +1678,11 @@ function readCustomModelProviderSlug() {
 }
 
 function getDraftAvailableModels() {
-  return [...builtinModelCatalog, ...draftCustomModels].map((model) => ({ ...model }));
+  const customModelCatalog = draftCustomModels.map((model) => ({
+    ...model,
+    id: getDraftCustomModelReference(model),
+  }));
+  return [...builtinModelCatalog, ...customModelCatalog].map((model) => ({ ...model }));
 }
 
 function getDraftChatCapableModels() {
@@ -1867,7 +1922,7 @@ function renderCustomModelList() {
   if (!draftCustomModels.length) {
     const emptyState = document.createElement("p");
     emptyState.className = "settings-copy";
-    emptyState.textContent = "No custom OpenRouter models configured yet.";
+    emptyState.textContent = "No custom models configured yet.";
     customModelListEl.append(emptyState);
     return;
   }
@@ -1875,7 +1930,7 @@ function renderCustomModelList() {
   for (const model of draftCustomModels) {
     const row = document.createElement("div");
     row.className = "model-management-row";
-    if (editingCustomModelId && editingCustomModelId === model.id) {
+    if (editingCustomModelClientUid && editingCustomModelClientUid === model.client_uid) {
       row.classList.add("custom-model-row--editing");
     }
 
@@ -1883,11 +1938,11 @@ function renderCustomModelList() {
     meta.className = "model-management-row__meta";
 
     const title = document.createElement("strong");
-    title.textContent = model.name || model.api_model || model.id;
+    title.textContent = model.name || model.api_model || model.id || model.client_uid;
 
     const subtitle = document.createElement("div");
     subtitle.className = "model-management-row__subtitle";
-    subtitle.textContent = [model.api_model || model.id, model.provider_slug ? `Route: ${model.provider_slug}` : ""]
+    subtitle.textContent = [model.api_model || model.id || model.client_uid, model.provider_slug ? `Route: ${model.provider_slug}` : ""]
       .filter(Boolean)
       .join(" · ");
 
@@ -1920,7 +1975,7 @@ function renderCustomModelList() {
     editBtn.className = "btn-ghost";
     editBtn.textContent = "Edit";
     editBtn.addEventListener("click", () => {
-      startEditingCustomModel(model.id);
+      startEditingCustomModel(model.client_uid);
     });
 
     const removeBtn = document.createElement("button");
@@ -1928,8 +1983,8 @@ function renderCustomModelList() {
     removeBtn.className = "btn-ghost btn-ghost--danger";
     removeBtn.textContent = "Remove";
     removeBtn.addEventListener("click", () => {
-      const wasEditing = editingCustomModelId === model.id;
-      draftCustomModels = draftCustomModels.filter((entry) => entry.id !== model.id);
+      const wasEditing = editingCustomModelClientUid === model.client_uid;
+      draftCustomModels = draftCustomModels.filter((entry) => entry.client_uid !== model.client_uid);
       if (wasEditing) {
         cancelEditingCustomModel({ silent: true });
       }
@@ -1979,27 +2034,27 @@ function fillCustomModelForm(model) {
 
 function updateCustomModelEditControls() {
   if (addCustomModelBtn) {
-    addCustomModelBtn.textContent = editingCustomModelId ? "Update model" : "Add OpenRouter model";
+    addCustomModelBtn.textContent = editingCustomModelClientUid ? "Update model" : "Add custom model";
   }
   if (customModelCancelEditBtn) {
-    customModelCancelEditBtn.hidden = !editingCustomModelId;
+    customModelCancelEditBtn.hidden = !editingCustomModelClientUid;
   }
 }
 
-function startEditingCustomModel(modelId) {
-  const model = draftCustomModels.find((entry) => entry.id === modelId);
+function startEditingCustomModel(modelClientUid) {
+  const model = draftCustomModels.find((entry) => entry.client_uid === modelClientUid);
   if (!model) {
     return;
   }
-  editingCustomModelId = model.id;
+  editingCustomModelClientUid = model.client_uid;
   fillCustomModelForm(model);
   updateCustomModelEditControls();
   renderCustomModelList();
-  setCustomModelStatus(`Editing ${model.name || model.id}.`, "muted");
+  setCustomModelStatus(`Editing ${model.name || model.api_model || model.client_uid}.`, "muted");
 }
 
 function cancelEditingCustomModel({ silent = false } = {}) {
-  editingCustomModelId = null;
+  editingCustomModelClientUid = null;
   resetCustomModelForm();
   updateCustomModelEditControls();
   renderCustomModelList();
@@ -2146,6 +2201,12 @@ function populateVisionModelSelect(selectEl, selectedValue, emptyLabel = "Use de
 }
 
 function renderOperationModelSelects(preferences = null) {
+  const currentChatSummaryModel = chatSummaryModelEl
+    ? String(chatSummaryModelEl.value || appSettings.chat_summary_model || "")
+    : String(appSettings.chat_summary_model || "");
+  const currentImageHelperModel = imageHelperModelEl
+    ? String(imageHelperModelEl.value || appSettings.image_helper_model || "")
+    : String(appSettings.image_helper_model || "");
   const currentSelections = preferences && typeof preferences === "object"
     ? {
         summarize: String(preferences.summarize || ""),
@@ -2164,8 +2225,8 @@ function renderOperationModelSelects(preferences = null) {
   populateOperationModelSelect(titleModelPreferenceEl, currentSelections.generate_title);
   populateOperationModelSelect(uploadMetadataModelPreferenceEl, currentSelections.upload_metadata);
   populateOperationModelSelect(subAgentModelPreferenceEl, currentSelections.sub_agent);
-  populateOperationModelSelect(chatSummaryModelEl, appSettings.chat_summary_model || "", "Use default chat model");
-  populateVisionModelSelect(imageHelperModelEl, appSettings.image_helper_model || "", "Use default chat model when needed");
+  populateOperationModelSelect(chatSummaryModelEl, currentChatSummaryModel, "Use default chat model");
+  populateVisionModelSelect(imageHelperModelEl, currentImageHelperModel, "Use default chat model when needed");
 }
 
 function renderModelManagementPanels({ preferVisibleId = "", operationPreferences = null } = {}) {
@@ -2199,7 +2260,7 @@ function addCustomModelFromInputs() {
     customModelReasoningEffortEl?.value || ""
   );
   if (!apiModel) {
-    setCustomModelStatus("OpenRouter model id is required.", "error");
+    setCustomModelStatus("Custom model API id is required.", "error");
     return;
   }
   if (providerSelection.error) {
@@ -2208,42 +2269,34 @@ function addCustomModelFromInputs() {
   }
 
   const providerSlug = providerSelection.providerSlug;
+  const existingIndex = editingCustomModelClientUid
+    ? draftCustomModels.findIndex((model) => model.client_uid === editingCustomModelClientUid)
+    : -1;
+  const existingModel = existingIndex >= 0 ? draftCustomModels[existingIndex] : null;
 
-  const modelId = buildOpenRouterModelId(apiModel, {
+  const normalizedModel = normalizeDraftCustomModel({
+    id: existingModel?.id || "",
+    client_uid: existingModel?.client_uid || createCustomModelClientUid(),
+    name: String(customModelNameEl?.value || "").trim() || apiModel,
+    provider: "openrouter",
+    api_model: apiModel,
+    provider_slug: providerSlug,
     reasoning_mode: reasoning.mode,
     reasoning_effort: reasoning.effort,
-    provider_slug: providerSlug,
     supports_tools: Boolean(customModelSupportsToolsEl?.checked),
     supports_vision: Boolean(customModelSupportsVisionEl?.checked),
     supports_structured_outputs: Boolean(customModelSupportsStructuredEl?.checked),
+    is_custom: true,
   });
-  if (!modelId) {
-    setCustomModelStatus("OpenRouter model id is invalid.", "error");
-    return;
-  }
-
-  const existingIndex = editingCustomModelId
-    ? draftCustomModels.findIndex((model) => model.id === editingCustomModelId)
-    : -1;
-  const duplicateIndex = draftCustomModels.findIndex((model, index) => model.id === modelId && index !== existingIndex);
+  const normalizedSignature = getDraftCustomModelSignature(normalizedModel);
+  const duplicateIndex = draftCustomModels.findIndex((model, index) => (
+    getDraftCustomModelSignature(model) === normalizedSignature && index !== existingIndex
+  ));
   if (duplicateIndex >= 0) {
-    setCustomModelStatus("That OpenRouter model configuration is already configured.", "warning");
+    setCustomModelStatus("That custom model configuration is already configured.", "warning");
     return;
   }
-
-  const normalizedModel = normalizeDraftCustomModel({
-      id: modelId,
-      name: String(customModelNameEl?.value || "").trim() || apiModel,
-      provider: "openrouter",
-      api_model: apiModel,
-      provider_slug: providerSlug,
-      reasoning_mode: reasoning.mode,
-      reasoning_effort: reasoning.effort,
-      supports_tools: Boolean(customModelSupportsToolsEl?.checked),
-      supports_vision: Boolean(customModelSupportsVisionEl?.checked),
-      supports_structured_outputs: Boolean(customModelSupportsStructuredEl?.checked),
-      is_custom: true,
-    });
+  const preferredModelReference = getDraftCustomModelReference(normalizedModel);
 
   if (existingIndex >= 0) {
     const nextModels = [...draftCustomModels];
@@ -2254,9 +2307,9 @@ function addCustomModelFromInputs() {
   }
 
   cancelEditingCustomModel({ silent: true });
-  renderModelManagementPanels({ preferVisibleId: modelId });
+  renderModelManagementPanels({ preferVisibleId: preferredModelReference });
   markDirty();
-  setCustomModelStatus(existingIndex >= 0 ? "OpenRouter model updated. Save to apply." : "OpenRouter model added. Save to apply.", "success");
+  setCustomModelStatus(existingIndex >= 0 ? "Custom model updated. Save to apply." : "Custom model added. Save to apply.", "success");
 }
 
 function flattenScratchpadSections(sectionMap) {
@@ -2789,7 +2842,7 @@ function applySettingsToForm() {
   draftCustomModels = Array.isArray(appSettings.custom_models)
     ? appSettings.custom_models.map((model) => normalizeDraftCustomModel(model))
     : [];
-  editingCustomModelId = null;
+  editingCustomModelClientUid = null;
   draftChatModelRows = [];
   initializeOperationFallbackDraftRows(appSettings.operation_model_fallback_preferences || {});
   renderModelManagementPanels({
@@ -2887,6 +2940,9 @@ function applyServerSettingsData(data) {
   appSettings.temperature = data.temperature ?? 0.7;
   appSettings.clarification_max_questions = data.clarification_max_questions || 5;
   appSettings.available_models = Array.isArray(data.available_models) ? data.available_models : [];
+  appSettings.custom_model_contract = data.custom_model_contract && typeof data.custom_model_contract === "object"
+    ? data.custom_model_contract
+    : {};
   appSettings.custom_models = Array.isArray(data.custom_models) ? data.custom_models : [];
   appSettings.visible_model_order = Array.isArray(data.visible_model_order) ? data.visible_model_order : [];
   appSettings.default_chat_model = data.default_chat_model || "";
@@ -3080,7 +3136,7 @@ async function saveSettings() {
     tool_memory_ttl_news_seconds: readNumericSetting(toolMemoryTtlNewsSecondsEl, 7200, { allowZero: false, min: 60 }),
     fetch_raw_max_text_chars: readNumericSetting(fetchRawMaxTextCharsEl, 24000, { allowZero: false, min: 1000 }),
     fetch_summary_max_chars: readNumericSetting(fetchSummaryMaxCharsEl, 8000, { allowZero: false, min: 500 }),
-    custom_models: draftCustomModels.map((model) => ({ ...model })),
+    custom_models: draftCustomModels.map((model) => serializeDraftCustomModel(model)),
     visible_model_order: getDraftVisibleModelOrder(),
     operation_model_preferences: getOperationModelPreferencesDraft(),
     operation_model_fallback_preferences: getOperationModelFallbackPreferencesDraft(),

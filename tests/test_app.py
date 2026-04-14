@@ -564,6 +564,10 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             payload["custom_models"][0]["id"],
             "openrouter:anthropic/claude-sonnet-4.5@@r=enabled:high;p=deepinfra/turbo;v=1;s=1",
         )
+        self.assertEqual(payload["custom_model_contract"]["provider"], "openrouter")
+        self.assertEqual(payload["custom_model_contract"]["model_prefix"], "openrouter:")
+        self.assertEqual(payload["custom_model_contract"]["client_uid_prefix"], "draft-custom-model:")
+        self.assertEqual(payload["custom_model_contract"]["variant_separator"], "@@")
         self.assertEqual(payload["custom_models"][0]["provider_slug"], "deepinfra/turbo")
         self.assertEqual(payload["custom_models"][0]["reasoning_mode"], "enabled")
         self.assertEqual(payload["custom_models"][0]["reasoning_effort"], "high")
@@ -1145,6 +1149,52 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertTrue(custom_models[1]["id"].startswith("openrouter:google/gemini-3-flash-preview"))
         self.assertIn("@@r=disabled", custom_models[0]["id"])
         self.assertIn("@@r=enabled:xhigh", custom_models[1]["id"])
+
+    def test_settings_patch_resolves_client_uid_references_for_custom_models(self):
+        response = self.client.patch(
+            "/api/settings",
+            json={
+                "custom_models": [
+                    {
+                        "client_uid": "draft-custom-model:1",
+                        "name": "Claude Sonnet 4.5",
+                        "api_model": "anthropic/claude-sonnet-4.5",
+                        "provider_slug": "deepinfra/turbo",
+                        "reasoning_mode": "enabled",
+                        "reasoning_effort": "high",
+                        "supports_tools": True,
+                        "supports_vision": True,
+                        "supports_structured_outputs": True,
+                    }
+                ],
+                "visible_model_order": ["draft-custom-model:1", "deepseek-chat"],
+                "operation_model_preferences": {
+                    "summarize": "draft-custom-model:1",
+                    "fetch_summarize": "deepseek-chat",
+                },
+                "operation_model_fallback_preferences": {
+                    "summarize": ["draft-custom-model:1", "deepseek-reasoner"],
+                },
+                "image_helper_model": "draft-custom-model:1",
+                "chat_summary_model": "draft-custom-model:1",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        custom_model_id = payload["custom_models"][0]["id"]
+        self.assertEqual(
+            custom_model_id,
+            "openrouter:anthropic/claude-sonnet-4.5@@r=enabled:high;p=deepinfra/turbo;v=1;s=1",
+        )
+        self.assertEqual(payload["visible_model_order"], [custom_model_id, "deepseek-chat"])
+        self.assertEqual(payload["operation_model_preferences"]["summarize"], custom_model_id)
+        self.assertEqual(
+            payload["operation_model_fallback_preferences"]["summarize"],
+            [custom_model_id, "deepseek-reasoner"],
+        )
+        self.assertEqual(payload["image_helper_model"], custom_model_id)
+        self.assertEqual(payload["chat_summary_model"], custom_model_id)
 
     def test_settings_patch_rejects_invalid_rag_presets(self):
         response = self.client.patch(
@@ -5614,6 +5664,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn('document.getElementById("app-bootstrap")', script_text)
         self.assertIn("function activateTab", script_text)
         self.assertIn("function applyConditionalSectionState", script_text)
+        self.assertIn("function getDraftCustomModelReference", script_text)
+        self.assertIn("client_uid", script_text)
+        self.assertIn("draft-custom-model:", script_text)
+        self.assertIn("No custom models configured yet.", script_text)
+        self.assertIn("Add custom model", script_text)
+        self.assertIn("Custom model API id is required.", script_text)
         self.assertIn("void loadKnowledgeBaseDocuments();", script_text)
         self.assertIn("void refreshSettings();", script_text)
         self.assertIn("window.addEventListener(\"beforeunload\"", script_text)

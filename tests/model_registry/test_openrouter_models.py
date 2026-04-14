@@ -13,6 +13,69 @@ from tests.support.app_harness import BaseAppRoutesTestCase
 
 
 class TestOpenRouterModelRegistry(BaseAppRoutesTestCase):
+    def test_build_model_provider_policy_marks_deepseek_as_cache_friendly(self):
+        policy = model_registry.build_model_provider_policy(
+            {
+                "provider": model_registry.DEEPSEEK_PROVIDER,
+                "api_model": "deepseek-chat",
+            }
+        )
+
+        self.assertTrue(policy["supports_prompt_cache"])
+        self.assertTrue(policy["prefers_cache_friendly_prefix"])
+        self.assertEqual(policy["cache_context"], {"supports_prompt_cache": True, "strategy": "implicit"})
+
+    def test_openrouter_tool_choice_auto_fallback_policy_is_centralized(self):
+        request_kwargs = {
+            "tool_choice": {"type": "function", "function": {"name": "ask_clarifying_question"}},
+            "parallel_tool_calls": False,
+        }
+        error_text = "Error code: 404 - {'error': {'message': 'No endpoints found that support the provided tool_choice value.', 'code': 404}}"
+        openrouter_target = {
+            "policy": model_registry.build_model_provider_policy(
+                {
+                    "provider": model_registry.OPENROUTER_PROVIDER,
+                    "api_model": "anthropic/claude-sonnet-4.5",
+                }
+            )
+        }
+        deepseek_target = {
+            "policy": model_registry.build_model_provider_policy(
+                {
+                    "provider": model_registry.DEEPSEEK_PROVIDER,
+                    "api_model": "deepseek-chat",
+                }
+            )
+        }
+
+        self.assertTrue(
+            model_registry.should_retry_model_target_tool_choice_with_auto(
+                error_text,
+                request_kwargs,
+                openrouter_target,
+            )
+        )
+        self.assertFalse(
+            model_registry.should_retry_model_target_tool_choice_with_auto(
+                error_text,
+                request_kwargs,
+                deepseek_target,
+            )
+        )
+
+        openrouter_fallback = model_registry.build_model_target_tool_choice_fallback_request(
+            request_kwargs,
+            openrouter_target,
+        )
+        deepseek_fallback = model_registry.build_model_target_tool_choice_fallback_request(
+            request_kwargs,
+            deepseek_target,
+        )
+
+        self.assertEqual(openrouter_fallback["tool_choice"], "auto")
+        self.assertNotIn("parallel_tool_calls", openrouter_fallback)
+        self.assertIsNone(deepseek_fallback)
+
     def test_create_app_refreshes_openrouter_headers_from_persisted_settings(self):
         save_app_settings(
             {

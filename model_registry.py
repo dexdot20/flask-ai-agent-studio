@@ -545,6 +545,117 @@ def build_openrouter_cache_estimate_context(messages: Any, record: dict[str, Any
     }
 
 
+def _summarize_model_cache_context(cache_context: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(cache_context, dict):
+        return None
+    return {
+        "supports_prompt_cache": bool(cache_context.get("supports_prompt_cache") is True),
+        "strategy": str(cache_context.get("strategy") or "").strip(),
+    }
+
+
+def build_model_provider_policy(record: dict[str, Any] | None, settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    provider = str(record.get("provider") or "").strip() if isinstance(record, dict) else ""
+    cache_context: dict[str, Any] | None = None
+    tool_choice_fallback_value: str | None = None
+    tool_choice_error_signatures: tuple[tuple[str, ...], ...] = ()
+    supports_native_reasoning_continuation = False
+
+    if provider == DEEPSEEK_PROVIDER:
+        cache_context = {
+            "supports_prompt_cache": True,
+            "strategy": "implicit",
+        }
+    elif provider == OPENROUTER_PROVIDER and isinstance(record, dict):
+        cache_context = _summarize_model_cache_context(
+            build_openrouter_cache_estimate_context([], record, settings)
+        )
+        supports_native_reasoning_continuation = True
+        tool_choice_fallback_value = "auto"
+        tool_choice_error_signatures = (
+            (
+                "tool_choice",
+                "no endpoints found",
+                "support the provided",
+            ),
+        )
+
+    supports_prompt_cache = bool(isinstance(cache_context, dict) and cache_context.get("supports_prompt_cache") is True)
+    return {
+        "provider": provider,
+        "cache_context": cache_context,
+        "supports_prompt_cache": supports_prompt_cache,
+        "prefers_cache_friendly_prefix": supports_prompt_cache,
+        "supports_native_reasoning_continuation": supports_native_reasoning_continuation,
+        "tool_choice_auto_fallback_enabled": bool(tool_choice_fallback_value),
+        "tool_choice_fallback_value": tool_choice_fallback_value,
+        "tool_choice_auto_fallback_error_signatures": tool_choice_error_signatures,
+    }
+
+
+def get_model_target_policy(target: dict[str, Any] | None) -> dict[str, Any]:
+    if isinstance(target, dict):
+        policy = target.get("policy")
+        if isinstance(policy, dict):
+            return dict(policy)
+        return build_model_provider_policy(target.get("record"), target.get("settings"))
+    return build_model_provider_policy(None)
+
+
+def model_prefers_cache_friendly_prefix(model_id: str | None, settings: dict[str, Any] | None = None) -> bool:
+    record = get_model_record(str(model_id or "").strip(), settings)
+    if not isinstance(record, dict):
+        return False
+    policy = build_model_provider_policy(record, settings)
+    return bool(policy.get("prefers_cache_friendly_prefix"))
+
+
+def model_target_supports_native_reasoning_continuation(target: dict[str, Any] | None) -> bool:
+    policy = get_model_target_policy(target)
+    return bool(policy.get("supports_native_reasoning_continuation"))
+
+
+def should_retry_model_target_tool_choice_with_auto(
+    error: Exception | str,
+    request_kwargs: dict[str, Any],
+    target: dict[str, Any] | None,
+) -> bool:
+    if not isinstance(request_kwargs.get("tool_choice"), dict):
+        return False
+
+    policy = get_model_target_policy(target)
+    if not bool(policy.get("tool_choice_auto_fallback_enabled")):
+        return False
+
+    normalized_error = str(error or "").strip().lower()
+    if not normalized_error:
+        return False
+
+    error_signatures = policy.get("tool_choice_auto_fallback_error_signatures") or ()
+    for signature in error_signatures:
+        if all(str(marker or "").strip().lower() in normalized_error for marker in signature):
+            return True
+    return False
+
+
+def build_model_target_tool_choice_fallback_request(
+    request_kwargs: dict[str, Any],
+    target: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(request_kwargs, dict):
+        return None
+
+    fallback_value = get_model_target_policy(target).get("tool_choice_fallback_value")
+    if fallback_value in (None, ""):
+        return None
+
+    fallback_request_kwargs = dict(request_kwargs)
+    fallback_request_kwargs["tool_choice"] = fallback_value
+    if fallback_value == "auto":
+        fallback_request_kwargs.pop("parallel_tool_calls", None)
+    return fallback_request_kwargs
+
+
 def _prepare_model_request_messages(messages: Any, record: dict[str, Any] | None, settings: dict[str, Any] | None = None) -> Any:
     if not isinstance(messages, list) or not isinstance(record, dict):
         return messages
@@ -686,6 +797,24 @@ def normalize_custom_models(raw_value: Any) -> list[dict[str, Any]]:
         seen_ids.add(model_id)
         normalized.append(definition)
     return normalized
+
+
+def get_custom_model_contract() -> dict[str, Any]:
+    return {
+        "provider": OPENROUTER_PROVIDER,
+        "model_prefix": OPENROUTER_MODEL_PREFIX,
+        "client_uid_prefix": "draft-custom-model:",
+        "variant_separator": OPENROUTER_MODEL_VARIANT_SEPARATOR,
+        "variant_part_separator": OPENROUTER_MODEL_VARIANT_PART_SEPARATOR,
+        "variant_key_value_separator": OPENROUTER_MODEL_VARIANT_KEY_VALUE_SEPARATOR,
+        "provider_slug_pattern": _OPENROUTER_PROVIDER_SLUG_RE.pattern,
+        "reasoning_modes": [
+            OPENROUTER_REASONING_MODE_DEFAULT,
+            OPENROUTER_REASONING_MODE_ENABLED,
+            OPENROUTER_REASONING_MODE_DISABLED,
+        ],
+        "reasoning_efforts": sorted(OPENROUTER_REASONING_EFFORTS),
+    }
 
 
 def get_all_models(settings: dict | None = None) -> list[dict[str, Any]]:
@@ -949,9 +1078,11 @@ def resolve_model_target(model_id: str, settings: dict | None = None) -> dict[st
     record = get_model_record(model_id, settings)
     if not record:
         raise ValueError(f"Unsupported model: {model_id}")
+    policy = build_model_provider_policy(record, settings)
     return {
         "record": record,
         "settings": settings,
+        "policy": policy,
         "client": get_provider_client(str(record["provider"])),
         "api_model": str(record["api_model"]),
         "extra_body": build_model_request_extra_body(record, settings),

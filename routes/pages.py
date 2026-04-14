@@ -142,6 +142,7 @@ from model_registry import (
     canonicalize_model_id,
     get_all_models,
     get_chat_capable_models,
+    get_custom_model_contract,
     get_default_chat_model_id,
     get_image_helper_model_id,
     get_model_record,
@@ -403,6 +404,34 @@ def _normalize_bool_setting_value(value) -> str:
     return "true" if str(value or "").strip().lower() in {"1", "true", "yes", "on"} else "false"
 
 
+def _normalize_custom_model_client_uid(
+    value,
+    *,
+    existing_custom_model_ids: set[str] | None = None,
+) -> str:
+    raw_value = str(value or "").strip()
+    if not raw_value or len(raw_value) > 200:
+        return ""
+
+    client_uid_prefix = str(get_custom_model_contract().get("client_uid_prefix") or "").strip()
+    if client_uid_prefix and raw_value.startswith(client_uid_prefix):
+        return raw_value
+    if raw_value in (existing_custom_model_ids or set()):
+        return raw_value
+    return ""
+
+
+def _resolve_model_reference_id(value, custom_model_reference_ids: dict[str, str] | None = None) -> str:
+    raw_value = str(value or "").strip()
+    if not raw_value:
+        return ""
+    if isinstance(custom_model_reference_ids, dict):
+        mapped_value = custom_model_reference_ids.get(raw_value)
+        if mapped_value:
+            return mapped_value
+    return canonicalize_model_id(raw_value)
+
+
 def build_settings_payload() -> dict:
     raw = get_app_settings()
     available_models = get_all_models(raw)
@@ -439,6 +468,7 @@ def build_settings_payload() -> dict:
         "temperature": get_model_temperature(raw),
         "clarification_max_questions": get_clarification_max_questions(raw),
         "available_models": available_models,
+        "custom_model_contract": get_custom_model_contract(),
         "custom_models": normalize_custom_models(raw.get("custom_models")),
         "visible_model_order": [model["id"] for model in visible_chat_models],
         "default_chat_model": get_default_chat_model_id(raw),
@@ -797,6 +827,12 @@ def register_page_routes(app) -> None:
 
         settings = get_app_settings()
         default_persona = get_default_persona(settings)
+        existing_custom_model_ids = {
+            str(model.get("id") or "").strip()
+            for model in normalize_custom_models(settings.get("custom_models"))
+            if str(model.get("id") or "").strip()
+        }
+        custom_model_reference_ids: dict[str, str] = {}
 
         if general_instructions is None and user_preferences is not None:
             general_instructions = user_preferences
@@ -914,6 +950,7 @@ def register_page_routes(app) -> None:
 
             normalized_custom_models = []
             seen_custom_model_ids: set[str] = set()
+            seen_custom_model_client_uids: set[str] = set()
             for entry in custom_models_raw:
                 if not isinstance(entry, dict):
                     return jsonify({"error": "Each custom model must be an object."}), 400
@@ -936,7 +973,25 @@ def register_page_routes(app) -> None:
                     return jsonify({"error": "Each custom model must include a valid OpenRouter model id."}), 400
                 if definition["id"] in seen_custom_model_ids:
                     return jsonify({"error": "custom_models contains duplicate model ids."}), 400
+
+                client_uid = _normalize_custom_model_client_uid(
+                    entry.get("client_uid"),
+                    existing_custom_model_ids=existing_custom_model_ids,
+                )
+                if str(entry.get("client_uid") or "").strip() and not client_uid:
+                    return jsonify({"error": "custom_models contains an invalid client_uid."}), 400
+                if client_uid:
+                    if client_uid in seen_custom_model_client_uids:
+                        return jsonify({"error": "custom_models contains duplicate client_uids."}), 400
+                    existing_mapping = custom_model_reference_ids.get(client_uid)
+                    if existing_mapping and existing_mapping != definition["id"]:
+                        return jsonify({"error": "custom_models contains conflicting client_uids."}), 400
+                    seen_custom_model_client_uids.add(client_uid)
+
                 seen_custom_model_ids.add(definition["id"])
+                custom_model_reference_ids[definition["id"]] = definition["id"]
+                if client_uid:
+                    custom_model_reference_ids[client_uid] = definition["id"]
                 normalized_custom_models.append(definition)
 
             settings["custom_models"] = json.dumps(normalized_custom_models, ensure_ascii=False)
@@ -947,7 +1002,7 @@ def register_page_routes(app) -> None:
 
             normalized_visible_model_order: list[str] = []
             for value in visible_model_order_raw:
-                model_id = canonicalize_model_id(value)
+                model_id = _resolve_model_reference_id(value, custom_model_reference_ids)
                 record = get_model_record(model_id, settings)
                 if not record or not record.get("supports_tools"):
                     return jsonify({"error": "visible_model_order contains unsupported chat models."}), 400
@@ -968,13 +1023,15 @@ def register_page_routes(app) -> None:
                 for key, value in operation_model_preferences_raw.items()
                 if key in MODEL_OPERATION_KEYS
             }
+            resolved_operation_preferences: dict[str, str] = {}
 
             for operation_key, model_value in filtered_operation_preferences.items():
-                candidate = canonicalize_model_id(model_value)
+                candidate = _resolve_model_reference_id(model_value, custom_model_reference_ids)
                 if candidate and get_model_record(candidate, settings) is None:
                     return jsonify({"error": f"operation_model_preferences.{operation_key} must reference a known model."}), 400
+                resolved_operation_preferences[operation_key] = candidate
 
-            normalized_operation_preferences = normalize_operation_model_preferences(filtered_operation_preferences, settings)
+            normalized_operation_preferences = normalize_operation_model_preferences(resolved_operation_preferences, settings)
             settings["operation_model_preferences"] = json.dumps(normalized_operation_preferences, ensure_ascii=False)
 
         if operation_model_fallback_preferences_raw is not None:
@@ -986,9 +1043,11 @@ def register_page_routes(app) -> None:
                 for key, value in operation_model_fallback_preferences_raw.items()
                 if key in MODEL_OPERATION_KEYS
             }
+            resolved_operation_fallback_preferences: dict[str, list[str] | str] = {}
 
             for operation_key, model_value in filtered_operation_fallback_preferences.items():
                 if model_value in (None, ""):
+                    resolved_operation_fallback_preferences[operation_key] = []
                     continue
 
                 if isinstance(model_value, str):
@@ -999,12 +1058,16 @@ def register_page_routes(app) -> None:
                     return jsonify({"error": f"operation_model_fallback_preferences.{operation_key} must be an array of model ids."}), 400
 
                 for candidate_value in candidate_values:
-                    candidate = canonicalize_model_id(candidate_value)
+                    candidate = _resolve_model_reference_id(candidate_value, custom_model_reference_ids)
                     if candidate and get_model_record(candidate, settings) is None:
                         return jsonify({"error": f"operation_model_fallback_preferences.{operation_key} must reference known models."}), 400
+                resolved_operation_fallback_preferences[operation_key] = [
+                    _resolve_model_reference_id(candidate_value, custom_model_reference_ids)
+                    for candidate_value in candidate_values
+                ]
 
             normalized_operation_fallback_preferences = normalize_operation_model_fallback_preferences(
-                filtered_operation_fallback_preferences,
+                resolved_operation_fallback_preferences,
                 settings,
             )
             settings["operation_model_fallback_preferences"] = json.dumps(
@@ -1019,7 +1082,7 @@ def register_page_routes(app) -> None:
             settings["image_processing_method"] = normalized_image_processing_method
 
         if image_helper_model_raw is not None:
-            candidate = canonicalize_model_id(image_helper_model_raw)
+            candidate = _resolve_model_reference_id(image_helper_model_raw, custom_model_reference_ids)
             if candidate:
                 record = get_model_record(candidate, settings)
                 if record is None:
@@ -1124,7 +1187,7 @@ def register_page_routes(app) -> None:
             settings["youtube_transcript_model_size"] = normalized_model_size[:64]
 
         if chat_summary_model_raw is not None:
-            candidate = canonicalize_model_id(chat_summary_model_raw)
+            candidate = _resolve_model_reference_id(chat_summary_model_raw, custom_model_reference_ids)
             if candidate and get_model_record(candidate, settings) is None:
                 return jsonify({"error": "chat_summary_model must reference a known model."}), 400
             settings["chat_summary_model"] = candidate
