@@ -4,8 +4,8 @@ import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app import create_app
 import model_registry
+from app import create_app
 from db import save_app_settings
 from model_registry import get_operation_model, get_operation_model_candidates, resolve_model_target
 from proxy_settings import PROXY_OPERATION_FETCH_URL
@@ -209,10 +209,39 @@ class TestOpenRouterModelRegistry(BaseAppRoutesTestCase):
         )
         self.assertEqual(merged["messages"][1]["content"], "Summarize the stable prefix.")
 
-    def test_apply_model_target_request_options_prefers_last_eligible_gemini_system_message(self):
+    def test_apply_model_target_request_options_prefers_leading_stable_gemini_system_message(self):
         request_kwargs = {
             "messages": [
-                {"role": "system", "content": "Stable prefix. " * 90},
+                {"role": "system", "content": "Stable prefix. " * 1000},
+                {"role": "user", "content": "Earlier question."},
+                {"role": "assistant", "content": "Earlier answer."},
+                {"role": "system", "content": "Dynamic current-turn injection. " * 1000},
+                {"role": "user", "content": "Summarize the stable prefix."},
+            ]
+        }
+        target = {
+            "record": {
+                "provider": model_registry.OPENROUTER_PROVIDER,
+                "api_model": "google/gemini-2.5-pro",
+            },
+            "extra_body": {"provider": {"sort": "throughput"}},
+        }
+
+        merged = model_registry.apply_model_target_request_options(request_kwargs, target)
+
+        self.assertIsInstance(merged["messages"][0]["content"], list)
+        self.assertEqual(
+            merged["messages"][0]["content"][0]["cache_control"],
+            {"type": "ephemeral"},
+        )
+        self.assertEqual(merged["messages"][3]["content"], request_kwargs["messages"][3]["content"])
+
+    def test_apply_model_target_request_options_falls_back_to_later_eligible_gemini_system_message(self):
+        request_kwargs = {
+            "messages": [
+                {"role": "system", "content": "Short stable prefix."},
+                {"role": "user", "content": "Earlier question."},
+                {"role": "assistant", "content": "Earlier answer."},
                 {"role": "system", "content": "Later stable prefix. " * 1000},
                 {"role": "user", "content": "Summarize the stable prefix."},
             ]
@@ -228,9 +257,9 @@ class TestOpenRouterModelRegistry(BaseAppRoutesTestCase):
         merged = model_registry.apply_model_target_request_options(request_kwargs, target)
 
         self.assertEqual(merged["messages"][0]["content"], request_kwargs["messages"][0]["content"])
-        self.assertIsInstance(merged["messages"][1]["content"], list)
+        self.assertIsInstance(merged["messages"][3]["content"], list)
         self.assertEqual(
-            merged["messages"][1]["content"][0]["cache_control"],
+            merged["messages"][3]["content"][0]["cache_control"],
             {"type": "ephemeral"},
         )
 

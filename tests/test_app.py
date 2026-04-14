@@ -12861,6 +12861,8 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         )
 
         injected_context = (
+            "## Persona Memory\n"
+            "- #4 21:35 - Repo style: Prefer concise progress updates.\n\n"
             "## Current Date and Time\n"
             "- Time: 21:40\n\n"
             "## Tool Execution History\n"
@@ -13136,6 +13138,64 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(first_message["role"], "system")
         self.assertIsInstance(first_message["content"], list)
         self.assertEqual(first_message["content"][0]["cache_control"], {"type": "ephemeral"})
+
+    def test_run_agent_stream_prefers_leading_stable_gemini_cache_breakpoint(self):
+        responses = [
+            iter(
+                [
+                    self._stream_chunk(content="Final answer."),
+                    self._stream_chunk(
+                        usage=SimpleNamespace(
+                            prompt_tokens=1,
+                            completion_tokens=1,
+                            total_tokens=2,
+                        )
+                    ),
+                ]
+            )
+        ]
+        mock_create = Mock(side_effect=responses)
+        mock_client = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(
+                    create=mock_create
+                )
+            )
+        )
+
+        with patch("agent.get_app_settings", return_value={}), patch(
+            "agent.resolve_model_target",
+            return_value={
+                "record": {
+                    "provider": model_registry.OPENROUTER_PROVIDER,
+                    "api_model": "google/gemini-2.5-pro",
+                },
+                "client": mock_client,
+                "api_model": "google/gemini-2.5-pro",
+                "extra_body": {"provider": {"sort": "throughput"}},
+            },
+        ):
+            list(
+                run_agent_stream(
+                    [
+                        {"role": "system", "content": "Stable prefix. " * 1000},
+                        {"role": "user", "content": "Earlier question."},
+                        {"role": "assistant", "content": "Earlier answer."},
+                        {"role": "system", "content": "Dynamic current-turn injection. " * 1000},
+                        {"role": "user", "content": "Test"},
+                    ],
+                    "openrouter:google/gemini-2.5-pro",
+                    1,
+                    [],
+                )
+            )
+
+        first_message = mock_create.call_args.kwargs["messages"][0]
+        fourth_message = mock_create.call_args.kwargs["messages"][3]
+        self.assertEqual(first_message["role"], "system")
+        self.assertIsInstance(first_message["content"], list)
+        self.assertEqual(first_message["content"][0]["cache_control"], {"type": "ephemeral"})
+        self.assertEqual(fourth_message["content"], "Dynamic current-turn injection. " * 1000)
 
     def test_run_agent_stream_compacts_canvas_tool_call_history(self):
         large_content = "\n".join(f"value_{index} = {index}" for index in range(400))
@@ -13508,6 +13568,8 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             "## Scratchpad (AI Persistent Memory)\n"
             "### General Notes\n"
             "Persistent note\n\n"
+            "## Persona Memory\n"
+            "- #4 21:35 - Repo style: Prefer concise progress updates.\n\n"
             "## Conversation Memory\n"
             "- #7 [task_context] 10:23 - Goal: Keep stable rules cached.\n\n"
             "## Conversation Memory Priority\n"
@@ -13541,6 +13603,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("21:40", system_messages[0]["content"])
         self.assertNotIn("The user prefers concise answers.", system_messages[0]["content"])
         self.assertNotIn("Persistent note", system_messages[0]["content"])
+        self.assertNotIn("Repo style: Prefer concise progress updates.", system_messages[0]["content"])
         self.assertNotIn("Goal: Keep stable rules cached.", system_messages[0]["content"])
         self.assertNotIn("## Conversation Memory Priority", system_messages[0]["content"])
 

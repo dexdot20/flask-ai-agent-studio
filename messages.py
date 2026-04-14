@@ -10,31 +10,35 @@ from datetime import datetime
 from canvas_service import (
     build_canvas_project_manifest,
     extract_canvas_documents,
-    get_canvas_document_capabilities,
     get_canvas_document_canvas_mode,
+    get_canvas_document_capabilities,
     get_canvas_document_content_mode,
     is_canvas_document_editable,
     scale_canvas_char_limit,
 )
 from config import (
     CANVAS_PROMPT_CODE_LINE_MAX_CHARS as CANVAS_PROMPT_DEFAULT_CODE_LINE_MAX_CHARS,
+)
+from config import (
     CANVAS_PROMPT_DEFAULT_MAX_CHARS,
     CANVAS_PROMPT_DEFAULT_MAX_LINES,
     CANVAS_PROMPT_DEFAULT_MAX_TOKENS,
-    CANVAS_PROMPT_TEXT_LINE_MAX_CHARS as CANVAS_PROMPT_DEFAULT_TEXT_LINE_MAX_CHARS,
     CLARIFICATION_DEFAULT_MAX_QUESTIONS,
     CLARIFICATION_QUESTION_LIMIT_MAX,
     CLARIFICATION_QUESTION_LIMIT_MIN,
-    DEFAULT_SEARCH_TOOL_QUERY_LIMIT,
     DEFAULT_MAX_PARALLEL_TOOLS,
+    DEFAULT_SEARCH_TOOL_QUERY_LIMIT,
     MAX_PARALLEL_TOOLS_MAX,
     MAX_PARALLEL_TOOLS_MIN,
     RAG_ENABLED,
-    SEARCH_TOOL_QUERY_LIMIT_MAX,
-    SEARCH_TOOL_QUERY_LIMIT_MIN,
     SCRATCHPAD_DEFAULT_SECTION,
     SCRATCHPAD_SECTION_METADATA,
     SCRATCHPAD_SECTION_ORDER,
+    SEARCH_TOOL_QUERY_LIMIT_MAX,
+    SEARCH_TOOL_QUERY_LIMIT_MIN,
+)
+from config import (
+    CANVAS_PROMPT_TEXT_LINE_MAX_CHARS as CANVAS_PROMPT_DEFAULT_TEXT_LINE_MAX_CHARS,
 )
 from db import (
     extract_clarification_response,
@@ -239,6 +243,7 @@ HISTORICAL_CONTEXT_INJECTION_STRIP_HEADINGS = {
     "## Knowledge Base",
     "## User Profile",
     "## Scratchpad (AI Persistent Memory)",
+    "## Persona Memory",
     "## Conversation Memory",
     "## Conversation Memory Priority",
     "## Canvas File Set Summary",

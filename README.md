@@ -130,7 +130,7 @@ Manual smoke test checklist for the Canvas UI is available in [docs/canvas-ui-sm
 5. If a document is attached, its text is extracted and added to the turn context.
 6. If RAG auto-injection is enabled, the user message is searched against the knowledge base.
 7. If tool-memory auto-injection is enabled, the same query searches remembered web results.
-8. A runtime system message is built with the current time, preferences, conversation memory, scratchpad, user profile facts, tool guidance, and any retrieved context.
+8. The runtime builds a stable top-loaded system prefix first, then injects current-turn dynamic context (time, memory, retrieval, tool trace, canvas state, and active tools) later in the prompt immediately before the latest user message; when older turns are replayed, only the cache-friendly durable subset of any stored context injection is kept.
 9. The agent resolves the selected model to the correct provider client and streams model output.
 10. Tool calls are validated, executed, cached, and appended to the transcript.
 11. Tool progress, reasoning deltas, answer deltas, usage, and message IDs are streamed back as NDJSON.
@@ -544,8 +544,8 @@ The delegated helper receives only explicit delegated task text, but users can c
 Prompt caching behavior is optimized in three different ways:
 
 - Built-in DeepSeek chat/reasoner calls rely on DeepSeek's automatic disk context caching, preserve a larger stable prefix when budgeting history, and surface `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` when the provider returns them.
-- OpenRouter Anthropic models use top-level `cache_control`, Gemini models inject explicit `cache_control` breakpoints on large stable blocks, and implicit-cache providers such as OpenRouter DeepSeek models are treated as cache-friendly for prefix retention and cache-hit estimation.
-- The chat runtime keeps the first system message stable and inserts volatile per-turn context later in the prompt so provider-side sticky routing and repeated-prefix caching have a better chance to hit.
+- OpenRouter Anthropic models use top-level `cache_control`, Gemini models prefer explicit `cache_control` breakpoints on the leading stable system prefix and fall back to later eligible blocks only when needed, and implicit-cache providers such as OpenRouter DeepSeek models are treated as cache-friendly for prefix retention and cache-hit estimation.
+- The chat runtime keeps the first system message stable, inserts volatile per-turn context later in the prompt, and strips historical runtime-only injections before replay so provider-side sticky routing and repeated-prefix caching have a better chance to hit.
 
 ## Using the app
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import weakref
 from functools import lru_cache
@@ -10,6 +9,7 @@ from typing import Any
 import httpx
 from dotenv import load_dotenv
 from openai import OpenAI
+
 from proxy_settings import PROXY_OPERATION_OPENROUTER
 from token_utils import estimate_text_tokens
 
@@ -112,14 +112,12 @@ class _ManagedChatCompletionResponse:
         if self._closed:
             return
         self._closed = True
-        try:
-            close_response = getattr(self._response, "close", None)
-            if callable(close_response):
-                try:
-                    close_response()
-                except Exception:
-                    pass
-        finally:
+        close_response = getattr(self._response, "close", None)
+        if callable(close_response):
+            try:
+                close_response()
+            except Exception:
+                pass
             return
 
     def __getattr__(self, name: str):
@@ -671,21 +669,32 @@ def _prepare_model_request_messages(messages: Any, record: dict[str, Any] | None
     prepared_messages = list(messages)
     cache_min_tokens = _openrouter_gemini_cache_min_tokens(api_model)
     fallback_index: int | None = None
+    leading_prefix_candidate: tuple[int, Any] | None = None
     candidate_index: int | None = None
     candidate_content: Any = None
+    prefix_is_still_leading = True
     for index, message in enumerate(prepared_messages):
         if not isinstance(message, dict):
+            prefix_is_still_leading = False
             continue
         role = str(message.get("role") or "").strip().lower()
         if fallback_index is None and role not in {"system", "developer"}:
             fallback_index = index
         if role not in {"system", "developer"}:
+            prefix_is_still_leading = False
             continue
         updated_content, applied = _with_openrouter_cache_breakpoint(message.get("content"), min_tokens=cache_min_tokens)
         if not applied:
             continue
+        if prefix_is_still_leading and leading_prefix_candidate is None:
+            leading_prefix_candidate = (index, updated_content)
         candidate_index = index
         candidate_content = updated_content
+
+    if leading_prefix_candidate is not None:
+        selected_index, selected_content = leading_prefix_candidate
+        prepared_messages[selected_index] = {**prepared_messages[selected_index], "content": selected_content}
+        return prepared_messages
 
     if candidate_index is not None:
         prepared_messages[candidate_index] = {**prepared_messages[candidate_index], "content": candidate_content}
