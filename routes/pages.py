@@ -85,6 +85,7 @@ from db import (
     get_openrouter_http_referer,
     get_openrouter_prompt_cache_enabled,
     get_prompt_max_input_tokens,
+    get_prompt_preflight_summary_token_count,
     get_prompt_rag_max_tokens,
     get_prompt_recent_history_max_tokens,
     get_prompt_response_token_reserve,
@@ -117,6 +118,8 @@ from db import (
     get_sub_agent_retry_attempts,
     get_sub_agent_retry_delay_seconds,
     get_sub_agent_timeout_seconds,
+    get_summary_retry_min_source_tokens,
+    get_summary_source_target_tokens,
     get_summary_skip_first,
     get_summary_skip_last,
     get_tool_memory_ttl_default_seconds,
@@ -167,7 +170,6 @@ from proxy_settings import (
     normalize_proxy_enabled_operations,
 )
 from tool_registry import TOOL_SPEC_BY_NAME
-
 
 TOOL_PERMISSION_LABELS = {
     "save_to_conversation_memory": "Save chat memory",
@@ -534,9 +536,12 @@ def build_settings_payload() -> dict:
         "prompt_response_token_reserve": get_prompt_response_token_reserve(raw),
         "prompt_recent_history_max_tokens": get_prompt_recent_history_max_tokens(raw),
         "prompt_summary_max_tokens": get_prompt_summary_max_tokens(raw),
+        "prompt_preflight_summary_token_count": get_prompt_preflight_summary_token_count(raw),
         "prompt_rag_max_tokens": get_prompt_rag_max_tokens(raw),
         "prompt_tool_memory_max_tokens": get_prompt_tool_memory_max_tokens(raw),
         "prompt_tool_trace_max_tokens": get_prompt_tool_trace_max_tokens(raw),
+        "summary_source_target_tokens": get_summary_source_target_tokens(raw),
+        "summary_retry_min_source_tokens": get_summary_retry_min_source_tokens(raw),
         "context_compaction_threshold": get_context_compaction_threshold(raw),
         "context_compaction_keep_recent_rounds": get_context_compaction_keep_recent_rounds(raw),
         "context_selection_strategy": get_context_selection_strategy(raw),
@@ -662,9 +667,12 @@ def register_page_routes(app) -> None:
         prompt_response_token_reserve_raw = data.get("prompt_response_token_reserve")
         prompt_recent_history_max_tokens_raw = data.get("prompt_recent_history_max_tokens")
         prompt_summary_max_tokens_raw = data.get("prompt_summary_max_tokens")
+        prompt_preflight_summary_token_count_raw = data.get("prompt_preflight_summary_token_count")
         prompt_rag_max_tokens_raw = data.get("prompt_rag_max_tokens")
         prompt_tool_memory_max_tokens_raw = data.get("prompt_tool_memory_max_tokens")
         prompt_tool_trace_max_tokens_raw = data.get("prompt_tool_trace_max_tokens")
+        summary_source_target_tokens_raw = data.get("summary_source_target_tokens")
+        summary_retry_min_source_tokens_raw = data.get("summary_retry_min_source_tokens")
         context_compaction_threshold_raw = data.get("context_compaction_threshold")
         context_compaction_keep_recent_rounds_raw = data.get("context_compaction_keep_recent_rounds")
         reasoning_auto_collapse_raw = data.get("reasoning_auto_collapse")
@@ -757,9 +765,12 @@ def register_page_routes(app) -> None:
             and prompt_response_token_reserve_raw is None
             and prompt_recent_history_max_tokens_raw is None
             and prompt_summary_max_tokens_raw is None
+            and prompt_preflight_summary_token_count_raw is None
             and prompt_rag_max_tokens_raw is None
             and prompt_tool_memory_max_tokens_raw is None
             and prompt_tool_trace_max_tokens_raw is None
+            and summary_source_target_tokens_raw is None
+            and summary_retry_min_source_tokens_raw is None
             and context_compaction_threshold_raw is None
             and context_compaction_keep_recent_rounds_raw is None
             and context_selection_strategy_raw is None
@@ -1423,6 +1434,15 @@ def register_page_routes(app) -> None:
                 return jsonify({"error": "prompt_summary_max_tokens must be between 500 and 120000."}), 400
             settings["prompt_summary_max_tokens"] = str(prompt_summary_max_tokens)
 
+        if prompt_preflight_summary_token_count_raw is not None:
+            try:
+                prompt_preflight_summary_token_count = int(prompt_preflight_summary_token_count_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "prompt_preflight_summary_token_count must be an integer."}), 400
+            if not (2_000 <= prompt_preflight_summary_token_count <= 200_000):
+                return jsonify({"error": "prompt_preflight_summary_token_count must be between 2000 and 200000."}), 400
+            settings["prompt_preflight_summary_token_count"] = str(prompt_preflight_summary_token_count)
+
         if prompt_rag_max_tokens_raw is not None:
             try:
                 prompt_rag_max_tokens = int(prompt_rag_max_tokens_raw)
@@ -1449,6 +1469,24 @@ def register_page_routes(app) -> None:
             if not (0 <= prompt_tool_trace_max_tokens <= 120_000):
                 return jsonify({"error": "prompt_tool_trace_max_tokens must be between 0 and 120000."}), 400
             settings["prompt_tool_trace_max_tokens"] = str(prompt_tool_trace_max_tokens)
+
+        if summary_source_target_tokens_raw is not None:
+            try:
+                summary_source_target_tokens = int(summary_source_target_tokens_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "summary_source_target_tokens must be an integer."}), 400
+            if not (1_000 <= summary_source_target_tokens <= 40_000):
+                return jsonify({"error": "summary_source_target_tokens must be between 1000 and 40000."}), 400
+            settings["summary_source_target_tokens"] = str(summary_source_target_tokens)
+
+        if summary_retry_min_source_tokens_raw is not None:
+            try:
+                summary_retry_min_source_tokens = int(summary_retry_min_source_tokens_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "summary_retry_min_source_tokens must be an integer."}), 400
+            if not (500 <= summary_retry_min_source_tokens <= 40_000):
+                return jsonify({"error": "summary_retry_min_source_tokens must be between 500 and 40000."}), 400
+            settings["summary_retry_min_source_tokens"] = str(summary_retry_min_source_tokens)
 
         if context_compaction_threshold_raw is not None:
             try:
@@ -1589,6 +1627,15 @@ def register_page_routes(app) -> None:
             configured_value = int(settings.get(setting_key, effective_prompt_max_input_tokens))
             if configured_value > effective_prompt_max_input_tokens:
                 return jsonify({"error": f"{label} cannot exceed prompt_max_input_tokens."}), 400
+
+        configured_summary_source_target_tokens = int(
+            settings.get("summary_source_target_tokens", get_summary_source_target_tokens(settings))
+        )
+        configured_summary_retry_min_source_tokens = int(
+            settings.get("summary_retry_min_source_tokens", get_summary_retry_min_source_tokens(settings))
+        )
+        if configured_summary_retry_min_source_tokens > configured_summary_source_target_tokens:
+            return jsonify({"error": "summary_retry_min_source_tokens cannot exceed summary_source_target_tokens."}), 400
 
         if fetch_url_token_threshold_raw is not None:
             try:

@@ -81,6 +81,7 @@ from config import (
     AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS,
     AGENT_CONTEXT_COMPACTION_THRESHOLD,
     PROMPT_MAX_INPUT_TOKENS,
+    PROMPT_PREFLIGHT_SUMMARY_TOKEN_COUNT,
     PROMPT_RAG_MAX_TOKENS,
     PROMPT_RECENT_HISTORY_MAX_TOKENS,
     PROMPT_RESPONSE_TOKEN_RESERVE,
@@ -89,6 +90,8 @@ from config import (
     PROMPT_TOOL_TRACE_MAX_TOKENS,
     PRUNING_MIN_TARGET_TOKENS,
     PRUNING_TARGET_REDUCTION_RATIO,
+    SUMMARY_RETRY_MIN_SOURCE_TOKENS,
+    SUMMARY_SOURCE_TARGET_TOKENS,
 )
 from db import (
     append_to_scratchpad,
@@ -264,9 +267,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(payload["prompt_response_token_reserve"], PROMPT_RESPONSE_TOKEN_RESERVE)
         self.assertEqual(payload["prompt_recent_history_max_tokens"], PROMPT_RECENT_HISTORY_MAX_TOKENS)
         self.assertEqual(payload["prompt_summary_max_tokens"], PROMPT_SUMMARY_MAX_TOKENS)
+        self.assertEqual(payload["prompt_preflight_summary_token_count"], PROMPT_PREFLIGHT_SUMMARY_TOKEN_COUNT)
         self.assertEqual(payload["prompt_rag_max_tokens"], PROMPT_RAG_MAX_TOKENS)
         self.assertEqual(payload["prompt_tool_memory_max_tokens"], PROMPT_TOOL_MEMORY_MAX_TOKENS)
         self.assertEqual(payload["prompt_tool_trace_max_tokens"], PROMPT_TOOL_TRACE_MAX_TOKENS)
+        self.assertEqual(payload["summary_source_target_tokens"], SUMMARY_SOURCE_TARGET_TOKENS)
+        self.assertEqual(payload["summary_retry_min_source_tokens"], SUMMARY_RETRY_MIN_SOURCE_TOKENS)
         self.assertAlmostEqual(payload["context_compaction_threshold"], AGENT_CONTEXT_COMPACTION_THRESHOLD)
         self.assertEqual(payload["context_compaction_keep_recent_rounds"], AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS)
         self.assertEqual(payload["context_selection_strategy"], "classic")
@@ -410,6 +416,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 "chat_summary_mode": "aggressive",
                 "chat_summary_detail_level": "detailed",
                 "chat_summary_trigger_token_count": 9000,
+                "prompt_preflight_summary_token_count": 95000,
+                "summary_source_target_tokens": 7000,
+                "summary_retry_min_source_tokens": 2000,
                 "prompt_max_input_tokens": 90000,
                 "prompt_response_token_reserve": 10000,
                 "prompt_recent_history_max_tokens": 28000,
@@ -517,6 +526,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(payload["chat_summary_mode"], "aggressive")
         self.assertEqual(payload["chat_summary_detail_level"], "detailed")
         self.assertEqual(payload["chat_summary_trigger_token_count"], 9000)
+        self.assertEqual(payload["prompt_preflight_summary_token_count"], 95000)
+        self.assertEqual(payload["summary_source_target_tokens"], 7000)
+        self.assertEqual(payload["summary_retry_min_source_tokens"], 2000)
         self.assertEqual(payload["prompt_max_input_tokens"], 90000)
         self.assertEqual(payload["prompt_response_token_reserve"], 10000)
         self.assertEqual(payload["prompt_recent_history_max_tokens"], 28000)
@@ -622,6 +634,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             json={
                 "chat_summary_mode": "conservative",
                 "chat_summary_detail_level": "comprehensive",
+                "prompt_preflight_summary_token_count": 91000,
+                "summary_source_target_tokens": 6500,
+                "summary_retry_min_source_tokens": 1800,
             },
         )
 
@@ -629,6 +644,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         payload = response.get_json()
         self.assertEqual(payload["chat_summary_mode"], "conservative")
         self.assertEqual(payload["chat_summary_detail_level"], "comprehensive")
+        self.assertEqual(payload["prompt_preflight_summary_token_count"], 91000)
+        self.assertEqual(payload["summary_source_target_tokens"], 6500)
+        self.assertEqual(payload["summary_retry_min_source_tokens"], 1800)
 
     def test_settings_reject_invalid_context_selection_strategy(self):
         response = self.client.patch(
@@ -1324,6 +1342,17 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("context_compaction_threshold", response.get_json()["error"])
+
+        response = self.client.patch(
+            "/api/settings",
+            json={
+                "summary_source_target_tokens": 1500,
+                "summary_retry_min_source_tokens": 1600,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("summary_retry_min_source_tokens", response.get_json()["error"])
 
     def test_settings_patch_rejects_invalid_canvas_values(self):
         response = self.client.patch(
@@ -2595,6 +2624,34 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertAlmostEqual(sum(weights.values()), 1.0)
         self.assertGreater(weights["entropy_prunability"], prune_service.PRUNE_SCORE_WEIGHTS["entropy_prunability"])
         self.assertGreater(weights["recency"], prune_service.PRUNE_SCORE_WEIGHTS["recency"])
+
+    def test_prune_scores_reuse_rag_search_for_duplicate_queries(self):
+        conversation_id = self._create_conversation()
+        duplicate_content = "Repeated pruning coverage text for caching. " * 8
+        distinct_content = "Distinct pruning coverage text for separate lookup. " * 8
+
+        with get_db() as conn:
+            insert_message(conn, conversation_id, "user", duplicate_content)
+            insert_message(conn, conversation_id, "assistant", duplicate_content)
+            insert_message(conn, conversation_id, "user", distinct_content)
+
+        rag_result = {
+            "matches": [{"source_key": "tool_memory:shared", "similarity": 0.8}],
+            "min_similarity": prune_service.PRUNE_SCORE_RAG_MIN_SIMILARITY,
+        }
+
+        with patch("prune_service.RAG_ENABLED", True), patch("prune_service.get_app_settings", return_value={}), patch(
+            "prune_service.get_rag_source_types",
+            return_value=["tool_memory"],
+        ), patch("prune_service._compute_entropy_score", return_value=0.25), patch(
+            "prune_service.search_knowledge_base_tool",
+            return_value=rag_result,
+        ) as mocked_search:
+            scored = prune_service.score_conversation_messages_for_prune(conversation_id)
+
+        self.assertEqual(len(scored), 3)
+        self.assertEqual(mocked_search.call_count, 2)
+        self.assertEqual(len({call.args[0] for call in mocked_search.call_args_list}), 2)
 
     def test_prune_conversation_batch_uses_scored_candidate_order(self):
         conversation_id = self._create_conversation()
@@ -16119,6 +16176,24 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertTrue(selected)
         self.assertTrue(any("Gemini cache breakpoints" in message["content"] for message in selected))
 
+    def test_select_summary_source_messages_prefers_earlier_window_when_focus_ties(self):
+        canonical_messages = [
+            {"id": 1, "position": 1, "role": "user", "content": "Gemini cache focus token budget. " * 4},
+            {"id": 2, "position": 2, "role": "assistant", "content": "Neutral filler sentence. " * 4},
+            {"id": 3, "position": 3, "role": "user", "content": "Gemini cache focus token budget. " * 4},
+            {"id": 4, "position": 4, "role": "assistant", "content": "Neutral filler sentence. " * 4},
+        ]
+
+        selected = _select_summary_source_messages_by_token_budget(
+            canonical_messages,
+            canonical_messages,
+            target_tokens=24,
+            user_preferences="",
+            continuation_focus="Need help with Gemini cache focus token budget.",
+        )
+
+        self.assertEqual([message["id"] for message in selected], [1])
+
     def test_build_summary_prompt_messages_includes_continuation_focus(self):
         prompt_messages = build_summary_prompt_messages(
             [{"role": "user", "content": "Earlier context"}],
@@ -18195,6 +18270,30 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             json={"force": True},
         )
         self.assertEqual(response.status_code, 404)
+
+    def test_manual_summarize_endpoint_returns_400_for_invalid_summary_request_options(self):
+        conversation_id = self._create_conversation()
+
+        with patch("routes.chat._parse_manual_summary_request_options", return_value=(None, None)):
+            response = self.client.post(
+                f"/api/conversations/{conversation_id}/summarize",
+                json={"force": True},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["error"], "Summary request could not be parsed.")
+
+    def test_manual_summarize_preview_endpoint_returns_400_for_invalid_summary_request_options(self):
+        conversation_id = self._create_conversation()
+
+        with patch("routes.chat._parse_manual_summary_request_options", return_value=(None, None)):
+            response = self.client.post(
+                f"/api/conversations/{conversation_id}/summarize/preview",
+                json={"force": True},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["error"], "Summary preview request could not be parsed.")
 
     def test_manual_summarize_endpoint_can_force_summarize(self):
         conversation_id = self._create_conversation()

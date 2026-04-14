@@ -232,7 +232,17 @@ SUMMARY_MIN_TEXT_LENGTH = 100
 SUMMARY_EXECUTOR = ThreadPoolExecutor(max_workers=2)
 POST_RESPONSE_EXECUTOR = ThreadPoolExecutor(max_workers=2)
 CHAT_STREAM_EXECUTOR = ThreadPoolExecutor(max_workers=4)
-_SUMMARY_LOCKS: dict[int, Lock] = {}
+
+
+class _ConversationSummaryLockState:
+    __slots__ = ("lock", "leases")
+
+    def __init__(self) -> None:
+        self.lock = Lock()
+        self.leases = 0
+
+
+_SUMMARY_LOCKS: dict[int, _ConversationSummaryLockState] = {}
 _SUMMARY_LOCKS_GUARD = Lock()
 _CHAT_RUNS: dict[str, dict] = {}
 _CHAT_RUNS_GUARD = Lock()
@@ -968,13 +978,22 @@ def _build_fallback_title_from_source(source_text: str) -> str:
     return _normalize_generated_title(title)
 
 
-def _get_summary_lock(conversation_id: int) -> Lock:
+def _acquire_summary_lock_state(conversation_id: int) -> _ConversationSummaryLockState:
     with _SUMMARY_LOCKS_GUARD:
-        lock = _SUMMARY_LOCKS.get(conversation_id)
-        if lock is None:
-            lock = Lock()
-            _SUMMARY_LOCKS[conversation_id] = lock
-        return lock
+        state = _SUMMARY_LOCKS.get(conversation_id)
+        if state is None:
+            state = _ConversationSummaryLockState()
+            _SUMMARY_LOCKS[conversation_id] = state
+        state.leases += 1
+        return state
+
+
+def _release_summary_lock_state(conversation_id: int, state: _ConversationSummaryLockState) -> None:
+    with _SUMMARY_LOCKS_GUARD:
+        if state.leases > 0:
+            state.leases -= 1
+        if _SUMMARY_LOCKS.get(conversation_id) is state and state.leases == 0 and not state.lock.locked():
+            _SUMMARY_LOCKS.pop(conversation_id, None)
 
 
 def _normalize_summary_items(values, *, max_items: int, item_limit: int) -> list[str]:
@@ -1203,6 +1222,199 @@ def _score_summary_message_priority(message: dict, focus_terms: set[str]) -> flo
         score += 1.5
 
     return score
+
+
+def _estimate_summary_prompt_overhead_tokens(user_preferences: str, continuation_focus: str = "") -> int:
+    prompt_messages, _ = _build_summary_prompt_payload(
+        [],
+        user_preferences,
+        continuation_focus=continuation_focus,
+    )
+    return _estimate_prompt_tokens(prompt_messages)
+
+
+def _estimate_summary_prompt_message_tokens(message: dict) -> int:
+    if not isinstance(message, dict):
+        return 0
+
+    role = str(message.get("role") or "").strip()
+    if role not in {"user", "assistant", "tool", "summary"}:
+        return 0
+
+    metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else None
+    content = str(message.get("content") or "").strip()
+    if role == "assistant":
+        content = _build_assistant_summary_content(content, metadata)
+    elif role == "summary":
+        role = "assistant"
+    elif role == "tool":
+        content = _build_tool_message_summary_content(content, message.get("tool_call_id"))
+
+    if not content:
+        return 0
+
+    if role == "user":
+        content = build_user_message_for_model(content, metadata)
+
+    role_label = "TOOL RESULT" if role == "tool" else role.upper()
+    return max(1, estimate_text_tokens(f"{role_label}:\n{content}"))
+
+
+def _fit_summary_source_messages_to_token_budget(
+    canonical_messages: list[dict],
+    source_messages: list[dict],
+    all_source_messages: list[dict],
+    target_tokens: int,
+    user_preferences: str,
+    continuation_focus: str,
+    focus_terms: set[str],
+) -> list[dict]:
+    fitted_messages = [message for message in source_messages if isinstance(message, dict)]
+    if not fitted_messages:
+        return []
+
+    while fitted_messages:
+        expanded_candidate_messages = _expand_summary_source_messages(
+            canonical_messages,
+            fitted_messages,
+            all_source_messages,
+        )
+        prompt_messages, _ = _build_summary_prompt_payload(
+            expanded_candidate_messages,
+            user_preferences,
+            continuation_focus=continuation_focus,
+        )
+        if len(fitted_messages) == 1 or _estimate_prompt_tokens(prompt_messages) <= target_tokens:
+            return fitted_messages
+
+        left_score = _score_summary_message_priority(fitted_messages[0], focus_terms)
+        right_score = _score_summary_message_priority(fitted_messages[-1], focus_terms)
+        if left_score < right_score:
+            fitted_messages.pop(0)
+        else:
+            fitted_messages.pop()
+
+    return []
+
+
+def _select_summary_source_messages_with_focus_exhaustive(
+    canonical_messages: list[dict],
+    ordered_source_messages: list[dict],
+    target_tokens: int,
+    user_preferences: str,
+    continuation_focus: str,
+    focus_terms: set[str],
+) -> list[dict]:
+    def _build_window(start_index: int) -> list[dict]:
+        selected: list[dict] = []
+        for message in ordered_source_messages[start_index:]:
+            candidate_source_messages = [*selected, message]
+            expanded_candidate_messages = _expand_summary_source_messages(
+                canonical_messages,
+                candidate_source_messages,
+                ordered_source_messages,
+            )
+            prompt_messages, _ = _build_summary_prompt_payload(
+                expanded_candidate_messages,
+                user_preferences,
+                continuation_focus=continuation_focus,
+            )
+            if selected and _estimate_prompt_tokens(prompt_messages) > target_tokens:
+                break
+            selected.append(message)
+        return selected
+
+    best_window: list[dict] = []
+    best_score: tuple[float, int, int] | None = None
+    for start_index in range(len(ordered_source_messages)):
+        candidate_window = _build_window(start_index)
+        if not candidate_window:
+            continue
+        priority_score = sum(_score_summary_message_priority(message, focus_terms) for message in candidate_window)
+        if priority_score <= 0:
+            continue
+        score = (
+            priority_score + min(len(candidate_window), 8) * 0.1,
+            -start_index,
+            len(candidate_window),
+        )
+        if best_score is None or score > best_score:
+            best_score = score
+            best_window = candidate_window
+    return best_window
+
+
+def _select_summary_source_messages_with_focus_optimized(
+    canonical_messages: list[dict],
+    ordered_source_messages: list[dict],
+    target_tokens: int,
+    user_preferences: str,
+    continuation_focus: str,
+    focus_terms: set[str],
+) -> list[dict]:
+    if not ordered_source_messages or target_tokens <= 0:
+        return []
+
+    available_transcript_tokens = max(
+        0,
+        target_tokens - _estimate_summary_prompt_overhead_tokens(user_preferences, continuation_focus),
+    )
+    if available_transcript_tokens <= 0:
+        return []
+
+    message_token_costs = [
+        max(1, _estimate_summary_prompt_message_tokens(message))
+        for message in ordered_source_messages
+    ]
+    message_priority_scores = [
+        _score_summary_message_priority(message, focus_terms)
+        for message in ordered_source_messages
+    ]
+
+    best_range: tuple[int, int] | None = None
+    best_rank: tuple[float, int, int] | None = None
+    start_index = 0
+    window_tokens = 0
+    window_priority = 0.0
+
+    for end_index, token_cost in enumerate(message_token_costs):
+        window_tokens += token_cost
+        window_priority += message_priority_scores[end_index]
+
+        while start_index < end_index and window_tokens > available_transcript_tokens:
+            window_tokens -= message_token_costs[start_index]
+            window_priority -= message_priority_scores[start_index]
+            start_index += 1
+
+        if window_tokens > available_transcript_tokens or window_priority <= 0:
+            continue
+
+        candidate_length = end_index - start_index + 1
+        candidate_rank = (
+            round(window_priority, 6),
+            -start_index,
+            candidate_length,
+        )
+        if best_rank is None or candidate_rank > best_rank:
+            best_rank = candidate_rank
+            best_range = (start_index, end_index)
+
+    if best_range is None:
+        return []
+
+    fitted_messages = _fit_summary_source_messages_to_token_budget(
+        canonical_messages,
+        ordered_source_messages[best_range[0] : best_range[1] + 1],
+        ordered_source_messages,
+        target_tokens,
+        user_preferences,
+        continuation_focus,
+        focus_terms,
+    )
+    if fitted_messages:
+        return fitted_messages
+
+    return []
 
 
 def _extract_previous_canvas_content_hash(canonical_messages: list[dict]) -> str | None:
@@ -3122,43 +3334,24 @@ def _select_summary_source_messages_by_token_budget(
     ordered_source_messages = [message for message in source_messages if isinstance(message, dict)]
     focus_terms = _tokenize_summary_focus(continuation_focus)
 
-    def _build_window(start_index: int) -> list[dict]:
-        selected: list[dict] = []
-        for message in ordered_source_messages[start_index:]:
-            candidate_source_messages = [*selected, message]
-            expanded_candidate_messages = _expand_summary_source_messages(
-                canonical_messages,
-                candidate_source_messages,
-                ordered_source_messages,
-            )
-            prompt_messages, _ = _build_summary_prompt_payload(
-                expanded_candidate_messages,
-                user_preferences,
-                continuation_focus=continuation_focus,
-            )
-            if selected and _estimate_prompt_tokens(prompt_messages) > target_tokens:
-                break
-            selected.append(message)
-        return selected
-
     if focus_terms:
-        best_window: list[dict] = []
-        best_score: tuple[float, int, int] | None = None
-        for start_index in range(len(ordered_source_messages)):
-            candidate_window = _build_window(start_index)
-            if not candidate_window:
-                continue
-            priority_score = sum(_score_summary_message_priority(message, focus_terms) for message in candidate_window)
-            if priority_score <= 0:
-                continue
-            score = (
-                priority_score + min(len(candidate_window), 8) * 0.1,
-                start_index,
-                len(candidate_window),
+        best_window = _select_summary_source_messages_with_focus_optimized(
+            canonical_messages,
+            ordered_source_messages,
+            target_tokens,
+            user_preferences,
+            continuation_focus,
+            focus_terms,
+        )
+        if not best_window:
+            best_window = _select_summary_source_messages_with_focus_exhaustive(
+                canonical_messages,
+                ordered_source_messages,
+                target_tokens,
+                user_preferences,
+                continuation_focus,
+                focus_terms,
             )
-            if best_score is None or score > best_score:
-                best_score = score
-                best_window = candidate_window
         if best_window:
             return best_window
 
@@ -3389,7 +3582,8 @@ def maybe_create_conversation_summary(
     summarize_all_messages: bool = False,
     dry_run: bool = False,
 ) -> dict:
-    summary_lock = _get_summary_lock(conversation_id)
+    summary_lock_state = _acquire_summary_lock_state(conversation_id)
+    summary_lock = summary_lock_state.lock
     acquired_summary_lock = False
     if not dry_run:
         acquired_summary_lock = summary_lock.acquire(blocking=False)
@@ -3817,6 +4011,7 @@ def maybe_create_conversation_summary(
     finally:
         if acquired_summary_lock:
             summary_lock.release()
+        _release_summary_lock_state(conversation_id, summary_lock_state)
 
 
 def _run_chat_post_response_tasks(
@@ -5676,8 +5871,9 @@ def register_chat_routes(app) -> None:
         parsed_options, parse_error = _parse_manual_summary_request_options(data, settings)
         if parse_error:
             return jsonify({"error": parse_error[0]}), parse_error[1]
-
-        assert parsed_options is not None
+        if parsed_options is None:
+            LOGGER.warning("Manual summarize options could not be resolved for conversation_id=%s.", conv_id)
+            return jsonify({"error": "Summary request could not be parsed."}), 400
 
         outcome = maybe_create_conversation_summary(
             conv_id,
@@ -5729,8 +5925,9 @@ def register_chat_routes(app) -> None:
         parsed_options, parse_error = _parse_manual_summary_request_options(data, settings)
         if parse_error:
             return jsonify({"error": parse_error[0]}), parse_error[1]
-
-        assert parsed_options is not None
+        if parsed_options is None:
+            LOGGER.warning("Summary preview options could not be resolved for conversation_id=%s.", conv_id)
+            return jsonify({"error": "Summary preview request could not be parsed."}), 400
 
         outcome = maybe_create_conversation_summary(
             conv_id,

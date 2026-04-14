@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import logging
 import re
 from typing import Any
@@ -56,6 +57,7 @@ PRUNING_MAX_ATTEMPTS = 2
 PRUNE_SCORE_CONTENT_PREVIEW_MAX_CHARS = 260
 PRUNE_SCORE_RAG_TOP_K = 4
 PRUNE_SCORE_RAG_MIN_SIMILARITY = 0.35
+PRUNE_SCORE_RAG_MAX_WORKERS = 4
 LOGGER = logging.getLogger(__name__)
 
 
@@ -244,28 +246,23 @@ def _normalize_rag_query_text(content: str) -> str:
     return normalized[:1_200].rstrip() + "…"
 
 
-def _compute_rag_coverage_score(
-    conversation_id: int,
-    message_id: int,
-    content: str,
+def _compute_rag_coverage_score_for_query(
+    query: str,
     *,
-    settings: dict | None = None,
+    allowed_source_types: list[str],
+    excluded_source_key: str,
+    conversation_id: int,
 ) -> float:
-    del message_id
     if not RAG_ENABLED:
         return 0.0
 
-    query = _normalize_rag_query_text(content)
-    if not query:
-        return 0.0
-
-    allowed_source_types = get_rag_source_types(settings)
-    if not allowed_source_types:
+    normalized_query = _normalize_rag_query_text(query)
+    if not normalized_query or not allowed_source_types:
         return 0.0
 
     try:
         result = search_knowledge_base_tool(
-            query,
+            normalized_query,
             top_k=PRUNE_SCORE_RAG_TOP_K,
             allowed_source_types=allowed_source_types,
             min_similarity=PRUNE_SCORE_RAG_MIN_SIMILARITY,
@@ -274,7 +271,6 @@ def _compute_rag_coverage_score(
         LOGGER.exception("Failed to compute prune RAG coverage for conversation %s.", conversation_id)
         return 0.0
 
-    excluded_source_key = conversation_rag_source_key(RAG_SOURCE_CONVERSATION, conversation_id)
     matches = [
         match
         for match in (result.get("matches") if isinstance(result, dict) else []) or []
@@ -300,6 +296,33 @@ def _compute_rag_coverage_score(
     }
     diversity_bonus = min(0.2, max(0, len(unique_sources) - 1) * 0.05)
     return _clamp_score(similarity_score + diversity_bonus)
+
+
+def _compute_rag_coverage_score(
+    conversation_id: int,
+    message_id: int,
+    content: str,
+    *,
+    settings: dict | None = None,
+) -> float:
+    del message_id
+    if not RAG_ENABLED:
+        return 0.0
+
+    query = _normalize_rag_query_text(content)
+    if not query:
+        return 0.0
+
+    allowed_source_types = get_rag_source_types(settings)
+    if not allowed_source_types:
+        return 0.0
+
+    return _compute_rag_coverage_score_for_query(
+        query,
+        allowed_source_types=allowed_source_types,
+        excluded_source_key=conversation_rag_source_key(RAG_SOURCE_CONVERSATION, conversation_id),
+        conversation_id=conversation_id,
+    )
 
 
 def _resolve_prune_score_weights(*, rag_enabled: bool) -> dict[str, float]:
@@ -363,6 +386,8 @@ def score_conversation_messages_for_prune(
 
     rag_enabled_for_score = bool(RAG_ENABLED)
     weights = _resolve_prune_score_weights(rag_enabled=rag_enabled_for_score)
+    allowed_source_types = get_rag_source_types(settings) if rag_enabled_for_score else []
+    excluded_source_key = conversation_rag_source_key(RAG_SOURCE_CONVERSATION, normalized_conversation_id)
 
     later_text = ""
     later_text_by_message_id: dict[int, str] = {}
@@ -379,6 +404,42 @@ def score_conversation_messages_for_prune(
     }
     max_tokens = max(token_counts.values(), default=1)
     max_rank = max(1, len(candidates) - 1)
+    rag_query_by_message_id: dict[int, str] = {}
+    rag_coverage_scores_by_query: dict[str, float] = {}
+
+    if rag_enabled_for_score and allowed_source_types:
+        unique_queries: list[str] = []
+        for candidate in candidates:
+            candidate_id = int(candidate.get("id") or 0)
+            normalized_query = _normalize_rag_query_text(str(candidate.get("content") or ""))
+            rag_query_by_message_id[candidate_id] = normalized_query
+            if normalized_query and normalized_query not in rag_coverage_scores_by_query:
+                rag_coverage_scores_by_query[normalized_query] = 0.0
+                unique_queries.append(normalized_query)
+
+        if len(unique_queries) == 1:
+            only_query = unique_queries[0]
+            rag_coverage_scores_by_query[only_query] = _compute_rag_coverage_score_for_query(
+                only_query,
+                allowed_source_types=allowed_source_types,
+                excluded_source_key=excluded_source_key,
+                conversation_id=normalized_conversation_id,
+            )
+        elif unique_queries:
+            max_workers = min(PRUNE_SCORE_RAG_MAX_WORKERS, len(unique_queries))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_by_query = {
+                    executor.submit(
+                        _compute_rag_coverage_score_for_query,
+                        query,
+                        allowed_source_types=allowed_source_types,
+                        excluded_source_key=excluded_source_key,
+                        conversation_id=normalized_conversation_id,
+                    ): query
+                    for query in unique_queries
+                }
+                for future, query in future_by_query.items():
+                    rag_coverage_scores_by_query[query] = future.result()
 
     scored_candidates: list[dict] = []
     for rank, candidate in enumerate(candidates):
@@ -390,12 +451,11 @@ def score_conversation_messages_for_prune(
             later_text=later_text_by_message_id.get(candidate_id, ""),
             settings=settings,
         )
-        rag_coverage_score = _compute_rag_coverage_score(
-            normalized_conversation_id,
-            candidate_id,
-            candidate_content,
-            settings=settings,
-        ) if rag_enabled_for_score else 0.0
+        rag_coverage_score = (
+            rag_coverage_scores_by_query.get(rag_query_by_message_id.get(candidate_id, ""), 0.0)
+            if rag_enabled_for_score and allowed_source_types
+            else 0.0
+        )
         staleness_score = _clamp_score(1.0 - (rank / max_rank))
         token_weight = _clamp_score(estimated_tokens / max_tokens)
         entropy_prunability = _clamp_score(1.0 - entropy_score)

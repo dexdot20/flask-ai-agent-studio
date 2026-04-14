@@ -111,6 +111,9 @@ const summaryDetailLevelEl = document.getElementById("summary-detail-level-selec
 const summaryTriggerEl = document.getElementById("summary-trigger-input");
 const summarySkipFirstEl = document.getElementById("summary-skip-first-input");
 const summarySkipLastEl = document.getElementById("summary-skip-last-input");
+const promptPreflightSummaryTokenCountEl = document.getElementById("prompt-preflight-summary-token-count-input");
+const summarySourceTargetTokensEl = document.getElementById("summary-source-target-tokens-input");
+const summaryRetryMinSourceTokensEl = document.getElementById("summary-retry-min-source-tokens-input");
 const promptMaxInputTokensEl = document.getElementById("prompt-max-input-tokens-input");
 const promptResponseTokenReserveEl = document.getElementById("prompt-response-token-reserve-input");
 const promptRecentHistoryMaxTokensEl = document.getElementById("prompt-recent-history-max-tokens-input");
@@ -2766,6 +2769,15 @@ function applySettingsToForm() {
   if (summaryTriggerEl) summaryTriggerEl.value = String(appSettings.chat_summary_trigger_token_count || 80000);
   if (summarySkipFirstEl) summarySkipFirstEl.value = String(appSettings.summary_skip_first ?? 2);
   if (summarySkipLastEl) summarySkipLastEl.value = String(appSettings.summary_skip_last ?? 1);
+  if (promptPreflightSummaryTokenCountEl) {
+    promptPreflightSummaryTokenCountEl.value = String(appSettings.prompt_preflight_summary_token_count ?? 90000);
+  }
+  if (summarySourceTargetTokensEl) {
+    summarySourceTargetTokensEl.value = String(appSettings.summary_source_target_tokens ?? 6000);
+  }
+  if (summaryRetryMinSourceTokensEl) {
+    summaryRetryMinSourceTokensEl.value = String(appSettings.summary_retry_min_source_tokens ?? 1500);
+  }
   if (promptMaxInputTokensEl) promptMaxInputTokensEl.value = String(appSettings.prompt_max_input_tokens ?? 80000);
   if (promptResponseTokenReserveEl) promptResponseTokenReserveEl.value = String(appSettings.prompt_response_token_reserve ?? 8000);
   if (promptRecentHistoryMaxTokensEl) promptRecentHistoryMaxTokensEl.value = String(appSettings.prompt_recent_history_max_tokens ?? 32000);
@@ -2967,6 +2979,9 @@ function applyServerSettingsData(data) {
   appSettings.chat_summary_trigger_token_count = data.chat_summary_trigger_token_count || 80000;
   appSettings.summary_skip_first = data.summary_skip_first ?? 2;
   appSettings.summary_skip_last = data.summary_skip_last ?? 1;
+  appSettings.prompt_preflight_summary_token_count = data.prompt_preflight_summary_token_count ?? 90000;
+  appSettings.summary_source_target_tokens = data.summary_source_target_tokens ?? 6000;
+  appSettings.summary_retry_min_source_tokens = data.summary_retry_min_source_tokens ?? 1500;
   appSettings.prompt_max_input_tokens = data.prompt_max_input_tokens ?? 80000;
   appSettings.prompt_response_token_reserve = data.prompt_response_token_reserve ?? 8000;
   appSettings.prompt_recent_history_max_tokens = data.prompt_recent_history_max_tokens ?? 32000;
@@ -3081,6 +3096,9 @@ async function saveSettings() {
     chat_summary_trigger_token_count: readNumericSetting(summaryTriggerEl, 80000, { allowZero: false }),
     summary_skip_first: readNumericSetting(summarySkipFirstEl, 0),
     summary_skip_last: readNumericSetting(summarySkipLastEl, 1),
+    prompt_preflight_summary_token_count: readNumericSetting(promptPreflightSummaryTokenCountEl, 90000, { allowZero: false, min: 2000, max: 200000 }),
+    summary_source_target_tokens: readNumericSetting(summarySourceTargetTokensEl, 6000, { allowZero: false, min: 1000, max: 40000 }),
+    summary_retry_min_source_tokens: readNumericSetting(summaryRetryMinSourceTokensEl, 1500, { allowZero: false, min: 500, max: 40000 }),
     prompt_max_input_tokens: readNumericSetting(promptMaxInputTokensEl, 80000, { allowZero: false, min: 8000, max: 120000 }),
     prompt_response_token_reserve: readNumericSetting(promptResponseTokenReserveEl, 8000, { allowZero: false, min: 1000, max: 32000 }),
     prompt_recent_history_max_tokens: readNumericSetting(promptRecentHistoryMaxTokensEl, 32000, { allowZero: false, min: 1000, max: 120000 }),
@@ -3547,6 +3565,9 @@ function registerDirtyListeners() {
   summaryTriggerEl?.addEventListener("input", markDirty);
   summarySkipFirstEl?.addEventListener("input", markDirty);
   summarySkipLastEl?.addEventListener("input", markDirty);
+  promptPreflightSummaryTokenCountEl?.addEventListener("input", markDirty);
+  summarySourceTargetTokensEl?.addEventListener("input", markDirty);
+  summaryRetryMinSourceTokensEl?.addEventListener("input", markDirty);
   promptMaxInputTokensEl?.addEventListener("input", markDirty);
   promptResponseTokenReserveEl?.addEventListener("input", markDirty);
   promptRecentHistoryMaxTokensEl?.addEventListener("input", markDirty);

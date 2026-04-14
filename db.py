@@ -5087,18 +5087,36 @@ def get_context_compaction_keep_recent_rounds(settings: dict | None = None) -> i
 
 
 def get_prompt_preflight_summary_token_count(settings: dict | None = None) -> int:
-    del settings
-    return PROMPT_PREFLIGHT_SUMMARY_TOKEN_COUNT
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(
+        source,
+        "prompt_preflight_summary_token_count",
+        PROMPT_PREFLIGHT_SUMMARY_TOKEN_COUNT,
+        2_000,
+        200_000,
+    )
 
 
 def get_summary_source_target_tokens(settings: dict | None = None) -> int:
-    del settings
-    return SUMMARY_SOURCE_TARGET_TOKENS
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(
+        source,
+        "summary_source_target_tokens",
+        SUMMARY_SOURCE_TARGET_TOKENS,
+        1_000,
+        40_000,
+    )
 
 
 def get_summary_retry_min_source_tokens(settings: dict | None = None) -> int:
-    del settings
-    return SUMMARY_RETRY_MIN_SOURCE_TOKENS
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(
+        source,
+        "summary_retry_min_source_tokens",
+        SUMMARY_RETRY_MIN_SOURCE_TOKENS,
+        500,
+        get_summary_source_target_tokens(source),
+    )
 
 
 def get_fetch_url_token_threshold(settings: dict | None = None) -> int:

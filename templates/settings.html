@@ -663,6 +663,31 @@
                     <p class="settings-copy">These messages are excluded from automatic summarization so the assistant keeps your opening context and latest turn intact.</p>
                   </section>
 
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Advanced summary budgets</span>
+                      <h4 class="settings-subsection__title">Source window sizing</h4>
+                      <p class="settings-subsection__copy">Tune when the agent preflights a summary attempt, how much raw history it tries to summarize, and how far it may back off on retries.</p>
+                    </div>
+                    <div class="settings-page-grid settings-page-grid--two settings-page-grid--compact">
+                      <div class="settings-form-cluster settings-form-cluster--split">
+                        <label class="settings-label" for="prompt-preflight-summary-token-count-input">Preflight summary trigger (2000-200000)</label>
+                        <input type="number" class="settings-number" id="prompt-preflight-summary-token-count-input" min="2000" max="200000" value="90000" />
+                        <p class="settings-copy">If the current turn crosses this estimated prompt size, the agent can proactively summarize before it hits tighter runtime compaction pressure.</p>
+                      </div>
+                      <div class="settings-form-cluster settings-form-cluster--split">
+                        <label class="settings-label" for="summary-source-target-tokens-input">Summary source target (1000-40000)</label>
+                        <input type="number" class="settings-number" id="summary-source-target-tokens-input" min="1000" max="40000" value="6000" />
+                        <p class="settings-copy">Target budget for the raw message slice selected as summary source material before prompt overhead is added.</p>
+                      </div>
+                      <div class="settings-form-cluster settings-form-cluster--split">
+                        <label class="settings-label" for="summary-retry-min-source-tokens-input">Summary retry minimum (500-40000)</label>
+                        <input type="number" class="settings-number" id="summary-retry-min-source-tokens-input" min="500" max="40000" value="1500" />
+                        <p class="settings-copy">When a first summary attempt is too large or fails validation, retries can shrink the source window down to this floor.</p>
+                      </div>
+                    </div>
+                  </section>
+
                 </div>
                 <details class="settings-collapsible settings-collapsible--soft">
                   <summary class="settings-collapsible__summary">
