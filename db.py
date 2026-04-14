@@ -46,6 +46,7 @@ from config import (
     SCRATCHPAD_SECTION_SETTING_KEYS,
     DOCUMENT_STORAGE_DIR,
     FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS,
+    FETCH_HTML_CONVERTER_MODES,
     FETCH_SUMMARIZE_MAX_INPUT_CHARS,
     FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS,
     FETCH_SUMMARY_MAX_CHARS,
@@ -5145,6 +5146,14 @@ def get_fetch_url_clip_aggressiveness(settings: dict | None = None) -> int:
     except (TypeError, ValueError):
         aggressiveness = 50
     return max(0, min(100, aggressiveness))
+
+
+def get_fetch_html_converter_mode(settings: dict | None = None) -> str:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = str(source.get("fetch_html_converter_mode", DEFAULT_SETTINGS["fetch_html_converter_mode"]) or "").strip().lower()
+    if raw_value in FETCH_HTML_CONVERTER_MODES:
+        return raw_value
+    return DEFAULT_SETTINGS["fetch_html_converter_mode"]
 
 
 def get_fetch_url_summarized_max_input_chars(settings: dict | None = None) -> int:

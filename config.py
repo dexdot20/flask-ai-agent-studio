@@ -188,6 +188,7 @@ OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED = True
 FETCH_TIMEOUT = 20
 FETCH_MAX_SIZE = 5 * 1024 * 1024
 FETCH_MAX_REDIRECTS = 5
+FETCH_HTML_CONVERTER_MODES = {"internal", "external", "hybrid"}
 CACHE_TTL_HOURS = DEFAULT_WEB_CACHE_TTL_HOURS
 SEARCH_MAX_RESULTS = 5
 CONTENT_MAX_CHARS = 100_000
@@ -516,6 +517,7 @@ DEFAULT_SETTINGS = {
     "tool_memory_auto_inject": "false",
     "fetch_url_token_threshold": str(FETCH_SUMMARY_TOKEN_THRESHOLD),
     "fetch_url_clip_aggressiveness": "50",
+    "fetch_html_converter_mode": "hybrid",
     "fetch_url_summarized_max_input_chars": str(FETCH_SUMMARIZE_MAX_INPUT_CHARS),
     "fetch_url_summarized_max_output_tokens": str(FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS),
     "fetch_raw_max_text_chars": str(FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS),

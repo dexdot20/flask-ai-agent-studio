@@ -529,6 +529,7 @@ The Settings page persists these values in `app_settings`:
 - `pruning_min_target_tokens`
 - `fetch_url_token_threshold`
 - `fetch_url_clip_aggressiveness`
+- `fetch_html_converter_mode`
 - `fetch_url_summarized_max_input_chars`
 - `fetch_url_summarized_max_output_tokens`
 - `rag_auto_inject_source_types`
@@ -886,7 +887,7 @@ DuckDuckGo text search.
 
 #### `fetch_url`
 
-Fetch and read the content of a specific web page. HTML pages are cleaned into an AI-friendly Markdown view, noisy layout chrome is stripped when possible, and large pages are clipped automatically; a page outline is included when clipping occurs.
+Fetch and read the content of a specific web page. HTML pages are cleaned into an AI-friendly Markdown view, noisy layout chrome is stripped when possible, and large pages are clipped automatically; a page outline is included when clipping occurs. The HTML conversion mode is configurable from Settings via `fetch_html_converter_mode` (`internal`, `external`, `hybrid`), and `hybrid` automatically falls back to the internal renderer when external conversion is unavailable.
 
 - Use this only when you actually need the page's exact content or source wording.
 

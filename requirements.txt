@@ -7,6 +7,7 @@ ddgs>=2.0
 requests>=2.31
 urllib3>=2.0
 beautifulsoup4>=4.12
+html-to-markdown>=3.1.0
 pypdf>=5.0
 Pillow>=10.0
 reportlab>=4.0

@@ -1201,6 +1201,15 @@
                       </div>
                       <div class="settings-page-grid settings-page-grid--two settings-page-grid--compact">
                         <div>
+                          <label class="settings-label" for="fetch-html-converter-mode-select">HTML converter mode</label>
+                          <select id="fetch-html-converter-mode-select" class="settings-select">
+                            <option value="hybrid">Hybrid (external + fallback)</option>
+                            <option value="external">External preferred</option>
+                            <option value="internal">Internal only</option>
+                          </select>
+                          <p class="settings-copy">Hybrid mode first tries the external HTML-to-Markdown converter and automatically falls back to the built-in renderer when needed.</p>
+                        </div>
+                        <div>
                           <label class="settings-label" for="fetch-summarize-max-input-chars-input">Summary source max chars (4000-100000)</label>
                           <input type="number" class="settings-number" id="fetch-summarize-max-input-chars-input" min="4000" max="100000" value="80000" />
                           <p class="settings-copy">Caps how much cleaned page content is forwarded to <code>fetch_url_summarized</code> before the helper model sees it.</p>

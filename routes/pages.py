@@ -14,6 +14,7 @@ from config import (
     DEFAULT_WEB_CACHE_TTL_HOURS,
     DEFAULT_SETTINGS,
     ENTROPY_PROFILE_PRESETS,
+    FETCH_HTML_CONVERTER_MODES,
     MAX_PARALLEL_TOOLS_MAX,
     MAX_PARALLEL_TOOLS_MIN,
     OCR_SUPPORTED_PROVIDERS,
@@ -67,6 +68,7 @@ from db import (
     get_entropy_rag_budget_ratio,
     get_entropy_reference_boost_enabled,
     get_fetch_raw_max_text_chars,
+    get_fetch_html_converter_mode,
     get_fetch_summary_max_chars,
     get_fetch_url_clip_aggressiveness,
     get_fetch_url_summarized_max_input_chars,
@@ -559,6 +561,7 @@ def build_settings_payload() -> dict:
         "pruning_min_target_tokens": get_pruning_min_target_tokens(raw),
         "fetch_url_token_threshold": get_fetch_url_token_threshold(raw),
         "fetch_url_clip_aggressiveness": get_fetch_url_clip_aggressiveness(raw),
+        "fetch_html_converter_mode": get_fetch_html_converter_mode(raw),
         "fetch_url_summarized_max_input_chars": get_fetch_url_summarized_max_input_chars(raw),
         "fetch_url_summarized_max_output_tokens": get_fetch_url_summarized_max_output_tokens(raw),
         "features": get_feature_flags(raw),
@@ -682,6 +685,7 @@ def register_page_routes(app) -> None:
         pruning_min_target_tokens_raw = data.get("pruning_min_target_tokens")
         fetch_url_token_threshold_raw = data.get("fetch_url_token_threshold")
         fetch_url_clip_aggressiveness_raw = data.get("fetch_url_clip_aggressiveness")
+        fetch_html_converter_mode_raw = data.get("fetch_html_converter_mode")
         fetch_url_summarized_max_input_chars_raw = data.get("fetch_url_summarized_max_input_chars")
         fetch_url_summarized_max_output_tokens_raw = data.get("fetch_url_summarized_max_output_tokens")
         canvas_prompt_max_lines_raw = data.get("canvas_prompt_max_lines")
@@ -784,6 +788,7 @@ def register_page_routes(app) -> None:
             and pruning_min_target_tokens_raw is None
             and fetch_url_token_threshold_raw is None
             and fetch_url_clip_aggressiveness_raw is None
+            and fetch_html_converter_mode_raw is None
             and fetch_url_summarized_max_input_chars_raw is None
             and fetch_url_summarized_max_output_tokens_raw is None
             and canvas_prompt_max_lines_raw is None
@@ -1675,6 +1680,12 @@ def register_page_routes(app) -> None:
             if not (0 <= fetch_url_clip_aggressiveness <= 100):
                 return jsonify({"error": "fetch_url_clip_aggressiveness must be between 0 and 100."}), 400
             settings["fetch_url_clip_aggressiveness"] = str(fetch_url_clip_aggressiveness)
+
+        if fetch_html_converter_mode_raw is not None:
+            normalized_fetch_html_converter_mode = str(fetch_html_converter_mode_raw or "").strip().lower()
+            if normalized_fetch_html_converter_mode not in FETCH_HTML_CONVERTER_MODES:
+                return jsonify({"error": "fetch_html_converter_mode must be one of internal, external, or hybrid."}), 400
+            settings["fetch_html_converter_mode"] = normalized_fetch_html_converter_mode
 
         if fetch_url_summarized_max_input_chars_raw is not None:
             try:

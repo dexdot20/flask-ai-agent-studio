@@ -143,6 +143,7 @@ const pruningTargetReductionRatioEl = document.getElementById("pruning-target-re
 const pruningMinTargetTokensEl = document.getElementById("pruning-min-target-tokens-input");
 const fetchThresholdEl = document.getElementById("fetch-threshold-input");
 const fetchAggressivenessEl = document.getElementById("fetch-aggressiveness-input");
+const fetchHtmlConverterModeEl = document.getElementById("fetch-html-converter-mode-select");
 const fetchSummarizeMaxInputCharsEl = document.getElementById("fetch-summarize-max-input-chars-input");
 const fetchSummarizeMaxOutputTokensEl = document.getElementById("fetch-summarize-max-output-tokens-input");
 const canvasPromptLinesEl = document.getElementById("canvas-prompt-lines-input");
@@ -2801,6 +2802,7 @@ function applySettingsToForm() {
   if (pruningMinTargetTokensEl) pruningMinTargetTokensEl.value = String(appSettings.pruning_min_target_tokens ?? 160);
   if (fetchThresholdEl) fetchThresholdEl.value = String(appSettings.fetch_url_token_threshold || 3500);
   if (fetchAggressivenessEl) fetchAggressivenessEl.value = String(appSettings.fetch_url_clip_aggressiveness || 50);
+  if (fetchHtmlConverterModeEl) fetchHtmlConverterModeEl.value = String(appSettings.fetch_html_converter_mode || "hybrid");
   if (fetchSummarizeMaxInputCharsEl) fetchSummarizeMaxInputCharsEl.value = String(appSettings.fetch_url_summarized_max_input_chars || 80000);
   if (fetchSummarizeMaxOutputTokensEl) fetchSummarizeMaxOutputTokensEl.value = String(appSettings.fetch_url_summarized_max_output_tokens || 2400);
   if (canvasPromptLinesEl) canvasPromptLinesEl.value = String(appSettings.canvas_prompt_max_lines || 250);
@@ -3003,6 +3005,7 @@ function applyServerSettingsData(data) {
   appSettings.pruning_min_target_tokens = data.pruning_min_target_tokens ?? 160;
   appSettings.fetch_url_token_threshold = data.fetch_url_token_threshold || 3500;
   appSettings.fetch_url_clip_aggressiveness = data.fetch_url_clip_aggressiveness ?? 50;
+  appSettings.fetch_html_converter_mode = data.fetch_html_converter_mode || "hybrid";
   appSettings.fetch_url_summarized_max_input_chars = data.fetch_url_summarized_max_input_chars || 80000;
   appSettings.fetch_url_summarized_max_output_tokens = data.fetch_url_summarized_max_output_tokens || 2400;
   appSettings.canvas_prompt_max_lines = data.canvas_prompt_max_lines || 250;
@@ -3117,6 +3120,7 @@ async function saveSettings() {
     pruning_min_target_tokens: readNumericSetting(pruningMinTargetTokensEl, 160, { allowZero: false, min: 50, max: 5000 }),
     fetch_url_token_threshold: readNumericSetting(fetchThresholdEl, 3500, { allowZero: false }),
     fetch_url_clip_aggressiveness: readNumericSetting(fetchAggressivenessEl, 50),
+    fetch_html_converter_mode: String(fetchHtmlConverterModeEl?.value || "hybrid"),
     fetch_url_summarized_max_input_chars: readNumericSetting(fetchSummarizeMaxInputCharsEl, 80000, { allowZero: false, min: 4000, max: 100000 }),
     fetch_url_summarized_max_output_tokens: readNumericSetting(fetchSummarizeMaxOutputTokensEl, 2400, { allowZero: false, min: 200, max: 4000 }),
     canvas_prompt_max_lines: readNumericSetting(canvasPromptLinesEl, 250, { allowZero: false }),
@@ -3591,6 +3595,7 @@ function registerDirtyListeners() {
   pruningMinTargetTokensEl?.addEventListener("input", markDirty);
   fetchThresholdEl?.addEventListener("input", markDirty);
   fetchAggressivenessEl?.addEventListener("input", markDirty);
+  fetchHtmlConverterModeEl?.addEventListener("change", markDirty);
   fetchSummarizeMaxInputCharsEl?.addEventListener("input", markDirty);
   fetchSummarizeMaxOutputTokensEl?.addEventListener("input", markDirty);
   canvasPromptLinesEl?.addEventListener("input", markDirty);

@@ -28,6 +28,11 @@ from ddgs import DDGS
 from urllib3.exceptions import InsecureRequestWarning
 
 try:
+    from html_to_markdown import convert as html_to_markdown_convert
+except ImportError:  # pragma: no cover - optional dependency
+    html_to_markdown_convert = None
+
+try:
     from defusedxml import ElementTree as ET
 except ImportError:  # pragma: no cover - compatibility fallback for older local envs
     import xml.etree.ElementTree as ET
@@ -43,6 +48,7 @@ from config import (
     SEARCH_MAX_RESULTS,
 )
 from db import cache_get, cache_set, get_proxy_enabled_operations, get_search_tool_query_limit as load_search_tool_query_limit
+from db import get_fetch_html_converter_mode as load_fetch_html_converter_mode
 from proxy_settings import (
     PROXY_OPERATION_FETCH_URL,
     PROXY_OPERATION_SEARCH_NEWS_DDGS,
@@ -857,6 +863,41 @@ def _build_html_markdown(
     return _combine_distinct_markdown_blocks([*supplemental_blocks, primary_markdown])
 
 
+def _normalize_fetch_html_converter_mode(value) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"internal", "external", "hybrid"}:
+        return normalized
+    return "hybrid"
+
+
+def _extract_external_markdown_content(conversion_result) -> str:
+    if isinstance(conversion_result, dict):
+        return str(conversion_result.get("content") or "")
+    if isinstance(conversion_result, str):
+        return conversion_result
+    return ""
+
+
+def _convert_html_to_markdown_external(content_root: Tag) -> str:
+    if not callable(html_to_markdown_convert):
+        return ""
+    html_fragment = str(content_root or "").strip()
+    if not html_fragment:
+        return ""
+
+    try:
+        converted = html_to_markdown_convert(html_fragment)
+    except Exception:
+        return ""
+
+    markdown = _clean_markdown_inline_text(_extract_external_markdown_content(converted))
+    if not markdown:
+        return ""
+
+    markdown = re.sub(r"\n{3,}", "\n\n", markdown).strip()
+    return markdown
+
+
 def _extract_html_outline(root) -> list[str]:
     headings = []
     for tag in root.find_all(["h1", "h2", "h3", "h4"]):
@@ -885,7 +926,13 @@ def _coerce_bool(value, default: bool = False) -> bool:
     return bool(value)
 
 
-def _extract_html(html: str, url: str, *, content_max_chars: int = CONTENT_MAX_CHARS) -> dict:
+def _extract_html(
+    html: str,
+    url: str,
+    *,
+    content_max_chars: int = CONTENT_MAX_CHARS,
+    converter_mode: str = "hybrid",
+) -> dict:
     soup = BeautifulSoup(html, "html.parser")
     title = soup.find("title") or ""
     title = title.get_text(strip=True) if title else ""
@@ -913,7 +960,7 @@ def _extract_html(html: str, url: str, *, content_max_chars: int = CONTENT_MAX_C
         text = _combine_distinct_text_blocks([reusable_summary, primary_text, *low_priority_blocks, noscript_text])
     if not text:
         text = _combine_distinct_text_blocks([reusable_summary, *low_priority_blocks, noscript_text])
-    markdown_content = _build_html_markdown(
+    markdown_content_internal = _build_html_markdown(
         content_root=content_root,
         url=url,
         meta_description=meta_description,
@@ -922,6 +969,14 @@ def _extract_html(html: str, url: str, *, content_max_chars: int = CONTENT_MAX_C
         noscript_text=noscript_text,
         primary_text=primary_text,
     )
+    normalized_converter_mode = _normalize_fetch_html_converter_mode(converter_mode)
+    markdown_content = markdown_content_internal
+    external_markdown_content = ""
+    if normalized_converter_mode in {"external", "hybrid"}:
+        external_markdown_content = _convert_html_to_markdown_external(content_root)
+    if external_markdown_content:
+        markdown_content = external_markdown_content
+
     result = {
         "url": url,
         "title": title,
@@ -929,6 +984,11 @@ def _extract_html(html: str, url: str, *, content_max_chars: int = CONTENT_MAX_C
         "raw_content": _truncate_content(text, content_max_chars),
         "content_format": "html",
         "content_source_element": content_source_element,
+        "content_converter": (
+            "external"
+            if external_markdown_content
+            else ("internal_fallback" if normalized_converter_mode in {"external", "hybrid"} else "internal")
+        ),
     }
     if outline:
         result["outline"] = outline
@@ -1021,6 +1081,7 @@ def _build_fetch_result_from_response(
     partial_error: str | None = None,
     *,
     content_max_chars: int = CONTENT_MAX_CHARS,
+    converter_mode: str = "hybrid",
 ) -> dict:
     ct = resp.headers.get("Content-Type", "").lower()
     final_url = resp.url
@@ -1035,7 +1096,12 @@ def _build_fetch_result_from_response(
         result = _extract_plain_text(raw, final_url, content_max_chars=content_max_chars)
     else:
         enc = resp.encoding or "utf-8"
-        result = _extract_html(raw.decode(enc, errors="replace"), final_url, content_max_chars=content_max_chars)
+        result = _extract_html(
+            raw.decode(enc, errors="replace"),
+            final_url,
+            content_max_chars=content_max_chars,
+            converter_mode=converter_mode,
+        )
 
     result["cleanup_applied"] = True
     result["status"] = resp.status_code
@@ -1076,11 +1142,12 @@ def fetch_url_tool(
 
     normalized_content_max_chars = _normalize_fetch_content_max_chars(content_max_chars)
     normalized_cache_namespace = str(cache_namespace or "").strip()
+    fetch_html_converter_mode = _normalize_fetch_html_converter_mode(load_fetch_html_converter_mode())
 
     if normalized_cache_namespace == "fetch" and normalized_content_max_chars == CONTENT_MAX_CHARS:
-        cache_key = f"fetch:{hashlib.md5(url.encode()).hexdigest()}"
+        cache_key = f"fetch:{hashlib.md5((url + '|' + fetch_html_converter_mode).encode()).hexdigest()}"
     elif normalized_cache_namespace:
-        digest = hashlib.md5(f"{url}|{normalized_content_max_chars}".encode()).hexdigest()
+        digest = hashlib.md5(f"{url}|{normalized_content_max_chars}|{fetch_html_converter_mode}".encode()).hexdigest()
         cache_key = f"{normalized_cache_namespace}:{digest}"
     else:
         cache_key = None
@@ -1151,6 +1218,7 @@ def fetch_url_tool(
                     url,
                     partial_error=partial_error,
                     content_max_chars=normalized_content_max_chars,
+                    converter_mode=fetch_html_converter_mode,
                 )
                 if bypassed_ssl_verification:
                     result["ssl_verification_bypassed"] = True

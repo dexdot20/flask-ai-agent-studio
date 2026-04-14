@@ -290,6 +290,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(payload["pruning_min_target_tokens"], PRUNING_MIN_TARGET_TOKENS)
         self.assertEqual(payload["fetch_url_token_threshold"], 3500)
         self.assertEqual(payload["fetch_url_clip_aggressiveness"], 50)
+        self.assertEqual(payload["fetch_html_converter_mode"], "hybrid")
         self.assertEqual(payload["fetch_url_summarized_max_input_chars"], 80000)
         self.assertEqual(payload["fetch_url_summarized_max_output_tokens"], 2400)
         self.assertEqual(payload["custom_models"], [])
@@ -440,6 +441,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 "pruning_min_target_tokens": 220,
                 "fetch_url_token_threshold": 4200,
                 "fetch_url_clip_aggressiveness": 70,
+                "fetch_html_converter_mode": "external",
                 "fetch_url_summarized_max_input_chars": 62000,
                 "fetch_url_summarized_max_output_tokens": 3100,
                 "canvas_prompt_max_lines": 1200,
@@ -547,6 +549,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(payload["pruning_min_target_tokens"], 220)
         self.assertEqual(payload["fetch_url_token_threshold"], 4200)
         self.assertEqual(payload["fetch_url_clip_aggressiveness"], 70)
+        self.assertEqual(payload["fetch_html_converter_mode"], "external")
         self.assertEqual(payload["fetch_url_summarized_max_input_chars"], 62000)
         self.assertEqual(payload["fetch_url_summarized_max_output_tokens"], 3100)
         self.assertEqual(payload["canvas_prompt_max_lines"], 1200)
@@ -648,6 +651,15 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("context_selection_strategy", response.get_json()["error"])
+
+    def test_settings_reject_invalid_fetch_html_converter_mode(self):
+        response = self.client.patch(
+            "/api/settings",
+            json={"fetch_html_converter_mode": "quantum"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("fetch_html_converter_mode", response.get_json()["error"])
 
     def test_conservative_summary_mode_uses_rounded_up_threshold(self):
         self.assertEqual(
@@ -15740,6 +15752,51 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("```bash\npip install -r requirements.txt\n```", result["content"])
         self.assertIn("Install dependencies", result["raw_content"])
         self.assertIn("pip install -r requirements.txt", result["raw_content"])
+
+    def test_extract_html_uses_external_converter_when_available(self):
+        html = """
+        <html>
+            <body>
+                <main>
+                    <h1>External Title</h1>
+                    <p>Internal body fallback text.</p>
+                </main>
+            </body>
+        </html>
+        """
+
+        with patch("web_tools.html_to_markdown_convert", return_value={"content": "# External Title\n\nRendered externally."}):
+            result = _extract_html(
+                html,
+                "https://example.com/docs",
+                converter_mode="external",
+            )
+
+        self.assertEqual(result["content_converter"], "external")
+        self.assertIn("Rendered externally.", result["content"])
+
+    def test_extract_html_falls_back_to_internal_converter_on_external_failure(self):
+        html = """
+        <html>
+            <body>
+                <main>
+                    <h1>Fallback Title</h1>
+                    <p>Internal renderer should still work.</p>
+                </main>
+            </body>
+        </html>
+        """
+
+        with patch("web_tools.html_to_markdown_convert", side_effect=RuntimeError("converter unavailable")):
+            result = _extract_html(
+                html,
+                "https://example.com/docs",
+                converter_mode="external",
+            )
+
+        self.assertEqual(result["content_converter"], "internal_fallback")
+        self.assertIn("# Fallback Title", result["content"])
+        self.assertIn("Internal renderer should still work.", result["content"])
 
     def test_extract_html_preserves_definition_lists_and_spanned_tables(self):
         html = """
