@@ -5642,6 +5642,40 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("YouTube", response.get_json()["error"])
 
+    def test_execute_tool_transcribe_youtube_video_returns_context_block(self):
+        with patch(
+            "agent.transcribe_youtube_video",
+            return_value={
+                "platform": "youtube",
+                "source_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                "source_video_id": "dQw4w9WgXcQ",
+                "title": "Demo Video",
+                "duration_seconds": 93,
+                "transcript_text": "Hello from the transcript.",
+                "transcript_language": "en",
+            },
+        ):
+            result, summary = _execute_tool(
+                "transcribe_youtube_video",
+                {"url": "https://youtu.be/dQw4w9WgXcQ"},
+            )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["source_video_id"], "dQw4w9WgXcQ")
+        self.assertIn("[YouTube video transcript: Demo Video]", result["transcript_context_block"])
+        self.assertIn("Hello from the transcript.", result["transcript_context_block"])
+        self.assertEqual(summary, "YouTube transcript ready: Demo Video")
+
+    def test_execute_tool_transcribe_youtube_video_rejects_invalid_url(self):
+        result, summary = _execute_tool(
+            "transcribe_youtube_video",
+            {"url": "https://example.com/not-youtube"},
+        )
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("YouTube URL", result["error"])
+        self.assertIn("Failed:", summary)
+
     def test_extract_youtube_video_id_rejects_lookalike_host(self):
         from video_transcript_service import extract_youtube_video_id
 

@@ -156,6 +156,11 @@ from web_tools import (
     search_web_tool,
     scroll_fetched_content_tool,
 )
+from video_transcript_service import (
+    build_video_transcript_context_block,
+    normalize_youtube_url,
+    transcribe_youtube_video,
+)
 
 SUB_AGENT_ALLOWED_TOOL_NAMES = DEFAULT_SUB_AGENT_ALLOWED_TOOL_NAMES
 
@@ -5313,6 +5318,51 @@ def _run_image_explain(tool_args: dict, runtime_state: dict):
     }, "Image question answered"
 
 
+def _run_transcribe_youtube_video(tool_args: dict, runtime_state: dict):
+    del runtime_state
+    raw_url = str(tool_args.get("url") or "").strip()
+    if not raw_url:
+        return {"status": "error", "error": "A YouTube URL is required."}, "Failed: missing YouTube URL"
+
+    try:
+        normalized_url = normalize_youtube_url(raw_url)
+        transcript_payload = transcribe_youtube_video(normalized_url)
+        transcript_text = str(transcript_payload.get("transcript_text") or "").strip()
+        if not transcript_text:
+            return {
+                "status": "error",
+                "error": "A readable speech transcript could not be extracted from the video.",
+            }, "Failed: transcript extraction"
+
+        context_block, transcript_truncated = build_video_transcript_context_block(
+            str(transcript_payload.get("title") or "YouTube video").strip(),
+            transcript_text,
+            source_url=str(transcript_payload.get("source_url") or normalized_url).strip(),
+            transcript_language=str(transcript_payload.get("transcript_language") or "").strip(),
+            duration_seconds=transcript_payload.get("duration_seconds"),
+        )
+        result = {
+            "status": "ok",
+            "platform": "youtube",
+            "source_url": str(transcript_payload.get("source_url") or normalized_url).strip(),
+            "source_video_id": str(transcript_payload.get("source_video_id") or "").strip(),
+            "title": str(transcript_payload.get("title") or "YouTube video").strip(),
+            "duration_seconds": transcript_payload.get("duration_seconds"),
+            "transcript_language": str(transcript_payload.get("transcript_language") or "").strip(),
+            "transcript_text": transcript_text,
+            "transcript_context_block": context_block,
+            "transcript_truncated": transcript_truncated,
+        }
+        summary_title = _clean_tool_text(result.get("title") or "YouTube video", limit=80)
+        summary = f"YouTube transcript ready: {summary_title}"
+        if transcript_truncated:
+            summary += " (truncated)"
+        return result, summary
+    except Exception as exc:
+        error_text = _format_tool_execution_error(exc)
+        return {"status": "error", "error": error_text}, f"Failed: {error_text}"
+
+
 def _run_search_knowledge_base(tool_args: dict, runtime_state: dict):
     result = search_knowledge_base_tool(
         tool_args.get("query", ""),
@@ -5995,6 +6045,7 @@ _TOOL_EXECUTORS = {
     "ask_clarifying_question": _run_ask_clarifying_question,
     "sub_agent": _run_sub_agent,
     "image_explain": _run_image_explain,
+    "transcribe_youtube_video": _run_transcribe_youtube_video,
     "search_knowledge_base": _run_search_knowledge_base,
     "search_tool_memory": _run_search_tool_memory,
     "search_web": _run_search_web,
@@ -6272,6 +6323,8 @@ def _tool_input_preview(tool_name: str, tool_args: dict) -> str:
         return f"{query} @ {target}"[:300]
     if tool_name == "sub_agent":
         return str(tool_args.get("task") or "").strip()[:300]
+    if tool_name == "transcribe_youtube_video":
+        return str(tool_args.get("url") or "").strip()[:300]
     return ""
 
 
@@ -6411,6 +6464,21 @@ def _build_tool_result_storage_entry(tool_name: str, tool_args: dict, result, su
                 artifact_lines.append(f"- {label}: {artifact_summary}")
         if artifact_lines:
             parts.append("Artifacts:\n" + "\n".join(artifact_lines))
+        text = "\n\n".join(parts)
+    elif tool_name == "transcribe_youtube_video" and isinstance(result, dict):
+        parts = []
+        title = _clean_tool_text(result.get("title") or "", limit=160)
+        url = _clean_tool_text(result.get("source_url") or tool_args.get("url") or "", limit=220)
+        language = _clean_tool_text(result.get("transcript_language") or "", limit=32)
+        context_block = _clean_tool_text(result.get("transcript_context_block") or "", limit=RAG_TOOL_RESULT_MAX_TEXT_CHARS)
+        if title:
+            parts.append(f"Title: {title}")
+        if url:
+            parts.append(f"URL: {url}")
+        if language:
+            parts.append(f"Language: {language}")
+        if context_block:
+            parts.append(context_block)
         text = "\n\n".join(parts)
     elif tool_name == "search_web" and isinstance(result, list):
         text = _format_list_tool_result(result, "Web results", link_key="url")

@@ -705,6 +705,34 @@ TOOL_SPECS = [
         },
     },
     {
+        "name": "transcribe_youtube_video",
+        "description": (
+            "Normalize a YouTube URL, transcribe the video's speech locally, and return a prompt-ready transcript context block. "
+            "Use this only when the user explicitly asks for a YouTube transcription or video-summary workflow and a URL is provided."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "YouTube URL to transcribe (watch, short, embed, or youtu.be format).",
+                }
+            },
+            "required": ["url"],
+        },
+        "prompt": {
+            "purpose": "Transcribes a YouTube video and returns transcript text plus a context block ready for prompt injection.",
+            "inputs": {
+                "url": "full YouTube URL",
+            },
+            "guidance": (
+                "Call this when the user wants transcript-driven analysis from a YouTube link and no transcript is already available in the current turn. "
+                "Do not call it for non-YouTube URLs. "
+                "If the runtime reports missing dependencies or disabled feature flags, surface that error clearly and continue with alternatives."
+            ),
+        },
+    },
+    {
         "name": "search_knowledge_base",
         "description": (
             "Search the internal knowledge base indexed with RAG. "

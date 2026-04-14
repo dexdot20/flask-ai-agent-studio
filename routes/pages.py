@@ -184,6 +184,7 @@ TOOL_PERMISSION_LABELS = {
     "ask_clarifying_question": "Ask interactive clarification questions",
     "sub_agent": "Web research helper",
     "image_explain": "Follow up on stored images",
+    "transcribe_youtube_video": "Transcribe YouTube video",
     "search_knowledge_base": "Knowledge base search",
     "search_tool_memory": "Search remembered research",
     "search_web": "Web search",
@@ -233,6 +234,7 @@ TOOL_PERMISSION_DESCRIPTIONS = {
     "ask_clarifying_question": "Pause and ask the user structured questions before answering.",
     "sub_agent": "Delegate a bounded web research task to a read-only helper agent.",
     "image_explain": "Ask follow-up questions about a previously uploaded image.",
+    "transcribe_youtube_video": "Validate a YouTube URL and generate a local speech transcript with a prompt-ready context block.",
     "search_knowledge_base": "Semantic search over synced chats and uploaded documents.",
     "search_tool_memory": "Search remembered web research results from earlier conversations.",
     "search_web": "Live web search via DuckDuckGo for current facts.",
@@ -325,7 +327,7 @@ PROXY_OPERATION_OPTIONS = [
 
 
 def _get_tool_permission_section_key(name: str) -> str:
-    if name in {"save_to_conversation_memory", "delete_conversation_memory_entry", "save_to_persona_memory", "delete_persona_memory_entry", "append_scratchpad", "replace_scratchpad", "read_scratchpad", "ask_clarifying_question", "sub_agent", "image_explain", "search_knowledge_base", "search_tool_memory"}:
+    if name in {"save_to_conversation_memory", "delete_conversation_memory_entry", "save_to_persona_memory", "delete_persona_memory_entry", "append_scratchpad", "replace_scratchpad", "read_scratchpad", "ask_clarifying_question", "sub_agent", "image_explain", "transcribe_youtube_video", "search_knowledge_base", "search_tool_memory"}:
         return "assistant"
     if name in {"search_web", "fetch_url", "fetch_url_summarized", "scroll_fetched_content", "grep_fetched_content", "search_news_ddgs", "search_news_google"}:
         return "research"
