@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from functools import lru_cache
 
@@ -9,13 +10,25 @@ except ImportError:  # pragma: no cover - optional dependency fallback
     tiktoken = None
 
 
+LOGGER = logging.getLogger(__name__)
+TOKEN_ESTIMATION_FALLBACK_MARGIN = 0.90
+_FALLBACK_WARNING_EMITTED = False
+
+
 @lru_cache(maxsize=1)
 def get_token_encoder():
+    global _FALLBACK_WARNING_EMITTED
     if tiktoken is None:
+        if not _FALLBACK_WARNING_EMITTED:
+            LOGGER.warning("tiktoken is not available; falling back to heuristic token estimation.")
+            _FALLBACK_WARNING_EMITTED = True
         return None
     try:
         return tiktoken.get_encoding("cl100k_base")
     except Exception:
+        if not _FALLBACK_WARNING_EMITTED:
+            LOGGER.warning("Failed to initialize tiktoken encoder; falling back to heuristic token estimation.")
+            _FALLBACK_WARNING_EMITTED = True
         return None
 
 
@@ -33,4 +46,5 @@ def estimate_text_tokens(text: str) -> int:
 
     byte_estimate = (len(normalized.encode("utf-8")) + 3) // 4
     piece_estimate = len(re.findall(r"\w+|[^\w\s]", normalized, re.UNICODE))
-    return max(1, byte_estimate, piece_estimate)
+    heuristic_estimate = max(1, byte_estimate, piece_estimate)
+    return max(1, int(heuristic_estimate / TOKEN_ESTIMATION_FALLBACK_MARGIN))

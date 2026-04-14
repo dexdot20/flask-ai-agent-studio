@@ -4,7 +4,16 @@ import logging
 import re
 from typing import Any
 
-from config import PRUNING_MIN_TARGET_TOKENS, PRUNING_TARGET_REDUCTION_RATIO, RAG_ENABLED, RAG_SOURCE_CONVERSATION
+from config import (
+    PRUNE_WEIGHT_ENTROPY,
+    PRUNE_WEIGHT_RAG,
+    PRUNE_WEIGHT_STALENESS,
+    PRUNE_WEIGHT_TOKEN,
+    PRUNING_MIN_TARGET_TOKENS,
+    PRUNING_TARGET_REDUCTION_RATIO,
+    RAG_ENABLED,
+    RAG_SOURCE_CONVERSATION,
+)
 from db import (
     get_app_settings,
     get_conversation_message_rows,
@@ -28,7 +37,7 @@ from model_registry import (
     get_provider_client,
     resolve_model_target,
 )
-from rag_service import conversation_rag_source_key, search_knowledge_base_tool, sync_conversations_to_rag_safe
+from rag_service import conversation_rag_source_key, search_knowledge_base_tool
 from token_utils import estimate_text_tokens
 
 PRUNABLE_ROLES = {"user", "assistant"}
@@ -47,13 +56,53 @@ PRUNING_MAX_ATTEMPTS = 2
 PRUNE_SCORE_CONTENT_PREVIEW_MAX_CHARS = 260
 PRUNE_SCORE_RAG_TOP_K = 4
 PRUNE_SCORE_RAG_MIN_SIMILARITY = 0.35
-PRUNE_SCORE_WEIGHTS = {
-    "entropy_prunability": 0.35,
-    "rag_coverage": 0.30,
-    "recency": 0.25,
-    "token_weight": 0.10,
-}
 LOGGER = logging.getLogger(__name__)
+
+
+class _PruneScoreWeights(dict):
+    def __getitem__(self, key):
+        normalized_key = "staleness" if str(key) == "recency" else key
+        return super().__getitem__(normalized_key)
+
+    def get(self, key, default=None):
+        normalized_key = "staleness" if str(key) == "recency" else key
+        return super().get(normalized_key, default)
+
+
+PRUNE_SCORE_WEIGHTS = _PruneScoreWeights(
+    {
+        "entropy_prunability": PRUNE_WEIGHT_ENTROPY,
+        "rag_coverage": PRUNE_WEIGHT_RAG,
+        "staleness": PRUNE_WEIGHT_STALENESS,
+        "token_weight": PRUNE_WEIGHT_TOKEN,
+    }
+)
+
+
+def _normalize_prune_score_weights(weights: dict[str, float]) -> dict[str, float]:
+    alias_value = (weights or {}).get("staleness", (weights or {}).get("recency", 0.0))
+    normalized = {
+        "entropy_prunability": max(0.0, float((weights or {}).get("entropy_prunability") or 0.0)),
+        "rag_coverage": max(0.0, float((weights or {}).get("rag_coverage") or 0.0)),
+        "staleness": max(0.0, float(alias_value or 0.0)),
+        "token_weight": max(0.0, float((weights or {}).get("token_weight") or 0.0)),
+    }
+    total = sum(normalized.values())
+    if total <= 0:
+        return _PruneScoreWeights(
+            {
+            "entropy_prunability": 0.35,
+            "rag_coverage": 0.30,
+            "staleness": 0.25,
+            "token_weight": 0.10,
+            }
+        )
+    return _PruneScoreWeights(
+        {
+            key: value / total
+            for key, value in normalized.items()
+        }
+    )
 
 
 def _extract_response_text(response: Any) -> str:
@@ -254,13 +303,13 @@ def _compute_rag_coverage_score(
 
 
 def _resolve_prune_score_weights(*, rag_enabled: bool) -> dict[str, float]:
-    weights = dict(PRUNE_SCORE_WEIGHTS)
+    weights = _normalize_prune_score_weights(PRUNE_SCORE_WEIGHTS)
     if rag_enabled:
         return weights
 
     redistributed_weight = weights.get("rag_coverage", 0.0)
     weights["rag_coverage"] = 0.0
-    recipient_keys = ("entropy_prunability", "recency")
+    recipient_keys = ("entropy_prunability", "staleness")
     recipient_total = sum(weights[key] for key in recipient_keys)
     if recipient_total <= 0 or redistributed_weight <= 0:
         return weights
@@ -313,8 +362,6 @@ def score_conversation_messages_for_prune(
         return []
 
     rag_enabled_for_score = bool(RAG_ENABLED)
-    if rag_enabled_for_score:
-        sync_conversations_to_rag_safe(conversation_id=normalized_conversation_id)
     weights = _resolve_prune_score_weights(rag_enabled=rag_enabled_for_score)
 
     later_text = ""
@@ -349,13 +396,13 @@ def score_conversation_messages_for_prune(
             candidate_content,
             settings=settings,
         ) if rag_enabled_for_score else 0.0
-        recency_score = _clamp_score(1.0 - (rank / max_rank))
+        staleness_score = _clamp_score(1.0 - (rank / max_rank))
         token_weight = _clamp_score(estimated_tokens / max_tokens)
         entropy_prunability = _clamp_score(1.0 - entropy_score)
         prune_score = _clamp_score(
             entropy_prunability * weights["entropy_prunability"]
             + rag_coverage_score * weights["rag_coverage"]
-            + recency_score * weights["recency"]
+            + staleness_score * weights["staleness"]
             + token_weight * weights["token_weight"]
         )
         scored_candidates.append(
@@ -367,7 +414,8 @@ def score_conversation_messages_for_prune(
                 "estimated_tokens": estimated_tokens,
                 "entropy_score": round(entropy_score, 4),
                 "rag_coverage_score": round(rag_coverage_score, 4),
-                "recency_score": round(recency_score, 4),
+                "staleness_score": round(staleness_score, 4),
+                "recency_score": round(staleness_score, 4),
                 "token_weight": round(token_weight, 4),
                 "prune_score": round(prune_score, 4),
             }
@@ -622,4 +670,10 @@ def prune_conversation_batch(conversation_id: int, batch_size: int) -> int:
                 "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
                 (normalized_conversation_id,),
             )
+        LOGGER.info("Pruned %d message(s) for conversation_id=%s.", pruned_count, normalized_conversation_id)
+    else:
+        LOGGER.debug(
+            "No messages were pruned for conversation_id=%s; eligible candidates were either absent or failed.",
+            normalized_conversation_id,
+        )
     return pruned_count

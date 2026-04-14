@@ -2313,6 +2313,7 @@ def _infer_fetch_summary_profile(result: dict) -> dict:
     content_source = _normalize_fetch_content_source(result.get("content_source_element"))
     outline = result.get("outline") if isinstance(result.get("outline"), list) else []
     outline_text = " ".join(_clean_tool_text(item, limit=80).casefold() for item in outline[:10])
+    content_preview = _clean_tool_text(result.get("content") or "", limit=600).casefold()
     haystack = " ".join(part for part in [url, title, meta_description, outline_text] if part)
 
     technical_terms = (
@@ -2355,6 +2356,17 @@ def _infer_fetch_summary_profile(result: dict) -> dict:
             "section_labels": "Headline, What happened, Key facts, Why it matters, Open questions or uncertainty",
             "guidance": "Preserve timelines, named entities, attributed claims, and what is still unverified.",
         }
+    if any(
+        term in content_preview
+        for term in ("api ", "endpoint", "config", "configuration", "schema", "get /", "post /", "request body")
+    ):
+        return {
+            "name": "technical_documentation",
+            "section_labels": "Summary, Key APIs or configuration, Important details, Constraints or caveats",
+            "guidance": (
+                "Preserve exact terminology, endpoint names, configuration keys, defaults, version numbers, and explicit limitations."
+            ),
+        }
     return {
         "name": "general_web_page",
         "section_labels": "Overview, Key points, Important details, Constraints or uncertainty",
@@ -2366,10 +2378,9 @@ def _estimate_fetch_summary_max_tokens(
     source_text: str,
     configured_max_tokens: int = FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS,
 ) -> int:
-    source_char_count = len(_clean_tool_text(source_text))
+    del source_text
     configured_cap = max(200, min(4_000, int(configured_max_tokens or FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS)))
-    dynamic_target = max(configured_cap, source_char_count // 32)
-    return max(200, min(4_000, dynamic_target))
+    return configured_cap
 
 
 def _summarize_fetch_result(result: dict, fallback_url: str = "") -> str:

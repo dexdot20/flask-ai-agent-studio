@@ -42,6 +42,7 @@ from config import (
     RAG_SOURCE_TOOL_MEMORY,
     RAG_SOURCE_TOOL_RESULT,
     SCRATCHPAD_SECTION_SETTING_KEYS,
+    SUMMARY_RETRY_REDUCTION_FACTOR,
     YOUTUBE_TRANSCRIPTS_DISABLED_FEATURE_ERROR,
     YOUTUBE_TRANSCRIPTS_ENABLED,
 )
@@ -160,6 +161,7 @@ from messages import (
 from image_service import analyze_uploaded_image, can_answer_image_questions
 from image_utils import read_uploaded_image
 from model_registry import (
+    apply_model_target_request_options,
     can_model_process_images,
     DEEPSEEK_PROVIDER,
     OPENROUTER_PROVIDER,
@@ -169,6 +171,7 @@ from model_registry import (
     get_model_record,
     get_operation_model,
     normalize_image_processing_method,
+    resolve_model_target,
 )
 from ocr_service import preload_ocr_engine
 from project_workspace_service import create_workspace_runtime_state, get_workspace_root
@@ -188,7 +191,7 @@ from video_transcript_service import (
     read_youtube_video_reference,
     transcribe_youtube_video,
 )
-from prune_service import is_prunable_message, prune_conversation_batch
+from prune_service import prune_conversation_batch
 
 
 TITLE_MAX_WORDS = 5
@@ -1685,6 +1688,58 @@ def _estimate_prompt_tokens(messages: list[dict]) -> int:
     return total
 
 
+def _extract_chat_completion_text(response) -> str:
+    choices = getattr(response, "choices", None) or []
+    if not choices:
+        return ""
+    message = getattr(choices[0], "message", None)
+    content = getattr(message, "content", "")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                text = str(item.get("text") or "")
+                if text:
+                    parts.append(text)
+        return "".join(parts).strip()
+    return str(content or "").strip()
+
+
+def _reformat_summary_response_as_json(
+    prompt_messages: list[dict],
+    summary_model: str,
+    settings: dict,
+) -> tuple[str, list[str]]:
+    target = resolve_model_target(summary_model, settings)
+    request_kwargs = apply_model_target_request_options(
+        {
+            "model": target["api_model"],
+            "messages": [
+                *prompt_messages,
+                {
+                    "role": "user",
+                    "content": (
+                        "Reformat your previous response as strict JSON only. Return ONLY a valid raw JSON object "
+                        "with exactly these keys: facts, decisions, open_issues, entities, tool_outcomes. "
+                        "Each key must contain an array (use [] when empty). "
+                        "No markdown, no code fences, no commentary."
+                    ),
+                },
+            ],
+            "max_tokens": 512,
+            "temperature": 0.0,
+        },
+        target,
+    )
+    try:
+        response = target["client"].chat.completions.create(**request_kwargs)
+    except Exception as exc:
+        return "", [str(exc)]
+    return _extract_chat_completion_text(response), []
+
+
 def _trim_text_sections_to_token_budget(text: str | None, max_tokens: int) -> str | None:
     normalized = str(text or "").strip()
     if not normalized or max_tokens <= 0:
@@ -1719,6 +1774,23 @@ def _trim_text_sections_to_token_budget(text: str | None, max_tokens: int) -> st
             return _clip_text_to_token_budget(section, max_tokens)
         kept.append(section)
     return "\n\n".join(kept) if kept else None
+
+
+def _count_prunable_message_tokens(messages: list[dict]) -> int:
+    total = 0
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "").strip()
+        if role not in {"user", "assistant"}:
+            continue
+        if role == "assistant" and message.get("tool_calls"):
+            continue
+        metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+        if metadata.get("is_summary") is True or metadata.get("is_pruned") is True:
+            continue
+        total += estimate_text_tokens(str(message.get("content") or ""))
+    return total
 
 
 def _trim_rag_context_to_token_budget(retrieved_context: dict | None, max_tokens: int) -> dict | None:
@@ -1821,15 +1893,6 @@ def _select_tail_messages_by_token_budget(messages: list[dict], max_tokens: int)
         selected_reversed.append(message)
         total += content_tokens
     return list(reversed(selected_reversed))
-
-
-def _count_prunable_message_tokens(messages: list[dict]) -> int:
-    total = 0
-    for message in messages:
-        if not is_prunable_message(message):
-            continue
-        total += estimate_text_tokens(str(message.get("content") or ""))
-    return total
 
 
 def _get_last_user_message_key(messages: list[dict]) -> tuple[int, int] | None:
@@ -3333,6 +3396,7 @@ def maybe_create_conversation_summary(
     if not dry_run:
         acquired_summary_lock = summary_lock.acquire(blocking=False)
         if not acquired_summary_lock:
+            LOGGER.debug("Summary lock already held for conversation_id=%s; skipping pass.", conversation_id)
             return {
                 "applied": False,
                 "locked": True,
@@ -3565,30 +3629,22 @@ def maybe_create_conversation_summary(
                 and not is_error_text
                 and len(summary_text) >= SUMMARY_MIN_TEXT_LENGTH
             ):
-                reformat_result = collect_agent_response(
-                    [
-                        *prompt_messages,
-                        {
-                            "role": "user",
-                            "content": (
-                                "Reformat your previous response as strict JSON only. Return ONLY a valid raw JSON object "
-                                "with exactly these keys: facts, decisions, open_issues, entities, tool_outcomes. "
-                                "Each key must contain an array (use [] when empty). "
-                                "No markdown, no code fences, no commentary."
-                            ),
-                        },
-                    ],
+                reformatted_summary_text, reformat_errors = _reformat_summary_response_as_json(
+                    prompt_messages,
                     summary_model,
-                    1,
-                    [],
-                    temperature=0.0,
-                    fetch_url_token_threshold=fetch_url_token_threshold,
-                    fetch_url_clip_aggressiveness=fetch_url_clip_aggressiveness,
+                    settings,
                 )
-                reformatted_summary_text = (reformat_result.get("content") or "").strip()
                 if reformatted_summary_text:
-                    summary_text = reformatted_summary_text
-                summary_errors = reformat_result.get("errors") or []
+                    summary_text = reformatted_summary_text.strip()
+                    summary_errors = []
+                else:
+                    summary_errors = []
+                    if reformat_errors:
+                        LOGGER.debug(
+                            "Summary JSON reformat failed for conversation_id=%s; keeping original summary text. error=%s",
+                            conversation_id,
+                            reformat_errors[0],
+                        )
                 structured_summary = _parse_structured_summary_payload(summary_text)
                 summary_validation_text = build_summary_content(summary_text, structured_summary)
                 is_error_text = summary_text.startswith(FINAL_ANSWER_ERROR_TEXT) or summary_text.startswith(FINAL_ANSWER_MISSING_TEXT)
@@ -3614,7 +3670,7 @@ def maybe_create_conversation_summary(
                 return failure_payload
             if failure_stage not in {"context_too_large", "provider_error", "empty_output"}:
                 return failure_payload
-            next_target = int(attempt_token_target * 0.65)
+            next_target = int(attempt_token_target * SUMMARY_RETRY_REDUCTION_FACTOR)
             if next_target >= attempt_token_target:
                 next_target = attempt_token_target - 1
             if next_target < retry_min_source_tokens:
@@ -3774,8 +3830,9 @@ def _run_chat_post_response_tasks(
     fetch_url_clip_aggressiveness: int,
     current_turn_ids: set[int],
 ) -> None:
+    summary_outcome = None
     try:
-        maybe_create_conversation_summary(
+        summary_outcome = maybe_create_conversation_summary(
             conversation_id,
             model,
             settings,
@@ -3783,10 +3840,15 @@ def _run_chat_post_response_tasks(
             fetch_url_clip_aggressiveness,
             current_turn_ids,
         )
+        if isinstance(summary_outcome, dict) and summary_outcome.get("locked"):
+            LOGGER.debug("Background summary skipped because another pass is running for conversation_id=%s", conversation_id)
     except Exception:
         LOGGER.exception("Background summary task failed for conversation_id=%s", conversation_id)
 
-    _maybe_run_conversation_pruning(conversation_id, settings)
+    if not (isinstance(summary_outcome, dict) and summary_outcome.get("applied") is True):
+        _maybe_run_conversation_pruning(conversation_id, settings)
+    else:
+        LOGGER.debug("Background pruning skipped because summarization already applied for conversation_id=%s", conversation_id)
 
     if RAG_ENABLED and conversation_id:
         try:
@@ -3800,8 +3862,14 @@ def _maybe_run_conversation_pruning(conversation_id: int, settings: dict) -> Non
         return
 
     try:
-        prunable_token_count = _count_prunable_message_tokens(get_conversation_messages(conversation_id))
-        if prunable_token_count < get_pruning_token_threshold(settings):
+        conversation_messages = get_conversation_messages(conversation_id)
+        visible_token_count = count_visible_message_tokens(
+            conversation_messages,
+            include_context_injections=False,
+        )
+        legacy_prunable_token_count = _count_prunable_message_tokens(conversation_messages)
+        effective_token_count = max(visible_token_count, legacy_prunable_token_count)
+        if effective_token_count < get_pruning_token_threshold(settings):
             return
         prune_conversation_batch(conversation_id, get_pruning_batch_size(settings))
     except Exception:
