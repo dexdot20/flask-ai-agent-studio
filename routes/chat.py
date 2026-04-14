@@ -3191,6 +3191,9 @@ def _maybe_run_preflight_summary(
     fetch_url_clip_aggressiveness: int,
     exclude_message_ids: set[int] | None = None,
 ) -> dict | None:
+    if get_chat_summary_mode(settings) == "never":
+        return None
+
     canonical_messages = get_conversation_messages(conversation_id)
     visible_token_count = count_visible_message_tokens(
         canonical_messages,
@@ -4707,11 +4710,14 @@ def register_chat_routes(app) -> None:
         preflight_summary_outcome = None
         preflight_summary_required = False
         if conv_id and persisted_user_message_id is not None:
+            chat_summary_mode = get_chat_summary_mode(settings)
             preflight_visible_token_count = count_visible_message_tokens(
                 canonical_messages,
                 include_context_injections=False,
             )
             preflight_summary_required = (
+                chat_summary_mode != "never"
+                and
                 preflight_visible_token_count >= get_prompt_preflight_summary_token_count(settings)
             )
             preflight_summary_outcome = _maybe_run_preflight_summary(

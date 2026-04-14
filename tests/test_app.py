@@ -18176,7 +18176,15 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         self.assertEqual(response.status_code, 200)
         events = [json.loads(line) for line in response.get_data(as_text=True).strip().splitlines()]
+        compacting_status = next(
+            (
+                event for event in events
+                if event.get("type") == "status" and event.get("status") == "compacting"
+            ),
+            None,
+        )
         summary_status = next((event for event in events if event["type"] == "conversation_summary_status"), None)
+        self.assertIsNone(compacting_status)
         self.assertIsNotNone(summary_status)
         self.assertEqual(summary_status["reason"], "mode_never")
         mocked_collect.assert_not_called()

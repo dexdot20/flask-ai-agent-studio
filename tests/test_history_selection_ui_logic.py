@@ -10,6 +10,7 @@ import pytest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 APP_JS_PATH = REPO_ROOT / "static" / "app.js"
+STYLE_CSS_PATH = REPO_ROOT / "static" / "style.css"
 SELECTION_HELPERS_START_MARKER = "function getHistoryMessageSortValue(message)"
 SELECTION_HELPERS_END_MARKER = "function isSummaryPanelOpen()"
 SUMMARY_REQUEST_START_MARKER = "function buildSummaryRequestBody()"
@@ -22,6 +23,10 @@ CREATE_MESSAGE_GROUP_END_MARKER = "function appendGroup(role, text, metadata = n
 
 def _load_app_js_source() -> str:
     return APP_JS_PATH.read_text(encoding="utf-8")
+
+
+def _load_style_css_source() -> str:
+  return STYLE_CSS_PATH.read_text(encoding="utf-8")
 
 
 def _load_selection_helper_source() -> str:
@@ -335,3 +340,13 @@ def test_create_message_group_uses_clickable_content_row_for_selection_mode() ->
     assert 'const shouldRenderContentRow = Boolean(displayText) || Boolean(selectionToggle);' in body
     assert 'contentRow.className = "msg-content-row"' in body
     assert 'bindHistorySelectionClickTarget(contentRow, options.messageId, activeSelectionMode);' in body
+
+
+def test_selection_desktop_css_keeps_summary_and_prune_overlays_click_through() -> None:
+  style_source = _load_style_css_source()
+
+  assert '@media (min-width: 901px)' in style_source
+  assert '#summary-overlay,' in style_source
+  assert '#prune-overlay {' in style_source
+  assert 'pointer-events: none;' in style_source
+  assert '.chat-area.chat-area--selection-mode {' in style_source

@@ -2375,6 +2375,31 @@ kbd {
   transform: translateY(0) scale(1);
 }
 
+@media (min-width: 901px) {
+  .chat-area.chat-area--selection-mode {
+    padding-right: min(460px, 40vw);
+    transition: padding-right 0.18s ease;
+  }
+
+  #summary-overlay,
+  #prune-overlay {
+    background: transparent;
+    backdrop-filter: none;
+    pointer-events: none;
+  }
+
+  #summary-overlay.open,
+  #prune-overlay.open {
+    display: block;
+    pointer-events: none;
+  }
+
+  #summary-panel,
+  #prune-panel {
+    width: min(420px, calc(100vw - 24px));
+  }
+}
+
 .summary-panel__header {
   display: flex;
   align-items: flex-start;
