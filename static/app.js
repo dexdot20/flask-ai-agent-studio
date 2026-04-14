@@ -70,6 +70,7 @@ if (nativeFetch) {
 
 const messagesEl = document.getElementById("messages");
 const inputEl = document.getElementById("user-input");
+const slashCommandMenuEl = document.getElementById("slash-command-menu");
 const imageInputEl = document.getElementById("image-input");
 const docInputEl = document.getElementById("doc-input");
 const attachBtn = document.getElementById("attach-btn");
@@ -1040,6 +1041,10 @@ let lastConversationMemorySignature = "";
 let userScrolledUp = false;
 let pendingCanvasConfirmAction = null;
 let pendingCanvasMutation = "";
+let slashCommandMenuOpen = false;
+let slashCommandMenuQuery = "";
+let slashCommandSuggestions = [];
+let slashCommandSelectedIndex = 0;
 
 const CANVAS_EMPTY_STATES = Object.freeze({
   no_documents: Object.freeze({
@@ -1934,43 +1939,438 @@ function buildPendingAttachmentMetadata(imageFiles, documentFiles, youtubeUrl = 
     : null;
 }
 
-function parseDoubleCheckCommand(rawText) {
-  const normalizedInput = String(rawText || "").trim();
-  if (!normalizedInput) {
-    return { requested: false, query: "", text: "" };
+const SLASH_COMMAND_MENU_MAX_VISIBLE_ITEMS = 6;
+const CHAT_SLASH_COMMANDS = Object.freeze([
+  Object.freeze({
+    name: "check",
+    label: "Double-check",
+    badgeLabel: "Double Check",
+    icon: "✓",
+    usage: "/check <claim, answer, or topic>",
+    description: "Run a deliberate second-pass verification pass before the assistant finalizes its answer.",
+    keywords: Object.freeze(["verify", "review", "audit", "fact", "confidence", "counterargument", "risk"]),
+    insertText: "/check ",
+    metadataKeys: Object.freeze(["double_check", "double_check_query"]),
+    parse(argsText = "") {
+      const query = String(argsText || "").trim();
+      const payload = {
+        double_check: true,
+        ...(query ? { double_check_query: query } : {}),
+      };
+      return {
+        requested: true,
+        query,
+        text: query,
+        metadata: payload,
+        requestPayload: payload,
+        fallbackText: "Double-check request.",
+      };
+    },
+    extractMetadata(metadata) {
+      if (!metadata || typeof metadata !== "object" || metadata.double_check !== true) {
+        return null;
+      }
+      const query = String(metadata.double_check_query || "").trim();
+      return {
+        requested: true,
+        query,
+        text: query,
+        metadata: {
+          double_check: true,
+          ...(query ? { double_check_query: query } : {}),
+        },
+        requestPayload: {
+          double_check: true,
+          ...(query ? { double_check_query: query } : {}),
+        },
+        fallbackText: "Double-check request.",
+      };
+    },
+  }),
+]);
+
+const CHAT_SLASH_COMMAND_BY_NAME = new Map(
+  CHAT_SLASH_COMMANDS.map((command) => [command.name, command])
+);
+
+function getSlashCommandByName(commandName) {
+  return CHAT_SLASH_COMMAND_BY_NAME.get(String(commandName || "").trim().toLowerCase()) || null;
+}
+
+function getSlashCommandSearchText(command) {
+  return [
+    command?.name,
+    command?.label,
+    command?.description,
+    command?.usage,
+    ...(Array.isArray(command?.keywords) ? command.keywords : []),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .trim()
+    .toLowerCase();
+}
+
+function normalizeSlashCommandResolution(command, resolution) {
+  if (!command || !resolution || typeof resolution !== "object") {
+    return null;
   }
 
-  const commandMatch = normalizedInput.match(/^\/check(?:\s+([\s\S]*))?$/i);
-  if (!commandMatch) {
-    return { requested: false, query: "", text: normalizedInput };
-  }
-
-  const query = String(commandMatch[1] || "").trim();
+  const text = String(resolution.text ?? "").trim();
+  const query = String(resolution.query ?? text).trim();
   return {
-    requested: true,
+    command,
+    requested: resolution.requested === true,
+    text,
     query,
-    text: query,
+    metadata: resolution.metadata && typeof resolution.metadata === "object" ? { ...resolution.metadata } : null,
+    requestPayload: resolution.requestPayload && typeof resolution.requestPayload === "object"
+      ? { ...resolution.requestPayload }
+      : null,
+    fallbackText: String(resolution.fallbackText || "").trim(),
   };
 }
 
-function buildDoubleCheckMetadata(metadata, { requested = false, query = "" } = {}) {
-  const base = metadata && typeof metadata === "object" ? { ...metadata } : {};
-  delete base.double_check;
-  delete base.double_check_query;
+function extractComposerSlashCommandMetadata(metadata) {
+  for (const command of CHAT_SLASH_COMMANDS) {
+    if (typeof command.extractMetadata !== "function") {
+      continue;
+    }
+    const resolution = normalizeSlashCommandResolution(command, command.extractMetadata(metadata));
+    if (resolution?.requested) {
+      return resolution;
+    }
+  }
+  return null;
+}
 
-  if (!requested) {
+function getMatchingSlashCommands(query = "") {
+  const normalizedQuery = String(query || "").trim().toLowerCase();
+  return CHAT_SLASH_COMMANDS.filter((command) => {
+    if (!normalizedQuery) {
+      return true;
+    }
+    return getSlashCommandSearchText(command).includes(normalizedQuery);
+  });
+}
+
+function getSlashCommandAutocompleteState(rawText) {
+  const trimmedStart = String(rawText || "").trimStart();
+  const commandMatch = trimmedStart.match(/^\/([^\s\n]*)$/);
+  if (!commandMatch) {
+    return { active: false, query: "", matches: [] };
+  }
+
+  const query = String(commandMatch[1] || "").trim().toLowerCase();
+  return {
+    active: true,
+    query,
+    matches: getMatchingSlashCommands(query),
+  };
+}
+
+function parseComposerSlashCommand(rawText) {
+  const normalizedInput = String(rawText || "").trim();
+  if (!normalizedInput.startsWith("/")) {
+    return {
+      command: null,
+      requested: false,
+      text: normalizedInput,
+      query: "",
+      metadata: null,
+      requestPayload: null,
+      fallbackText: "",
+    };
+  }
+
+  const commandMatch = normalizedInput.match(/^\/([a-z0-9_-]+)(?:\s+([\s\S]*))?$/i);
+  if (!commandMatch) {
+    return {
+      command: null,
+      requested: false,
+      text: normalizedInput,
+      query: "",
+      metadata: null,
+      requestPayload: null,
+      fallbackText: "",
+    };
+  }
+
+  const command = getSlashCommandByName(commandMatch[1]);
+  if (!command || typeof command.parse !== "function") {
+    return {
+      command: null,
+      requested: false,
+      text: normalizedInput,
+      query: "",
+      metadata: null,
+      requestPayload: null,
+      fallbackText: "",
+    };
+  }
+
+  return normalizeSlashCommandResolution(command, command.parse(commandMatch[2] || "", { rawInput: normalizedInput })) || {
+    command: null,
+    requested: false,
+    text: normalizedInput,
+    query: "",
+    metadata: null,
+    requestPayload: null,
+    fallbackText: "",
+  };
+}
+
+function clearComposerSlashCommandMetadata(target) {
+  const base = target && typeof target === "object" ? target : {};
+  CHAT_SLASH_COMMANDS.forEach((command) => {
+    (Array.isArray(command.metadataKeys) ? command.metadataKeys : []).forEach((key) => {
+      delete base[key];
+    });
+  });
+  return base;
+}
+
+function buildComposerSlashCommandMetadata(metadata, slashCommandResolution) {
+  const base = metadata && typeof metadata === "object" ? { ...metadata } : {};
+  clearComposerSlashCommandMetadata(base);
+  if (!slashCommandResolution?.requested || !slashCommandResolution.metadata) {
     return Object.keys(base).length ? base : null;
   }
-
-  const nextMetadata = {
+  return {
     ...base,
-    double_check: true,
+    ...slashCommandResolution.metadata,
   };
-  const normalizedQuery = String(query || "").trim();
-  if (normalizedQuery) {
-    nextMetadata.double_check_query = normalizedQuery;
+}
+
+function getSlashCommandRequestPayload(slashCommandResolution) {
+  const payload = slashCommandResolution?.requestPayload && typeof slashCommandResolution.requestPayload === "object"
+    ? slashCommandResolution.requestPayload
+    : {};
+  return Object.entries(payload).reduce((acc, [key, value]) => {
+    if (value === undefined || value === null) {
+      return acc;
+    }
+    if (typeof value === "string" && !value.trim()) {
+      return acc;
+    }
+    acc[key] = value;
+    return acc;
+  }, {});
+}
+
+function appendSlashCommandFormData(formData, slashCommandResolution) {
+  if (!(formData instanceof FormData)) {
+    return;
   }
-  return nextMetadata;
+  Object.entries(getSlashCommandRequestPayload(slashCommandResolution)).forEach(([key, value]) => {
+    formData.append(key, typeof value === "boolean" ? String(value) : String(value));
+  });
+}
+
+function buildComposerSlashCommandEditableText(content, metadata) {
+  const commandState = extractComposerSlashCommandMetadata(metadata);
+  if (!commandState?.command) {
+    return String(content || "");
+  }
+  return commandState.query
+    ? `/${commandState.command.name} ${commandState.query}`
+    : `/${commandState.command.name}`;
+}
+
+function getActiveSlashCommandSuggestion() {
+  if (!slashCommandSuggestions.length) {
+    return null;
+  }
+  return slashCommandSuggestions[Math.max(0, Math.min(slashCommandSelectedIndex, slashCommandSuggestions.length - 1))] || null;
+}
+
+function isSlashCommandMenuOpen() {
+  return Boolean(slashCommandMenuOpen && slashCommandMenuEl && slashCommandMenuEl.hidden === false);
+}
+
+function closeSlashCommandMenu() {
+  slashCommandMenuOpen = false;
+  slashCommandMenuQuery = "";
+  slashCommandSuggestions = [];
+  slashCommandSelectedIndex = 0;
+  if (!slashCommandMenuEl) {
+    return;
+  }
+  slashCommandMenuEl.hidden = true;
+  slashCommandMenuEl.setAttribute("aria-hidden", "true");
+  slashCommandMenuEl.replaceChildren();
+  if (inputEl) {
+    inputEl.setAttribute("aria-expanded", "false");
+    inputEl.removeAttribute("aria-activedescendant");
+  }
+}
+
+function applySlashCommandSuggestion(command) {
+  if (!inputEl || !command) {
+    return;
+  }
+
+  const leadingWhitespace = (String(inputEl.value || "").match(/^\s*/) || [""])[0];
+  inputEl.value = `${leadingWhitespace}${String(command.insertText || `/${command.name} `)}`;
+  autoResize(inputEl);
+  closeSlashCommandMenu();
+  inputEl.focus();
+  inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
+}
+
+function moveSlashCommandSelection(direction) {
+  if (!slashCommandSuggestions.length) {
+    return;
+  }
+  const normalizedDirection = direction < 0 ? -1 : 1;
+  slashCommandSelectedIndex = (slashCommandSelectedIndex + normalizedDirection + slashCommandSuggestions.length) % slashCommandSuggestions.length;
+  renderSlashCommandMenu();
+}
+
+function renderSlashCommandMenu() {
+  if (!slashCommandMenuEl) {
+    return;
+  }
+  if (!slashCommandMenuOpen) {
+    closeSlashCommandMenu();
+    return;
+  }
+
+  const activeSuggestion = getActiveSlashCommandSuggestion();
+  const fragment = document.createDocumentFragment();
+
+  const header = document.createElement("div");
+  header.className = "slash-command-menu__header";
+
+  const title = document.createElement("div");
+  title.className = "slash-command-menu__title";
+  title.textContent = "Commands";
+
+  const subtitle = document.createElement("div");
+  subtitle.className = "slash-command-menu__subtitle";
+  subtitle.textContent = slashCommandMenuQuery
+    ? `Showing matches for /${slashCommandMenuQuery}`
+    : "Choose a command to insert into the composer.";
+
+  header.append(title, subtitle);
+  fragment.appendChild(header);
+
+  const list = document.createElement("div");
+  list.className = "slash-command-menu__list";
+  list.setAttribute("role", "listbox");
+
+  if (slashCommandSuggestions.length) {
+    slashCommandSuggestions.forEach((command, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.id = `slash-command-option-${command.name}`;
+      button.className = "slash-command-menu__item";
+      button.setAttribute("role", "option");
+
+      const isActive = index === slashCommandSelectedIndex;
+      if (isActive) {
+        button.classList.add("is-active");
+      }
+      button.setAttribute("aria-selected", String(isActive));
+      button.addEventListener("mousedown", (event) => event.preventDefault());
+      button.addEventListener("click", () => applySlashCommandSuggestion(command));
+      button.addEventListener("mouseenter", () => {
+        if (slashCommandSelectedIndex !== index) {
+          slashCommandSelectedIndex = index;
+          renderSlashCommandMenu();
+        }
+      });
+
+      const icon = document.createElement("span");
+      icon.className = "slash-command-menu__icon";
+      icon.textContent = String(command.icon || "⌘");
+
+      const body = document.createElement("span");
+      body.className = "slash-command-menu__body";
+
+      const topRow = document.createElement("span");
+      topRow.className = "slash-command-menu__top-row";
+
+      const name = document.createElement("span");
+      name.className = "slash-command-menu__name";
+      name.textContent = `/${command.name}`;
+
+      const usage = document.createElement("span");
+      usage.className = "slash-command-menu__usage";
+      usage.textContent = command.usage;
+
+      topRow.append(name, usage);
+
+      const description = document.createElement("span");
+      description.className = "slash-command-menu__description";
+      description.textContent = command.description;
+
+      body.append(topRow, description);
+
+      const hint = document.createElement("span");
+      hint.className = "slash-command-menu__insert-hint";
+      hint.textContent = "Insert";
+
+      button.append(icon, body, hint);
+      list.appendChild(button);
+    });
+  } else {
+    const emptyState = document.createElement("div");
+    emptyState.className = "slash-command-menu__empty";
+    emptyState.textContent = slashCommandMenuQuery
+      ? `No commands match /${slashCommandMenuQuery}.`
+      : "No slash commands are registered.";
+    list.appendChild(emptyState);
+  }
+
+  fragment.appendChild(list);
+
+  const footer = document.createElement("div");
+  footer.className = "slash-command-menu__footer";
+  footer.textContent = slashCommandSuggestions.length
+    ? "↑ ↓ to navigate • Enter or Tab to insert • Esc to close"
+    : "Keep typing to filter registered commands.";
+  fragment.appendChild(footer);
+
+  slashCommandMenuEl.hidden = false;
+  slashCommandMenuEl.setAttribute("aria-hidden", "false");
+  slashCommandMenuEl.replaceChildren(fragment);
+
+  if (inputEl) {
+    inputEl.setAttribute("aria-expanded", "true");
+    if (activeSuggestion) {
+      inputEl.setAttribute("aria-activedescendant", `slash-command-option-${activeSuggestion.name}`);
+    } else {
+      inputEl.removeAttribute("aria-activedescendant");
+    }
+  }
+}
+
+function syncSlashCommandMenuWithInput({ preserveSelection = true } = {}) {
+  if (!slashCommandMenuEl || !inputEl || isStreaming || isFixing) {
+    closeSlashCommandMenu();
+    return;
+  }
+
+  const menuState = getSlashCommandAutocompleteState(inputEl.value);
+  if (!menuState.active) {
+    closeSlashCommandMenu();
+    return;
+  }
+
+  const previousSelectedName = preserveSelection ? getActiveSlashCommandSuggestion()?.name : "";
+  slashCommandMenuOpen = true;
+  slashCommandMenuQuery = menuState.query;
+  slashCommandSuggestions = menuState.matches.slice(0, SLASH_COMMAND_MENU_MAX_VISIBLE_ITEMS);
+
+  if (previousSelectedName) {
+    const nextIndex = slashCommandSuggestions.findIndex((command) => command.name === previousSelectedName);
+    slashCommandSelectedIndex = nextIndex >= 0 ? nextIndex : 0;
+  } else {
+    slashCommandSelectedIndex = 0;
+  }
+
+  renderSlashCommandMenu();
 }
 
 function sanitizeEditedUserMetadata(metadata) {
@@ -1980,12 +2380,9 @@ function sanitizeEditedUserMetadata(metadata) {
     sanitizedMetadata.attachments = attachments;
     Object.assign(sanitizedMetadata, buildLegacyAttachmentMetadata(attachments));
   }
-  if (metadata?.double_check === true) {
-    sanitizedMetadata.double_check = true;
-    const normalizedQuery = String(metadata?.double_check_query || "").trim();
-    if (normalizedQuery) {
-      sanitizedMetadata.double_check_query = normalizedQuery;
-    }
+  const slashCommandState = extractComposerSlashCommandMetadata(metadata);
+  if (slashCommandState?.metadata) {
+    Object.assign(sanitizedMetadata, slashCommandState.metadata);
   }
   return Object.keys(sanitizedMetadata).length ? sanitizedMetadata : null;
 }
@@ -7905,7 +8302,9 @@ function beginInlineEditingMessage(messageId) {
 
   clearEditTarget();
   inlineEditingMessageId = Number(message.id);
-  inlineEditingDraft = String(message.content || "");
+  inlineEditingDraft = message.role === "user"
+    ? buildComposerSlashCommandEditableText(message.content, message.metadata)
+    : String(message.content || "");
   savingEditedMessageId = null;
   renderConversationHistory({ preserveScroll: true });
   focusInlineEditor(message.id);
@@ -7944,8 +8343,14 @@ async function saveEditedHistoryMessage(messageId, nextContent, options = {}) {
   }
 
   const normalizedContent = String(nextContent ?? "").replace(/\r\n/g, "\n");
-  const attachments = getMessageAttachments(message.metadata);
-  if (!normalizedContent.trim() && (message.role !== "user" || attachments.length === 0)) {
+  const parsedSlashCommand = message.role === "user" ? parseComposerSlashCommand(normalizedContent) : null;
+  const storedContent = message.role === "user" && parsedSlashCommand?.command
+    ? parsedSlashCommand.text
+    : normalizedContent;
+  const updatedUserMetadata = message.role === "user"
+    ? buildComposerSlashCommandMetadata(message.metadata, parsedSlashCommand)
+    : null;
+  if (!storedContent.trim() && (message.role !== "user" || !updatedUserMetadata)) {
     showToast(
       message.role === "assistant" ? "Assistant message cannot be empty." : "Message cannot be empty.",
       "warning",
@@ -7955,7 +8360,10 @@ async function saveEditedHistoryMessage(messageId, nextContent, options = {}) {
   }
 
   const shouldSendAfterSave = Boolean(options.sendAfterSave && message.role === "user");
-  const contentChanged = normalizedContent !== String(message.content || "");
+  const previousEditableContent = message.role === "user"
+    ? buildComposerSlashCommandEditableText(message.content, message.metadata)
+    : String(message.content || "");
+  const contentChanged = normalizedContent !== previousEditableContent;
 
   if (!contentChanged && !shouldSendAfterSave) {
     cancelInlineEditingMessage();
@@ -7972,7 +8380,8 @@ async function saveEditedHistoryMessage(messageId, nextContent, options = {}) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           conversation_id: currentConvId,
-          content: normalizedContent,
+          content: storedContent,
+          ...(message.role === "user" ? { metadata: updatedUserMetadata } : {}),
         }),
       });
       const data = await response.json().catch(() => null);
@@ -8036,8 +8445,9 @@ function beginEditingMessage(messageId) {
 
   clearInlineEditingTarget();
   editingMessageId = Number(message.id);
-  inputEl.value = message.content;
+  inputEl.value = buildComposerSlashCommandEditableText(message.content, message.metadata);
   autoResize(inputEl);
+  syncSlashCommandMenuWithInput({ preserveSelection: false });
   clearSelectedImage();
   refreshEditBanner();
   renderConversationHistory();
@@ -8557,7 +8967,11 @@ function createInlineMessageEditor(message) {
 
   const textarea = document.createElement("textarea");
   textarea.className = "message-inline-editor__input";
-  textarea.value = isInlineEditingTarget(message.id) ? inlineEditingDraft : String(message.content || "");
+  textarea.value = isInlineEditingTarget(message.id)
+    ? inlineEditingDraft
+    : message.role === "user"
+      ? buildComposerSlashCommandEditableText(message.content, message.metadata)
+      : String(message.content || "");
   textarea.placeholder = message.role === "assistant"
     ? "Edit the assistant reply"
     : "Edit the message";
@@ -10917,6 +11331,19 @@ inputEl.addEventListener("input", () => {
     clearPendingDeleteMessage({ preserveScroll: true });
   }
   autoResize(inputEl);
+  syncSlashCommandMenuWithInput();
+});
+
+inputEl.addEventListener("focus", () => {
+  syncSlashCommandMenuWithInput();
+});
+
+inputEl.addEventListener("blur", () => {
+  window.setTimeout(() => {
+    if (document.activeElement !== inputEl) {
+      closeSlashCommandMenu();
+    }
+  }, 0);
 });
 
 messagesEl.addEventListener("scroll", () => {
@@ -10941,6 +11368,27 @@ if (summaryUndoBtn) {
 }
 
 inputEl.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && isSlashCommandMenuOpen()) {
+    event.preventDefault();
+    closeSlashCommandMenu();
+    return;
+  }
+
+  if ((event.key === "ArrowDown" || event.key === "ArrowUp") && isSlashCommandMenuOpen() && slashCommandSuggestions.length) {
+    event.preventDefault();
+    moveSlashCommandSelection(event.key === "ArrowDown" ? 1 : -1);
+    return;
+  }
+
+  if ((event.key === "Enter" && !event.shiftKey) || event.key === "Tab") {
+    const activeSuggestion = isSlashCommandMenuOpen() ? getActiveSlashCommandSuggestion() : null;
+    if (activeSuggestion) {
+      event.preventDefault();
+      applySlashCommandSuggestion(activeSuggestion);
+      return;
+    }
+  }
+
   if (event.key === "Enter" && !event.shiftKey) {
     if ("ontouchstart" in window || navigator.maxTouchPoints > 0) return;
     event.preventDefault();
@@ -12583,6 +13031,7 @@ function createMessageGroup(role, text, metadata = null, options = {}) {
   metaRow.className = "msg-meta-row";
 
   const normalizedMetadata = metadata && typeof metadata === "object" ? metadata : null;
+  const slashCommandState = role === "user" ? extractComposerSlashCommandMetadata(normalizedMetadata) : null;
   const historyMessage = {
     id: options.messageId,
     role,
@@ -12642,10 +13091,10 @@ function createMessageGroup(role, text, metadata = null, options = {}) {
     prunedBadge.textContent = "Pruned";
     labelGroup.appendChild(prunedBadge);
   }
-  if (role === "user" && normalizedMetadata?.double_check === true) {
+  if (role === "user" && slashCommandState?.command?.badgeLabel) {
     const doubleCheckBadge = document.createElement("span");
     doubleCheckBadge.className = "double-check-badge";
-    doubleCheckBadge.textContent = "Double Check";
+    doubleCheckBadge.textContent = slashCommandState.command.badgeLabel;
     labelGroup.appendChild(doubleCheckBadge);
   }
 
@@ -12681,11 +13130,11 @@ function createMessageGroup(role, text, metadata = null, options = {}) {
   const attachments = getMessageAttachments(metadata);
   const hasImage = attachments.some((attachment) => attachment.kind === "image");
   const hasDocument = attachments.some((attachment) => attachment.kind === "document");
-  const doubleCheckDisplayText = normalizedMetadata?.double_check === true
-    ? String(normalizedMetadata.double_check_query || "").trim()
+  const slashCommandDisplayText = slashCommandState
+    ? String(slashCommandState.text || "").trim()
     : "";
-  const displayText = text || doubleCheckDisplayText || (normalizedMetadata?.double_check === true
-    ? "Double-check request."
+  const displayText = text || slashCommandDisplayText || (slashCommandState?.fallbackText
+    ? slashCommandState.fallbackText
     : attachments.length
       ? "Attachments uploaded."
       : hasImage
@@ -12858,14 +13307,12 @@ async function sendMessage(options = {}) {
     ? options.forcedMetadata
     : null;
   const rawInputText = forcedText || inputEl.value.trim();
-  const doubleCheckCommand = parseDoubleCheckCommand(rawInputText);
-  const text = doubleCheckCommand.text;
-  const doubleCheckRequested = doubleCheckCommand.requested;
-  const doubleCheckQuery = doubleCheckCommand.query;
+  const slashCommand = parseComposerSlashCommand(rawInputText);
+  const text = slashCommand.requested ? slashCommand.text : rawInputText;
   const pendingImages = [...selectedImageFiles];
   const pendingDocuments = [...selectedDocumentFiles];
   const pendingYouTubeUrl = selectedYouTubeUrl;
-  if (!text && !doubleCheckRequested && !pendingImages.length && !pendingDocuments.length && !pendingYouTubeUrl) {
+  if (!text && !slashCommand.requested && !pendingImages.length && !pendingDocuments.length && !pendingYouTubeUrl) {
     return { ok: false, errorCode: "" };
   }
 
@@ -12914,6 +13361,7 @@ async function sendMessage(options = {}) {
   let sendErrorCode = "";
 
   clearToastRegion();
+  closeSlashCommandMenu();
   inputEl.value = "";
   inputEl.style.height = "auto";
   clearAllAttachments();
@@ -12938,10 +13386,7 @@ async function sendMessage(options = {}) {
   }
 
   let userMetadata = buildPendingAttachmentMetadata(pendingImages, pendingDocuments, pendingYouTubeUrl);
-  userMetadata = buildDoubleCheckMetadata(userMetadata, {
-    requested: doubleCheckRequested,
-    query: doubleCheckQuery,
-  });
+  userMetadata = buildComposerSlashCommandMetadata(userMetadata, slashCommand);
   if (forcedMetadata) {
     userMetadata = {
       ...(userMetadata || {}),
@@ -13161,12 +13606,7 @@ async function sendMessage(options = {}) {
       formData.append("conversation_id", String(currentConvId));
       formData.append("user_content", text);
       formData.append("stream_request_id", streamRequestId);
-      if (doubleCheckRequested) {
-        formData.append("double_check", "true");
-        if (doubleCheckQuery) {
-          formData.append("double_check_query", doubleCheckQuery);
-        }
-      }
+      appendSlashCommandFormData(formData, slashCommand);
       if (editedMessageId !== null) {
         formData.append("edited_message_id", String(editedMessageId));
       }
@@ -13202,8 +13642,7 @@ async function sendMessage(options = {}) {
           user_content: text,
           document_canvas_action: documentCanvasAction,
           youtube_url: pendingYouTubeUrl,
-          double_check: doubleCheckRequested,
-          double_check_query: doubleCheckQuery,
+          ...getSlashCommandRequestPayload(slashCommand),
         }),
       });
     }

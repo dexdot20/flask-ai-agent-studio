@@ -2855,6 +2855,52 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(assistant_response.get_json()["message"]["content"], "Düzeltilmiş asistan yanıtı")
         self.assertEqual(mocked_sync.call_count, 2)
 
+    def test_update_message_endpoint_allows_and_clears_slash_command_metadata(self):
+        conversation_id = self._create_conversation()
+        with get_db() as conn:
+            user_id = insert_message(
+                conn,
+                conversation_id,
+                "user",
+                "İlk doğrulama",
+                metadata=serialize_message_metadata(
+                    {
+                        "double_check": True,
+                        "double_check_query": "İlk doğrulama",
+                    }
+                ),
+            )
+
+        with patch("routes.conversations.sync_conversations_to_rag_safe") as mocked_sync:
+            keep_command_response = self.client.patch(
+                f"/api/messages/{user_id}",
+                json={
+                    "conversation_id": conversation_id,
+                    "content": "",
+                    "metadata": {"double_check": True},
+                },
+            )
+            clear_command_response = self.client.patch(
+                f"/api/messages/{user_id}",
+                json={
+                    "conversation_id": conversation_id,
+                    "content": "Normal mesaj",
+                    "metadata": None,
+                },
+            )
+
+        self.assertEqual(keep_command_response.status_code, 200)
+        keep_metadata = keep_command_response.get_json()["message"]["metadata"]
+        self.assertEqual(keep_command_response.get_json()["message"]["content"], "")
+        self.assertTrue(keep_metadata["double_check"])
+        self.assertNotIn("double_check_query", keep_metadata)
+
+        self.assertEqual(clear_command_response.status_code, 200)
+        clear_metadata = clear_command_response.get_json()["message"].get("metadata") or {}
+        self.assertEqual(clear_command_response.get_json()["message"]["content"], "Normal mesaj")
+        self.assertNotIn("double_check", clear_metadata)
+        self.assertEqual(mocked_sync.call_count, 2)
+
     def test_chat_uses_updated_history_messages_after_manual_edit(self):
         captured = {}
         conversation_id = self._create_conversation()

@@ -662,6 +662,7 @@
         <span id="edit-banner-text">Editing an earlier message.</span>
         <button id="edit-banner-cancel" class="edit-banner__cancel" type="button">Cancel</button>
       </div>
+      <div id="slash-command-menu" class="slash-command-menu" hidden aria-hidden="true"></div>
       <div class="input-wrapper">
         <input id="image-input" type="file" accept="image/png,image/jpeg,image/webp,.docx,.pdf,.txt,.csv,.md,.py,.js,.ts,.tsx,.jsx,.json,.html,.css,.scss,.sh,.sql,.yaml,.yml,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf,text/plain,text/csv,text/markdown" multiple hidden />
         <input id="doc-input" type="file" accept=".docx,.pdf,.txt,.csv,.md,.py,.js,.ts,.tsx,.jsx,.json,.html,.css,.scss,.sh,.sql,.yaml,.yml,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf,text/plain,text/csv,text/markdown" multiple hidden />
@@ -675,7 +676,7 @@
             <polygon points="5 3 19 12 5 21 5 3"></polygon>
           </svg>
         </button>
-        <textarea id="user-input" rows="1" placeholder="Type a message…"></textarea>
+        <textarea id="user-input" rows="1" placeholder="Type a message or / for commands…" aria-controls="slash-command-menu" aria-haspopup="listbox" aria-expanded="false" aria-autocomplete="list"></textarea>
         <button class="btn-fix" id="fix-btn" title="Improve text" aria-label="Improve text" type="button">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M12.3 6.3l5.4 5.4"/>
@@ -696,7 +697,7 @@
       </div>
       <div id="attachment-preview" class="attachment-preview" hidden></div>
       <p id="vision-disabled-note" class="input-hint" hidden>Image uploads are disabled in .env. Document uploads (DOCX, PDF, TXT, CSV, MD) are still available.</p>
-      <p class="input-hint">Press <kbd>Enter</kbd> to send &nbsp;·&nbsp; <kbd>Shift+Enter</kbd> for a new line</p>
+      <p class="input-hint">Press <kbd>Enter</kbd> to send &nbsp;·&nbsp; <kbd>Shift+Enter</kbd> for a new line &nbsp;·&nbsp; Type <kbd>/</kbd> for commands</p>
       <div id="error-area" aria-live="polite" aria-atomic="false"></div>
     </div>
   </div>

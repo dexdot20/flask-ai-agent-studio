@@ -1,6 +1,6 @@
 # Flask ChatBot: Multi-Provider + Tools + RAG + OCR + Multimodal + Canvas + Memory + Workspace
 
-This is a single-page Flask chat application built around DeepSeek plus optional OpenRouter models, multi-step tool use, local RAG, dedicated local OCR, configurable helper/direct image analysis, conversation summarization, pruning, user-configurable entropy-aware context selection, persistent conversation memory, editable canvas documents, page-aware canvas navigation, and a per-conversation workspace sandbox.
+This is a single-page Flask chat application built around DeepSeek plus optional OpenRouter models, multi-step tool use, registry-driven composer slash commands, local RAG, dedicated local OCR, configurable helper/direct image analysis, conversation summarization, pruning, user-configurable entropy-aware context selection, persistent conversation memory, editable canvas documents, page-aware canvas navigation, and a per-conversation workspace sandbox.
 
 It is not a minimal prompt/response demo. The app keeps conversation history in SQLite, restores assistant metadata when a conversation is reopened, supports editing earlier user messages, streams tool progress and reasoning, can enrich a user turn with local OCR or extracted document text before the model sees it, and can compact older content with summaries and pruning.
 
@@ -52,6 +52,7 @@ It is not a minimal prompt/response demo. The app keeps conversation history in 
 - Automatically generate a short title after the first exchange or on demand
 - Edit a previous user message, delete later turns, and regenerate from that branch
 - Restore assistant metadata, reasoning, tool results, and canvas state when reopening a conversation
+- Show a slash-command picker in the composer when the user types `/`, with registry-backed command insertion and keyboard navigation
 - Show a separate Fix action that rewrites the current draft before sending
 - Manually summarize a conversation, undo an inserted summary, and prune older visible messages
 - Switch the context-selection strategy between classic history, entropy-only, and entropy + RAG hybrid modes from Settings
@@ -122,7 +123,7 @@ Manual smoke test checklist for the Canvas UI is available in [docs/canvas-ui-sm
 
 ## Architecture overview
 
-1. The browser sends JSON or multipart form data to `/chat`.
+1. The browser composer optionally resolves a registered slash command (currently `/check`) and then sends JSON or multipart form data to `/chat`.
 2. The backend loads persisted settings from SQLite.
 3. If an image is attached, the configured image-processing method chooses among helper-LLM image description, direct multimodal model input, or local OCR.
 4. If the preferred image method is unavailable, `auto`, `llm_helper`, and `llm_direct` fall back to the nearest supported method, while explicit `local_ocr` stays strict.
@@ -170,10 +171,10 @@ Manual smoke test checklist for the Canvas UI is available in [docs/canvas-ui-sm
 │   ├── ingestor.py         # Record-to-chunk conversion helpers
 │   └── store.py            # ChromaDB collection/query/delete helpers
 ├── static/
-│   ├── app.js              # Frontend application logic
-│   └── style.css           # UI styling
+│   ├── app.js              # Frontend application logic, including the slash-command registry and composer menu
+│   └── style.css           # UI styling, including the slash-command suggestion palette
 ├── templates/
-│   ├── index.html          # Chat UI
+│   ├── index.html          # Chat UI, including the slash-command menu shell inside the composer
 │   └── settings.html       # Dedicated settings page
 ├── tests/
 │   └── test_app.py         # Backend, streaming, tool, RAG, fetched-content browsing, pruning, and UI bootstrap tests
@@ -552,10 +553,33 @@ Prompt caching behavior is optimized in three different ways:
 
 1. Open the app.
 2. Pick a model.
-3. Type a message.
+3. Type a message, or type `/` to open the slash-command picker.
 4. Optionally click Fix to rewrite the draft before sending.
 5. Press Enter to send, or Shift+Enter for a new line.
 6. Watch tool progress, reasoning, and answer text stream live.
+
+### Slash commands
+
+The chat composer includes a registry-driven slash-command system.
+
+- Type `/` in the main chat box to open the command list.
+- Keep typing to filter commands by name or description.
+- Use <kbd>↑</kbd> and <kbd>↓</kbd> to navigate.
+- Use <kbd>Enter</kbd> or <kbd>Tab</kbd> to insert the selected command.
+- Once a command is inserted, continue typing its argument normally.
+
+Current command set:
+
+| Command | Purpose | Example |
+| --- | --- | --- |
+| `/check` | Ask the assistant to do a deliberate second-pass verification, challenge its own answer, and gather extra evidence when needed. | `/check Verify the deployment steps before I run them.` |
+
+Implementation note for future commands:
+
+- `static/app.js` defines the canonical `CHAT_SLASH_COMMANDS` registry.
+- The same registry powers the composer menu, command filtering, slash parsing, metadata persistence, and outgoing `/chat` payload fields.
+- To add a new command later, add one more registry entry with its `name`, `label`, `usage`, `description`, `insertText`, `metadataKeys`, `parse()`, and `extractMetadata()` behavior.
+- `templates/index.html` provides the composer menu container, and `static/style.css` provides the shared menu styling.
 
 ### Title, summary, and pruning actions
 
@@ -1199,6 +1223,7 @@ The app creates and uses these tables:
 - image metadata
 - OCR text
 - vision summary
+- slash-command metadata such as `double_check` and `double_check_query`
 - assistant guidance
 - key points
 - canvas page counts and pinned page or viewport data
@@ -1258,6 +1283,19 @@ app = create_app(database_path="/tmp/chatbot-test.db")
 ```
 
 That is how the test suite keeps databases isolated.
+
+### Adding a slash command
+
+Slash commands are intentionally wired through one frontend registry so future additions do not need one-off composer code paths.
+
+When adding a new command:
+
+1. Add a new entry to `CHAT_SLASH_COMMANDS` in `static/app.js`.
+2. Define how the command is inserted into the composer with `insertText`.
+3. Define how the command turns raw input into normalized chat content plus any metadata or request payload fields inside `parse()`.
+4. Define how stored message metadata is recognized again inside `extractMetadata()` so badges, edit flows, and re-rendered history stay consistent.
+5. If the command needs backend behavior, teach `/chat` or message edit routes to read the new request fields and persist any related metadata.
+6. Update this README and `AGENTS.MD` project context so the new command becomes part of the documented architecture.
 
 ### Pre-commit hooks (optional)
 

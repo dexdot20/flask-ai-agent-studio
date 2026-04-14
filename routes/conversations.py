@@ -1280,13 +1280,13 @@ def register_conversation_routes(app) -> None:
                 return jsonify({"error": "Assistant tool-call messages cannot be edited."}), 400
 
             metadata = parse_message_metadata(row["metadata"])
-            attachments = extract_message_attachments(metadata)
-            if not normalized_content.strip() and (role != "user" or not attachments):
-                return jsonify({"error": "Message content cannot be empty."}), 400
-
             updated_metadata = metadata
             if role == "user":
-                updated_metadata = sanitize_edited_user_message_metadata(metadata)
+                metadata_payload = data.get("metadata") if "metadata" in data else metadata
+                updated_metadata = sanitize_edited_user_message_metadata(metadata_payload)
+
+            if not normalized_content.strip() and (role != "user" or not updated_metadata):
+                return jsonify({"error": "Message content cannot be empty."}), 400
 
             conn.execute(
                 "UPDATE messages SET content = ?, metadata = ? WHERE id = ?",
