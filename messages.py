@@ -231,6 +231,7 @@ DEPENDENT_TOOL_NAMES = (
 
 HISTORICAL_CONTEXT_INJECTION_STRIP_HEADINGS = {
     "## Clarification Response",
+    "## Double-Check Protocol",
     "## Tool Memory",
     "## Knowledge Base",
     "## User Profile",
@@ -1951,11 +1952,41 @@ def _build_runtime_volatile_parts(
     summary_count: int = 0,
     include_time_context: bool = True,
     previous_canvas_content_hash: str | None = None,
+    double_check: bool = False,
+    double_check_query: str = "",
 ) -> list[str]:
     volatile_parts: list[str] = []
 
     if include_time_context:
         volatile_parts.append(_build_current_time_context(now))
+
+    if double_check:
+        normalized_double_check_query = str(double_check_query or "").strip()
+        volatile_parts.append("## Double-Check Protocol")
+        volatile_parts.append(
+            "*Treat this turn as a verification pass. Audit the relevant factual claims, advice, calculations, technical assertions, and safety-sensitive guidance before finalizing the answer. Use a concise but rigorous tone, and explain your confidence level honestly.*\n"
+        )
+        volatile_parts.append("- Goal: perform a deliberate second-pass review instead of a normal first-pass answer.")
+        if normalized_double_check_query:
+            volatile_parts.append(f"- Focus scope: verify this specific claim or request first: {normalized_double_check_query}")
+        else:
+            volatile_parts.append("- Focus scope: scan the conversation history for the important unresolved claims or recommendations that still need verification.")
+        volatile_parts.append(
+            "- Avoid re-checking claims that were already double-checked earlier in this conversation unless new evidence, new user instructions, or unresolved uncertainty justify another pass."
+        )
+        volatile_parts.append(
+            "- If the current context is sufficient, verify from the existing conversation and tool results. If fresh or external evidence is needed, use the available web or retrieval tools to gather it."
+        )
+        volatile_parts.append(
+            "- Stress-test your own conclusion: include the strongest counterargument, failure mode, or devil's-advocate objection before settling on the final judgment."
+        )
+        volatile_parts.append(
+            "- Do not present uncertain claims as certain. Distinguish clearly between verified facts, likely inferences, unresolved doubts, and missing evidence."
+        )
+        volatile_parts.append(
+            "- Write the final answer in natural prose. A fixed template is not required, but the reasoning should make it obvious why the conclusion holds and what could still be wrong."
+        )
+        volatile_parts.append("")
 
     tool_memory_payload = _build_tool_memory_payload(tool_memory_context, active_tool_names)
     if tool_memory_payload:
@@ -2353,6 +2384,8 @@ def build_runtime_context_injection(
     include_time_context: bool = True,
     previous_canvas_content_hash: str | None = None,
     include_dynamic_context: bool = False,
+    double_check: bool = False,
+    double_check_query: str = "",
 ) -> str:
     normalized_now = (now or datetime.now().astimezone()).astimezone()
     resolved_tool_names = _normalize_tool_name_list(runtime_tool_names)
@@ -2380,6 +2413,8 @@ def build_runtime_context_injection(
             active_tool_names=resolved_tool_names,
             clarification_response=clarification_response,
             all_clarification_rounds=all_clarification_rounds,
+            double_check=double_check,
+            double_check_query=double_check_query,
             retrieved_context=retrieved_context,
             tool_trace_context=tool_trace_context,
             tool_memory_context=tool_memory_context,
@@ -2433,6 +2468,8 @@ def build_runtime_system_message(
     canvas_payload: dict | None = None,
     summary_count: int = 0,
     previous_canvas_content_hash: str | None = None,
+    double_check: bool = False,
+    double_check_query: str = "",
 ):
     now = (now or datetime.now().astimezone()).astimezone()
     configured_tool_names = _normalize_tool_name_list(active_tool_names)
@@ -2484,6 +2521,8 @@ def build_runtime_system_message(
                 active_tool_names=runtime_tool_names,
                 clarification_response=clarification_response,
                 all_clarification_rounds=all_clarification_rounds,
+                double_check=double_check,
+                double_check_query=double_check_query,
                 retrieved_context=retrieved_context,
                 tool_trace_context=tool_trace_context,
                 tool_memory_context=tool_memory_context,
@@ -2542,6 +2581,8 @@ def prepend_runtime_context(
     runtime_message: dict | None = None,
     now: datetime | None = None,
     previous_canvas_content_hash: str | None = None,
+    double_check: bool = False,
+    double_check_query: str = "",
 ):
     normalized_now = (now or datetime.now().astimezone()).astimezone()
     resolved_runtime_tool_names = _normalize_tool_name_list(runtime_tool_names)
@@ -2576,6 +2617,8 @@ def prepend_runtime_context(
             active_tool_names or [],
             clarification_response=clarification_response,
             all_clarification_rounds=all_clarification_rounds,
+            double_check=double_check,
+            double_check_query=double_check_query,
             retrieved_context=retrieved_context,
             user_profile_context=user_profile_context,
             persona_memory=persona_memory,
@@ -2620,6 +2663,8 @@ def prepend_runtime_context(
             active_tool_names=active_tool_names or [],
             clarification_response=clarification_response,
             all_clarification_rounds=all_clarification_rounds,
+            double_check=double_check,
+            double_check_query=double_check_query,
             retrieved_context=retrieved_context,
             tool_trace_context=tool_trace_context,
             tool_memory_context=tool_memory_context,

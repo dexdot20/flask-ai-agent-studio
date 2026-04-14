@@ -676,6 +676,20 @@ body.sidebar-collapsed .chat-area {
   text-transform: uppercase;
 }
 
+.double-check-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid rgba(165, 120, 255, 0.34);
+  background: rgba(165, 120, 255, 0.14);
+  color: #dcc8ff;
+  padding: 3px 8px;
+  font-size: 0.67rem;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .summary-inline-meta {
   display: inline-flex;
   align-items: center;

@@ -1922,16 +1922,60 @@ function buildPendingAttachmentMetadata(imageFiles, documentFiles, youtubeUrl = 
     : null;
 }
 
-function sanitizeEditedUserMetadata(metadata) {
-  const attachments = getMessageAttachments(metadata);
-  if (!attachments.length) {
-    return null;
+function parseDoubleCheckCommand(rawText) {
+  const normalizedInput = String(rawText || "").trim();
+  if (!normalizedInput) {
+    return { requested: false, query: "", text: "" };
   }
 
+  const commandMatch = normalizedInput.match(/^\/check(?:\s+([\s\S]*))?$/i);
+  if (!commandMatch) {
+    return { requested: false, query: "", text: normalizedInput };
+  }
+
+  const query = String(commandMatch[1] || "").trim();
   return {
-    attachments,
-    ...buildLegacyAttachmentMetadata(attachments),
+    requested: true,
+    query,
+    text: query,
   };
+}
+
+function buildDoubleCheckMetadata(metadata, { requested = false, query = "" } = {}) {
+  const base = metadata && typeof metadata === "object" ? { ...metadata } : {};
+  delete base.double_check;
+  delete base.double_check_query;
+
+  if (!requested) {
+    return Object.keys(base).length ? base : null;
+  }
+
+  const nextMetadata = {
+    ...base,
+    double_check: true,
+  };
+  const normalizedQuery = String(query || "").trim();
+  if (normalizedQuery) {
+    nextMetadata.double_check_query = normalizedQuery;
+  }
+  return nextMetadata;
+}
+
+function sanitizeEditedUserMetadata(metadata) {
+  const attachments = getMessageAttachments(metadata);
+  const sanitizedMetadata = {};
+  if (attachments.length) {
+    sanitizedMetadata.attachments = attachments;
+    Object.assign(sanitizedMetadata, buildLegacyAttachmentMetadata(attachments));
+  }
+  if (metadata?.double_check === true) {
+    sanitizedMetadata.double_check = true;
+    const normalizedQuery = String(metadata?.double_check_query || "").trim();
+    if (normalizedQuery) {
+      sanitizedMetadata.double_check_query = normalizedQuery;
+    }
+  }
+  return Object.keys(sanitizedMetadata).length ? sanitizedMetadata : null;
 }
 const ragDisabledNoteEl = document.getElementById("rag-disabled-note");
 const visionDisabledNoteEl = document.getElementById("vision-disabled-note");
@@ -12536,6 +12580,12 @@ function createMessageGroup(role, text, metadata = null, options = {}) {
     prunedBadge.textContent = "Pruned";
     labelGroup.appendChild(prunedBadge);
   }
+  if (role === "user" && normalizedMetadata?.double_check === true) {
+    const doubleCheckBadge = document.createElement("span");
+    doubleCheckBadge.className = "double-check-badge";
+    doubleCheckBadge.textContent = "Double Check";
+    labelGroup.appendChild(doubleCheckBadge);
+  }
 
   metaRow.appendChild(labelGroup);
 
@@ -12569,7 +12619,18 @@ function createMessageGroup(role, text, metadata = null, options = {}) {
   const attachments = getMessageAttachments(metadata);
   const hasImage = attachments.some((attachment) => attachment.kind === "image");
   const hasDocument = attachments.some((attachment) => attachment.kind === "document");
-  const displayText = text || (attachments.length ? "Attachments uploaded." : hasImage ? "Image uploaded." : hasDocument ? "Document uploaded." : "");
+  const doubleCheckDisplayText = normalizedMetadata?.double_check === true
+    ? String(normalizedMetadata.double_check_query || "").trim()
+    : "";
+  const displayText = text || doubleCheckDisplayText || (normalizedMetadata?.double_check === true
+    ? "Double-check request."
+    : attachments.length
+      ? "Attachments uploaded."
+      : hasImage
+        ? "Image uploaded."
+        : hasDocument
+          ? "Document uploaded."
+          : "");
   const pendingClarification = role === "assistant" ? getPendingClarification(normalizedMetadata) : null;
   const footerActions = createMessageActions(historyMessage, options);
 
@@ -12711,11 +12772,15 @@ async function sendMessage(options = {}) {
   const forcedMetadata = options.forcedMetadata && typeof options.forcedMetadata === "object"
     ? options.forcedMetadata
     : null;
-  const text = forcedText || inputEl.value.trim();
+  const rawInputText = forcedText || inputEl.value.trim();
+  const doubleCheckCommand = parseDoubleCheckCommand(rawInputText);
+  const text = doubleCheckCommand.text;
+  const doubleCheckRequested = doubleCheckCommand.requested;
+  const doubleCheckQuery = doubleCheckCommand.query;
   const pendingImages = [...selectedImageFiles];
   const pendingDocuments = [...selectedDocumentFiles];
   const pendingYouTubeUrl = selectedYouTubeUrl;
-  if (!text && !pendingImages.length && !pendingDocuments.length && !pendingYouTubeUrl) {
+  if (!text && !doubleCheckRequested && !pendingImages.length && !pendingDocuments.length && !pendingYouTubeUrl) {
     return { ok: false, errorCode: "" };
   }
 
@@ -12788,6 +12853,10 @@ async function sendMessage(options = {}) {
   }
 
   let userMetadata = buildPendingAttachmentMetadata(pendingImages, pendingDocuments, pendingYouTubeUrl);
+  userMetadata = buildDoubleCheckMetadata(userMetadata, {
+    requested: doubleCheckRequested,
+    query: doubleCheckQuery,
+  });
   if (forcedMetadata) {
     userMetadata = {
       ...(userMetadata || {}),
@@ -13007,6 +13076,12 @@ async function sendMessage(options = {}) {
       formData.append("conversation_id", String(currentConvId));
       formData.append("user_content", text);
       formData.append("stream_request_id", streamRequestId);
+      if (doubleCheckRequested) {
+        formData.append("double_check", "true");
+        if (doubleCheckQuery) {
+          formData.append("double_check_query", doubleCheckQuery);
+        }
+      }
       if (editedMessageId !== null) {
         formData.append("edited_message_id", String(editedMessageId));
       }
@@ -13042,6 +13117,8 @@ async function sendMessage(options = {}) {
           user_content: text,
           document_canvas_action: documentCanvasAction,
           youtube_url: pendingYouTubeUrl,
+          double_check: doubleCheckRequested,
+          double_check_query: doubleCheckQuery,
         }),
       });
     }

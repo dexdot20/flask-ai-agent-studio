@@ -65,6 +65,7 @@ from db import (
     create_image_asset,
     create_video_asset,
     extract_clarification_response,
+    extract_double_check_request,
     extract_message_attachments,
     extract_pending_clarification,
     extract_message_tool_results,
@@ -2542,6 +2543,8 @@ def _build_budgeted_prompt_messages(
     workspace_root: str | None = None,
     model_id: str | None = None,
     previous_canvas_content_hash: str | None = None,
+    double_check: bool = False,
+    double_check_query: str = "",
 ) -> tuple[list[dict], list[dict], dict, str | None]:
     ordered_messages = [message for message in canonical_messages if isinstance(message, dict)]
     active_tool_names = active_tool_names or []
@@ -2594,6 +2597,8 @@ def _build_budgeted_prompt_messages(
         active_tool_names=runtime_tool_names,
         clarification_response=clarification_response,
         all_clarification_rounds=all_clarification_rounds,
+        double_check=double_check,
+        double_check_query=double_check_query,
         retrieved_context=None,
         tool_trace_context=None,
         tool_memory_context=None,
@@ -2702,6 +2707,8 @@ def _build_budgeted_prompt_messages(
         active_tool_names=runtime_tool_names,
         clarification_response=clarification_response,
         all_clarification_rounds=all_clarification_rounds,
+        double_check=double_check,
+        double_check_query=double_check_query,
         retrieved_context=rag_context,
         tool_trace_context=trimmed_tool_trace,
         tool_memory_context=trimmed_tool_memory,
@@ -2732,6 +2739,8 @@ def _build_budgeted_prompt_messages(
         runtime_tool_names,
         clarification_response=clarification_response,
         all_clarification_rounds=all_clarification_rounds,
+        double_check=double_check,
+        double_check_query=double_check_query,
         retrieved_context=rag_context,
         user_profile_context=user_profile_context,
         persona_memory=persona_memory,
@@ -2769,6 +2778,8 @@ def _build_budgeted_prompt_messages(
         runtime_tool_names,
         clarification_response=clarification_response,
         all_clarification_rounds=all_clarification_rounds,
+        double_check=double_check,
+        double_check_query=double_check_query,
         retrieved_context=rag_context,
         user_profile_context=user_profile_context,
         persona_memory=persona_memory,
@@ -3860,6 +3871,12 @@ def _maybe_run_conversation_pruning(conversation_id: int, settings: dict) -> Non
         LOGGER.exception("Background pruning task failed for conversation_id=%s", conversation_id)
 
 
+def _parse_request_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def parse_chat_request_payload():
     settings = get_app_settings()
     default_model = get_default_chat_model_id(settings)
@@ -3883,6 +3900,8 @@ def parse_chat_request_payload():
             "stream_request_id": request.form.get("stream_request_id", ""),
             "user_content": request.form.get("user_content", ""),
             "youtube_url": request.form.get("youtube_url", ""),
+            "double_check": _parse_request_bool(request.form.get("double_check")),
+            "double_check_query": str(request.form.get("double_check_query", "") or "").strip(),
             "images": image_files,
             "documents": document_files,
             "document_modes": document_modes,
@@ -3901,6 +3920,8 @@ def parse_chat_request_payload():
         "stream_request_id": data.get("stream_request_id", ""),
         "user_content": data.get("user_content", ""),
         "youtube_url": data.get("youtube_url", ""),
+        "double_check": _parse_request_bool(data.get("double_check")),
+        "double_check_query": str(data.get("double_check_query", "") or "").strip(),
         "images": [],
         "documents": [],
         "document_modes": [],
@@ -3949,6 +3970,17 @@ def _merge_attachment_metadata(metadata: dict | None, attachments: list[dict]) -
     cleaned = _strip_attachment_metadata(metadata)
     if attachments:
         cleaned["attachments"] = attachments
+    return cleaned
+
+
+def _build_double_check_metadata(enabled: bool, query: str = "") -> dict:
+    if not enabled:
+        return {}
+
+    cleaned = {"double_check": True}
+    normalized_query = str(query or "").strip()
+    if normalized_query:
+        cleaned["double_check_query"] = normalized_query
     return cleaned
 
 
@@ -4158,6 +4190,8 @@ def register_chat_routes(app) -> None:
         stream_request_id = str(payload.get("stream_request_id") or "").strip()[:120] or uuid4().hex
         user_content = payload["user_content"]
         youtube_url = str(payload.get("youtube_url") or "").strip()
+        payload_double_check = payload.get("double_check") is True
+        payload_double_check_query = str(payload.get("double_check_query") or "").strip()
         uploaded_images = payload["images"]
         uploaded_documents = payload["documents"]
         uploaded_document_modes = payload.get("document_modes") if isinstance(payload.get("document_modes"), list) else []
@@ -4201,6 +4235,20 @@ def register_chat_routes(app) -> None:
                         **user_metadata,
                         "clarification_response": validated_clarification_response,
                     }
+
+        double_check = payload_double_check
+        double_check_query = payload_double_check_query
+        if latest_user_message is not None:
+            metadata_double_check = extract_double_check_request(latest_user_message.get("metadata"))
+            if metadata_double_check:
+                double_check = True
+                double_check_query = str(metadata_double_check.get("double_check_query") or double_check_query or "").strip()
+            elif payload_double_check:
+                user_metadata = latest_user_message.get("metadata") if isinstance(latest_user_message.get("metadata"), dict) else {}
+                latest_user_message["metadata"] = {
+                    **user_metadata,
+                    **_build_double_check_metadata(True, payload_double_check_query),
+                }
 
         processed_attachments = []
         processed_document_uploads = []
@@ -4772,8 +4820,10 @@ def register_chat_routes(app) -> None:
             active_tool_names,
             clarification_response,
             clarification_rounds_for_prompt or None,
-            retrieved_context,
-            tool_memory_context,
+            double_check=double_check,
+            double_check_query=double_check_query,
+            retrieved_context=retrieved_context,
+            tool_memory_context=tool_memory_context,
             model_id=model,
             persona_memory=persona_memory,
             conversation_memory=conversation_memory,

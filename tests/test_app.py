@@ -8691,6 +8691,43 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("search_web", rows[1]["tool_calls"])
         self.assertEqual(rows[2]["tool_call_id"], "call-1")
 
+    def test_chat_double_check_payload_persists_user_metadata(self):
+        conversation_id = self._create_conversation()
+        fake_events = iter(
+            [
+                {"type": "answer_start"},
+                {"type": "answer_delta", "text": "Double-check complete."},
+                {"type": "tool_capture", "tool_results": []},
+                {"type": "done"},
+            ]
+        )
+
+        with patch("routes.chat.run_agent_stream", return_value=fake_events):
+            response = self.client.post(
+                "/chat",
+                json={
+                    "conversation_id": conversation_id,
+                    "model": "deepseek-chat",
+                    "user_content": "Verify the latest answer.",
+                    "double_check": True,
+                    "double_check_query": "Verify the latest answer.",
+                    "messages": [{"role": "user", "content": "Verify the latest answer."}],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        response.get_data(as_text=True)
+
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT metadata FROM messages WHERE conversation_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1",
+                (conversation_id,),
+            ).fetchone()
+
+        metadata = parse_message_metadata(row["metadata"])
+        self.assertTrue(metadata["double_check"])
+        self.assertEqual(metadata["double_check_query"], "Verify the latest answer.")
+
     def test_parse_message_tool_calls_compacts_large_canvas_payloads(self):
         large_content = "\n".join(f"print({index})" for index in range(200))
         raw_tool_calls = [
@@ -8739,6 +8776,18 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(metadata["tool_trace"][0]["tool_name"], "search_web")
         self.assertEqual(metadata["tool_trace"][0]["state"], "done")
         self.assertTrue(metadata["tool_trace"][0]["cached"])
+
+    def test_serialize_message_metadata_keeps_double_check_request(self):
+        payload = serialize_message_metadata(
+            {
+                "double_check": True,
+                "double_check_query": "Verify the numerical claim.",
+            }
+        )
+
+        metadata = parse_message_metadata(payload)
+        self.assertTrue(metadata["double_check"])
+        self.assertEqual(metadata["double_check_query"], "Verify the numerical claim.")
 
     def test_serialize_message_metadata_keeps_sub_agent_traces(self):
         payload = serialize_message_metadata(

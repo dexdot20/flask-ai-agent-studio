@@ -217,6 +217,24 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         self.assertIn("Round 2", content)
         self.assertIn("- Urunun fiyat araligi nedir? → 199 TL - 3990 TL", content)
 
+    def test_build_runtime_system_message_includes_double_check_protocol(self):
+        message = build_runtime_system_message(
+            active_tool_names=["search_web", "fetch_url"],
+            double_check=True,
+            double_check_query="Verify whether the deployment command is still correct.",
+        )
+
+        content = message["content"]
+        self.assertIn("## Double-Check Protocol", content)
+        self.assertIn("Treat this turn as a verification pass", content)
+        self.assertIn(
+            "verify this specific claim or request first: Verify whether the deployment command is still correct.",
+            content,
+        )
+        self.assertIn("strongest counterargument", content)
+        self.assertIn("Do not present uncertain claims as certain", content)
+        self.assertLess(content.index("## Current Date and Time"), content.index("## Double-Check Protocol"))
+
     def test_runtime_system_message_hides_canvas_edit_tools_without_canvas_document(self):
         message = build_runtime_system_message(
             active_tool_names=[

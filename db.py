@@ -3362,12 +3362,28 @@ def extract_clarification_response(metadata: dict | None) -> dict | None:
     return cleaned or None
 
 
+def extract_double_check_request(metadata: dict | None) -> dict | None:
+    source = metadata if isinstance(metadata, dict) else {}
+    if source.get("double_check") is not True:
+        return None
+
+    cleaned = {"double_check": True}
+    query = str(source.get("double_check_query") or "").strip()
+    if query:
+        cleaned["double_check_query"] = query[:CONTENT_MAX_CHARS]
+    return cleaned
+
+
 def sanitize_edited_user_message_metadata(metadata: dict | None) -> dict:
     source = parse_message_metadata(metadata)
     attachments = extract_message_attachments(source)
-    if not attachments:
-        return {}
-    return {"attachments": attachments}
+    cleaned = {}
+    if attachments:
+        cleaned["attachments"] = attachments
+    double_check_request = extract_double_check_request(source)
+    if double_check_request:
+        cleaned.update(double_check_request)
+    return cleaned
 
 
 def serialize_message_metadata(metadata: dict | None, *, include_private_fields: bool = False) -> str | None:
@@ -3398,6 +3414,10 @@ def serialize_message_metadata(metadata: dict | None, *, include_private_fields:
 
     if attachments:
         cleaned["attachments"] = attachments
+
+    double_check_request = extract_double_check_request(metadata)
+    if double_check_request:
+        cleaned.update(double_check_request)
 
     if reasoning_content:
         cleaned["reasoning_content"] = reasoning_content[:CONTENT_MAX_CHARS]
