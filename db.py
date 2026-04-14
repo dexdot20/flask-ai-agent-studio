@@ -4630,11 +4630,7 @@ def get_model_temperature(settings: dict | None = None) -> float:
 
 
 def get_rag_auto_inject_enabled(settings: dict | None = None) -> bool:
-    if not get_rag_enabled(settings):
-        return False
-    source = settings if settings is not None else get_app_settings()
-    raw_value = source.get("rag_auto_inject", DEFAULT_SETTINGS["rag_auto_inject"])
-    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
+    return bool(get_rag_auto_inject_source_types(settings))
 
 
 def get_rag_sensitivity(settings: dict | None = None) -> str:
@@ -4665,6 +4661,8 @@ def get_rag_auto_inject_source_types(settings: dict | None = None) -> list[str]:
     if not get_rag_enabled(settings):
         return []
     source = settings if settings is not None else get_app_settings()
+    if not _get_bool_setting_value(source, "rag_auto_inject", True):
+        return []
     raw_value = source.get("rag_auto_inject_source_types", DEFAULT_SETTINGS["rag_auto_inject_source_types"])
     return normalize_rag_source_types(raw_value)
 

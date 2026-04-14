@@ -925,6 +925,9 @@ async function refreshSummarySettingsFromServer() {
       chat_summary_trigger_token_count: data.chat_summary_trigger_token_count,
       summary_skip_first: data.summary_skip_first,
       summary_skip_last: data.summary_skip_last,
+      prompt_preflight_summary_token_count: data.prompt_preflight_summary_token_count,
+      summary_source_target_tokens: data.summary_source_target_tokens,
+      summary_retry_min_source_tokens: data.summary_retry_min_source_tokens,
     });
     setSummaryDetailLevel(String(appSettings.chat_summary_detail_level || "balanced").trim() || "balanced");
     renderSummaryInspector();
@@ -9287,7 +9290,15 @@ function updateSummarySelectionUi() {
   }
 
   if (summarySettingsNote) {
-    summarySettingsNote.textContent = `Current Settings: mode ${mode}, detail ${detailLabel}, protect first ${skipFirst}, protect last ${skipLast}.`;
+    const preflightTrigger = Number(appSettings.prompt_preflight_summary_token_count || 0);
+    const sourceTarget = Number(appSettings.summary_source_target_tokens || 0);
+    const retryFloor = Number(appSettings.summary_retry_min_source_tokens || 0);
+    const advancedDetails = [
+      preflightTrigger > 0 ? `preflight ${fmt(preflightTrigger)}` : null,
+      sourceTarget > 0 ? `source target ${fmt(sourceTarget)}` : null,
+      retryFloor > 0 ? `retry floor ${fmt(retryFloor)}` : null,
+    ].filter(Boolean);
+    summarySettingsNote.textContent = `Current Settings: mode ${mode}, detail ${detailLabel}, protect first ${skipFirst}, protect last ${skipLast}${advancedDetails.length ? `, ${advancedDetails.join(", ")}` : ""}.`;
   }
 }
 

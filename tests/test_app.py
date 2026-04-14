@@ -597,7 +597,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         )
         self.assertEqual(payload["active_tools"], ["fetch_url", "search_web"])
         self.assertEqual(payload["proxy_enabled_operations"], ["openrouter", "fetch_url"])
-        self.assertFalse(payload["rag_auto_inject"])
+        self.assertTrue(payload["rag_auto_inject"])
         self.assertEqual(payload["rag_sensitivity"], "strict")
         self.assertEqual(payload["rag_context_size"], "large")
         self.assertEqual(
@@ -1268,7 +1268,19 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
         self.assertEqual(payload["rag_source_types"], ["conversation"])
+        self.assertTrue(payload["rag_auto_inject"])
         self.assertEqual(payload["rag_auto_inject_source_types"], ["uploaded_document"])
+
+    def test_settings_patch_legacy_rag_auto_inject_toggle_clears_auto_inject_sources(self):
+        response = self.client.patch(
+            "/api/settings",
+            json={"rag_auto_inject": False},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertFalse(payload["rag_auto_inject"])
+        self.assertEqual(payload["rag_auto_inject_source_types"], [])
 
     def test_settings_patch_rejects_invalid_pruning_values(self):
         response = self.client.patch(

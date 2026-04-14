@@ -1544,6 +1544,8 @@ def register_conversation_routes(app) -> None:
             min_similarity = float(min_similarity) if min_similarity not in (None, "") else None
         except (TypeError, ValueError):
             return jsonify({"error": "min_similarity must be a number between 0.0 and 1.0."}), 400
+        if min_similarity is not None and not (0.0 <= min_similarity <= 1.0):
+            return jsonify({"error": "min_similarity must be a number between 0.0 and 1.0."}), 400
 
         selected_source_types, invalid_source_types = _parse_rag_source_type_filter(raw_source_types)
         if invalid_source_types:

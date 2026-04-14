@@ -618,6 +618,13 @@ class TestRagRuntime(BaseAppRoutesTestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("min_similarity", response.get_json()["error"])
 
+    def test_rag_search_route_rejects_out_of_range_min_similarity(self):
+        for value in ("-0.1", "1.1"):
+            response = self.client.get(f"/api/rag/search?q=memory&min_similarity={value}")
+
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("min_similarity", response.get_json()["error"])
+
     def test_schedule_rag_conversation_sync_runs_inline_in_testing(self):
         with self.app.app_context():
             with patch("routes.chat.sync_conversations_to_rag_safe") as mocked_safe, patch(

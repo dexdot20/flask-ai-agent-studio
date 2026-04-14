@@ -1296,15 +1296,12 @@ def register_page_routes(app) -> None:
 
         effective_rag_enabled = get_rag_enabled(settings)
 
+        normalized_rag_auto_inject_toggle = None
         if rag_auto_inject is not None and effective_rag_enabled:
             if isinstance(rag_auto_inject, bool):
-                settings["rag_auto_inject"] = "true" if rag_auto_inject else "false"
+                normalized_rag_auto_inject_toggle = rag_auto_inject
             else:
-                settings["rag_auto_inject"] = (
-                    "true" if str(rag_auto_inject).strip().lower() in {"1", "true", "yes", "on"} else "false"
-                )
-        elif not effective_rag_enabled:
-            settings["rag_auto_inject"] = "false"
+                normalized_rag_auto_inject_toggle = str(rag_auto_inject).strip().lower() in {"1", "true", "yes", "on"}
 
         if rag_sensitivity is not None:
             normalized_rag_sensitivity = str(rag_sensitivity or "").strip().lower()
@@ -1327,6 +1324,7 @@ def register_page_routes(app) -> None:
                 return jsonify({"error": "rag_source_types contains unsupported source types."}), 400
             settings["rag_source_types"] = json.dumps(normalized_rag_source_types, ensure_ascii=False)
 
+        normalized_rag_auto_inject_source_types = None
         if rag_auto_inject_source_types is not None:
             if not isinstance(rag_auto_inject_source_types, list):
                 return jsonify({"error": "rag_auto_inject_source_types must be an array."}), 400
@@ -1334,7 +1332,26 @@ def register_page_routes(app) -> None:
             incoming_auto_inject_source_types = [str(value or "").strip().lower() for value in rag_auto_inject_source_types]
             if any(source_type not in normalized_rag_auto_inject_source_types for source_type in incoming_auto_inject_source_types):
                 return jsonify({"error": "rag_auto_inject_source_types contains unsupported source types."}), 400
-            settings["rag_auto_inject_source_types"] = json.dumps(normalized_rag_auto_inject_source_types, ensure_ascii=False)
+
+        current_raw_rag_auto_inject_source_types = normalize_rag_source_types(
+            settings.get("rag_auto_inject_source_types", DEFAULT_SETTINGS["rag_auto_inject_source_types"])
+        )
+        if not effective_rag_enabled:
+            effective_rag_auto_inject_source_types = []
+        elif normalized_rag_auto_inject_source_types is not None:
+            effective_rag_auto_inject_source_types = normalized_rag_auto_inject_source_types
+        elif normalized_rag_auto_inject_toggle is False:
+            effective_rag_auto_inject_source_types = []
+        elif normalized_rag_auto_inject_toggle is True:
+            effective_rag_auto_inject_source_types = current_raw_rag_auto_inject_source_types or get_rag_source_types(settings)
+        else:
+            effective_rag_auto_inject_source_types = get_rag_auto_inject_source_types(settings)
+
+        settings["rag_auto_inject_source_types"] = json.dumps(
+            effective_rag_auto_inject_source_types,
+            ensure_ascii=False,
+        )
+        settings["rag_auto_inject"] = "true" if effective_rag_auto_inject_source_types else "false"
 
         if tool_memory_auto_inject is not None and effective_rag_enabled:
             if isinstance(tool_memory_auto_inject, bool):
@@ -1346,6 +1363,7 @@ def register_page_routes(app) -> None:
         elif not effective_rag_enabled:
             settings["tool_memory_auto_inject"] = "false"
             settings["rag_auto_inject_source_types"] = json.dumps([], ensure_ascii=False)
+            settings["rag_auto_inject"] = "false"
 
         if chat_summary_mode_raw is not None:
             normalized_summary_mode = str(chat_summary_mode_raw or "").strip().lower()
