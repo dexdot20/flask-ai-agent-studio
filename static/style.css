@@ -419,7 +419,11 @@ body.sidebar-collapsed .chat-area {
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
-  padding: 10px 16px 0;
+  margin: 10px 16px 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(79, 110, 247, 0.16);
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(79, 110, 247, 0.1), rgba(79, 110, 247, 0.04));
 }
 
 .history-selection-bar__copy {
@@ -432,6 +436,7 @@ body.sidebar-collapsed .chat-area {
 .history-selection-bar__copy strong {
   font-size: 0.8rem;
   color: var(--text-primary);
+  letter-spacing: -0.01em;
 }
 
 .history-selection-bar__copy span {
@@ -566,6 +571,30 @@ body.sidebar-collapsed .chat-area {
   min-width: 0;
 }
 
+.msg-content-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+}
+
+.msg-group.user .msg-content-row {
+  justify-content: flex-end;
+}
+
+.msg-group.assistant .msg-content-row,
+.msg-group.summary .msg-content-row {
+  justify-content: flex-start;
+}
+
+.msg-content-row--selectable {
+  cursor: pointer;
+}
+
+.msg-content-row--selectable:hover .bubble {
+  border-color: rgba(79, 110, 247, 0.24);
+}
+
 .msg-group--selectable.is-selected .bubble,
 .msg-group--selectable.is-selected .message-inline-editor {
   border-color: rgba(79, 110, 247, 0.46);
@@ -575,21 +604,24 @@ body.sidebar-collapsed .chat-area {
 .msg-selection-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  border: 1px solid rgba(79, 110, 247, 0.24);
-  background: rgba(79, 110, 247, 0.08);
+  justify-content: center;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid rgba(79, 110, 247, 0.22);
+  background: rgba(79, 110, 247, 0.06);
   color: var(--text-primary);
-  border-radius: 999px;
-  padding: 4px 9px;
-  font-size: 0.7rem;
-  font-weight: 600;
+  border-radius: 10px;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s, color 0.15s;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition: border-color 0.15s, background 0.15s, color 0.15s, transform 0.15s;
 }
 
 .msg-selection-toggle:hover {
   border-color: rgba(79, 110, 247, 0.5);
-  background: rgba(79, 110, 247, 0.14);
+  background: rgba(79, 110, 247, 0.12);
+  transform: translateY(-1px);
 }
 
 .msg-selection-toggle__box {
@@ -597,27 +629,39 @@ body.sidebar-collapsed .chat-area {
   width: 14px;
   height: 14px;
   border-radius: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(0, 0, 0, 0.18);
+  border: 1.5px solid rgba(255, 255, 255, 0.22);
+  background: rgba(0, 0, 0, 0.2);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
   flex: 0 0 auto;
 }
 
-.msg-selection-toggle[aria-pressed="true"] {
+.msg-selection-toggle__box::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 2px;
+  width: 6px;
+  height: 4px;
+  border-left: 2px solid transparent;
+  border-bottom: 2px solid transparent;
+  transform: rotate(-45deg);
+  opacity: 0;
+  transition: opacity 0.15s, border-color 0.15s;
+}
+
+.msg-selection-toggle[aria-checked="true"] {
   border-color: rgba(79, 110, 247, 0.6);
   background: rgba(79, 110, 247, 0.18);
 }
 
-.msg-selection-toggle[aria-pressed="true"] .msg-selection-toggle__box {
+.msg-selection-toggle[aria-checked="true"] .msg-selection-toggle__box {
   border-color: rgba(79, 110, 247, 0.72);
-  background: rgba(79, 110, 247, 0.18);
+  background: rgba(79, 110, 247, 0.4);
 }
 
-.msg-selection-toggle[aria-pressed="true"] .msg-selection-toggle__box::after {
-  content: "";
-  position: absolute;
-  inset: 2px;
-  border-radius: 2px;
-  background: var(--accent);
+.msg-selection-toggle[aria-checked="true"] .msg-selection-toggle__box::after {
+  border-color: #eef2ff;
+  opacity: 1;
 }
 
 .msg-group.user .msg-meta-row {
@@ -2548,6 +2592,16 @@ kbd {
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.025);
+}
+
+.prune-score-item--interactive {
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, transform 0.15s;
+}
+
+.prune-score-item--interactive:hover {
+  border-color: rgba(79, 110, 247, 0.22);
+  transform: translateY(-1px);
 }
 
 .prune-score-item.is-selected {
@@ -5884,12 +5938,23 @@ kbd {
 
 @media (max-width: 560px) {
   .history-selection-bar {
-    padding: 8px 12px 0;
+    margin: 8px 12px 0;
+    padding: 10px 12px;
   }
 
   .history-selection-bar__actions {
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .msg-content-row {
+    gap: 8px;
+  }
+
+  .msg-selection-toggle {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
   }
 
   .msg-selection-toggle__label {

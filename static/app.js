@@ -442,11 +442,19 @@ function renderPruneScoreList() {
   const fragment = document.createDocumentFragment();
   pruneScores.forEach((score, index) => {
     const messageId = Number(score?.id || 0);
+    const isSelected = selectedIds.has(messageId);
     const article = document.createElement("article");
-    article.className = "prune-score-item";
-    if (selectedIds.has(messageId)) {
+    article.className = "prune-score-item prune-score-item--interactive";
+    article.dataset.messageId = String(messageId || "");
+    if (isSelected) {
       article.classList.add("is-selected");
     }
+    article.addEventListener("click", (event) => {
+      if (isHistorySelectionInteractionTarget(event.target) || hasLiveHistoryTextSelection()) {
+        return;
+      }
+      toggleHistoryMessageSelection(messageId, "prune");
+    });
 
     const header = document.createElement("div");
     header.className = "prune-score-item__header";
@@ -493,7 +501,8 @@ function renderPruneScoreList() {
     const selectButton = document.createElement("button");
     selectButton.type = "button";
     selectButton.className = "msg-action-btn msg-action-btn--with-label";
-    selectButton.textContent = selectedIds.has(messageId) ? "Selected" : (index < pruneRecommendedBatchSize ? "Select recommended" : "Select");
+    selectButton.setAttribute("aria-pressed", String(isSelected));
+    selectButton.textContent = isSelected ? "In selection" : (index < pruneRecommendedBatchSize ? "Add recommended" : "Add to selection");
     selectButton.addEventListener("click", () => {
       toggleHistoryMessageSelection(messageId, "prune");
     });
@@ -522,19 +531,19 @@ function updatePrunePanelUi() {
 
   if (pruneSelectionCount) {
     pruneSelectionCount.textContent = selectedCount
-      ? `${fmt(selectedCount)} message${selectedCount === 1 ? " is" : "s are"} selected for pruning.`
-      : "No messages selected yet.";
+      ? `${fmt(selectedCount)} message${selectedCount === 1 ? " is" : "s are"} selected for pruning. Use the ticks next to messages or click a message bubble to adjust the selection.`
+      : "No messages selected yet. Use the ticks next to messages or the recommended list.";
   }
 
   if (pruneStatus) {
     if (!currentConvId) {
-      pruneStatus.textContent = "Open a conversation to inspect prune candidates. Per-message prune buttons appear while this panel is open.";
+      pruneStatus.textContent = "Open a conversation to inspect prune candidates. Tick messages in the chat or click a message bubble while this panel is open.";
     } else if (pruneScoresLoading) {
       pruneStatus.textContent = "Loading prune scores in the background…";
     } else if (pruneScoresError) {
       pruneStatus.textContent = pruneScoresError;
     } else if (pruneScores.length) {
-      pruneStatus.textContent = `${fmt(pruneScores.length)} prunable messages scored. Higher scores are better prune candidates.`;
+      pruneStatus.textContent = `${fmt(pruneScores.length)} prunable messages scored. Higher scores are better prune candidates. Use the ticks next to messages or click a message bubble to build your exact prune set.`;
     } else {
       pruneStatus.textContent = "No prune candidates are currently available.";
     }
@@ -5929,17 +5938,17 @@ function renderHistorySelectionBar() {
 
   const selectedCount = getSelectedMessageIds(messageSelectionMode).length;
   const modeLabel = messageSelectionMode === "prune" ? "Prune selection" : "Summary selection";
-  historySelectionLabel.textContent = modeLabel;
+  historySelectionLabel.textContent = selectedCount ? `${modeLabel} · ${fmt(selectedCount)}` : modeLabel;
   historySelectionDetail.textContent = messageSelectionMode === "prune"
     ? (
       selectedCount
-        ? `${fmt(selectedCount)} message${selectedCount === 1 ? " is" : "s are"} selected. Use the panel actions or the per-message prune buttons.`
-        : "Pick messages in the conversation or use the recommended prune list from the panel."
+        ? `${fmt(selectedCount)} message${selectedCount === 1 ? " is" : "s are"} ready for pruning. Use the tick next to each message or click the message bubble to adjust the selection, then apply it from the Prune panel.`
+        : "Tick messages in the conversation or click a message bubble, then use the panel actions or the recommended prune list."
     )
     : (
       selectedCount
-        ? `${fmt(selectedCount)} message${selectedCount === 1 ? " is" : "s are"} selected for summary. Leaving it empty falls back to automatic selection.`
-        : "Click eligible messages in the conversation to build a custom summary selection."
+        ? `${fmt(selectedCount)} message${selectedCount === 1 ? " is" : "s are"} selected for summary. Use the tick next to each message or click the message bubble to adjust the selection. Clear it to return to automatic rules.`
+        : "Tick eligible messages in the conversation or click a message bubble to build a custom summary selection. Leaving it empty falls back to automatic rules."
     );
 
   if (historySelectionClear) {
@@ -8461,6 +8470,46 @@ function createAssistantMessageActions(message) {
   return createMessageActions(message, { editable: true });
 }
 
+function hasLiveHistoryTextSelection() {
+  if (typeof window === "undefined" || typeof window.getSelection !== "function") {
+    return false;
+  }
+  const selection = window.getSelection();
+  return Boolean(selection && !selection.isCollapsed && String(selection.toString() || "").trim());
+}
+
+function isHistorySelectionInteractionTarget(target) {
+  if (!(target instanceof Element)) {
+    return false;
+  }
+  return Boolean(
+    target.closest(
+      "a, button, input, textarea, select, summary, details, label, .msg-actions, .message-inline-editor, .clarification-card, .tool-trace-panel, .sub-agent-trace-panel, .reasoning-panel"
+    )
+  );
+}
+
+function bindHistorySelectionClickTarget(targetEl, messageId, mode) {
+  const normalizedMessageId = Number(messageId);
+  if (!(targetEl instanceof HTMLElement) || !mode || !Number.isInteger(normalizedMessageId) || normalizedMessageId <= 0) {
+    return;
+  }
+
+  targetEl.dataset.selectionMode = mode;
+  targetEl.addEventListener("click", (event) => {
+    if (event.defaultPrevented) {
+      return;
+    }
+    if (typeof event.button === "number" && event.button !== 0) {
+      return;
+    }
+    if (isHistorySelectionInteractionTarget(event.target) || hasLiveHistoryTextSelection()) {
+      return;
+    }
+    toggleHistoryMessageSelection(normalizedMessageId, mode);
+  });
+}
+
 function createHistorySelectionToggle(message, mode) {
   const messageId = Number(message?.id || 0);
   if (!Number.isInteger(messageId) || messageId <= 0 || !mode) {
@@ -8468,22 +8517,26 @@ function createHistorySelectionToggle(message, mode) {
   }
 
   const isSelected = isMessageSelectedForMode(messageId, mode);
+  const selectionAction = mode === "prune"
+    ? (isSelected ? "Remove message from prune selection" : "Add message to prune selection")
+    : (isSelected ? "Remove message from summary selection" : "Add message to summary selection");
   const button = document.createElement("button");
   button.type = "button";
   button.className = "msg-selection-toggle";
   button.dataset.selectionMode = mode;
-  button.setAttribute("aria-pressed", String(isSelected));
-  button.title = mode === "prune"
-    ? (isSelected ? "Remove from prune selection" : "Select for pruning")
-    : (isSelected ? "Remove from summary selection" : "Select for summary");
+  button.setAttribute("role", "checkbox");
+  button.setAttribute("aria-checked", String(isSelected));
+  button.setAttribute("aria-label", selectionAction);
+  button.title = selectionAction;
+  button.classList.toggle("is-selected", isSelected);
 
   const box = document.createElement("span");
   box.className = "msg-selection-toggle__box";
   box.setAttribute("aria-hidden", "true");
 
   const label = document.createElement("span");
-  label.className = "msg-selection-toggle__label";
-  label.textContent = isSelected ? "Selected" : "Select";
+  label.className = "msg-selection-toggle__label sr-only";
+  label.textContent = selectionAction;
 
   button.append(box, label);
   button.addEventListener("click", (event) => {
@@ -9221,7 +9274,7 @@ function updateSummarySelectionUi() {
     if (!currentConvId) {
       summarySelectionNote.textContent = "Open a conversation to see which messages are currently eligible for summary.";
     } else if (selectedMessageCount > 0) {
-      summarySelectionNote.textContent = `${fmt(selectedMessageCount)} selected message${selectedMessageCount === 1 ? " will" : "s will"} be summarized in conversation order. Clear the selection to return to automatic rules.`;
+      summarySelectionNote.textContent = `${fmt(selectedMessageCount)} selected message${selectedMessageCount === 1 ? " will" : "s will"} be summarized in conversation order. Use the ticks next to messages or click a message bubble to adjust the selection. Clear the selection to return to automatic rules.`;
     } else if (summarizeAllMessages) {
       summarySelectionNote.textContent = allMessagesEligibleCount > 0
         ? `All ${fmt(allMessagesEligibleCount)} eligible messages will be summarized. The protected messages from Settings stay in place.`
@@ -9229,7 +9282,7 @@ function updateSummarySelectionUi() {
     } else if (!eligibleCount) {
       summarySelectionNote.textContent = "No messages are currently eligible after the protected first/last message window from Settings is applied.";
     } else {
-      summarySelectionNote.textContent = `Eligible after Settings protection: ${eligibleCount} messages. Click messages in the conversation for a custom selection, or leave it blank for automatic selection.`;
+      summarySelectionNote.textContent = `Eligible after Settings protection: ${eligibleCount} messages. Tick messages in the conversation or click a message bubble for a custom selection, or leave it blank for automatic selection.`;
     }
   }
 
@@ -12534,14 +12587,11 @@ function createMessageGroup(role, text, metadata = null, options = {}) {
   const labelGroup = document.createElement("div");
   labelGroup.className = "msg-meta-label-group";
 
-  if (activeSelectionMode) {
-    const selectionToggle = createHistorySelectionToggle(historyMessage, activeSelectionMode);
-    if (selectionToggle) {
-      labelGroup.appendChild(selectionToggle);
-      group.classList.add("msg-group--selectable", `msg-group--selectable-${activeSelectionMode}`);
-      if (isMessageSelectedForMode(options.messageId, activeSelectionMode)) {
-        group.classList.add("is-selected");
-      }
+  const selectionToggle = activeSelectionMode ? createHistorySelectionToggle(historyMessage, activeSelectionMode) : null;
+  if (selectionToggle) {
+    group.classList.add("msg-group--selectable", `msg-group--selectable-${activeSelectionMode}`);
+    if (isMessageSelectedForMode(options.messageId, activeSelectionMode)) {
+      group.classList.add("is-selected");
     }
   }
 
@@ -12656,12 +12706,35 @@ function createMessageGroup(role, text, metadata = null, options = {}) {
     } else {
       bubble.textContent = displayText;
     }
-    if (displayText) {
-      if (role === "summary") {
-        bubble.classList.add("summary-inline-body");
-        bubble.hidden = true;
+    if (role === "summary") {
+      bubble.classList.add("summary-inline-body");
+      bubble.hidden = true;
+    }
+
+    const shouldRenderContentRow = Boolean(displayText) || Boolean(selectionToggle);
+    if (shouldRenderContentRow) {
+      const contentRow = document.createElement("div");
+      contentRow.className = "msg-content-row";
+      if (selectionToggle && activeSelectionMode) {
+        contentRow.classList.add("msg-content-row--selectable", `msg-content-row--selectable-${activeSelectionMode}`);
+        bindHistorySelectionClickTarget(contentRow, options.messageId, activeSelectionMode);
       }
-      group.appendChild(bubble);
+
+      if (displayText) {
+        if (selectionToggle) {
+          if (role === "user") {
+            contentRow.append(bubble, selectionToggle);
+          } else {
+            contentRow.append(selectionToggle, bubble);
+          }
+        } else {
+          contentRow.appendChild(bubble);
+        }
+      } else if (selectionToggle) {
+        contentRow.appendChild(selectionToggle);
+      }
+
+      group.appendChild(contentRow);
     }
   }
 
