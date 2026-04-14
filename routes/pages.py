@@ -70,9 +70,6 @@ from db import (
     get_fetch_url_summarized_max_input_chars,
     get_fetch_url_summarized_max_output_tokens,
     get_fetch_url_token_threshold,
-    get_fetch_url_to_canvas_chunk_chars,
-    get_fetch_url_to_canvas_chunk_threshold,
-    get_fetch_url_to_canvas_max_chunks,
     get_login_lockout_seconds,
     get_login_max_failed_attempts,
     get_login_remember_session_days,
@@ -187,7 +184,7 @@ TOOL_PERMISSION_LABELS = {
     "search_web": "Web search",
     "fetch_url": "Read URL content",
     "fetch_url_summarized": "Summarize URL",
-    "fetch_url_to_canvas": "Import URL into Canvas",
+    "scroll_fetched_content": "Scroll fetched page content",
     "grep_fetched_content": "Search fetched page content",
     "search_news_ddgs": "News search — DDGS",
     "search_news_google": "News search — Google",
@@ -236,7 +233,7 @@ TOOL_PERMISSION_DESCRIPTIONS = {
     "search_web": "Live web search via DuckDuckGo for current facts.",
     "fetch_url": "Read and extract cleaned text from a specific web page.",
     "fetch_url_summarized": "Fetch a page and return only a focused AI summary.",
-    "fetch_url_to_canvas": "Fetch a page and import it into one or more searchable Canvas draft documents.",
+    "scroll_fetched_content": "Read another window from a previously fetched page without importing it into Canvas.",
     "grep_fetched_content": "Search for a keyword or pattern inside a previously fetched page.",
     "search_news_ddgs": "Search recent news articles via DuckDuckGo News.",
     "search_news_google": "Search recent news articles via Google News RSS.",
@@ -325,7 +322,7 @@ PROXY_OPERATION_OPTIONS = [
 def _get_tool_permission_section_key(name: str) -> str:
     if name in {"save_to_conversation_memory", "delete_conversation_memory_entry", "save_to_persona_memory", "delete_persona_memory_entry", "append_scratchpad", "replace_scratchpad", "read_scratchpad", "ask_clarifying_question", "sub_agent", "image_explain", "search_knowledge_base", "search_tool_memory"}:
         return "assistant"
-    if name in {"search_web", "fetch_url", "fetch_url_summarized", "fetch_url_to_canvas", "grep_fetched_content", "search_news_ddgs", "search_news_google"}:
+    if name in {"search_web", "fetch_url", "fetch_url_summarized", "scroll_fetched_content", "grep_fetched_content", "search_news_ddgs", "search_news_google"}:
         return "research"
     if name in {
         "create_canvas_document",
@@ -560,9 +557,6 @@ def build_settings_payload() -> dict:
         "fetch_url_clip_aggressiveness": get_fetch_url_clip_aggressiveness(raw),
         "fetch_url_summarized_max_input_chars": get_fetch_url_summarized_max_input_chars(raw),
         "fetch_url_summarized_max_output_tokens": get_fetch_url_summarized_max_output_tokens(raw),
-        "fetch_url_to_canvas_chunk_threshold": get_fetch_url_to_canvas_chunk_threshold(raw),
-        "fetch_url_to_canvas_chunk_chars": get_fetch_url_to_canvas_chunk_chars(raw),
-        "fetch_url_to_canvas_max_chunks": get_fetch_url_to_canvas_max_chunks(raw),
         "features": get_feature_flags(raw),
     }
 
@@ -685,9 +679,6 @@ def register_page_routes(app) -> None:
         fetch_url_clip_aggressiveness_raw = data.get("fetch_url_clip_aggressiveness")
         fetch_url_summarized_max_input_chars_raw = data.get("fetch_url_summarized_max_input_chars")
         fetch_url_summarized_max_output_tokens_raw = data.get("fetch_url_summarized_max_output_tokens")
-        fetch_url_to_canvas_chunk_threshold_raw = data.get("fetch_url_to_canvas_chunk_threshold")
-        fetch_url_to_canvas_chunk_chars_raw = data.get("fetch_url_to_canvas_chunk_chars")
-        fetch_url_to_canvas_max_chunks_raw = data.get("fetch_url_to_canvas_max_chunks")
         canvas_prompt_max_lines_raw = data.get("canvas_prompt_max_lines")
         canvas_prompt_max_tokens_raw = data.get("canvas_prompt_max_tokens")
         canvas_prompt_max_chars_raw = data.get("canvas_prompt_max_chars")
@@ -789,9 +780,6 @@ def register_page_routes(app) -> None:
             and fetch_url_clip_aggressiveness_raw is None
             and fetch_url_summarized_max_input_chars_raw is None
             and fetch_url_summarized_max_output_tokens_raw is None
-            and fetch_url_to_canvas_chunk_threshold_raw is None
-            and fetch_url_to_canvas_chunk_chars_raw is None
-            and fetch_url_to_canvas_max_chunks_raw is None
             and canvas_prompt_max_lines_raw is None
             and canvas_prompt_max_tokens_raw is None
             and canvas_prompt_max_chars_raw is None
@@ -1672,33 +1660,6 @@ def register_page_routes(app) -> None:
             if not (200 <= fetch_url_summarized_max_output_tokens <= 4_000):
                 return jsonify({"error": "fetch_url_summarized_max_output_tokens must be between 200 and 4000."}), 400
             settings["fetch_url_summarized_max_output_tokens"] = str(fetch_url_summarized_max_output_tokens)
-
-        if fetch_url_to_canvas_chunk_threshold_raw is not None:
-            try:
-                fetch_url_to_canvas_chunk_threshold = int(fetch_url_to_canvas_chunk_threshold_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "fetch_url_to_canvas_chunk_threshold must be an integer."}), 400
-            if not (2_000 <= fetch_url_to_canvas_chunk_threshold <= CONTENT_MAX_CHARS):
-                return jsonify({"error": f"fetch_url_to_canvas_chunk_threshold must be between 2000 and {CONTENT_MAX_CHARS}."}), 400
-            settings["fetch_url_to_canvas_chunk_threshold"] = str(fetch_url_to_canvas_chunk_threshold)
-
-        if fetch_url_to_canvas_chunk_chars_raw is not None:
-            try:
-                fetch_url_to_canvas_chunk_chars = int(fetch_url_to_canvas_chunk_chars_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "fetch_url_to_canvas_chunk_chars must be an integer."}), 400
-            if not (4_000 <= fetch_url_to_canvas_chunk_chars <= CONTENT_MAX_CHARS):
-                return jsonify({"error": f"fetch_url_to_canvas_chunk_chars must be between 4000 and {CONTENT_MAX_CHARS}."}), 400
-            settings["fetch_url_to_canvas_chunk_chars"] = str(fetch_url_to_canvas_chunk_chars)
-
-        if fetch_url_to_canvas_max_chunks_raw is not None:
-            try:
-                fetch_url_to_canvas_max_chunks = int(fetch_url_to_canvas_max_chunks_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "fetch_url_to_canvas_max_chunks must be an integer."}), 400
-            if not (1 <= fetch_url_to_canvas_max_chunks <= 20):
-                return jsonify({"error": "fetch_url_to_canvas_max_chunks must be between 1 and 20."}), 400
-            settings["fetch_url_to_canvas_max_chunks"] = str(fetch_url_to_canvas_max_chunks)
 
         if canvas_prompt_max_lines_raw is not None:
             try:

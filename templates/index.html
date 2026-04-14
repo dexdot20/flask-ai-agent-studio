@@ -41,20 +41,7 @@
         <option value="">Default persona</option>
       </select>
     </div>
-    <button class="btn-ghost btn-canvas" id="canvas-toggle-btn" type="button" data-icon="◫" aria-controls="canvas-panel" aria-expanded="false" aria-label="Open Canvas" title="Open Canvas">
-      <span class="btn-canvas__label">Canvas</span>
-      <span id="canvas-btn-indicator" class="canvas-btn-indicator" hidden></span>
-    </button>
-    <button class="btn-ghost btn-memory" id="memory-toggle-btn" type="button" data-icon="◉" aria-controls="memory-panel" aria-expanded="false" aria-label="Open Conversation Memory" title="Open Conversation Memory">
-      <span class="btn-canvas__label">Memory</span>
-    </button>
-    <button class="btn-ghost" id="summary-toggle-btn" type="button" aria-controls="summary-panel" aria-expanded="false" aria-label="Open summary panel" title="Open summary panel">
-      Summary
-    </button>
-    <button class="btn-ghost" id="prune-toggle-btn" type="button" aria-controls="prune-panel" aria-expanded="false" aria-label="Open prune panel" title="Open prune panel">
-      Prune
-    </button>
-    <button class="btn-ghost mobile-tools-toggle" id="mobile-tools-btn" type="button" aria-controls="mobile-tools-panel" aria-expanded="false" title="More options">
+    <button class="btn-ghost mobile-tools-toggle" id="mobile-tools-btn" type="button" aria-controls="mobile-tools-panel" aria-expanded="false" aria-haspopup="menu" aria-label="Open panels and tools" title="Open panels and tools">
       <span aria-hidden="true">⋯</span>
     </button>
   </div>
@@ -62,7 +49,7 @@
 
 <div id="mobile-tools-panel" class="mobile-tools-panel" aria-hidden="true">
   <div class="mobile-tools-panel__header">
-    <span>Menu</span>
+    <span>Panels &amp; tools</span>
     <button id="mobile-tools-close" type="button" title="Close">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
         <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
@@ -88,8 +75,8 @@
     </div>
   </div>
   <div class="mobile-tools-panel__section mobile-tools-panel__section--actions">
-    <button class="mobile-tools-action" id="mobile-summary-btn" type="button">Summarize Conversation</button>
-    <button class="mobile-tools-action" id="mobile-canvas-btn" type="button">Canvas</button>
+    <button class="mobile-tools-action" id="mobile-summary-btn" type="button">Summary panel</button>
+    <button class="mobile-tools-action" id="mobile-canvas-btn" type="button">Canvas panel</button>
     <button class="mobile-tools-action" id="mobile-memory-btn" type="button">Conversation memory</button>
     <button class="mobile-tools-action" id="mobile-export-btn" type="button">Export chat</button>
     <button class="mobile-tools-action" id="mobile-prune-btn" type="button">Prune history</button>

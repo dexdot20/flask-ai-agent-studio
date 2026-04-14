@@ -155,12 +155,12 @@ def build_canvas_decision_matrix(
                 "notes": "Create one file per document. For source code, use format='code'. Prefer line edits for later partial changes.",
             }
         )
-    if enabled("fetch_url_to_canvas"):
+    if enabled("fetch_url") and enabled("scroll_fetched_content", "grep_fetched_content"):
         rows.append(
             {
-                "situation": "A fetched web page is long enough that you want to inspect it across later turns with canvas search, scroll, or expand tools.",
-                "tool": "fetch_url_to_canvas",
-                "notes": "Imports the page into one or more linked canvas documents so large sources stay searchable. Prefer this over raw fetch when you plan multi-step exploration inside Canvas.",
+                "situation": "A fetched web page is long enough that you want to inspect it across later turns without turning it into a Canvas draft.",
+                "tool": "fetch_url + scroll_fetched_content / grep_fetched_content",
+                "notes": "Fetch once, then browse the cached page by line window with scroll_fetched_content or jump to exact passages with grep_fetched_content.",
             }
         )
     if enabled("rewrite_canvas_document"):
@@ -651,7 +651,7 @@ TOOL_SPECS = [
                 "If the request can already be answered from the current conversation or stable knowledge, do not delegate it to web research. "
                 "Do not let the token cost warning block delegation when the task is complex; the sub-agent exists for exactly those multi-tool cases. "
                 "Give the helper a concrete task, expected deliverable, and any important constraints. "
-                "Remember that the helper only receives fixed web-research tools: search_web, search_news_ddgs, search_news_google, fetch_url, fetch_url_summarized, and grep_fetched_content. "
+                "Remember that the helper only receives fixed web-research tools: search_web, search_news_ddgs, search_news_google, fetch_url, fetch_url_summarized, scroll_fetched_content, and grep_fetched_content. "
                 "The user controls both the helper's web-tool allowlist and its maximum step budget from Settings, so do not try to manage that budget yourself. "
                 "Before calling this tool, rewrite the delegated task into concise English instructions for the helper, even if the user spoke Turkish or another language. "
                 "Use the user's original language only when the delegated task itself depends on that language, and otherwise expect the helper to work in English by default. "
@@ -835,7 +835,7 @@ TOOL_SPECS = [
             "Use after search_web when you actually need the page's exact content or source wording. "
             "For very large pages the content may be clipped to fit the token budget; "
             "when that happens the result includes an outline of the page sections plus preserved leading, middle, and trailing excerpts when space allows. "
-            "If you need to find a specific term or passage in a clipped page, use grep_fetched_content after this tool."
+            "If you need omitted sections or an exact passage from a clipped page, use scroll_fetched_content or grep_fetched_content after this tool."
         ),
         "parameters": {
             "type": "object",
@@ -856,8 +856,8 @@ TOOL_SPECS = [
                 "The tool also tries to preserve a middle excerpt so important details are not biased toward only the start or end of the page. "
                 "Do not fetch a page unless you actually need its exact content or source wording. "
                 "Do not repeat the same URL in the same turn. "
-                "If you expect a long page to remain useful across later turns, prefer fetch_url_to_canvas so the content becomes searchable and scrollable inside Canvas. "
-                "To locate specific text in a clipped page use grep_fetched_content. "
+                "If a long page will remain useful across later turns, fetch_url keeps the raw page text available for later scroll_fetched_content and grep_fetched_content calls without importing it into Canvas. "
+                "Use scroll_fetched_content to browse omitted sections and grep_fetched_content to locate exact text in a clipped page. "
                 "To recall content from a previously fetched URL across turns use search_tool_memory."
             ),
         },
@@ -890,34 +890,55 @@ TOOL_SPECS = [
                 "Use this when you want the page distilled before it reaches you, such as long articles where only the key points matter. "
                 "If focus is given, the summary should prioritize that question or angle. "
                 "Expect short labeled sections with key facts, constraints, and any unresolved uncertainty the source still leaves open. "
-                "Use fetch_url instead when you need raw extracted text, metadata, page outline details, or exact wording from the source page. "
-                "Use fetch_url_to_canvas instead when you want the full page preserved in searchable Canvas documents for deeper multi-turn inspection."
+                "Use fetch_url instead when you need raw extracted text, metadata, page outline details, exact wording from the source page, or later browsing via scroll_fetched_content / grep_fetched_content."
             ),
         },
     },
     {
-        "name": "fetch_url_to_canvas",
+        "name": "scroll_fetched_content",
         "description": (
-            "Fetch a specific web page and import the cleaned page content into one or more linked Canvas documents. "
-            "Use this when a long source page should stay searchable, scrollable, and inspectable across later turns instead of being squeezed into one prompt-sized fetch result."
+            "Read a window of lines from the content of a previously fetched URL. "
+            "Prefers already-fetched raw page text, but can also re-fetch the page live when cached content is unavailable. "
+            "Use this to browse omitted sections of a long or clipped page without importing it into Canvas."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "url": {
                     "type": "string",
-                    "description": "Full URL of the page (must start with http:// or https://).",
-                }
+                    "description": "The URL whose fetched content should be browsed; cached content is preferred and live refetch can be used when needed.",
+                },
+                "start_line": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Optional 1-based first line to show (default 1).",
+                },
+                "window_lines": {
+                    "type": "integer",
+                    "minimum": 20,
+                    "maximum": 400,
+                    "description": "Number of lines to return (20–400, default 120).",
+                },
+                "refresh_if_missing": {
+                    "type": "boolean",
+                    "description": "When true, automatically re-fetch the URL live if cached raw content is unavailable (default true).",
+                },
             },
             "required": ["url"],
         },
         "prompt": {
-            "purpose": "Reads a URL and saves the cleaned content into searchable Canvas documents.",
-            "inputs": {"url": "full http/https URL"},
+            "purpose": "Browses a previously fetched page by returning a specific line window from its cached content.",
+            "inputs": {
+                "url": "URL to browse; cached content is preferred and live refetch can be used when needed",
+                "start_line": "optional 1-based first line to show",
+                "window_lines": "optional 20-400 line window size",
+                "refresh_if_missing": "whether to re-fetch the page live when cached raw content is missing",
+            },
             "guidance": (
-                "Use this when you expect the fetched page to be explored in depth across multiple turns with Canvas tools such as search_canvas_document, scroll_canvas_document, or expand_canvas_document. "
-                "The runtime may split long pages into multiple linked Canvas documents automatically, so you can inspect them incrementally instead of relying on one clipped fetch result. "
-                "Prefer fetch_url when you only need a one-off raw page read, and prefer fetch_url_summarized when only a distilled page summary is needed."
+                "Use this after fetch_url when the returned page text was clipped or when you want to inspect a large fetched source incrementally across later turns. "
+                "Start with start_line=1 when you need the top of the page, then continue with the next window when the result reports more content below. "
+                "Use grep_fetched_content first when you need to jump directly to a keyword, heading, code snippet, or exact passage instead of browsing sequentially. "
+                "Use refresh_if_missing=false only when you explicitly need cache-only behavior."
             ),
         },
     },

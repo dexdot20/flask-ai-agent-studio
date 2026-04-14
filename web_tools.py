@@ -1411,6 +1411,9 @@ def search_news_google_tool(queries: list, lang: str = "tr", when: str | None = 
 
 _GREP_CONTEXT_MAX_LINES = 5
 _GREP_MAX_MATCHES = 30
+_FETCH_SCROLL_DEFAULT_WINDOW_LINES = 120
+_FETCH_SCROLL_MIN_WINDOW_LINES = 20
+_FETCH_SCROLL_MAX_WINDOW_LINES = 400
 
 
 def _coerce_grep_int(value, default: int, minimum: int, maximum: int) -> int:
@@ -1432,6 +1435,204 @@ def _strip_tool_memory_record_prefix(text: str) -> str:
 
     stripped = "\n".join(lines[start_index:]).lstrip()
     return stripped or str(text or "")
+
+
+def _normalize_fetched_snapshot_text(text: str) -> str:
+    return str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def _load_fetched_content_snapshot(url: str, *, refresh_if_missing: bool = True) -> dict:
+    searched_source = ""
+    refetch_error = ""
+    raw_text = ""
+    title = ""
+    content_format = ""
+
+    def _apply_snapshot(candidate: dict, source_name: str) -> bool:
+        nonlocal raw_text, searched_source, title, content_format
+        if not isinstance(candidate, dict):
+            return False
+        normalized_text = _normalize_fetched_snapshot_text(candidate.get("raw_content") or candidate.get("content") or "")
+        if not normalized_text:
+            return False
+        raw_text = normalized_text
+        searched_source = source_name
+        title = str(candidate.get("title") or "").strip()
+        content_format = str(candidate.get("content_format") or "").strip()
+        return True
+
+    cache_key = f"fetch:{hashlib.md5(url.encode()).hexdigest()}"
+    cached = cache_get(cache_key)
+    if _apply_snapshot(cached, "fetch_cache"):
+        return {
+            "raw_text": raw_text,
+            "searched_source": searched_source,
+            "refetch_error": refetch_error,
+            "title": title,
+            "content_format": content_format,
+        }
+
+    try:
+        from rag_service import get_exact_tool_memory_match  # lazy import – avoids circular deps
+
+        match = get_exact_tool_memory_match("fetch_url", url)
+        if isinstance(match, dict):
+            raw_text = _normalize_fetched_snapshot_text(_strip_tool_memory_record_prefix(match.get("content") or ""))
+            if raw_text:
+                searched_source = "tool_memory_raw"
+                return {
+                    "raw_text": raw_text,
+                    "searched_source": searched_source,
+                    "refetch_error": refetch_error,
+                    "title": title,
+                    "content_format": content_format,
+                }
+    except Exception:
+        raw_text = ""
+
+    if refresh_if_missing:
+        refreshed = fetch_url_tool(url)
+        if _apply_snapshot(refreshed, "live_refetch") and not refreshed.get("error"):
+            return {
+                "raw_text": raw_text,
+                "searched_source": searched_source,
+                "refetch_error": refetch_error,
+                "title": title,
+                "content_format": content_format,
+            }
+        refetch_error = str(refreshed.get("error") or refreshed.get("fetch_warning") or "").strip()
+
+    try:
+        from rag_service import get_exact_tool_memory_match, search_tool_memory  # lazy import – avoids circular deps
+
+        summarized_match = get_exact_tool_memory_match("fetch_url_summarized", url)
+        if isinstance(summarized_match, dict):
+            raw_text = _normalize_fetched_snapshot_text(_strip_tool_memory_record_prefix(summarized_match.get("content") or ""))
+            if raw_text:
+                searched_source = "tool_memory_summary"
+                return {
+                    "raw_text": raw_text,
+                    "searched_source": searched_source,
+                    "refetch_error": refetch_error,
+                    "title": title,
+                    "content_format": content_format,
+                }
+
+        search_matches = (search_tool_memory(url, top_k=5).get("matches") or [])[:5]
+        for match in search_matches:
+            source_name = str(match.get("source_name") or "").strip()
+            if not source_name.startswith("fetch_url_summarized:"):
+                continue
+            if url not in source_name:
+                continue
+            raw_text = _normalize_fetched_snapshot_text(_strip_tool_memory_record_prefix(match.get("text") or ""))
+            if raw_text:
+                searched_source = "tool_memory_summary"
+                return {
+                    "raw_text": raw_text,
+                    "searched_source": searched_source,
+                    "refetch_error": refetch_error,
+                    "title": title,
+                    "content_format": content_format,
+                }
+    except Exception:
+        raw_text = ""
+
+    return {
+        "raw_text": raw_text,
+        "searched_source": searched_source,
+        "refetch_error": refetch_error,
+        "title": title,
+        "content_format": content_format,
+    }
+
+
+def scroll_fetched_content_tool(
+    url: str,
+    start_line: int = 1,
+    window_lines: int = _FETCH_SCROLL_DEFAULT_WINDOW_LINES,
+    refresh_if_missing: bool = True,
+) -> dict:
+    """Read a line window from a previously fetched URL without importing it into Canvas."""
+    url = str(url or "").strip()
+    if not url:
+        return {"error": "url is required", "url": ""}
+
+    start_line = _coerce_grep_int(start_line, default=1, minimum=1, maximum=1_000_000)
+    window_lines = _coerce_grep_int(
+        window_lines,
+        default=_FETCH_SCROLL_DEFAULT_WINDOW_LINES,
+        minimum=_FETCH_SCROLL_MIN_WINDOW_LINES,
+        maximum=_FETCH_SCROLL_MAX_WINDOW_LINES,
+    )
+    refresh_if_missing = _coerce_bool(refresh_if_missing, default=True)
+
+    snapshot = _load_fetched_content_snapshot(url, refresh_if_missing=refresh_if_missing)
+    raw_text = snapshot.get("raw_text") or ""
+    searched_source = str(snapshot.get("searched_source") or "").strip()
+    refetch_error = str(snapshot.get("refetch_error") or "").strip()
+
+    if not raw_text:
+        error_message = (
+            "URL content not found in cache, live fetch, or tool memory. "
+            "Call fetch_url for this URL first, then use scroll_fetched_content."
+        )
+        if refetch_error:
+            error_message += f" Live refetch also failed: {refetch_error}"
+        return {
+            "error": error_message,
+            "url": url,
+            "line_count": 0,
+            "visible_lines": [],
+        }
+
+    lines = raw_text.splitlines()
+    if not lines:
+        lines = [raw_text]
+
+    line_count = len(lines)
+    max_start_line = max(1, line_count - window_lines + 1)
+    requested_start_line = start_line
+    actual_start_line = min(requested_start_line, max_start_line)
+    actual_end_line = min(line_count, actual_start_line + window_lines - 1)
+    visible_lines = [
+        f"{line_number}: {line}"
+        for line_number, line in enumerate(lines[actual_start_line - 1 : actual_end_line], start=actual_start_line)
+    ]
+
+    result: dict = {
+        "url": url,
+        "line_count": line_count,
+        "start_line": actual_start_line,
+        "end_line_actual": actual_end_line,
+        "visible_lines": visible_lines,
+        "has_more_above": actual_start_line > 1,
+        "has_more_below": actual_end_line < line_count,
+        "searched_source": searched_source or "unknown",
+        "window_lines": window_lines,
+    }
+    title = str(snapshot.get("title") or "").strip()
+    if title:
+        result["title"] = title
+    content_format = str(snapshot.get("content_format") or "").strip()
+    if content_format:
+        result["content_format"] = content_format
+    if searched_source == "live_refetch":
+        result["refetched"] = True
+    if requested_start_line != actual_start_line:
+        result["requested_start_line"] = requested_start_line
+
+    note_parts = []
+    if requested_start_line != actual_start_line:
+        note_parts.append(
+            f"Requested start line {requested_start_line} exceeded the available content window; showing the last available window instead."
+        )
+    if searched_source == "tool_memory_summary":
+        note_parts.append("Showing a remembered summarized page snapshot because full raw page text was unavailable.")
+    if note_parts:
+        result["note"] = " ".join(note_parts)
+
+    return result
 
 
 def grep_fetched_content_tool(
@@ -1457,66 +1658,10 @@ def grep_fetched_content_tool(
     context_lines = _coerce_grep_int(context_lines, default=2, minimum=0, maximum=_GREP_CONTEXT_MAX_LINES)
     max_matches = _coerce_grep_int(max_matches, default=20, minimum=1, maximum=_GREP_MAX_MATCHES)
     refresh_if_missing = _coerce_bool(refresh_if_missing, default=True)
-    searched_source = ""
-    refetch_error = ""
-
-    # 1. Try the in-process fetch cache first (fastest, same session)
-    cache_key = f"fetch:{hashlib.md5(url.encode()).hexdigest()}"
-    cached = cache_get(cache_key)
-    if isinstance(cached, dict):
-        raw_text = cached.get("raw_content") or cached.get("content") or ""
-        if raw_text:
-            searched_source = "fetch_cache"
-    else:
-        raw_text = ""
-
-    # 2. Fall back to RAG tool memory (cross-turn, full raw_content preferred)
-    if not raw_text:
-        try:
-            from rag_service import get_exact_tool_memory_match  # lazy import – avoids circular deps
-            match = get_exact_tool_memory_match("fetch_url", url)
-            if isinstance(match, dict):
-                raw_text = _strip_tool_memory_record_prefix(match.get("content") or "")
-                if raw_text:
-                    searched_source = "tool_memory_raw"
-        except Exception:
-            raw_text = ""
-
-    # 3. Re-fetch live when no raw page text is available.
-    if not raw_text and refresh_if_missing:
-        refreshed = fetch_url_tool(url)
-        refreshed_text = _clean_extracted_text(refreshed.get("raw_content") or refreshed.get("content") or "")
-        if refreshed_text and not refreshed.get("error"):
-            raw_text = refreshed_text
-            searched_source = "live_refetch"
-        else:
-            refetch_error = str(refreshed.get("error") or refreshed.get("fetch_warning") or "").strip()
-
-    # 4. Fallback to summarized fetch tool memory when only the distilled summary exists.
-    if not raw_text:
-        try:
-            from rag_service import get_exact_tool_memory_match, search_tool_memory  # lazy import – avoids circular deps
-
-            summarized_match = get_exact_tool_memory_match("fetch_url_summarized", url)
-            if isinstance(summarized_match, dict):
-                raw_text = _strip_tool_memory_record_prefix(summarized_match.get("content") or "")
-                if raw_text:
-                    searched_source = "tool_memory_summary"
-
-            if not raw_text:
-                search_matches = (search_tool_memory(url, top_k=5).get("matches") or [])[:5]
-                for match in search_matches:
-                    source_name = str(match.get("source_name") or "").strip()
-                    if not source_name.startswith("fetch_url_summarized:"):
-                        continue
-                    if url not in source_name:
-                        continue
-                    raw_text = _strip_tool_memory_record_prefix(match.get("text") or "")
-                    if raw_text:
-                        searched_source = "tool_memory_summary"
-                        break
-        except Exception:
-            raw_text = ""
+    snapshot = _load_fetched_content_snapshot(url, refresh_if_missing=refresh_if_missing)
+    raw_text = str(snapshot.get("raw_text") or "")
+    searched_source = str(snapshot.get("searched_source") or "").strip()
+    refetch_error = str(snapshot.get("refetch_error") or "").strip()
 
     if not raw_text:
         error_message = (

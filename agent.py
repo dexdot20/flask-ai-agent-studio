@@ -40,6 +40,7 @@ from canvas_service import (
     get_canvas_runtime_active_document_id,
     get_canvas_runtime_documents,
     get_canvas_runtime_snapshot,
+    get_canvas_viewport_payloads,
     insert_canvas_lines,
     join_canvas_lines,
     list_canvas_lines,
@@ -104,9 +105,6 @@ from db import (
     get_fetch_url_summarized_max_input_chars,
     get_fetch_url_summarized_max_output_tokens,
     get_fetch_url_token_threshold,
-    get_fetch_url_to_canvas_chunk_chars,
-    get_fetch_url_to_canvas_chunk_threshold,
-    get_fetch_url_to_canvas_max_chunks,
     get_all_scratchpad_sections,
     get_app_settings,
     get_clarification_max_questions,
@@ -125,7 +123,12 @@ from db import (
     read_image_asset_bytes,
     replace_scratchpad,
 )
-from messages import _build_canvas_prompt_payload, _build_pending_clarification_message_content, build_current_time_context
+from messages import (
+    _build_canvas_prompt_payload,
+    _build_pending_clarification_message_content,
+    build_current_time_context,
+    refresh_canvas_sections_in_context_injection,
+)
 from image_service import answer_image_question
 from model_registry import (
     DEEPSEEK_PROVIDER,
@@ -150,6 +153,7 @@ from web_tools import (
     search_news_ddgs_tool,
     search_news_google_tool,
     search_web_tool,
+    scroll_fetched_content_tool,
 )
 
 SUB_AGENT_ALLOWED_TOOL_NAMES = DEFAULT_SUB_AGENT_ALLOWED_TOOL_NAMES
@@ -174,7 +178,6 @@ CANVAS_TOOL_NAMES = {
     "scroll_canvas_document",
     "search_canvas_document",
     "validate_canvas_document",
-    "fetch_url_to_canvas",
     "create_canvas_document",
     "rewrite_canvas_document",
     "preview_canvas_changes",
@@ -191,7 +194,6 @@ CANVAS_TOOL_NAMES = {
     "clear_canvas",
 }
 CANVAS_MUTATION_TOOL_NAMES = {
-    "fetch_url_to_canvas",
     "create_canvas_document",
     "rewrite_canvas_document",
     "batch_canvas_edits",
@@ -239,6 +241,16 @@ CANVAS_STREAM_REPLACE_CONTENT_TOOL_NAMES = {
     "insert_canvas_lines",
     "delete_canvas_lines",
 }
+RUNTIME_CONTEXT_INJECTION_SECTION_MARKERS = {
+    "## Current Date and Time",
+    "## Conversation Summaries",
+    "## Tool Execution History",
+    "## Active Tools This Turn",
+    "## Canvas File Set Summary",
+    "## Active Canvas Document",
+    "## Ignored Canvas Documents",
+    "## Pinned Canvas Viewports",
+}
 DSML_INVOKE_TAG_RE = re.compile(r'<[^>]*invoke\s+name="(?P<name>[^"]+)"[^>]*>', re.IGNORECASE)
 DSML_FUNCTION_CALLS_TAG_RE = re.compile(r'<[^>]*function_calls[^>]*>', re.IGNORECASE)
 DSML_PARAMETER_TAG_RE = re.compile(
@@ -256,7 +268,7 @@ WEB_TOOL_NAMES = {
     "search_web",
     "fetch_url",
     "fetch_url_summarized",
-    "fetch_url_to_canvas",
+    "scroll_fetched_content",
     "search_news_ddgs",
     "search_news_google",
 }
@@ -275,7 +287,7 @@ SEARCH_QUERY_ARGUMENT_ALIASES = (
 SEARCH_TOOL_QUERY_BATCH_SIZE = 5
 SEARCH_MEMORY_PROMOTION_MATCH_LIMIT = 2
 SEARCH_MEMORY_PROMOTION_EXCERPT_LIMIT = 180
-PARALLEL_SAFE_TOOL_NAMES = (WEB_TOOL_NAMES - {"fetch_url_to_canvas"}) | {
+PARALLEL_SAFE_TOOL_NAMES = WEB_TOOL_NAMES | {
     "image_explain",
     # RAG / memory reads
     "search_knowledge_base",
@@ -297,7 +309,7 @@ PARALLEL_SAFE_TOOL_NAMES = (WEB_TOOL_NAMES - {"fetch_url_to_canvas"}) | {
     # Delegated read-only helper
     "sub_agent",
 }
-SESSION_CACHEABLE_TOOL_NAMES = (WEB_TOOL_NAMES - {"fetch_url_to_canvas"}) | {
+SESSION_CACHEABLE_TOOL_NAMES = WEB_TOOL_NAMES | {
     "grep_fetched_content",
 }
 SUB_AGENT_MAX_TRANSCRIPT_MESSAGES = 24
@@ -1026,18 +1038,21 @@ def _build_recovery_hint_for_tool(tool_name: str, tool_args: dict | None = None)
         url = _clean_tool_text(normalized_tool_args.get("url") or "", limit=160)
         if url:
             return (
-                f"If exact wording is needed, call grep_fetched_content with {url} and a keyword or regex, "
-                "or search_tool_memory with the same URL."
+                f"Need omitted text? Use scroll_fetched_content with {url} and a start line, "
+                f"grep_fetched_content with {url} and a keyword or regex, or search_tool_memory with the same URL."
             )
-        return "If exact wording is needed, call grep_fetched_content with the same URL and a keyword or regex."
+        return (
+            "Need omitted text? Use scroll_fetched_content with the same URL and a start line, "
+            "or grep_fetched_content with a keyword or regex."
+        )
     if normalized_tool_name == "fetch_url_summarized":
         url = _clean_tool_text(normalized_tool_args.get("url") or "", limit=160)
         if url:
             return (
-                f"If the clean summary is not enough, call fetch_url or grep_fetched_content with {url} "
-                "to inspect the raw extracted page text."
+                f"Need more than the summary? Call fetch_url for {url}, then use scroll_fetched_content or "
+                "grep_fetched_content."
             )
-        return "If the clean summary is not enough, call fetch_url to inspect the raw extracted page text."
+        return "Need more than the summary? Call fetch_url, then use scroll_fetched_content or grep_fetched_content."
     if normalized_tool_name in {"search_web", "search_news_ddgs", "search_news_google"}:
         return "If exact wording is needed, fetch a specific returned URL or rerun the search with a narrower query."
     if normalized_tool_name == "search_knowledge_base":
@@ -2108,7 +2123,117 @@ def _build_head_tail_excerpt(text: str, target_chars: int) -> tuple[str, dict]:
     return f"{head}{dynamic_marker}{tail}", {"strategy": "head_tail_excerpt", "excerpt_count": 2}
 
 
-def _clip_text_preserving_ends(text: str, target_chars: int) -> tuple[str, dict]:
+def _extract_fetch_entropy_terms(text: str) -> list[str]:
+    return [term.lower() for term in re.findall(r"[A-Za-z0-9_./:-]{3,}", str(text or ""))]
+
+
+def _extract_fetch_anchor_terms(text: str) -> list[str]:
+    unique_terms: list[str] = []
+    seen_terms: set[str] = set()
+    for term in _extract_fetch_entropy_terms(text):
+        if len(term) < 5 or term.isdigit() or term in seen_terms:
+            continue
+        seen_terms.add(term)
+        unique_terms.append(term)
+        if len(unique_terms) >= 8:
+            break
+    return unique_terms
+
+
+def _score_fetch_excerpt_window(window: str, *, anchor_terms: list[str] | None = None) -> float:
+    normalized_window = str(window or "").strip()
+    if not normalized_window:
+        return 0.0
+
+    terms = _extract_fetch_entropy_terms(normalized_window)
+    lexical_score = 0.0
+    if terms:
+        lexical_score = min(1.0, (len(set(terms)) / len(terms)) * 1.4)
+
+    structural_score = 0.0
+    if "```" in normalized_window or re.search(r"^\s{4,}\S", normalized_window, re.MULTILINE):
+        structural_score += 0.24
+    if re.search(r"https?://|www\.", normalized_window):
+        structural_score += 0.18
+    if re.search(r"\b\d[\d.,_:/-]*\b", normalized_window):
+        structural_score += 0.16
+    if re.search(r"^#{1,6}\s+", normalized_window, re.MULTILINE):
+        structural_score += 0.14
+    if re.search(r"^[\-*•]\s+", normalized_window, re.MULTILINE):
+        structural_score += 0.10
+    if "{" in normalized_window and "}" in normalized_window:
+        structural_score += 0.08
+    structural_score = min(1.0, structural_score)
+
+    density_score = min(1.0, max(1, _estimate_text_tokens(normalized_window)) / 220.0)
+
+    reference_score = 0.0
+    normalized_anchor_terms = [term for term in (anchor_terms or []) if term]
+    if normalized_anchor_terms:
+        lowered_window = normalized_window.lower()
+        anchor_hits = sum(1 for term in normalized_anchor_terms if term in lowered_window)
+        reference_score = min(1.0, anchor_hits / max(1, min(4, len(normalized_anchor_terms))))
+
+    return (
+        lexical_score * 0.38
+        + structural_score * 0.24
+        + density_score * 0.18
+        + reference_score * 0.20
+    )
+
+
+def _select_entropy_middle_excerpt_start(
+    text: str,
+    *,
+    head_chars: int,
+    middle_chars: int,
+    tail_chars: int,
+    anchor_text: str = "",
+) -> tuple[int | None, dict]:
+    cleaned = str(text or "")
+    if not cleaned or middle_chars <= 0:
+        return None, {"window_selection": "center_window"}
+
+    min_start = max(1, int(head_chars or 0) + 1)
+    max_start = len(cleaned) - max(0, int(tail_chars or 0)) - int(middle_chars or 0) - 1
+    if max_start <= min_start:
+        return None, {"window_selection": "center_window"}
+
+    center_start = max(min_start, min(max_start, (len(cleaned) - middle_chars) // 2))
+    anchor_terms = _extract_fetch_anchor_terms(anchor_text)
+    lowered_text = cleaned.lower()
+
+    candidate_starts: set[int] = {center_start, min_start, max_start}
+    step = max(200, middle_chars // 2)
+    candidate_starts.update(range(min_start, max_start + 1, step))
+
+    for term in anchor_terms[:6]:
+        position = lowered_text.find(term)
+        if position < 0:
+            continue
+        candidate_starts.add(max(min_start, min(max_start, position - middle_chars // 4)))
+
+    best_start = center_start
+    best_score = -1.0
+    best_distance = 1.0
+    for start in sorted(candidate_starts):
+        window = cleaned[start : start + middle_chars]
+        score = _score_fetch_excerpt_window(window, anchor_terms=anchor_terms)
+        distance = abs(start - center_start) / max(1, max_start - min_start)
+        if score > best_score + 1e-9 or (abs(score - best_score) <= 1e-9 and distance < best_distance):
+            best_start = start
+            best_score = score
+            best_distance = distance
+
+    selection = "center_window"
+    if anchor_terms and best_start != center_start:
+        selection = "entropy_anchor_window"
+    elif best_start != center_start:
+        selection = "entropy_window"
+    return best_start, {"window_selection": selection, "window_entropy_score": round(max(0.0, best_score), 4)}
+
+
+def _clip_text_preserving_ends(text: str, target_chars: int, *, anchor_text: str = "") -> tuple[str, dict]:
     cleaned = str(text or "")
     normalized_target = max(0, int(target_chars or 0))
     if not cleaned or normalized_target <= 0 or len(cleaned) <= normalized_target:
@@ -2135,7 +2260,16 @@ def _clip_text_preserving_ends(text: str, target_chars: int) -> tuple[str, dict]
 
     def _compose_excerpt(current_lengths: list[int]):
         head_chars, middle_chars, tail_chars = current_lengths
-        middle_start = max(head_chars, (len(cleaned) - middle_chars) // 2)
+        middle_start, selection_details = _select_entropy_middle_excerpt_start(
+            cleaned,
+            head_chars=head_chars,
+            middle_chars=middle_chars,
+            tail_chars=tail_chars,
+            anchor_text=anchor_text,
+        )
+        if middle_start is None:
+            middle_start = max(head_chars, (len(cleaned) - middle_chars) // 2)
+            selection_details = {"window_selection": "center_window"}
         middle_end = middle_start + middle_chars
         tail_start = max(middle_end, len(cleaned) - tail_chars)
         if middle_start <= head_chars or tail_start <= middle_end:
@@ -2153,6 +2287,7 @@ def _clip_text_preserving_ends(text: str, target_chars: int) -> tuple[str, dict]
             "marker_one": marker_one,
             "marker_two": marker_two,
             "overflow": max(0, total_len - normalized_target),
+            **selection_details,
         }
 
     composed = _compose_excerpt(lengths)
@@ -2187,7 +2322,19 @@ def _build_fetch_clipped_text(result: dict, token_threshold: int, clip_aggressiv
     clip_ratio = min(1.0, token_threshold / max(token_estimate, 1))
     preserve_multiplier = min(1.0, 1.8 - (_normalize_fetch_clip_aggressiveness(clip_aggressiveness) / 100) * 1.0)
     target_chars = max(2000, min(FETCH_SUMMARY_MAX_CHARS, int(len(raw_content) * clip_ratio * preserve_multiplier)))
-    clipped_content, clip_details = _clip_text_preserving_ends(raw_content, target_chars)
+    anchor_parts: list[str] = []
+    for field_name in ("title", "meta_description", "structured_data", "content_source_element"):
+        field_value = _clean_tool_text(result.get(field_name) or "", limit=600)
+        if field_value:
+            anchor_parts.append(field_value)
+    outline = result.get("outline") if isinstance(result.get("outline"), list) else []
+    if outline:
+        anchor_parts.extend(_clean_tool_text(item, limit=120) for item in outline[:12] if _clean_tool_text(item, limit=120))
+    clipped_content, clip_details = _clip_text_preserving_ends(
+        raw_content,
+        target_chars,
+        anchor_text=" ".join(anchor_parts),
+    )
     result_text = clipped_content or raw_content
     return result_text, _estimate_text_tokens(result_text), clip_details
 
@@ -2247,7 +2394,7 @@ def _build_fetch_diagnostic_fields(result: dict) -> dict:
         "fetch_diagnostic": (
             f"fetch_url already attempted this URL. Outcome: {detail} "
             "Do not call fetch_url again for the same URL in this turn. "
-            "If you need to find specific text from this page, use grep_fetched_content instead."
+            "If you need omitted sections or exact text from this page, use scroll_fetched_content or grep_fetched_content instead."
         ).strip(),
     }
 
@@ -2667,6 +2814,8 @@ def _prepare_fetch_result_for_model(
         if clip_strategy == "head_middle_tail_excerpt"
         else "The leading and trailing excerpts are preserved; the middle portion is omitted."
     )
+    if clip_details.get("window_selection") in {"entropy_window", "entropy_anchor_window"}:
+        coverage_note += " The middle excerpt is chosen from a higher-signal region instead of always using the literal center of the page."
     prepared["content"] = clipped_text
     prepared["content_mode"] = "clipped_text"
     prepared["clip_strategy"] = clip_strategy
@@ -2679,7 +2828,7 @@ def _prepare_fetch_result_for_model(
         f"({clipped_pct}% of the page, approximately {token_estimate:,} tokens). "
         f"{coverage_note} "
         f"{('Context anchors: ' + context_summary + ' ') if context_summary else ''}"
-        f"{recovery_hint or 'Use grep_fetched_content for exact text and search_tool_memory for semantic recall.'}"
+        f"{recovery_hint or 'Use scroll_fetched_content to browse omitted sections, grep_fetched_content for exact text, and search_tool_memory for semantic recall.'}"
     )
     prepared["content_token_estimate"] = token_estimate
     prepared["raw_content_available"] = True
@@ -2730,8 +2879,11 @@ def _build_fetch_tool_message_content(tool_args: dict, summary: str, transcript_
     if body:
         coverage_lines.append(f"Coverage: {_describe_fetch_content_mode(content_mode, clip_strategy)}")
     if transcript_result.get("raw_content_available") is True:
-        coverage_lines.append("Exact-text recovery: Full raw page text remains available via grep_fetched_content.")
+        coverage_lines.append(
+            "Raw page recovery: Use scroll_fetched_content for sequential browsing and grep_fetched_content for exact text."
+        )
     if content_mode in {"clipped_text", "budget_compact", "budget_brief"} and url:
+        coverage_lines.append(f'Scroll example: scroll_fetched_content(url="{url}", start_line=1)')
         coverage_lines.append(f'Exact-text lookup example: grep_fetched_content(url="{url}", pattern="keyword")')
     if coverage_lines:
         parts.append("## Content Coverage\n" + "\n".join(coverage_lines))
@@ -2785,6 +2937,34 @@ def _format_canvas_scroll_result_as_text(result: dict) -> str:
         nav.append(f"↓ More content below line {end}")
     if nav:
         parts.append(" | ".join(nav))
+    return "\n".join(parts)
+
+
+def _format_fetched_content_scroll_result_as_text(result: dict) -> str:
+    """Format a fetched-page scroll result into human-readable text."""
+    title = result.get("title") or result.get("url") or "Fetched page"
+    total = result.get("line_count", 0)
+    start = result.get("start_line", 1)
+    end = result.get("end_line_actual", total)
+    lines = result.get("visible_lines") or []
+    parts = [f"### {title} (fetched lines {start}–{end} of {total})"]
+    url = _clean_tool_text(result.get("url") or "", limit=220)
+    if url:
+        parts.append(f"URL: {url}")
+    if lines:
+        parts.append("```text")
+        parts.append("\n".join(str(line) for line in lines))
+        parts.append("```")
+    nav = []
+    if result.get("has_more_above"):
+        nav.append(f"↑ More page content above line {start}")
+    if result.get("has_more_below"):
+        nav.append(f"↓ More page content below line {end}")
+    if nav:
+        parts.append(" | ".join(nav))
+    note = _clean_tool_text(result.get("note") or "", limit=280)
+    if note:
+        parts.append(note)
     return "\n".join(parts)
 
 
@@ -2847,6 +3027,8 @@ def _prepare_tool_result_for_transcript(
             fetch_url_token_threshold=fetch_url_token_threshold,
             fetch_url_clip_aggressiveness=fetch_url_clip_aggressiveness,
         )
+    if tool_name == "scroll_fetched_content" and isinstance(result, dict) and not result.get("error"):
+        return _format_fetched_content_scroll_result_as_text(result)
     if tool_name in CANVAS_CONTEXT_READ_TOOL_NAMES and isinstance(result, dict):
         result = _format_canvas_read_result_as_text(tool_name, result)
     if tool_name in CANVAS_MUTATION_TOOL_NAMES and isinstance(result, dict):
@@ -4036,13 +4218,19 @@ def _validate_tool_arguments(tool_name: str, tool_args: dict) -> str | None:
             minimum = property_schema.get("minimum")
             maximum = property_schema.get("maximum")
             if minimum is not None and value < minimum:
-                if tool_name == "grep_fetched_content" and key in {"context_lines", "max_matches"}:
+                if (
+                    (tool_name == "grep_fetched_content" and key in {"context_lines", "max_matches"})
+                    or (tool_name == "scroll_fetched_content" and key == "window_lines")
+                ):
                     value = minimum
                     tool_args[key] = value
                 else:
                     return f"Argument '{key}' in {tool_name} must be >= {minimum}"
             if maximum is not None and value > maximum:
-                if tool_name == "grep_fetched_content" and key in {"context_lines", "max_matches"}:
+                if (
+                    (tool_name == "grep_fetched_content" and key in {"context_lines", "max_matches"})
+                    or (tool_name == "scroll_fetched_content" and key == "window_lines")
+                ):
                     value = maximum
                     tool_args[key] = value
                 else:
@@ -5198,219 +5386,20 @@ def _run_fetch_url(tool_args: dict, runtime_state: dict):
     return result, _summarize_fetch_result(result, tool_args.get("url", ""))
 
 
-def _slugify_canvas_import_label(value: str, fallback: str = "web-page") -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
-    return slug[:64] or fallback
-
-
-def _build_fetch_canvas_base_title(result: dict, url: str) -> str:
-    title = _clean_tool_text(result.get("title") or "", limit=120)
-    if title:
-        return title
-    parsed = urlparse(url)
-    fallback = (parsed.path.rstrip("/").split("/")[-1] or parsed.netloc or url or "Fetched page").strip()
-    return _clean_tool_text(fallback, limit=120) or "Fetched page"
-
-
-def _build_fetch_canvas_path(base_title: str, url: str, import_group_id: str, chunk_index: int, chunk_count: int) -> str:
-    parsed = urlparse(url)
-    label_source = parsed.netloc or parsed.path or base_title
-    base_slug = _slugify_canvas_import_label(label_source)
-    suffix = import_group_id[:8]
-    if chunk_count > 1:
-        return f"web/{base_slug}-{suffix}/part-{chunk_index:02d}.md"
-    return f"web/{base_slug}-{suffix}.md"
-
-
-def _build_fetch_to_canvas_content_budget(settings: dict) -> int:
-    chunk_threshold = get_fetch_url_to_canvas_chunk_threshold(settings)
-    chunk_chars = get_fetch_url_to_canvas_chunk_chars(settings)
-    max_chunks = get_fetch_url_to_canvas_max_chunks(settings)
-    requested_budget = max(chunk_threshold, chunk_chars * max_chunks + 8_000)
-    return max(2_000, min(1_000_000, requested_budget))
-
-
-def _split_fetched_content_for_canvas(
-    text: str,
-    *,
-    chunk_threshold: int,
-    chunk_chars: int,
-    max_chunks: int,
-) -> tuple[list[str], bool]:
-    normalized_text = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
-    if not normalized_text:
-        return [], False
-
-    normalized_chunk_threshold = max(2_000, int(chunk_threshold or 0))
-    normalized_chunk_chars = max(4_000, int(chunk_chars or 0))
-    normalized_max_chunks = max(1, int(max_chunks or 0))
-
-    if len(normalized_text) <= normalized_chunk_threshold:
-        return [normalized_text], False
-
-    pieces: list[str] = []
-    for paragraph in re.split(r"\n{2,}", normalized_text):
-        remaining = paragraph.strip()
-        if not remaining:
-            continue
-        while len(remaining) > normalized_chunk_chars:
-            split_at = remaining.rfind("\n", 0, normalized_chunk_chars)
-            if split_at < normalized_chunk_chars // 2:
-                split_at = remaining.rfind(" ", 0, normalized_chunk_chars)
-            if split_at < normalized_chunk_chars // 2:
-                split_at = normalized_chunk_chars
-            piece = remaining[:split_at].strip()
-            if piece:
-                pieces.append(piece)
-            remaining = remaining[split_at:].lstrip()
-        if remaining:
-            pieces.append(remaining)
-
-    if not pieces:
-        pieces = [normalized_text]
-
-    chunks: list[str] = []
-    current_chunk = ""
-    for piece in pieces:
-        candidate = piece if not current_chunk else f"{current_chunk}\n\n{piece}"
-        if current_chunk and len(candidate) > normalized_chunk_chars:
-            chunks.append(current_chunk)
-            current_chunk = piece
-        else:
-            current_chunk = candidate
-    if current_chunk:
-        chunks.append(current_chunk)
-
-    was_truncated = len(chunks) > normalized_max_chunks
-    if was_truncated:
-        chunks = chunks[:normalized_max_chunks]
-        chunks[-1] = chunks[-1].rstrip() + (
-            f"\n\n[Import truncated after {normalized_max_chunks} Canvas documents. Remaining fetched content was omitted.]"
-        )
-    return chunks, was_truncated
-
-
-def _run_fetch_url_to_canvas(tool_args: dict, runtime_state: dict):
-    url = str(tool_args.get("url") or "").strip()
-    settings = get_app_settings()
-    chunk_threshold = get_fetch_url_to_canvas_chunk_threshold(settings)
-    chunk_chars = get_fetch_url_to_canvas_chunk_chars(settings)
-    max_chunks = get_fetch_url_to_canvas_max_chunks(settings)
-    fetch_budget = _build_fetch_to_canvas_content_budget(settings)
-    cache_namespace = f"fetch_canvas:{chunk_chars}:{max_chunks}"
-    result = fetch_url_tool(url, content_max_chars=fetch_budget, cache_namespace=cache_namespace)
-
-    cleaned_content = str(result.get("content") or "").strip()
-    if result.get("error") or not cleaned_content:
-        error_result = {
-            "status": "error",
-            "action": "url_import_failed",
-            "url": str(result.get("url") or url).strip(),
-            "title": _clean_tool_text(result.get("title") or "", limit=120),
-            "summary": _summarize_fetch_result(result, url),
-        }
-        if result.get("error"):
-            error_result["error"] = _clean_tool_text(result.get("error") or "", limit=400)
-        return error_result, _summarize_fetch_result(result, url)
-
-    chunks, was_truncated = _split_fetched_content_for_canvas(
-        cleaned_content,
-        chunk_threshold=chunk_threshold,
-        chunk_chars=chunk_chars,
-        max_chunks=max_chunks,
+def _run_scroll_fetched_content(tool_args: dict, runtime_state: dict):
+    del runtime_state
+    result = scroll_fetched_content_tool(
+        url=tool_args.get("url", ""),
+        start_line=tool_args.get("start_line", 1),
+        window_lines=tool_args.get("window_lines", 120),
+        refresh_if_missing=tool_args.get("refresh_if_missing", True),
     )
-    if not chunks:
-        return {
-            "status": "error",
-            "action": "url_import_failed",
-            "url": str(result.get("url") or url).strip(),
-            "error": "Fetched page did not contain importable text.",
-        }, "fetch_url_to_canvas failed: no importable text"
-
-    canvas_state = _get_canvas_runtime_state(runtime_state)
-    source_url = str(result.get("url") or url).strip()
-    base_title = _build_fetch_canvas_base_title(result, source_url)
-    source_title = _clean_tool_text(result.get("title") or base_title, limit=160) or base_title
-    import_group_id = f"fetch-{uuid4().hex[:12]}"
-    meta_description = _clean_tool_text(result.get("meta_description") or "", limit=180)
-    created_documents: list[dict] = []
-
-    for index, chunk_text in enumerate(chunks, start=1):
-        chunk_count = len(chunks)
-        title = base_title if chunk_count == 1 else f"{base_title} (Part {index}/{chunk_count})"
-        summary = meta_description
-        if chunk_count > 1:
-            summary_prefix = f"Imported web page chunk {index}/{chunk_count}"
-            summary = f"{summary_prefix}: {meta_description}" if meta_description else summary_prefix
-        elif not summary:
-            summary = "Imported web page"
-        content_parts = [f"# {title}"]
-        if source_url:
-            source_line = f"Source: {source_url}"
-            if chunk_count > 1:
-                source_line += f" · Part {index} of {chunk_count}"
-            content_parts.append(f"_{source_line}_")
-        content_parts.append(chunk_text.strip())
-        document = create_canvas_document(
-            canvas_state,
-            title=title,
-            content="\n\n".join(part for part in content_parts if part).strip(),
-            format_name="markdown",
-            path=_build_fetch_canvas_path(base_title, source_url, import_group_id, index, chunk_count),
-            role="reference",
-            summary=summary,
-            source_url=source_url,
-            source_title=source_title,
-            source_kind="fetched_url",
-            import_group_id=import_group_id,
-            chunk_index=index,
-            chunk_count=chunk_count,
-        )
-        created_documents.append(document)
-
-    if created_documents:
-        canvas_state["active_document_id"] = created_documents[0].get("id")
-
-    document_snapshots = []
-    for document in created_documents:
-        snapshot = build_canvas_document_result_snapshot(document) or {}
-        snapshot_entry = dict(snapshot)
-        if snapshot_entry.get("id"):
-            snapshot_entry["document_id"] = snapshot_entry.get("id")
-        if snapshot_entry.get("path"):
-            snapshot_entry["document_path"] = snapshot_entry.get("path")
-        document_snapshots.append(snapshot_entry)
-
-    first_snapshot = document_snapshots[0]
-    tool_result = {
-        "status": "ok",
-        "action": "url_imported_to_canvas",
-        "url": source_url,
-        "title": base_title,
-        "document_id": first_snapshot.get("document_id"),
-        "document_path": first_snapshot.get("document_path"),
-        "document_count": len(document_snapshots),
-        "documents": document_snapshots,
-        "document": first_snapshot,
-        "primary_locator": {
-            "document_id": first_snapshot.get("document_id"),
-            "document_path": first_snapshot.get("document_path"),
-        },
-        "import_group_id": import_group_id,
-        "chunked": len(document_snapshots) > 1,
-        "truncated": was_truncated,
-        "content_format": result.get("content_format"),
-        "fetch_summary": _summarize_fetch_result(result, source_url),
-    }
-    if meta_description:
-        tool_result["summary"] = meta_description
-    if result.get("fetch_warning"):
-        tool_result["fetch_warning"] = _clean_tool_text(result.get("fetch_warning") or "", limit=240)
-
-    summary = f"Fetched URL imported to Canvas: {len(document_snapshots)} document(s)"
-    if was_truncated:
-        summary += " (truncated to import limit)"
-    return tool_result, summary
+    if result.get("error"):
+        summary = f"scroll_fetched_content error: {_clean_tool_text(result['error'], limit=120)}"
+    else:
+        target_label = _clean_tool_text(result.get("title") or result.get("url") or tool_args.get("url") or "page", limit=80)
+        summary = f"scroll_fetched_content: {target_label} {result.get('start_line')}-{result.get('end_line_actual')}"
+    return result, summary
 
 
 def _run_fetch_url_summarized(tool_args: dict, runtime_state: dict):
@@ -5991,7 +5980,7 @@ _TOOL_EXECUTORS = {
     "search_news_google": _run_search_news_google,
     "fetch_url": _run_fetch_url,
     "fetch_url_summarized": _run_fetch_url_summarized,
-    "fetch_url_to_canvas": _run_fetch_url_to_canvas,
+    "scroll_fetched_content": _run_scroll_fetched_content,
     "grep_fetched_content": _run_grep_fetched_content,
     "expand_canvas_document": _run_expand_canvas_document,
     "batch_read_canvas_documents": _run_batch_read_canvas_documents,
@@ -6052,12 +6041,59 @@ def _build_active_canvas_prompt_payload(runtime_state: dict) -> dict | None:
     return _build_canvas_prompt_payload(
         documents,
         active_document_id=get_canvas_runtime_active_document_id(canvas_state),
+        canvas_viewports=get_canvas_viewport_payloads(canvas_state),
         max_lines=max_lines or 250,
         max_chars=max_chars or None,
         max_tokens=max_tokens or 0,
         code_line_max_chars=code_line_max_chars or None,
         text_line_max_chars=text_line_max_chars or None,
     )
+
+
+def _refresh_latest_canvas_context_injection_message(messages: list[dict], runtime_state: dict) -> bool:
+    if not isinstance(messages, list) or not messages or not isinstance(runtime_state, dict):
+        return False
+
+    canvas_state = _get_canvas_runtime_state(runtime_state)
+    prompt_state = runtime_state.get("canvas_prompt") if isinstance(runtime_state.get("canvas_prompt"), dict) else {}
+    agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
+    active_tool_names = _normalize_tool_name_list(
+        agent_context.get("prompt_tool_names")
+        if isinstance(agent_context.get("prompt_tool_names"), list)
+        else agent_context.get("enabled_tool_names")
+    )
+    canvas_documents = get_canvas_runtime_documents(canvas_state)
+    canvas_active_document_id = get_canvas_runtime_active_document_id(canvas_state)
+    canvas_viewports = get_canvas_viewport_payloads(canvas_state)
+
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if str(message.get("role") or "").strip() != "system":
+            continue
+        content = str(message.get("content") or "")
+        if not content:
+            continue
+        if not any(marker in content for marker in RUNTIME_CONTEXT_INJECTION_SECTION_MARKERS):
+            continue
+
+        refreshed_content = refresh_canvas_sections_in_context_injection(
+            content,
+            active_tool_names=active_tool_names,
+            canvas_documents=canvas_documents,
+            canvas_active_document_id=canvas_active_document_id,
+            canvas_viewports=canvas_viewports,
+            canvas_prompt_max_lines=_coerce_int_range(prompt_state.get("max_lines"), 0, 0, 10_000) or None,
+            canvas_prompt_max_chars=_coerce_int_range(prompt_state.get("max_chars"), 0, 0, 1_000_000) or None,
+            canvas_prompt_max_tokens=_coerce_int_range(prompt_state.get("max_tokens"), 0, 0, 1_000_000) or None,
+            canvas_prompt_code_line_max_chars=_coerce_int_range(prompt_state.get("code_line_max_chars"), 0, 0, 10_000) or None,
+            canvas_prompt_text_line_max_chars=_coerce_int_range(prompt_state.get("text_line_max_chars"), 0, 0, 10_000) or None,
+        )
+        if refreshed_content == content:
+            return False
+        messages[index] = {**message, "content": refreshed_content}
+        return True
+
+    return False
 
 
 def _build_already_visible_canvas_expand_result(tool_args: dict, runtime_state: dict) -> dict | None:
@@ -6172,7 +6208,7 @@ def _tool_input_preview(tool_name: str, tool_args: dict) -> str:
                 return f"{query} | {suffix}"[:300]
             return suffix[:300]
         return query[:300]
-    if tool_name in {"fetch_url", "fetch_url_to_canvas"}:
+    if tool_name == "fetch_url":
         return str(tool_args.get("url") or "").strip()[:300]
     if tool_name == "fetch_url_summarized":
         url = str(tool_args.get("url") or "").strip()
@@ -6180,6 +6216,14 @@ def _tool_input_preview(tool_name: str, tool_args: dict) -> str:
         if url and focus:
             return f"{url} | {focus}"[:300]
         return url[:300]
+    if tool_name == "scroll_fetched_content":
+        url = str(tool_args.get("url") or "").strip()
+        start_line = _coerce_int_range(tool_args.get("start_line"), 1, 1, 1_000_000)
+        window_lines = _coerce_int_range(tool_args.get("window_lines"), 120, 20, 400)
+        preview = f"line {start_line} (+{window_lines})"
+        if url:
+            return f"{url} | {preview}"[:300]
+        return preview[:300]
     if tool_name == "read_file":
         return str(tool_args.get("path") or "").strip()[:300]
     if tool_name == "list_dir":
@@ -7926,6 +7970,7 @@ def run_agent_stream(
         tool_messages = []
         tool_output_entries = []
         clarification_repair_error: str | None = None
+        canvas_context_refresh_needed = False
 
         # ---- Phase 1: validate, pre-check, build execution slots (sequential) ----
         slots = []
@@ -8428,6 +8473,7 @@ def run_agent_stream(
                         canvas_modified = True
                         if not _tool_result_has_error(tool_name, result):
                             successful_canvas_mutation = True
+                            canvas_context_refresh_needed = True
                             # Emit the committed canvas snapshot immediately so
                             # the frontend can replace the live preview with the
                             # final rendered document before the assistant's
@@ -8522,6 +8568,8 @@ def run_agent_stream(
         }
         messages.extend(tool_messages)
         _merge_tool_execution_result_message(messages, tool_execution_result_message)
+        if canvas_context_refresh_needed:
+            _refresh_latest_canvas_context_injection_message(messages, runtime_state)
         if clarification_repair_error and not _has_clarification_tool_repair_instruction(messages):
             messages.append(_build_clarification_tool_repair_instruction(clarification_repair_error))
             _trace_agent_event(

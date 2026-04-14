@@ -176,7 +176,7 @@ Manual smoke test checklist for the Canvas UI is available in [docs/canvas-ui-sm
 │   ├── index.html          # Chat UI
 │   └── settings.html       # Dedicated settings page
 ├── tests/
-│   └── test_app.py         # Backend, streaming, tool, RAG, fetch-to-canvas, pruning, and UI bootstrap tests
+│   └── test_app.py         # Backend, streaming, tool, RAG, fetched-content browsing, pruning, and UI bootstrap tests
 ├── proxies.example.txt     # Sample proxy file
 ├── models/                 # Downloaded local model caches created by install.sh
 ├── requirements.txt        # Core runtime dependencies
@@ -413,9 +413,6 @@ Remote helper/direct image modes rely on at least one configured provider key pl
 | `FETCH_SUMMARIZE_MAX_INPUT_CHARS` | `80000` | Maximum raw text fed into fetch summarization |
 | `FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS` | `2400` | Maximum tokens returned by fetch summarization |
 | `FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS` | `24000` | Maximum raw tool-result text kept for fetch-style results |
-| `FETCH_URL_TO_CANVAS_CHUNK_THRESHOLD` | `20000` | Fetched pages at or above this size are split into Canvas documents |
-| `FETCH_URL_TO_CANVAS_CHUNK_CHARS` | `30000` | Target character budget for each imported Canvas chunk |
-| `FETCH_URL_TO_CANVAS_MAX_CHUNKS` | `10` | Maximum Canvas documents created from one page import |
 | `CHAT_SUMMARY_TRIGGER_TOKEN_COUNT` | `80000` | Visible-token count that triggers automatic summarization |
 | `CHAT_SUMMARY_MODE` | `auto` | `auto`, `never`, or `aggressive` |
 | `CHAT_SUMMARY_MODEL` | `deepseek-chat` | Fallback model used for summarization when no summary preference is stored in Settings |
@@ -452,7 +449,6 @@ The scratchpad is organized into named sections: `lessons`, `profile`, `notes`, 
 - max redirects: 5
 - web cache TTL: 24 hours
 - max search/news results per query: 5
-- fetch-to-canvas import defaults: 20,000-char split threshold, 30,000 chars per chunk, 10 chunks max
 - supported image types: PNG, JPEG, WEBP
 - max upload image size: 10 MB
 - document upload max size: 20 MB
@@ -534,9 +530,6 @@ The Settings page persists these values in `app_settings`:
 - `fetch_url_clip_aggressiveness`
 - `fetch_url_summarized_max_input_chars`
 - `fetch_url_summarized_max_output_tokens`
-- `fetch_url_to_canvas_chunk_threshold`
-- `fetch_url_to_canvas_chunk_chars`
-- `fetch_url_to_canvas_max_chunks`
 - `rag_auto_inject_source_types`
 - `operation_model_fallback_preferences`
 - `proxy_enabled_operations`
@@ -575,7 +568,7 @@ Prompt caching behavior is optimized in three different ways:
 
 The app includes a dedicated `/settings` page.
 
-- Assistant tab: general instructions, AI personality, OpenRouter model management, visible chat-model ordering, task-specific model preferences and fallback chains, temperature, image-processing method, helper image model, tool-step budget, clarification limits, sub-agent timeout/retry controls, fetch clipping/summarization/import budgets, canvas limits, summarization, pruning, proxy scopes, reasoning auto-collapse, and context-selection strategy controls
+- Assistant tab: general instructions, AI personality, OpenRouter model management, visible chat-model ordering, task-specific model preferences and fallback chains, temperature, image-processing method, helper image model, tool-step budget, clarification limits, sub-agent timeout/retry controls, fetch clipping/summarization budgets, canvas limits, summarization, pruning, proxy scopes, reasoning auto-collapse, and context-selection strategy controls
 - Memory tab: conversation memory, scratchpad, tool-memory auto-injection, RAG auto-injection, RAG source pools, and user profile memory behavior
 - Tools tab: active tool permissions, including canvas and project-workspace tools
 - Knowledge tab: knowledge-base uploads, RAG maintenance, and sync controls
@@ -884,12 +877,15 @@ Fetch a specific web page and return only an AI-generated summary of its content
   - `url` (string, required) - full HTTP or HTTPS URL
   - `focus` (string, optional) - optional question or angle to focus the summary on
 
-#### `fetch_url_to_canvas`
+#### `scroll_fetched_content`
 
-Fetch a specific web page and import it into one or more searchable Canvas documents. Use this when you want a long page to stay available across later turns.
+Read a specific line window from the content of a previously fetched URL. This is the main way to browse long fetched pages without importing them into Canvas.
 
 - Arguments:
-  - `url` (string, required) - full HTTP or HTTPS URL
+  - `url` (string, required) - the URL whose content to inspect
+  - `start_line` (integer, optional, 1+) - first line to return; defaults to `1`
+  - `window_lines` (integer, optional, 20-400) - number of lines to return in one window
+  - `refresh_if_missing` (boolean, optional) - re-fetch the page live when cached raw content is absent; defaults to `true`
 
 #### `grep_fetched_content`
 

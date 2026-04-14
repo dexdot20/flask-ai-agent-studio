@@ -164,6 +164,7 @@ SUB_AGENT_ALLOWED_TOOL_NAMES = [
     "search_web",
     "fetch_url",
     "fetch_url_summarized",
+    "scroll_fetched_content",
     "grep_fetched_content",
     "search_news_ddgs",
     "search_news_google",
@@ -191,15 +192,6 @@ FETCH_SUMMARY_TOKEN_THRESHOLD = max(400, _parse_int_env("FETCH_SUMMARY_TOKEN_THR
 FETCH_SUMMARY_MAX_CHARS = max(2000, min(CONTENT_MAX_CHARS, _parse_int_env("FETCH_SUMMARY_MAX_CHARS", 8000)))
 FETCH_SUMMARIZE_MAX_INPUT_CHARS = max(4_000, min(CONTENT_MAX_CHARS, _parse_int_env("FETCH_SUMMARIZE_MAX_INPUT_CHARS", 80_000)))
 FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS = max(200, min(4_000, _parse_int_env("FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS", 2400)))
-FETCH_URL_TO_CANVAS_CHUNK_THRESHOLD = max(
-    2_000,
-    min(CONTENT_MAX_CHARS, _parse_int_env("FETCH_URL_TO_CANVAS_CHUNK_THRESHOLD", 20_000)),
-)
-FETCH_URL_TO_CANVAS_CHUNK_CHARS = max(
-    4_000,
-    min(CONTENT_MAX_CHARS, _parse_int_env("FETCH_URL_TO_CANVAS_CHUNK_CHARS", 30_000)),
-)
-FETCH_URL_TO_CANVAS_MAX_CHUNKS = max(1, min(20, _parse_int_env("FETCH_URL_TO_CANVAS_MAX_CHUNKS", 10)))
 FETCH_SUMMARY_GENERAL_TOP_K = max(1, min(6, _parse_int_env("FETCH_SUMMARY_GENERAL_TOP_K", 3)))
 FETCH_SUMMARY_QUERY_TOP_K = max(1, min(8, _parse_int_env("FETCH_SUMMARY_QUERY_TOP_K", 4)))
 FETCH_SUMMARY_EXCERPT_MAX_CHARS = max(200, min(1200, _parse_int_env("FETCH_SUMMARY_EXCERPT_MAX_CHARS", 500)))
@@ -261,7 +253,7 @@ DEFAULT_ACTIVE_TOOL_NAMES = [
     "search_web",
     "fetch_url",
     "fetch_url_summarized",
-    "fetch_url_to_canvas",
+    "scroll_fetched_content",
     "grep_fetched_content",
     "search_news_ddgs",
     "search_news_google",
@@ -524,9 +516,6 @@ DEFAULT_SETTINGS = {
     "fetch_url_summarized_max_output_tokens": str(FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS),
     "fetch_raw_max_text_chars": str(FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS),
     "fetch_summary_max_chars": str(FETCH_SUMMARY_MAX_CHARS),
-    "fetch_url_to_canvas_chunk_threshold": str(FETCH_URL_TO_CANVAS_CHUNK_THRESHOLD),
-    "fetch_url_to_canvas_chunk_chars": str(FETCH_URL_TO_CANVAS_CHUNK_CHARS),
-    "fetch_url_to_canvas_max_chunks": str(FETCH_URL_TO_CANVAS_MAX_CHUNKS),
     "rag_chunk_size": str(RAG_CHUNK_SIZE),
     "rag_chunk_overlap": str(RAG_CHUNK_OVERLAP),
     "rag_max_chunks_per_source": str(RAG_MAX_CHUNKS_PER_SOURCE),

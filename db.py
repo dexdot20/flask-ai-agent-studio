@@ -49,9 +49,6 @@ from config import (
     FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS,
     FETCH_SUMMARY_MAX_CHARS,
     FETCH_SUMMARY_TOKEN_THRESHOLD,
-    FETCH_URL_TO_CANVAS_CHUNK_CHARS,
-    FETCH_URL_TO_CANVAS_CHUNK_THRESHOLD,
-    FETCH_URL_TO_CANVAS_MAX_CHUNKS,
     IMAGE_STORAGE_DIR,
     DEFAULT_MAX_PARALLEL_TOOLS,
     ENTROPY_PROFILE_PRESETS,
@@ -5158,39 +5155,6 @@ def get_fetch_url_summarized_max_output_tokens(settings: dict | None = None) -> 
         FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS,
         200,
         4_000,
-    )
-
-
-def get_fetch_url_to_canvas_chunk_threshold(settings: dict | None = None) -> int:
-    source = settings if settings is not None else get_app_settings()
-    return _get_int_setting_value(
-        source,
-        "fetch_url_to_canvas_chunk_threshold",
-        FETCH_URL_TO_CANVAS_CHUNK_THRESHOLD,
-        2_000,
-        CONTENT_MAX_CHARS,
-    )
-
-
-def get_fetch_url_to_canvas_chunk_chars(settings: dict | None = None) -> int:
-    source = settings if settings is not None else get_app_settings()
-    return _get_int_setting_value(
-        source,
-        "fetch_url_to_canvas_chunk_chars",
-        FETCH_URL_TO_CANVAS_CHUNK_CHARS,
-        4_000,
-        CONTENT_MAX_CHARS,
-    )
-
-
-def get_fetch_url_to_canvas_max_chunks(settings: dict | None = None) -> int:
-    source = settings if settings is not None else get_app_settings()
-    return _get_int_setting_value(
-        source,
-        "fetch_url_to_canvas_max_chunks",
-        FETCH_URL_TO_CANVAS_MAX_CHUNKS,
-        1,
-        20,
     )
 
 

@@ -144,9 +144,6 @@ const fetchThresholdEl = document.getElementById("fetch-threshold-input");
 const fetchAggressivenessEl = document.getElementById("fetch-aggressiveness-input");
 const fetchSummarizeMaxInputCharsEl = document.getElementById("fetch-summarize-max-input-chars-input");
 const fetchSummarizeMaxOutputTokensEl = document.getElementById("fetch-summarize-max-output-tokens-input");
-const fetchToCanvasThresholdEl = document.getElementById("fetch-to-canvas-threshold-input");
-const fetchToCanvasChunkCharsEl = document.getElementById("fetch-to-canvas-chunk-chars-input");
-const fetchToCanvasMaxChunksEl = document.getElementById("fetch-to-canvas-max-chunks-input");
 const canvasPromptLinesEl = document.getElementById("canvas-prompt-lines-input");
 const canvasPromptTokensEl = document.getElementById("canvas-prompt-tokens-input");
 const canvasPromptCharsEl = document.getElementById("canvas-prompt-chars-input");
@@ -2804,9 +2801,6 @@ function applySettingsToForm() {
   if (fetchAggressivenessEl) fetchAggressivenessEl.value = String(appSettings.fetch_url_clip_aggressiveness || 50);
   if (fetchSummarizeMaxInputCharsEl) fetchSummarizeMaxInputCharsEl.value = String(appSettings.fetch_url_summarized_max_input_chars || 80000);
   if (fetchSummarizeMaxOutputTokensEl) fetchSummarizeMaxOutputTokensEl.value = String(appSettings.fetch_url_summarized_max_output_tokens || 2400);
-  if (fetchToCanvasThresholdEl) fetchToCanvasThresholdEl.value = String(appSettings.fetch_url_to_canvas_chunk_threshold || 20000);
-  if (fetchToCanvasChunkCharsEl) fetchToCanvasChunkCharsEl.value = String(appSettings.fetch_url_to_canvas_chunk_chars || 30000);
-  if (fetchToCanvasMaxChunksEl) fetchToCanvasMaxChunksEl.value = String(appSettings.fetch_url_to_canvas_max_chunks || 10);
   if (canvasPromptLinesEl) canvasPromptLinesEl.value = String(appSettings.canvas_prompt_max_lines || 250);
   if (canvasPromptTokensEl) canvasPromptTokensEl.value = String(appSettings.canvas_prompt_max_tokens || 4000);
   if (canvasPromptCharsEl) canvasPromptCharsEl.value = String(appSettings.canvas_prompt_max_chars || 20000);
@@ -3008,9 +3002,6 @@ function applyServerSettingsData(data) {
   appSettings.fetch_url_clip_aggressiveness = data.fetch_url_clip_aggressiveness ?? 50;
   appSettings.fetch_url_summarized_max_input_chars = data.fetch_url_summarized_max_input_chars || 80000;
   appSettings.fetch_url_summarized_max_output_tokens = data.fetch_url_summarized_max_output_tokens || 2400;
-  appSettings.fetch_url_to_canvas_chunk_threshold = data.fetch_url_to_canvas_chunk_threshold || 20000;
-  appSettings.fetch_url_to_canvas_chunk_chars = data.fetch_url_to_canvas_chunk_chars || 30000;
-  appSettings.fetch_url_to_canvas_max_chunks = data.fetch_url_to_canvas_max_chunks || 10;
   appSettings.canvas_prompt_max_lines = data.canvas_prompt_max_lines || 250;
   appSettings.canvas_prompt_max_tokens = data.canvas_prompt_max_tokens || 4000;
   appSettings.canvas_prompt_max_chars = data.canvas_prompt_max_chars || 20000;
@@ -3124,9 +3115,6 @@ async function saveSettings() {
     fetch_url_clip_aggressiveness: readNumericSetting(fetchAggressivenessEl, 50),
     fetch_url_summarized_max_input_chars: readNumericSetting(fetchSummarizeMaxInputCharsEl, 80000, { allowZero: false, min: 4000, max: 100000 }),
     fetch_url_summarized_max_output_tokens: readNumericSetting(fetchSummarizeMaxOutputTokensEl, 2400, { allowZero: false, min: 200, max: 4000 }),
-    fetch_url_to_canvas_chunk_threshold: readNumericSetting(fetchToCanvasThresholdEl, 20000, { allowZero: false, min: 2000, max: 100000 }),
-    fetch_url_to_canvas_chunk_chars: readNumericSetting(fetchToCanvasChunkCharsEl, 30000, { allowZero: false, min: 4000, max: 100000 }),
-    fetch_url_to_canvas_max_chunks: readNumericSetting(fetchToCanvasMaxChunksEl, 10, { allowZero: false, min: 1, max: 20 }),
     canvas_prompt_max_lines: readNumericSetting(canvasPromptLinesEl, 250, { allowZero: false }),
     canvas_prompt_max_tokens: readNumericSetting(canvasPromptTokensEl, 4000, { allowZero: false }),
     canvas_prompt_max_chars: readNumericSetting(canvasPromptCharsEl, 20000, { allowZero: false }),

@@ -250,6 +250,17 @@ HISTORICAL_CONTEXT_INJECTION_STRIP_HEADINGS = {
     "## Active Tools This Turn",
     "## Current Date and Time",
 }
+CANVAS_RUNTIME_CONTEXT_REFRESH_HEADINGS = {
+    "## Canvas File Set Summary",
+    "## Active Canvas Document",
+    "## Ignored Canvas Documents",
+    "## Pinned Canvas Viewports",
+}
+CANVAS_RUNTIME_CONTEXT_INSERT_BEFORE_HEADINGS = (
+    "## Conversation Summaries",
+    "## Tool Execution History",
+    "## Active Tools This Turn",
+)
 
 
 def _normalize_runtime_scratchpad_sections(
@@ -1012,6 +1023,41 @@ def _strip_volatile_sections_from_context_injection(context_injection: str) -> s
     return "\n\n".join(section for section in retained_sections if section).strip()
 
 
+def _split_context_injection_sections(context_injection: str) -> list[tuple[str | None, str]]:
+    normalized = str(context_injection or "").strip()
+    if not normalized:
+        return []
+
+    sections: list[tuple[str | None, str]] = []
+    current_lines: list[str] = []
+    current_heading: str | None = None
+
+    def flush_section() -> None:
+        nonlocal current_lines, current_heading
+        if not current_lines:
+            return
+        section_text = "\n".join(current_lines).strip()
+        if section_text:
+            sections.append((current_heading, section_text))
+        current_lines = []
+        current_heading = None
+
+    for line in normalized.splitlines():
+        if line.startswith("## "):
+            flush_section()
+            current_heading = line.strip()
+            current_lines = [line]
+            continue
+
+        if not current_lines:
+            current_lines = [line]
+        else:
+            current_lines.append(line)
+
+    flush_section()
+    return sections
+
+
 def prepare_context_injection_for_history(context_injection: str) -> str:
     """Return the stable subset of a runtime context injection worth persisting.
 
@@ -1761,6 +1807,200 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
     return lines
 
 
+def _build_canvas_runtime_context_sections(
+    active_tool_names: list[str],
+    canvas_payload: dict | None,
+    *,
+    previous_canvas_content_hash: str | None = None,
+) -> list[str]:
+    if not isinstance(canvas_payload, dict):
+        return []
+
+    sections: list[str] = []
+    workspace_summary_lines = _build_canvas_workspace_summary(canvas_payload)
+    if workspace_summary_lines:
+        sections.append(_finalize_prompt_text(workspace_summary_lines))
+
+    active_document = canvas_payload.get("active_document") if isinstance(canvas_payload.get("active_document"), dict) else {}
+    if not active_document:
+        return sections
+
+    active_document_ignored = active_document.get("ignored") is True
+    active_lines = ["## Active Canvas Document"]
+    active_lines.append(f"- Active document id: {active_document['id']}")
+    if not workspace_summary_lines and active_document.get("path"):
+        active_lines.append(f"- Path: {active_document['path']}")
+    elif not workspace_summary_lines and active_document.get("title"):
+        active_lines.append(f"- Title: {active_document['title']}")
+    if active_document.get("role"):
+        active_lines.append(f"- Role: {active_document['role']}")
+    active_lines.append(f"- Format: {active_document['format']}")
+    active_lines.append(f"- Content mode: {get_canvas_document_content_mode(active_document)}")
+    active_lines.append(f"- Canvas mode: {get_canvas_document_canvas_mode(active_document)}")
+    if active_document.get("language"):
+        active_lines.append(f"- Language: {active_document['language']}")
+    active_lines.append(f"- Total lines: {canvas_payload['total_lines']}")
+    if int(active_document.get("page_count") or 0) > 1:
+        active_lines.append(f"- Total pages: {int(active_document.get('page_count') or 0)}")
+    if active_document_ignored:
+        active_lines.append("- Ignored in prompt: true")
+        if active_document.get("ignored_reason"):
+            active_lines.append(f"- Ignore reason: {active_document['ignored_reason']}")
+        active_lines.append("- Visible lines in prompt: hidden (ignored document)")
+    elif get_canvas_document_capabilities(active_document)["line_addressable"]:
+        active_lines.append(
+            f"- Visible lines in prompt: 1-{canvas_payload['visible_line_end']}"
+            + (" (truncated excerpt)" if canvas_payload["is_truncated"] else "")
+        )
+    else:
+        active_lines.append("- Visual preview: page images are available in the UI, but line excerpts are not injected for this document type.")
+    if not active_document_ignored:
+        preview_compaction_note = _build_canvas_preview_compaction_note(
+            active_tool_names,
+            int(canvas_payload.get("clipped_line_count") or 0),
+        )
+        if preview_compaction_note:
+            active_lines.append(preview_compaction_note)
+    if not active_document_ignored and "expand_canvas_document" in set(active_tool_names or []):
+        active_lines.append(
+            "- Snapshot rule: expand_canvas_document returns a call-time snapshot. If the canvas may have changed after an earlier expansion, call it again before relying on that older view."
+        )
+    if active_document_ignored:
+        active_lines.append(
+            "- Guidance: This canvas document is intentionally ignored for automatic prompt content. Its metadata stays visible so you can re-enable it later with update_canvas_metadata and ignored=false when needed."
+        )
+    elif not get_canvas_document_capabilities(active_document)["line_addressable"]:
+        active_lines.append(
+            "- Guidance: This active canvas document is an image-backed visual preview. Treat it as read-only and avoid line-based canvas inspection or editing tools."
+        )
+    elif canvas_payload["is_truncated"]:
+        active_lines.append(_build_canvas_truncated_excerpt_guidance(active_tool_names))
+    else:
+        active_lines.append(
+            "- Guidance: The active canvas document is fully visible in the current excerpt. Canvas is already fully visible, so use the visible line numbers directly for line-level edits."
+        )
+    if canvas_payload["mode"] == "project":
+        active_lines.append(
+            "- In project mode, prefer the explicit document_path shown in the prompt for targeting, even when you do not know the document_id yet."
+        )
+    if (
+        not active_document_ignored
+        and get_canvas_document_capabilities(active_document)["line_addressable"]
+        and is_canvas_document_editable(active_document)
+        and "rewrite_canvas_document" in set(active_tool_names or [])
+    ):
+        active_lines.append(
+            "- Auto-update rule: If your response generates content that directly replaces or substantially transforms this document, call rewrite_canvas_document immediately — do not ask the user for permission to save."
+        )
+    if not active_document_ignored and int(active_document.get("page_count") or 0) > 1 and get_canvas_document_capabilities(active_document)["line_addressable"]:
+        active_lines.append(
+            "- Multi-page guidance: if the task refers to a specific PDF-style page, call focus_canvas_page only when the document already exposes explicit '## Page N' markers in its text content."
+        )
+    if canvas_payload["visible_lines"] and not active_document_ignored:
+        canvas_content_unchanged = (
+            previous_canvas_content_hash
+            and previous_canvas_content_hash == canvas_payload.get("content_hash")
+        )
+        if canvas_content_unchanged:
+            active_lines.append(
+                f"[Document content unchanged since last turn — cached version is current. Total: {canvas_payload['total_lines']} lines]"
+            )
+        else:
+            active_lines.append("```text\n" + "\n".join(canvas_payload["visible_lines"]) + "\n```")
+    elif get_canvas_document_capabilities(active_document)["line_addressable"] and not active_document_ignored:
+        active_lines.append("(The active canvas document is empty.)")
+    sections.append(_finalize_prompt_text(active_lines))
+
+    ignored_documents_section = _build_ignored_canvas_documents_section(canvas_payload)
+    if ignored_documents_section:
+        sections.append(_finalize_prompt_text(ignored_documents_section))
+
+    viewport_payloads = canvas_payload.get("viewports") if isinstance(canvas_payload.get("viewports"), list) else []
+    if viewport_payloads:
+        viewport_lines = [
+            "## Pinned Canvas Viewports",
+            "- These pinned ranges are auto-injected from prior viewport selections. Reuse them before asking to scroll or expand the same region again.",
+        ]
+        for viewport in viewport_payloads[:6]:
+            target_label = str(viewport.get("document_path") or viewport.get("title") or viewport.get("document_id") or "Canvas").strip()
+            page_label = f" page {int(viewport.get('page_number') or 0)}" if int(viewport.get("page_number") or 0) > 0 else ""
+            viewport_lines.append(
+                f"- {target_label}{page_label} lines {int(viewport.get('start_line') or 0)}-{int(viewport.get('end_line') or 0)}"
+                + (
+                    f" (remaining turns: {int(viewport.get('remaining_turns') or 0)})"
+                    if int(viewport.get("remaining_turns") or 0) > 0
+                    else ""
+                )
+            )
+            visible_lines = viewport.get("visible_lines") if isinstance(viewport.get("visible_lines"), list) else []
+            if visible_lines:
+                viewport_lines.append("```text\n" + "\n".join(str(line) for line in visible_lines) + "\n```")
+        sections.append(_finalize_prompt_text(viewport_lines))
+
+    return [section for section in sections if section]
+
+
+def refresh_canvas_sections_in_context_injection(
+    context_injection: str,
+    *,
+    active_tool_names: list[str] | None = None,
+    canvas_documents=None,
+    canvas_active_document_id: str | None = None,
+    canvas_viewports: list[dict] | None = None,
+    canvas_prompt_max_lines: int | None = None,
+    canvas_prompt_max_chars: int | None = None,
+    canvas_prompt_max_tokens: int | None = None,
+    canvas_prompt_code_line_max_chars: int | None = None,
+    canvas_prompt_text_line_max_chars: int | None = None,
+) -> str:
+    normalized_context = str(context_injection or "").strip()
+    if not normalized_context:
+        return ""
+
+    canvas_payload = _build_canvas_prompt_payload(
+        canvas_documents,
+        active_document_id=canvas_active_document_id,
+        canvas_viewports=canvas_viewports,
+        max_lines=canvas_prompt_max_lines or CANVAS_PROMPT_MAX_LINES,
+        max_chars=canvas_prompt_max_chars,
+        max_tokens=canvas_prompt_max_tokens if canvas_prompt_max_tokens is not None else CANVAS_PROMPT_MAX_TOKENS,
+        code_line_max_chars=canvas_prompt_code_line_max_chars,
+        text_line_max_chars=canvas_prompt_text_line_max_chars,
+    )
+    replacement_sections = _build_canvas_runtime_context_sections(
+        _normalize_tool_name_list(active_tool_names),
+        canvas_payload,
+        previous_canvas_content_hash=None,
+    )
+
+    retained_sections: list[tuple[str | None, str]] = []
+    insert_index: int | None = None
+    removed_any = False
+    for heading, section_text in _split_context_injection_sections(normalized_context):
+        if heading in CANVAS_RUNTIME_CONTEXT_REFRESH_HEADINGS:
+            removed_any = True
+            if insert_index is None:
+                insert_index = len(retained_sections)
+            continue
+        retained_sections.append((heading, section_text))
+
+    if insert_index is None:
+        for index, (heading, _) in enumerate(retained_sections):
+            if heading in CANVAS_RUNTIME_CONTEXT_INSERT_BEFORE_HEADINGS:
+                insert_index = index
+                break
+    if insert_index is None:
+        insert_index = len(retained_sections)
+
+    if not replacement_sections and not removed_any:
+        return normalized_context
+
+    final_sections = [section_text for _, section_text in retained_sections[:insert_index]]
+    final_sections.extend(replacement_sections)
+    final_sections.extend(section_text for _, section_text in retained_sections[insert_index:])
+    return "\n\n".join(section for section in final_sections if section).strip()
+
+
 def _normalize_clarification_max_questions(value: int | None) -> int:
     try:
         normalized = int(value) if value is not None else CLARIFICATION_DEFAULT_MAX_QUESTIONS
@@ -2035,118 +2275,13 @@ def _build_runtime_volatile_parts(
             text_line_max_chars=canvas_prompt_text_line_max_chars,
         )
     if canvas_payload:
-        workspace_summary_lines = _build_canvas_workspace_summary(canvas_payload)
-        if workspace_summary_lines:
-            volatile_parts.extend(workspace_summary_lines)
-        active_document = canvas_payload["active_document"]
-        active_document_ignored = active_document.get("ignored") is True
-        volatile_parts.append("## Active Canvas Document")
-        volatile_parts.append(f"- Active document id: {active_document['id']}")
-        if not workspace_summary_lines and active_document.get("path"):
-            volatile_parts.append(f"- Path: {active_document['path']}")
-        elif not workspace_summary_lines and active_document.get("title"):
-            volatile_parts.append(f"- Title: {active_document['title']}")
-        if active_document.get("role"):
-            volatile_parts.append(f"- Role: {active_document['role']}")
-        volatile_parts.append(f"- Format: {active_document['format']}")
-        volatile_parts.append(f"- Content mode: {get_canvas_document_content_mode(active_document)}")
-        volatile_parts.append(f"- Canvas mode: {get_canvas_document_canvas_mode(active_document)}")
-        if active_document.get("language"):
-            volatile_parts.append(f"- Language: {active_document['language']}")
-        volatile_parts.append(f"- Total lines: {canvas_payload['total_lines']}")
-        if int(active_document.get("page_count") or 0) > 1:
-            volatile_parts.append(f"- Total pages: {int(active_document.get('page_count') or 0)}")
-        if active_document_ignored:
-            volatile_parts.append("- Ignored in prompt: true")
-            if active_document.get("ignored_reason"):
-                volatile_parts.append(f"- Ignore reason: {active_document['ignored_reason']}")
-            volatile_parts.append("- Visible lines in prompt: hidden (ignored document)")
-        elif get_canvas_document_capabilities(active_document)["line_addressable"]:
-            volatile_parts.append(
-                f"- Visible lines in prompt: 1-{canvas_payload['visible_line_end']}"
-                + (" (truncated excerpt)" if canvas_payload["is_truncated"] else "")
-            )
-        else:
-            volatile_parts.append("- Visual preview: page images are available in the UI, but line excerpts are not injected for this document type.")
-        if not active_document_ignored:
-            preview_compaction_note = _build_canvas_preview_compaction_note(
+        volatile_parts.extend(
+            _build_canvas_runtime_context_sections(
                 active_tool_names,
-                int(canvas_payload.get("clipped_line_count") or 0),
+                canvas_payload,
+                previous_canvas_content_hash=previous_canvas_content_hash,
             )
-            if preview_compaction_note:
-                volatile_parts.append(preview_compaction_note)
-        if not active_document_ignored and "expand_canvas_document" in set(active_tool_names or []):
-            volatile_parts.append(
-                "- Snapshot rule: expand_canvas_document returns a call-time snapshot. If the canvas may have changed after an earlier expansion, call it again before relying on that older view."
-            )
-        if active_document_ignored:
-            volatile_parts.append(
-                "- Guidance: This canvas document is intentionally ignored for automatic prompt content. Its metadata stays visible so you can re-enable it later with update_canvas_metadata and ignored=false when needed."
-            )
-        elif not get_canvas_document_capabilities(active_document)["line_addressable"]:
-            volatile_parts.append(
-                "- Guidance: This active canvas document is an image-backed visual preview. Treat it as read-only and avoid line-based canvas inspection or editing tools."
-            )
-        elif canvas_payload["is_truncated"]:
-            volatile_parts.append(_build_canvas_truncated_excerpt_guidance(active_tool_names))
-        else:
-            volatile_parts.append(
-                "- Guidance: The active canvas document is fully visible in the current excerpt. Canvas is already fully visible, so use the visible line numbers directly for line-level edits."
-            )
-        if canvas_payload["mode"] == "project":
-            volatile_parts.append(
-                "- In project mode, prefer the explicit document_path shown in the prompt for targeting, even when you do not know the document_id yet."
-            )
-        if (
-            not active_document_ignored
-            and get_canvas_document_capabilities(active_document)["line_addressable"]
-            and is_canvas_document_editable(active_document)
-            and "rewrite_canvas_document" in set(active_tool_names or [])
-        ):
-            volatile_parts.append(
-                "- Auto-update rule: If your response generates content that directly replaces or substantially transforms this document, call rewrite_canvas_document immediately — do not ask the user for permission to save."
-            )
-        if not active_document_ignored and int(active_document.get("page_count") or 0) > 1 and get_canvas_document_capabilities(active_document)["line_addressable"]:
-            volatile_parts.append(
-                "- Multi-page guidance: if the task refers to a specific PDF-style page, call focus_canvas_page only when the document already exposes explicit '## Page N' markers in its text content."
-            )
-        if canvas_payload["visible_lines"] and not active_document_ignored:
-            _canvas_content_unchanged = (
-                previous_canvas_content_hash
-                and previous_canvas_content_hash == canvas_payload.get("content_hash")
-            )
-            if _canvas_content_unchanged:
-                volatile_parts.append(
-                    f"[Document content unchanged since last turn — cached version is current. Total: {canvas_payload['total_lines']} lines]\n"
-                )
-            else:
-                volatile_parts.append("```text\n" + "\n".join(canvas_payload["visible_lines"]) + "\n```\n")
-        elif get_canvas_document_capabilities(active_document)["line_addressable"] and not active_document_ignored:
-            volatile_parts.append("(The active canvas document is empty.)\n")
-
-        ignored_documents_section = _build_ignored_canvas_documents_section(canvas_payload)
-        if ignored_documents_section:
-            volatile_parts.extend(ignored_documents_section)
-
-        viewport_payloads = canvas_payload.get("viewports") if isinstance(canvas_payload.get("viewports"), list) else []
-        if viewport_payloads:
-            volatile_parts.append("## Pinned Canvas Viewports")
-            volatile_parts.append("- These pinned ranges are auto-injected from prior viewport selections. Reuse them before asking to scroll or expand the same region again.")
-            for viewport in viewport_payloads[:6]:
-                target_label = str(viewport.get("document_path") or viewport.get("title") or viewport.get("document_id") or "Canvas").strip()
-                page_label = f" page {int(viewport.get('page_number') or 0)}" if int(viewport.get("page_number") or 0) > 0 else ""
-                volatile_parts.append(
-                    f"- {target_label}{page_label} lines {int(viewport.get('start_line') or 0)}-{int(viewport.get('end_line') or 0)}"
-                    + (
-                        f" (remaining turns: {int(viewport.get('remaining_turns') or 0)})"
-                        if int(viewport.get("remaining_turns") or 0) > 0
-                        else ""
-                    )
-                )
-                visible_lines = viewport.get("visible_lines") if isinstance(viewport.get("visible_lines"), list) else []
-                if visible_lines:
-                    volatile_parts.append("```text\n" + "\n".join(str(line) for line in visible_lines) + "\n```")
-            volatile_parts.append("")
+        )
 
     if summary_count:
         volatile_parts.append("## Conversation Summaries")

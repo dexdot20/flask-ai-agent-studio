@@ -14,7 +14,12 @@ from db import (
     build_user_profile_system_context,
     upsert_user_profile_entry,
 )
-from messages import build_runtime_system_message, build_tool_call_contract, prepend_runtime_context
+from messages import (
+    build_runtime_system_message,
+    build_tool_call_contract,
+    prepend_runtime_context,
+    refresh_canvas_sections_in_context_injection,
+)
 from tests.support.app_harness import BaseAppRoutesTestCase
 from tool_registry import TOOL_SPEC_BY_NAME, get_openai_tool_specs
 
@@ -514,6 +519,62 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         self.assertIn("src/app.py lines 2-3", content)
         self.assertIn("2: line 2", content)
         self.assertIn("3: line 3", content)
+
+    def test_refresh_canvas_sections_in_context_injection_removes_deleted_canvas_sections(self):
+        context_injection = (
+            "## Current Date and Time\n"
+            "- Time: 21:40\n\n"
+            "## Active Canvas Document\n"
+            "- Active document id: canvas-1\n"
+            "```text\n"
+            "1: old line\n"
+            "```\n\n"
+            "## Pinned Canvas Viewports\n"
+            "- src/app.py lines 2-3\n\n"
+            "## Conversation Summaries\n"
+            "- Earlier summary"
+        )
+
+        refreshed = refresh_canvas_sections_in_context_injection(
+            context_injection,
+            active_tool_names=["delete_canvas_document"],
+            canvas_documents=[],
+        )
+
+        self.assertIn("## Current Date and Time", refreshed)
+        self.assertIn("## Conversation Summaries", refreshed)
+        self.assertNotIn("## Active Canvas Document", refreshed)
+        self.assertNotIn("## Pinned Canvas Viewports", refreshed)
+        self.assertNotIn("old line", refreshed)
+        self.assertLess(refreshed.index("## Current Date and Time"), refreshed.index("## Conversation Summaries"))
+
+    def test_refresh_canvas_sections_in_context_injection_inserts_new_canvas_sections_before_summaries(self):
+        context_injection = (
+            "## Current Date and Time\n"
+            "- Time: 21:40\n\n"
+            "## Conversation Summaries\n"
+            "- Earlier summary"
+        )
+
+        refreshed = refresh_canvas_sections_in_context_injection(
+            context_injection,
+            active_tool_names=["create_canvas_document", "rewrite_canvas_document"],
+            canvas_documents=[
+                {
+                    "id": "canvas-1",
+                    "title": "notes.md",
+                    "format": "markdown",
+                    "language": "markdown",
+                    "content": "alpha\nbeta",
+                }
+            ],
+            canvas_active_document_id="canvas-1",
+        )
+
+        self.assertIn("## Active Canvas Document", refreshed)
+        self.assertIn("1: alpha", refreshed)
+        self.assertIn("2: beta", refreshed)
+        self.assertLess(refreshed.index("## Active Canvas Document"), refreshed.index("## Conversation Summaries"))
 
     def test_runtime_system_message_mentions_canvas_preview_compaction(self):
         message = build_runtime_system_message(
