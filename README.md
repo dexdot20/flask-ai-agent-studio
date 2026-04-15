@@ -348,6 +348,14 @@ At least one provider key is required.
 | `LOGIN_MAX_FAILED_ATTEMPTS` | `3` | Failed PIN attempts before temporary lockout |
 | `LOGIN_LOCKOUT_SECONDS` | `300` | Lockout duration after repeated failures |
 | `LOGIN_REMEMBER_SESSION_DAYS` | `3650` | Lifetime used for remembered devices |
+| `TRUST_PROXY_HEADERS` | `false` | Trust reverse-proxy forwarded headers (`X-Forwarded-*`) |
+| `FORCE_HTTPS` | `false` | Redirect all HTTP requests to HTTPS using status `308` |
+| `SESSION_COOKIE_SECURE` | `false` (defaults to `FORCE_HTTPS`) | Sends session cookies only over HTTPS |
+| `PREFERRED_URL_SCHEME` | `http` (`https` when `FORCE_HTTPS=true`) | Default URL scheme used by Flask for generated URLs |
+| `SECURITY_HSTS_ENABLED` | `false` | Adds the `Strict-Transport-Security` header on HTTPS responses |
+| `SECURITY_HSTS_MAX_AGE` | `31536000` | HSTS max-age in seconds |
+| `SECURITY_HSTS_INCLUDE_SUBDOMAINS` | `true` | Adds HSTS `includeSubDomains` directive |
+| `SECURITY_HSTS_PRELOAD` | `false` | Adds HSTS `preload` directive |
 
 ### RAG and embedding
 
@@ -1310,6 +1318,9 @@ A sample `.pre-commit-config.yaml` is not included in the repository.
 
 ## Security and operational notes
 
+- to prevent ISP or LAN observers from reading user messages in transit, run the app behind HTTPS (reverse proxy) and enable `FORCE_HTTPS=true` plus `SESSION_COOKIE_SECURE=true`
+- if you terminate TLS at a reverse proxy, set `TRUST_PROXY_HEADERS=true` so Flask correctly treats proxied HTTPS requests as secure
+- enable HSTS with `SECURITY_HSTS_ENABLED=true` only after HTTPS is working end-to-end
 - `fetch_url` rejects localhost and private-network targets
 - only enabled tools are exposed to the model
 - tool arguments are schema-validated before execution

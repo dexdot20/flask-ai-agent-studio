@@ -112,6 +112,15 @@ LOGIN_SESSION_TIMEOUT_MINUTES = max(1, _parse_int_env("LOGIN_SESSION_TIMEOUT_MIN
 LOGIN_MAX_FAILED_ATTEMPTS = max(1, _parse_int_env("LOGIN_MAX_FAILED_ATTEMPTS", 3))
 LOGIN_LOCKOUT_SECONDS = max(1, _parse_int_env("LOGIN_LOCKOUT_SECONDS", 300))
 LOGIN_REMEMBER_SESSION_DAYS = max(1, _parse_int_env("LOGIN_REMEMBER_SESSION_DAYS", 3650))
+TRUST_PROXY_HEADERS = _parse_bool_env("TRUST_PROXY_HEADERS", False)
+FORCE_HTTPS = _parse_bool_env("FORCE_HTTPS", False)
+SESSION_COOKIE_SECURE = _parse_bool_env("SESSION_COOKIE_SECURE", FORCE_HTTPS)
+_preferred_url_scheme = (os.getenv("PREFERRED_URL_SCHEME") or ("https" if FORCE_HTTPS else "http")).strip().lower()
+PREFERRED_URL_SCHEME = _preferred_url_scheme if _preferred_url_scheme in {"http", "https"} else "http"
+SECURITY_HSTS_ENABLED = _parse_bool_env("SECURITY_HSTS_ENABLED", False)
+SECURITY_HSTS_MAX_AGE = max(0, _parse_int_env("SECURITY_HSTS_MAX_AGE", 31_536_000))
+SECURITY_HSTS_INCLUDE_SUBDOMAINS = _parse_bool_env("SECURITY_HSTS_INCLUDE_SUBDOMAINS", True)
+SECURITY_HSTS_PRELOAD = _parse_bool_env("SECURITY_HSTS_PRELOAD", False)
 
 
 IMAGE_MAX_BYTES = 10 * 1024 * 1024

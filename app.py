@@ -1,7 +1,8 @@
 from datetime import timedelta
 from threading import Lock
 
-from flask import Flask
+from flask import Flask, redirect, request
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 import config
 from request_security import install_request_security
@@ -39,8 +40,35 @@ def create_app(database_path: str | None = None, *, load_persisted_runtime_setti
     app.config["DATABASE_PATH"] = resolved_database_path
     app.config["SECRET_KEY"] = config.SECRET_KEY
     app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=config.LOGIN_REMEMBER_SESSION_DAYS)
+    app.config["PREFERRED_URL_SCHEME"] = config.PREFERRED_URL_SCHEME
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    app.config["SESSION_COOKIE_SECURE"] = config.SESSION_COOKIE_SECURE
+
+    if config.TRUST_PROXY_HEADERS:
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
+
+    if config.SECURITY_HSTS_ENABLED:
+        hsts_directives = [f"max-age={config.SECURITY_HSTS_MAX_AGE}"]
+        if config.SECURITY_HSTS_INCLUDE_SUBDOMAINS:
+            hsts_directives.append("includeSubDomains")
+        if config.SECURITY_HSTS_PRELOAD:
+            hsts_directives.append("preload")
+        hsts_value = "; ".join(hsts_directives)
+
+        @app.after_request
+        def _inject_hsts_header(response):
+            if request.is_secure:
+                response.headers.setdefault("Strict-Transport-Security", hsts_value)
+            return response
+
+    if config.FORCE_HTTPS:
+        @app.before_request
+        def _enforce_https():
+            if request.is_secure:
+                return None
+            secure_url = request.url.replace("http://", "https://", 1)
+            return redirect(secure_url, code=308)
 
     @app.before_request
     def _sync_rag_once_before_request():
@@ -75,4 +103,4 @@ if __name__ == "__main__":
     preload_dependencies(runtime_app)
     runtime_app.config["RAG_STARTUP_SYNC_DONE"] = True
     _sync_rag_on_startup()
-    runtime_app.run(host="0.0.0.0", debug=True, use_reloader=False)
+    runtime_app.run(host="0.0.0.0", debug=False, use_reloader=False)
