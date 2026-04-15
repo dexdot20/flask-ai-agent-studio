@@ -6018,15 +6018,82 @@ def _normalize_conversation_title_for_tool(raw_title: str) -> str:
     return text[:48].strip()
 
 
+def _build_internal_title_generation_prompt(source_text: str) -> list[dict]:
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You generate a compact conversation title from the user's message. "
+                "Return only a noun phrase or short topic label, not a sentence.\n\n"
+                "Rules:\n"
+                "- Return ONLY the title — nothing else.\n"
+                "- Use 2-5 words when possible; 1 word is allowed if it is specific.\n"
+                "- Match the user's language when clear.\n"
+                "- Prefer the concrete topic over generic labels like 'Greeting', 'Question', 'Canvas', or 'Completed'.\n"
+                "- Do NOT answer, explain, apologize, greet, or mention that you are generating a title.\n"
+                "- No quotes, markdown, emojis, or punctuation at the end.\n"
+                "- If the topic is unclear, return exactly: New Chat\n\n"
+                "Examples:\n"
+                "User: 'How do I sort a list in Python?' → Python List Sorting\n"
+                "User: 'Hello, how are you?' → Hello\n"
+                "User: 'What is the capital of France?' → Capital of France\n"
+                "User: 'What's the weather like today?' → Weather Forecast"
+            ),
+        },
+        {
+            "role": "user",
+            "content": str(source_text or "").strip(),
+        },
+    ]
+
+
+def _generate_conversation_title_with_dedicated_model(conversation_id: int, fallback_model: str = "") -> str:
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT role, content
+               FROM messages
+               WHERE conversation_id = ?
+                 AND deleted_at IS NULL
+                 AND role IN ('user', 'summary')
+               ORDER BY position, id
+               LIMIT 3""",
+            (conversation_id,),
+        ).fetchall()
+
+    if not rows:
+        return ""
+
+    source_text = ""
+    for row in rows:
+        content = str(row["content"] or "").strip()
+        if content:
+            source_text = content
+            break
+    if not source_text:
+        return ""
+
+    settings = get_app_settings()
+    fallback_model_id = str(fallback_model or "").strip() or "deepseek-chat"
+    title_model = get_operation_model(
+        "generate_title",
+        settings,
+        fallback_model_id=fallback_model_id,
+    )
+    result = collect_agent_response(
+        _build_internal_title_generation_prompt(source_text),
+        title_model,
+        1,
+        [],
+        temperature=get_model_temperature(settings),
+    )
+    return _normalize_conversation_title_for_tool(result.get("content") or "")
+
+
 def _run_set_conversation_title(tool_args: dict, runtime_state: dict):
     agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
     conv_id = _coerce_int_range(agent_context.get("conversation_id"), 0, 0, 2_147_483_647)
     if conv_id <= 0:
         return {"status": "error", "error": "Missing conversation id."}, "Missing conversation id"
-
-    requested_title = _normalize_conversation_title_for_tool(tool_args.get("title", ""))
-    if not requested_title:
-        return {"status": "error", "error": "Title is empty."}, "Title is empty"
 
     with get_db() as conn:
         row = conn.execute("SELECT title FROM conversations WHERE id = ?", (conv_id,)).fetchone()
@@ -6042,12 +6109,22 @@ def _run_set_conversation_title(tool_args: dict, runtime_state: dict):
                 "reason": "title_already_set",
             }, f"Conversation title already set: {current_title}"
 
+    generated_title = _generate_conversation_title_with_dedicated_model(
+        conv_id,
+        fallback_model=str(agent_context.get("model") or "").strip(),
+    )
+    requested_title = _normalize_conversation_title_for_tool(tool_args.get("title", ""))
+    final_title = generated_title or requested_title
+    if not final_title:
+        return {"status": "error", "error": "Title could not be generated."}, "Title could not be generated"
+
+    with get_db() as conn:
         conn.execute(
             "UPDATE conversations SET title = ?, updated_at = datetime('now') WHERE id = ?",
-            (requested_title, conv_id),
+            (final_title, conv_id),
         )
 
-    return {"status": "ok", "updated": True, "title": requested_title}, f"Conversation title set: {requested_title}"
+    return {"status": "ok", "updated": True, "title": final_title}, f"Conversation title set: {final_title}"
 
 
 _TOOL_EXECUTORS = {

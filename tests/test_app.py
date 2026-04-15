@@ -48,6 +48,7 @@ from agent import (
     _lookup_cross_turn_tool_memory,
     _prepare_tool_result_for_transcript,
     _run_fetch_url_summarized,
+    _run_set_conversation_title,
     _run_scroll_fetched_content,
     _run_sub_agent_stream,
     _summarize_model_call_usage,
@@ -2566,6 +2567,40 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["title"], "Better Title")
+
+    def test_set_conversation_title_uses_dedicated_model_output(self):
+        with patch("routes.conversations.sync_conversations_to_rag_safe"):
+            conversation_id = self._create_conversation(title="New Chat")
+
+        with get_db() as conn:
+            insert_message(conn, conversation_id, "user", "Привітання Naber")
+
+        runtime_state = {
+            "agent_context": {
+                "conversation_id": conversation_id,
+                "model": "deepseek-chat",
+            }
+        }
+
+        with patch("agent.get_app_settings", return_value={}), patch(
+            "agent.get_operation_model",
+            return_value="deepseek-chat",
+        ), patch("agent.get_model_temperature", return_value=0.7), patch(
+            "agent.collect_agent_response",
+            return_value={"content": "Greeting", "errors": []},
+        ):
+            result, _ = _run_set_conversation_title(
+                {"title": "Teknik Gelişim ve Strateji"},
+                runtime_state,
+            )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertTrue(result["updated"])
+        self.assertEqual(result["title"], "Greeting")
+
+        with get_db() as conn:
+            row = conn.execute("SELECT title FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
+        self.assertEqual(row["title"], "Greeting")
 
     def test_manual_prune_endpoint_updates_message_and_preserves_original(self):
         conversation_id = self._create_conversation()

@@ -600,7 +600,7 @@ Implementation note for future commands:
 ### Title, summary, and pruning actions
 
 - First-turn conversations can receive an automatic internal title update through `set_conversation_title` when the topic is clear.
-- Use Generate Title to refresh a conversation title manually when needed; if a title was already set by the internal title tool, the endpoint returns the existing title directly.
+- Use Generate Title to refresh a conversation title manually when needed; the endpoint always re-evaluates current conversation content.
 - Use Summarize to force a summary pass for the current conversation.
 - Use Undo on a summary message to restore the summarized messages.
 - Use Prune history to prune the first N eligible unpruned messages in the current conversation.
@@ -1205,7 +1205,7 @@ Workspace tools let the assistant validate and edit files in the conversation sa
 | `PATCH` | `/api/settings` | Update persisted settings |
 | `POST` | `/api/fix-text` | Rewrite the current draft before sending |
 | `POST` | `/chat` | Main streamed chat endpoint; accepts JSON or multipart uploads |
-| `POST` | `/api/conversations/<id>/generate-title` | Generate or refresh a title from conversation content; returns the existing title directly when it was already set by the internal title tool |
+| `POST` | `/api/conversations/<id>/generate-title` | Generate or refresh a title from conversation content |
 | `POST` | `/api/conversations/<id>/summarize` | Manually summarize a conversation |
 | `POST` | `/api/conversations/<id>/summaries/<summary_id>/undo` | Undo a summary message |
 | `POST` | `/api/messages/<id>/prune` | Prune a visible user or assistant message |

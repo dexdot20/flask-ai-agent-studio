@@ -5805,18 +5805,6 @@ def register_chat_routes(app) -> None:
             ).fetchone()
             if not conversation:
                 return jsonify({"error": "Not found."}), 404
-            current_title = str(conversation["title"] or "").strip()
-            if current_title and current_title != TITLE_FALLBACK:
-                title_set_via_tool = conn.execute(
-                    """SELECT 1 FROM messages
-                       WHERE conversation_id = ?
-                         AND role = 'assistant'
-                         AND metadata LIKE ?
-                       LIMIT 1""",
-                    (conv_id, '%"tool_name": "set_conversation_title"%'),
-                ).fetchone()
-                if title_set_via_tool:
-                    return jsonify({"title": current_title})
             messages = conn.execute(
                 """SELECT role, content, metadata FROM messages
                     WHERE conversation_id = ?
