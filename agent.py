@@ -146,7 +146,14 @@ from model_registry import (
     should_retry_model_target_tool_choice_with_auto,
 )
 from rag_service import get_exact_tool_memory_match, search_knowledge_base_tool, search_tool_memory, upsert_tool_memory_result
-from tool_registry import TOOL_SPEC_BY_NAME, get_openai_tool_specs
+from tool_registry import (
+    CANVAS_READ_BARRIER_TOOL_NAMES,
+    TOOL_SPEC_BY_NAME,
+    WEB_TOOL_NAMES,
+    get_openai_tool_specs,
+    is_tool_parallel_safe,
+    is_tool_session_cacheable,
+)
 from token_utils import estimate_text_tokens
 from web_tools import (
     fetch_url_tool,
@@ -222,10 +229,7 @@ CANVAS_CONTEXT_READ_TOOL_NAMES = {
 # All canvas read/inspect tools (superset of CANVAS_CONTEXT_READ_TOOL_NAMES).
 # Used by the canvas dependency barrier and the self-read guard to identify
 # tools that must not observe stale pre-mutation canvas state.
-CANVAS_ALL_READ_TOOL_NAMES = CANVAS_CONTEXT_READ_TOOL_NAMES | {
-    "search_canvas_document",
-    "validate_canvas_document",
-}
+CANVAS_ALL_READ_TOOL_NAMES = set(CANVAS_READ_BARRIER_TOOL_NAMES)
 CANVAS_STREAM_OPEN_TOOL_NAMES = {
     "create_canvas_document",
     "rewrite_canvas_document",
@@ -270,14 +274,6 @@ TOOL_ARGUMENT_CODE_FENCE_RE = re.compile(
 )
 _VALID_IDENTIFIER_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 TOOL_ARGUMENT_LANGUAGE_LABELS = {"json", "javascript", "js", "python", "py"}
-WEB_TOOL_NAMES = {
-    "search_web",
-    "fetch_url",
-    "fetch_url_summarized",
-    "scroll_fetched_content",
-    "search_news_ddgs",
-    "search_news_google",
-}
 SEARCH_QUERY_BATCHED_TOOL_NAMES = {
     "search_web",
     "search_news_ddgs",
@@ -292,31 +288,6 @@ SEARCH_QUERY_ARGUMENT_ALIASES = (
 )
 SEARCH_MEMORY_PROMOTION_MATCH_LIMIT = 2
 SEARCH_MEMORY_PROMOTION_EXCERPT_LIMIT = 180
-PARALLEL_SAFE_TOOL_NAMES = WEB_TOOL_NAMES | {
-    "image_explain",
-    # RAG / memory reads
-    "search_knowledge_base",
-    "search_tool_memory",
-    "read_scratchpad",
-    # Fetch content grep (read-only, cache-based)
-    "grep_fetched_content",
-    # Workspace reads
-    "read_file",
-    "list_dir",
-    "search_files",
-    "validate_project_workspace",
-    # Canvas inspection (non-mutating)
-    "expand_canvas_document",
-    "batch_read_canvas_documents",
-    "scroll_canvas_document",
-    "search_canvas_document",
-    "validate_canvas_document",
-    # Delegated read-only helper
-    "sub_agent",
-}
-SESSION_CACHEABLE_TOOL_NAMES = WEB_TOOL_NAMES | {
-    "grep_fetched_content",
-}
 SUB_AGENT_MAX_TRANSCRIPT_MESSAGES = 24
 SUB_AGENT_MAX_MESSAGE_CONTENT_CHARS = 4_000
 SUB_AGENT_MAX_REASONING_CHARS = 4_000
@@ -1261,7 +1232,7 @@ def _sleep_with_agent_cancel(agent_context: dict | None, delay_seconds: float) -
 
 
 def _is_session_cacheable_tool(tool_name: str) -> bool:
-    return _normalize_tool_name(tool_name) in SESSION_CACHEABLE_TOOL_NAMES
+    return is_tool_session_cacheable(_normalize_tool_name(tool_name))
 
 
 def _resolve_sub_agent_tool_names(settings: dict) -> list[str]:
@@ -1665,6 +1636,7 @@ def _build_sub_agent_messages(
         "If the task text is not in English, first rewrite it into clear English working notes for yourself, then continue in English.",
         "Use English for tool planning, reasoning, status updates, and the final answer unless told otherwise.",
         f"When using read-only search tools like search_web or search_news, batch queries between 1 and {normalized_search_tool_query_limit} items per list and split broader searches into multiple calls.",
+        "Default to batching independent read-only tool calls into the same turn when they do not depend on each other; avoid one-by-one fan-out unless a later tool truly needs an earlier result.",
         "Synthesize your findings and return a concise, definitive final answer that directly helps the parent assistant continue."
     ]
     parts.append(build_current_time_context(now))
@@ -4610,12 +4582,7 @@ def _run_read_scratchpad(tool_args: dict, runtime_state: dict):
 
 def _is_parallel_safe_tool_call(tool_name: str, tool_args: dict) -> bool:
     normalized_tool_name = _normalize_tool_name(tool_name)
-    normalized_tool_args = tool_args if isinstance(tool_args, dict) else {}
-    if normalized_tool_name in {"search_knowledge_base", "search_tool_memory"} and _coerce_tool_bool(
-        normalized_tool_args.get("save_to_conversation_memory")
-    ):
-        return False
-    return normalized_tool_name in PARALLEL_SAFE_TOOL_NAMES
+    return is_tool_parallel_safe(normalized_tool_name, tool_args)
 
 
 def _build_search_memory_default_key(tool_name: str, query: str) -> str:

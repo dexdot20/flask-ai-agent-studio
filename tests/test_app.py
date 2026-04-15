@@ -6071,6 +6071,36 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ["search_web"],
         )
 
+    def test_chat_route_exposes_web_tools_to_prompt_visible_tool_set(self):
+        conversation_id = self._create_conversation()
+        captured = {}
+
+        def fake_run_agent_stream(*args, **kwargs):
+            captured["prompt_tool_names"] = list(kwargs.get("prompt_tool_names") or [])
+            return iter([
+                {"type": "answer_start"},
+                {"type": "answer_delta", "text": "Done."},
+                {"type": "tool_capture", "tool_results": []},
+                {"type": "done"},
+            ])
+
+        with patch("routes.chat.get_active_tool_names", return_value=["search_web", "fetch_url"]), patch(
+            "routes.chat.run_agent_stream",
+            side_effect=fake_run_agent_stream,
+        ):
+            response = self.client.post(
+                "/chat",
+                json={
+                    "messages": [{"role": "user", "content": "Find the latest release notes."}],
+                    "model": "deepseek-chat",
+                    "conversation_id": conversation_id,
+                    "user_content": "Find the latest release notes.",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured["prompt_tool_names"], ["search_web", "fetch_url"])
+
     def test_resolve_runtime_tool_names_keeps_canvas_tools_when_canvas_documents_exist(self):
         runtime_names = resolve_runtime_tool_names(
             [

@@ -2133,6 +2133,247 @@ TOOL_SPECS = [
 TOOL_SPEC_BY_NAME = {tool["name"]: tool for tool in TOOL_SPECS}
 SEARCH_QUERY_LIMITED_TOOL_NAMES = {"search_web", "search_news_ddgs", "search_news_google"}
 
+_TOOL_RUNTIME_DEFAULTS = {
+    "read_only": False,
+    "parallel_safe": False,
+    "exclusive_turn": False,
+    "session_cacheable": False,
+    "prompt_visible": True,
+    "depends_on_tool_outputs": False,
+    "state_domains": (),
+}
+
+_TOOL_RUNTIME_METADATA_OVERRIDES = {
+    "ask_clarifying_question": {
+        "exclusive_turn": True,
+        "state_domains": ("clarification",),
+    },
+    "sub_agent": {
+        "read_only": True,
+        "parallel_safe": True,
+        "state_domains": ("delegation", "web"),
+    },
+    "image_explain": {
+        "read_only": True,
+        "parallel_safe": True,
+        "state_domains": ("image",),
+    },
+    "transcribe_youtube_video": {
+        "state_domains": ("video",),
+    },
+    "search_knowledge_base": {
+        "read_only": True,
+        "parallel_safe": True,
+        "depends_on_tool_outputs": True,
+        "state_domains": ("memory", "rag"),
+    },
+    "search_tool_memory": {
+        "read_only": True,
+        "parallel_safe": True,
+        "depends_on_tool_outputs": True,
+        "state_domains": ("memory", "web"),
+    },
+    "search_web": {
+        "read_only": True,
+        "parallel_safe": True,
+        "session_cacheable": True,
+        "state_domains": ("web",),
+    },
+    "fetch_url": {
+        "read_only": True,
+        "parallel_safe": True,
+        "session_cacheable": True,
+        "state_domains": ("web",),
+    },
+    "fetch_url_summarized": {
+        "read_only": True,
+        "parallel_safe": True,
+        "state_domains": ("web",),
+    },
+    "scroll_fetched_content": {
+        "read_only": True,
+        "parallel_safe": True,
+        "state_domains": ("web",),
+    },
+    "grep_fetched_content": {
+        "read_only": True,
+        "parallel_safe": True,
+        "session_cacheable": True,
+        "state_domains": ("web",),
+    },
+    "search_news_ddgs": {
+        "read_only": True,
+        "parallel_safe": True,
+        "session_cacheable": True,
+        "state_domains": ("web",),
+    },
+    "search_news_google": {
+        "read_only": True,
+        "parallel_safe": True,
+        "session_cacheable": True,
+        "state_domains": ("web",),
+    },
+    "expand_canvas_document": {
+        "read_only": True,
+        "parallel_safe": True,
+        "state_domains": ("canvas",),
+    },
+    "batch_read_canvas_documents": {
+        "read_only": True,
+        "parallel_safe": True,
+        "state_domains": ("canvas",),
+    },
+    "scroll_canvas_document": {
+        "read_only": True,
+        "parallel_safe": True,
+        "state_domains": ("canvas",),
+    },
+    "search_canvas_document": {
+        "read_only": True,
+        "parallel_safe": True,
+        "state_domains": ("canvas",),
+    },
+    "validate_canvas_document": {
+        "read_only": True,
+        "parallel_safe": True,
+        "state_domains": ("canvas",),
+    },
+    "preview_canvas_changes": {
+        "read_only": True,
+        "parallel_safe": True,
+        "state_domains": ("canvas",),
+    },
+    "read_scratchpad": {
+        "read_only": True,
+        "parallel_safe": True,
+        "state_domains": ("memory",),
+    },
+    "read_file": {
+        "read_only": True,
+        "parallel_safe": True,
+        "state_domains": ("workspace",),
+    },
+    "list_dir": {
+        "read_only": True,
+        "parallel_safe": True,
+        "state_domains": ("workspace",),
+    },
+    "search_files": {
+        "read_only": True,
+        "parallel_safe": True,
+        "state_domains": ("workspace",),
+    },
+    "validate_project_workspace": {
+        "read_only": True,
+        "parallel_safe": True,
+        "state_domains": ("workspace",),
+    },
+}
+
+
+def _normalize_runtime_tool_name_list(values) -> list[str]:
+    normalized: list[str] = []
+    for raw_value in values or []:
+        tool_name = str(raw_value or "").strip()
+        if tool_name and tool_name not in normalized:
+            normalized.append(tool_name)
+    return normalized
+
+
+def _coerce_runtime_tool_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value in (None, ""):
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _build_tool_runtime_metadata() -> dict[str, dict]:
+    metadata: dict[str, dict] = {}
+    for tool in TOOL_SPECS:
+        tool_name = str(tool.get("name") or "").strip()
+        if not tool_name:
+            continue
+        entry = dict(_TOOL_RUNTIME_DEFAULTS)
+        entry.update(_TOOL_RUNTIME_METADATA_OVERRIDES.get(tool_name, {}))
+        entry["state_domains"] = tuple(dict.fromkeys(entry.get("state_domains") or ()))
+        metadata[tool_name] = entry
+    return metadata
+
+
+TOOL_RUNTIME_METADATA = _build_tool_runtime_metadata()
+WEB_TOOL_NAMES = frozenset(
+    tool_name
+    for tool_name, metadata in TOOL_RUNTIME_METADATA.items()
+    if "web" in metadata.get("state_domains", ())
+)
+PARALLEL_SAFE_TOOL_NAMES = frozenset(
+    tool_name
+    for tool_name, metadata in TOOL_RUNTIME_METADATA.items()
+    if metadata.get("parallel_safe") is True
+)
+PARALLEL_SAFE_READ_ONLY_TOOL_NAMES = tuple(
+    tool_name
+    for tool_name, metadata in TOOL_RUNTIME_METADATA.items()
+    if metadata.get("parallel_safe") is True and metadata.get("read_only") is True
+)
+SESSION_CACHEABLE_TOOL_NAMES = frozenset(
+    tool_name
+    for tool_name, metadata in TOOL_RUNTIME_METADATA.items()
+    if metadata.get("session_cacheable") is True
+)
+CANVAS_READ_BARRIER_TOOL_NAMES = frozenset(
+    tool_name
+    for tool_name, metadata in TOOL_RUNTIME_METADATA.items()
+    if metadata.get("read_only") is True and "canvas" in metadata.get("state_domains", ())
+)
+
+
+def get_tool_runtime_metadata(tool_name: str) -> dict:
+    normalized_tool_name = str(tool_name or "").strip()
+    metadata = TOOL_RUNTIME_METADATA.get(normalized_tool_name)
+    if metadata is None:
+        return dict(_TOOL_RUNTIME_DEFAULTS)
+    return dict(metadata)
+
+
+def is_tool_parallel_safe(tool_name: str, tool_args: dict | None = None) -> bool:
+    normalized_tool_name = str(tool_name or "").strip()
+    metadata = TOOL_RUNTIME_METADATA.get(normalized_tool_name)
+    if not metadata or metadata.get("parallel_safe") is not True:
+        return False
+    normalized_tool_args = tool_args if isinstance(tool_args, dict) else {}
+    if normalized_tool_name in {"search_knowledge_base", "search_tool_memory"} and _coerce_runtime_tool_bool(
+        normalized_tool_args.get("save_to_conversation_memory")
+    ):
+        return False
+    return True
+
+
+def is_tool_session_cacheable(tool_name: str) -> bool:
+    return get_tool_runtime_metadata(tool_name).get("session_cacheable") is True
+
+
+def get_parallel_safe_tool_names(tool_names=None, *, read_only_only: bool = False) -> list[str]:
+    normalized_tool_names = _normalize_runtime_tool_name_list(tool_names)
+    if not normalized_tool_names:
+        normalized_tool_names = list(TOOL_RUNTIME_METADATA.keys())
+    return [
+        tool_name
+        for tool_name in normalized_tool_names
+        if is_tool_parallel_safe(tool_name)
+        and (not read_only_only or get_tool_runtime_metadata(tool_name).get("read_only") is True)
+    ]
+
+
+def get_prompt_visible_tool_names(tool_names=None) -> list[str]:
+    normalized_tool_names = _normalize_runtime_tool_name_list(tool_names)
+    return [
+        tool_name
+        for tool_name in normalized_tool_names
+        if get_tool_runtime_metadata(tool_name).get("prompt_visible") is not False
+    ]
+
 
 def _normalize_clarification_max_questions(value: int | None) -> int:
     try:

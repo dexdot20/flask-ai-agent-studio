@@ -17,7 +17,6 @@ from uuid import uuid4
 from flask import Response, current_app, jsonify, request, stream_with_context
 
 from agent import AgentRunCancelledError, FINAL_ANSWER_ERROR_TEXT, FINAL_ANSWER_MISSING_TEXT, USER_CANCELLED_ERROR_TEXT, collect_agent_response, run_agent_stream
-from agent import WEB_TOOL_NAMES
 from canvas_service import (
     create_canvas_document,
     create_canvas_runtime_state,
@@ -185,7 +184,7 @@ from rag_service import build_rag_auto_context, build_tool_memory_auto_context, 
 from rag_service import sync_conversations_to_rag_background, sync_conversations_to_rag_safe
 from routes.request_utils import is_valid_model_id, normalize_model_id, parse_messages_payload, parse_optional_int
 from token_utils import estimate_text_tokens
-from tool_registry import resolve_runtime_tool_names
+from tool_registry import get_prompt_visible_tool_names, resolve_runtime_tool_names
 from video_transcript_service import (
     build_video_transcript_context_block,
     read_youtube_video_reference,
@@ -5085,7 +5084,7 @@ def register_chat_routes(app) -> None:
                 canvas_documents=initial_canvas_documents,
                 workspace_root=workspace_root,
             )
-            prompt_tool_names = [name for name in runtime_tool_names if name not in WEB_TOOL_NAMES]
+            prompt_tool_names = get_prompt_visible_tool_names(runtime_tool_names)
             agent_stream = run_agent_stream(
                 request_api_messages,
                 model,

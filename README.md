@@ -66,7 +66,10 @@ It is not a minimal prompt/response demo. The app keeps conversation history in 
 - Validates tool names and tool argument schemas before execution
 - Supports native function calls from the model
 - Supports model-emitted tool JSON fallback handling
+- Uses centralized tool-runtime metadata (`tool_registry.py`) to keep prompt guidance and runtime scheduling aligned for read-only parallel-safe tools, cacheable tools, and canvas read barriers
 - Limits tool rounds with configurable `max_steps` from 1 to 50
+- Encourages the model to batch independent read-only tool calls in one turn (instead of serial one-by-one fan-out), then reason across the combined results
+- Keeps canvas mutation+read safety barriers in place so same-turn canvas reads do not observe stale pre-mutation state
 - Forces a final-answer phase when the tool budget is exhausted
 - Tracks estimated prompt composition locally across the stable runtime/system prefix, tool specs, canvas context, conversation memory, scratchpad, tool trace, tool memory, RAG context, message history, tool calls, tool results, and provider overhead
 - Estimates per-turn and session cost when pricing is known for the selected provider; unsupported providers fall back to unknown-cost reporting
@@ -131,11 +134,12 @@ Manual smoke test checklist for the Canvas UI is available in [docs/canvas-ui-sm
 6. If RAG auto-injection is enabled, the user message is searched against the knowledge base.
 7. If tool-memory auto-injection is enabled, the same query searches remembered web results.
 8. The runtime builds a stable top-loaded system prefix first, then injects current-turn dynamic context (time, memory, retrieval, tool trace, canvas state, and active tools) later in the prompt immediately before the latest user message; when older turns are replayed, only the cache-friendly durable subset of any stored context injection is kept.
-9. The agent resolves the selected model to the correct provider client and streams model output.
-10. Tool calls are validated, executed, cached, and appended to the transcript.
-11. Tool progress, reasoning deltas, answer deltas, usage, and message IDs are streamed back as NDJSON.
-12. The final assistant message is stored with metadata such as reasoning, usage, tool trace, canvas state, and stored tool results.
-13. After a turn finishes, the app may summarize older context, prune older visible messages, apply entropy-aware history selection, and sync conversations or tool results into the RAG store.
+9. Prompt-visible tools are now resolved from centralized runtime metadata, so the main agent can see the same controlled web and read-only tools that the scheduler can execute safely.
+10. The agent resolves the selected model to the correct provider client and streams model output.
+11. Tool calls are validated, executed, cached, and appended to the transcript.
+12. Tool progress, reasoning deltas, answer deltas, usage, and message IDs are streamed back as NDJSON.
+13. The final assistant message is stored with metadata such as reasoning, usage, tool trace, canvas state, and stored tool results.
+14. After a turn finishes, the app may summarize older context, prune older visible messages, apply entropy-aware history selection, and sync conversations or tool results into the RAG store.
 
 ## Project structure
 
@@ -891,7 +895,7 @@ DuckDuckGo text search.
 - Use this only when you need current information or external verification that is not already answerable from the current conversation.
 
 - Arguments:
-  - `queries` (array, required, 1-5 strings) - list of search queries to run
+  - `queries` (array, required, 1-N strings) - list of search queries to run (N is controlled by Settings `search_tool_query_limit`; default 5)
 
 #### `fetch_url`
 
@@ -940,7 +944,7 @@ DuckDuckGo News search.
 - Use this only when the request needs current news coverage, broad discovery, or external verification.
 
 - Arguments:
-  - `queries` (array, required, 1-5 strings)
+  - `queries` (array, required, 1-N strings) - N is controlled by Settings `search_tool_query_limit`; default 5
   - `lang` (string, optional) - `tr` or `en`
   - `when` (string, optional) - `d`, `w`, `m`, or `y`
 
@@ -951,7 +955,7 @@ Google News RSS search.
 - Use this only when Google News coverage is specifically needed for current news verification.
 
 - Arguments:
-  - `queries` (array, required, 1-5 strings)
+  - `queries` (array, required, 1-N strings) - N is controlled by Settings `search_tool_query_limit`; default 5
   - `lang` (string, optional) - `tr` or `en`
   - `when` (string, optional) - `d`, `w`, `m`, or `y`
 

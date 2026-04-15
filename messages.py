@@ -49,7 +49,7 @@ from db import (
     parse_message_tool_calls,
     read_image_asset_bytes,
 )
-from tool_registry import resolve_runtime_tool_names
+from tool_registry import PARALLEL_SAFE_READ_ONLY_TOOL_NAMES, resolve_runtime_tool_names
 
 SUMMARY_LABEL = "Conversation summary (generated from deleted messages):"
 MODEL_SUMMARY_LABEL = "Conversation summary:"
@@ -58,29 +58,6 @@ CANVAS_PROMPT_MAX_LINES = CANVAS_PROMPT_DEFAULT_MAX_LINES
 CANVAS_PROMPT_MAX_TOKENS = CANVAS_PROMPT_DEFAULT_MAX_TOKENS
 CANVAS_PROMPT_CODE_LINE_MAX_CHARS = CANVAS_PROMPT_DEFAULT_CODE_LINE_MAX_CHARS
 CANVAS_PROMPT_TEXT_LINE_MAX_CHARS = CANVAS_PROMPT_DEFAULT_TEXT_LINE_MAX_CHARS
-PARALLEL_SAFE_READ_ONLY_TOOL_NAMES = (
-    # Web / fetch
-    "search_web",
-    "fetch_url",
-    "search_news_ddgs",
-    "search_news_google",
-    "image_explain",
-    # RAG / memory reads
-    "search_knowledge_base",
-    "search_tool_memory",
-    "read_scratchpad",
-    # Workspace reads
-    "read_file",
-    "list_dir",
-    "search_files",
-    "validate_project_workspace",
-    # Canvas inspection (non-mutating)
-    "expand_canvas_document",
-    "scroll_canvas_document",
-    "search_canvas_document",
-    "preview_canvas_changes",
-)
-
 _CLARIFICATION_QA_LINE_RE = re.compile(r"^\s*(?:(?:Q|A)\s*:\s*.*|-\s*.+?\s*→\s*.+)$", re.IGNORECASE)
 
 
@@ -2063,6 +2040,7 @@ def _build_active_tools_context(active_tool_names: list[str]) -> list[str]:
     ]
     if parallel_safe_tool_names:
         lines.append(f"- Parallel-safe read tools: {_format_tool_name_list(parallel_safe_tool_names)}")
+        lines.append("- Default batching behavior: if several parallel-safe reads are independent, group them into the same assistant turn instead of calling them one by one.")
     else:
         lines.append("- Parallel-safe read tools: none")
     lines.append("")
@@ -2119,6 +2097,9 @@ def build_tool_call_contract(
             f"Parallel-safe tools (see Active Tools) run concurrently; cap is {parallel_limit} per turn. "
             "Sequential tools can also be batched in one turn to save an LLM round-trip. "
             "Only split into separate turns when tool B genuinely needs the output of tool A."
+        )
+        batching_sections.append(
+            "**Default strategy:** when you need several independent read-only checks, prefer one high-value batch of parallel-safe tool calls in the same answer instead of drip-feeding single calls across many turns."
         )
 
     if any(name in normalized_tool_names for name in DEPENDENT_TOOL_NAMES):

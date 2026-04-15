@@ -21,7 +21,7 @@ from messages import (
     refresh_canvas_sections_in_context_injection,
 )
 from tests.support.app_harness import BaseAppRoutesTestCase
-from tool_registry import TOOL_SPEC_BY_NAME, get_openai_tool_specs
+from tool_registry import PARALLEL_SAFE_READ_ONLY_TOOL_NAMES, TOOL_SPEC_BY_NAME, get_openai_tool_specs, get_parallel_safe_tool_names
 
 
 class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
@@ -391,6 +391,21 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
 
         batching_guidance = contract["batching_guidance"]
         self.assertIn("cap is 2 per turn", batching_guidance)
+
+    def test_parallel_safe_read_only_tool_metadata_stays_in_sync(self):
+        expected_recent_tools = {
+            "fetch_url_summarized",
+            "scroll_fetched_content",
+            "batch_read_canvas_documents",
+            "validate_canvas_document",
+            "preview_canvas_changes",
+            "sub_agent",
+        }
+
+        runtime_parallel_safe = set(get_parallel_safe_tool_names(read_only_only=True))
+
+        self.assertEqual(set(PARALLEL_SAFE_READ_ONLY_TOOL_NAMES), runtime_parallel_safe)
+        self.assertTrue(expected_recent_tools.issubset(runtime_parallel_safe))
 
     def test_build_tool_call_contract_mentions_clarification_limit(self):
         contract = build_tool_call_contract(["ask_clarifying_question"], clarification_max_questions=3)
