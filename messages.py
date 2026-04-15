@@ -1020,6 +1020,7 @@ def _strip_volatile_sections_from_context_injection(context_injection: str) -> s
     normalized = str(context_injection or "").strip()
     if not normalized:
         return ""
+    has_structured_headings = any(line.startswith("## ") for line in normalized.splitlines())
 
     retained_sections: list[str] = []
     current_lines: list[str] = []
@@ -1031,6 +1032,13 @@ def _strip_volatile_sections_from_context_injection(context_injection: str) -> s
             return
         section_text = "\n".join(current_lines).strip()
         if section_text and current_heading not in HISTORICAL_CONTEXT_INJECTION_STRIP_HEADINGS:
+            if current_heading is None and has_structured_headings:
+                # Drop unstructured preamble chunks when the payload is already
+                # sectioned by headings. These preambles are typically legacy
+                # dynamic runtime leftovers and add avoidable cache entropy.
+                current_lines = []
+                current_heading = None
+                return
             retained_sections.append(section_text)
         current_lines = []
         current_heading = None

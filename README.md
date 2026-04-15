@@ -143,6 +143,35 @@ Manual smoke test checklist for the Canvas UI is available in [docs/canvas-ui-sm
 15. The final assistant message is stored with metadata such as reasoning, usage, tool trace, canvas state, and stored tool results.
 16. After a turn finishes, the app may summarize older context, prune older visible messages, apply entropy-aware history selection, and sync conversations or tool results into the RAG store.
 
+### Prompt cache optimization guide (OpenRouter + DeepSeek)
+
+- Keep durable instructions and stable long-lived context at the top of the prompt.
+- Keep volatile turn-scoped context (current time, active tools, live tool trace, transient canvas focus) near the current user turn.
+- Historical replay strips volatile runtime sections so old turns do not repeatedly reintroduce cache-busting state.
+- Tool trace timestamps are persisted at minute precision (`HH:MM`) to reduce high-frequency prompt churn.
+- OpenRouter Anthropic cache breakpoints skip known volatile runtime blocks (for example `## Current Date and Time`, `## Tool Execution History`, `## Active Tools This Turn`) to avoid caching dynamic prefixes.
+- OpenRouter Gemini models keep a leading stable-system breakpoint strategy by default.
+
+### Prompt cache observability checklist
+
+Use these signals to verify cache behavior after changes:
+
+- OpenRouter
+  - `prompt_tokens_details.cached_tokens`
+  - `prompt_tokens_details.cache_write_tokens`
+  - Derived session fields in usage events:
+    - `prompt_cache_hit_tokens`
+    - `prompt_cache_miss_tokens`
+    - `prompt_cache_write_tokens`
+- DeepSeek
+  - `prompt_cache_hit_tokens`
+  - `prompt_cache_miss_tokens`
+- Runtime diagnostics
+  - `cache_metrics_estimated` (true means cache numbers were inferred)
+  - `provider_usage_partial` (true means at least one call lacked provider usage fields)
+
+Operationally, compare repeated same-prefix turns and confirm that hit tokens trend upward while miss tokens trend downward once the prefix stabilizes.
+
 ## Project structure
 
 ```text

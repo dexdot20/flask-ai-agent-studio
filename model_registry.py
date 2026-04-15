@@ -57,6 +57,12 @@ _OPENROUTER_IMPLICIT_PROMPT_CACHE_MODEL_PREFIXES = (
     "groq/",
 )
 _OPENROUTER_ANTHROPIC_CACHE_MAX_BREAKPOINTS = 2
+_OPENROUTER_ANTHROPIC_VOLATILE_RUNTIME_MARKERS = (
+    "## current date and time",
+    "authoritative current time",
+    "## tool execution history",
+    "## active tools this turn",
+)
 
 
 def _openrouter_anthropic_cache_min_tokens(api_model: str) -> int:
@@ -489,6 +495,28 @@ def _with_openrouter_cache_breakpoint(content: Any, *, min_tokens: int, ttl: str
     return ([{"type": "text", "text": text, "cache_control": cache_control}], True)
 
 
+def _is_openrouter_anthropic_volatile_runtime_content(content: Any) -> bool:
+    text_chunks: list[str] = []
+    if isinstance(content, list):
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if str(block.get("type") or "").strip() != "text":
+                continue
+            block_text = str(block.get("text") or "").strip()
+            if block_text:
+                text_chunks.append(block_text)
+    else:
+        normalized_text = str(content or "").strip()
+        if normalized_text:
+            text_chunks.append(normalized_text)
+
+    if not text_chunks:
+        return False
+    combined_text = "\n\n".join(text_chunks).lower()
+    return any(marker in combined_text for marker in _OPENROUTER_ANTHROPIC_VOLATILE_RUNTIME_MARKERS)
+
+
 def _serialize_openrouter_cache_payload(value: Any) -> str:
     if value in (None, "", [], {}):
         return ""
@@ -715,6 +743,8 @@ def _prepare_model_request_messages(messages: Any, record: dict[str, Any] | None
             break
         if breakpoints_placed >= max_breakpoints:
             break
+        if supports_top_level_cache and _is_openrouter_anthropic_volatile_runtime_content(message.get("content")):
+            continue
         updated_content, applied = _with_openrouter_cache_breakpoint(message.get("content"), min_tokens=cache_min_tokens, ttl=cache_ttl)
         if applied:
             prepared_messages[index] = {**prepared_messages[index], "content": updated_content}

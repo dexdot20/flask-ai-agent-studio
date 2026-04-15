@@ -4229,7 +4229,7 @@ def register_chat_routes(app) -> None:
         entry = {
             "tool_name": tool_name,
             "step": normalized_step,
-            "executed_at": datetime.now().astimezone().strftime("%H:%M:%S"),
+            "executed_at": datetime.now().astimezone().strftime("%H:%M"),
         }
 
         preview = str(event.get("preview") or "").strip()
@@ -4261,6 +4261,9 @@ def register_chat_routes(app) -> None:
             return
 
         current = entries[existing_index]
+        existing_executed_at = str(current.get("executed_at") or "").strip()
+        if existing_executed_at:
+            entry["executed_at"] = existing_executed_at
         current.update(entry)
 
     def build_tool_results_ui_payload(tool_results: list[dict]) -> list[dict]:

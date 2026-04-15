@@ -6467,6 +6467,23 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(metrics["prompt_cache_write_tokens"], 120)
         self.assertTrue(metrics["cache_write_present"])
 
+    def test_extract_usage_metrics_marks_cache_metrics_present_for_write_only_payload(self):
+        usage = SimpleNamespace(
+            prompt_tokens=1000,
+            completion_tokens=50,
+            total_tokens=1050,
+            prompt_cache_hit_tokens=None,
+            prompt_cache_miss_tokens=None,
+            model_extra={
+                "prompt_tokens_details": {"cache_write_tokens": 120}
+            },
+        )
+
+        metrics = _extract_usage_metrics(usage)
+
+        self.assertTrue(metrics["cache_write_present"])
+        self.assertTrue(metrics["cache_metrics_present"])
+
     def test_extract_usage_metrics_prefers_deepseek_field_over_prompt_tokens_details(self):
         # When DeepSeek's native field is already present, it takes priority
         usage = SimpleNamespace(
@@ -6712,6 +6729,15 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
         script_text = script_path.read_text(encoding="utf-8")
         self.assertIn("const RAG_SENSITIVITY_HINTS = {", script_text)
+
+    def test_settings_frontend_builds_delta_payload_for_patch(self):
+        script_path = Path(__file__).resolve().parent.parent / "static" / "settings.js"
+        script_text = script_path.read_text(encoding="utf-8")
+
+        self.assertIn("function buildSettingsDeltaPayload(nextPayload, previousSettings)", script_text)
+        self.assertIn("Object.prototype.hasOwnProperty.call(payload || {}, key)", script_text)
+        self.assertIn("const payload = buildSettingsDeltaPayload(fullPayload, appSettings);", script_text)
+        self.assertIn('setSettingsStatus("No changes to save", "muted")', script_text)
 
     def test_settings_api_persists_search_tool_query_limit(self):
         response = self.client.patch("/api/settings", json={"search_tool_query_limit": 9})
@@ -8654,6 +8680,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(assistant_metadata["reasoning_content"], "Analyzing request")
         self.assertEqual(assistant_metadata["tool_trace"][0]["tool_name"], "search_web")
         self.assertEqual(assistant_metadata["tool_trace"][0]["state"], "done")
+        self.assertRegex(str(assistant_metadata["tool_trace"][0].get("executed_at") or ""), r"^\d{2}:\d{2}$")
         self.assertEqual(assistant_metadata["usage"]["estimated_input_tokens"], 11)
         self.assertEqual(assistant_metadata["usage"]["input_breakdown"]["user_messages"], 6)
         self.assertEqual(assistant_metadata["usage"]["input_breakdown"]["core_instructions"], 5)
@@ -13258,6 +13285,20 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertGreater(usage_event["model_calls"][0]["estimated_input_tokens"], 0)
         self.assertEqual(usage_event["model_calls"][1]["prompt_tokens"], 3)
 
+    def test_extract_usage_metrics_marks_zero_token_usage_fields_as_present(self):
+        usage = SimpleNamespace(
+            prompt_tokens=0,
+            completion_tokens=0,
+            total_tokens=0,
+            prompt_cache_hit_tokens=None,
+            prompt_cache_miss_tokens=None,
+        )
+
+        metrics = _extract_usage_metrics(usage)
+
+        self.assertTrue(metrics["usage_fields_present"])
+        self.assertFalse(metrics["cache_metrics_present"])
+
     def test_run_agent_stream_passes_openrouter_extra_body_preferences(self):
         responses = [
             iter(
@@ -13785,6 +13826,44 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertNotIn("Earlier clarification guidance", system_messages[0]["content"])
         self.assertNotIn("Earlier search result", system_messages[0]["content"])
         self.assertNotIn("Earlier KB excerpt", system_messages[0]["content"])
+
+    def test_build_api_messages_strips_historical_legacy_unheaded_preamble(self):
+        historical_context = (
+            "Legacy runtime preamble that should not survive replay.\n\n"
+            "## Tool Execution History\n"
+            "- search_web [done]: old query\n\n"
+            "## Current Date and Time\n"
+            "- Time: 21:35\n\n"
+            "## Conversation Memory\n"
+            "- #7 [task_context] 10:23 - Goal: Keep stable rules cached."
+        )
+        latest_context = "## Current Date and Time\n- Time: 21:40"
+        normalized = normalize_chat_messages(
+            [
+                {
+                    "role": "user",
+                    "content": "First",
+                    "metadata": parse_message_metadata(
+                        serialize_message_metadata({"context_injection": historical_context})
+                    ),
+                },
+                {"role": "assistant", "content": "Reply"},
+                {
+                    "role": "user",
+                    "content": "Second",
+                    "metadata": parse_message_metadata(
+                        serialize_message_metadata({"context_injection": latest_context})
+                    ),
+                },
+            ]
+        )
+
+        api_messages = build_api_messages(normalized)
+
+        system_messages = [message for message in api_messages if message["role"] == "system"]
+        self.assertEqual(len(system_messages), 1)
+        self.assertIn("21:40", system_messages[0]["content"])
+        self.assertNotIn("Legacy runtime preamble that should not survive replay.", system_messages[0]["content"])
 
     def test_build_api_messages_strips_historical_dynamic_runtime_state_injections(self):
         historical_context = (

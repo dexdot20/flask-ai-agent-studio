@@ -412,6 +412,9 @@ def _extract_usage_metrics(usage) -> dict[str, int]:
     prompt_cache_hit_present = "prompt_cache_hit_tokens" in payload and payload.get("prompt_cache_hit_tokens") is not None
     prompt_cache_miss_present = "prompt_cache_miss_tokens" in payload and payload.get("prompt_cache_miss_tokens") is not None
     prompt_cache_write_present = "prompt_cache_write_tokens" in payload and payload.get("prompt_cache_write_tokens") is not None
+    prompt_tokens_present = "prompt_tokens" in payload and payload.get("prompt_tokens") is not None
+    completion_tokens_present = "completion_tokens" in payload and payload.get("completion_tokens") is not None
+    total_tokens_present = "total_tokens" in payload and payload.get("total_tokens") is not None
 
     # Normalize OpenRouter prompt_tokens_details.cached_tokens → prompt_cache_hit_tokens
     if not prompt_cache_hit_present:
@@ -442,7 +445,15 @@ def _extract_usage_metrics(usage) -> dict[str, int]:
     metrics["cache_hit_present"] = prompt_cache_hit_present
     metrics["cache_miss_present"] = prompt_cache_miss_present
     metrics["cache_write_present"] = prompt_cache_write_present
-    metrics["cache_metrics_present"] = prompt_cache_hit_present or prompt_cache_miss_present
+    metrics["cache_metrics_present"] = prompt_cache_hit_present or prompt_cache_miss_present or prompt_cache_write_present
+    metrics["usage_fields_present"] = (
+        prompt_tokens_present
+        or completion_tokens_present
+        or total_tokens_present
+        or prompt_cache_hit_present
+        or prompt_cache_miss_present
+        or prompt_cache_write_present
+    )
     return metrics
 
 
@@ -2711,17 +2722,7 @@ def _summarize_fetched_page_result(
                 "prompt_cache_write_tokens": response_usage["prompt_cache_write_tokens"],
                 "completion_tokens": response_usage["completion_tokens"] or None,
                 "total_tokens": response_usage["total_tokens"] or None,
-                "missing_provider_usage": not any(
-                    value > 0
-                    for value in (
-                        response_usage["prompt_tokens"],
-                        response_usage["prompt_cache_hit_tokens"],
-                        response_usage["prompt_cache_miss_tokens"],
-                        response_usage["prompt_cache_write_tokens"],
-                        response_usage["completion_tokens"],
-                        response_usage["total_tokens"],
-                    )
-                ),
+                "missing_provider_usage": not bool(response_usage.get("usage_fields_present")),
             },
             "content_text": summary_text,
         },
@@ -7338,7 +7339,7 @@ def run_agent_stream(
                     completion_tokens,
                     total_tokens,
                 )
-            ),
+            ) or bool(metrics.get("usage_fields_present")),
             "cache_hit_present": bool(metrics.get("cache_hit_present")),
             "cache_miss_present": bool(metrics.get("cache_miss_present")),
             "cache_write_present": bool(metrics.get("cache_write_present")),

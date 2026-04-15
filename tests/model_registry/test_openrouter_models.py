@@ -298,6 +298,73 @@ class TestOpenRouterModelRegistry(BaseAppRoutesTestCase):
         self.assertEqual(merged["messages"][0]["content"][0]["cache_control"], {"type": "ephemeral"})
         self.assertEqual(merged["extra_body"], {"provider": {"sort": "throughput"}})
 
+    def test_apply_model_target_request_options_adds_anthropic_cache_breakpoint_with_1h_ttl(self):
+        request_kwargs = {
+            "messages": [
+                {"role": "system", "content": "Reference context. " * 1000},
+                {"role": "user", "content": "Summarize the stable prefix."},
+            ]
+        }
+        target = {
+            "record": {
+                "provider": model_registry.OPENROUTER_PROVIDER,
+                "api_model": "anthropic/claude-sonnet-4.5",
+            },
+            "settings": {"openrouter_anthropic_cache_ttl": "1h"},
+            "extra_body": {"provider": {"sort": "throughput"}},
+        }
+
+        merged = model_registry.apply_model_target_request_options(request_kwargs, target)
+
+        self.assertIsInstance(merged["messages"][0]["content"], list)
+        self.assertEqual(
+            merged["messages"][0]["content"][0]["cache_control"],
+            {"type": "ephemeral", "ttl": "1h"},
+        )
+
+    def test_apply_model_target_request_options_skips_anthropic_breakpoint_for_volatile_runtime_block(self):
+        request_kwargs = {
+            "messages": [
+                {"role": "system", "content": "Short stable prefix."},
+                {"role": "system", "content": "## Current Date and Time\n- Time: 21:40\n\n" + ("Dynamic runtime context. " * 1200)},
+                {"role": "user", "content": "Summarize the stable prefix."},
+            ]
+        }
+        target = {
+            "record": {
+                "provider": model_registry.OPENROUTER_PROVIDER,
+                "api_model": "anthropic/claude-sonnet-4.5",
+            },
+            "extra_body": {"provider": {"sort": "throughput"}},
+        }
+
+        merged = model_registry.apply_model_target_request_options(request_kwargs, target)
+
+        self.assertEqual(merged["messages"][0]["content"], request_kwargs["messages"][0]["content"])
+        self.assertEqual(merged["messages"][1]["content"], request_kwargs["messages"][1]["content"])
+
+    def test_apply_model_target_request_options_avoids_second_anthropic_breakpoint_on_volatile_runtime_block(self):
+        request_kwargs = {
+            "messages": [
+                {"role": "system", "content": "Stable prefix. " * 1000},
+                {"role": "system", "content": "## Tool Execution History\n- search_web [done]: old query\n\n" + ("Dynamic runtime context. " * 1000)},
+                {"role": "user", "content": "Summarize the stable prefix."},
+            ]
+        }
+        target = {
+            "record": {
+                "provider": model_registry.OPENROUTER_PROVIDER,
+                "api_model": "anthropic/claude-sonnet-4.5",
+            },
+            "extra_body": {"provider": {"sort": "throughput"}},
+        }
+
+        merged = model_registry.apply_model_target_request_options(request_kwargs, target)
+
+        self.assertIsInstance(merged["messages"][0]["content"], list)
+        self.assertEqual(merged["messages"][0]["content"][0]["cache_control"], {"type": "ephemeral"})
+        self.assertEqual(merged["messages"][1]["content"], request_kwargs["messages"][1]["content"])
+
     def test_apply_model_target_request_options_skips_small_block_form_gemini_prefix(self):
         request_kwargs = {
             "messages": [

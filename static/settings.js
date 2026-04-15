@@ -1224,7 +1224,26 @@ function valueAsComparableString(value) {
 }
 
 function hasRestartRequiredChanges(payload, previousSettings) {
-  return RESTART_REQUIRED_SETTING_KEYS.some((key) => valueAsComparableString(payload[key]) !== valueAsComparableString(previousSettings?.[key]));
+  return RESTART_REQUIRED_SETTING_KEYS.some((key) => (
+    Object.prototype.hasOwnProperty.call(payload || {}, key)
+    && valueAsComparableString(payload[key]) !== valueAsComparableString(previousSettings?.[key])
+  ));
+}
+
+function buildSettingsDeltaPayload(nextPayload, previousSettings) {
+  const delta = {};
+  const normalizedNextPayload = nextPayload && typeof nextPayload === "object" ? nextPayload : {};
+  const normalizedPreviousSettings = previousSettings && typeof previousSettings === "object" ? previousSettings : {};
+
+  Object.keys(normalizedNextPayload).forEach((key) => {
+    const nextValue = normalizedNextPayload[key];
+    const previousValue = normalizedPreviousSettings[key];
+    if (valueAsComparableString(nextValue) !== valueAsComparableString(previousValue)) {
+      delta[key] = nextValue;
+    }
+  });
+
+  return delta;
 }
 
 function showRestartWarning(message) {
@@ -3076,7 +3095,7 @@ async function saveSettings() {
   const scratchpadSections = readScratchpadSectionsFromList();
   const previousSettingsSnapshot = { ...appSettings };
   const isRagEnabledDraft = Boolean(ragEnabledEl?.checked);
-  const payload = {
+  const fullPayload = {
     default_persona_id: defaultPersonaEl?.value || "",
     temperature: readFloatSetting(temperatureEl, 0.7, { min: 0, max: 2 }),
     max_steps: readNumericSetting(maxStepsEl, 5, { allowZero: false }),
@@ -3180,7 +3199,16 @@ async function saveSettings() {
   };
 
   if (reasoningAutoCollapseEl) {
-    payload.reasoning_auto_collapse = Boolean(reasoningAutoCollapseEl.checked);
+    fullPayload.reasoning_auto_collapse = Boolean(reasoningAutoCollapseEl.checked);
+  }
+
+  const payload = buildSettingsDeltaPayload(fullPayload, appSettings);
+  if (!Object.keys(payload).length) {
+    clearDirtyState();
+    hideRestartWarning();
+    setSettingsStatus("No changes to save", "muted");
+    setDirtyPill("All changes saved", "success");
+    return;
   }
 
   saveButtons.forEach((button) => {
