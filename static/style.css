@@ -7530,6 +7530,96 @@ kbd {
   align-items: start;
 }
 
+body[data-page="settings"] .settings-page-grid--two,
+body[data-page="settings"] .settings-page-grid--three,
+body[data-page="settings"] .settings-subsection-grid--two,
+body[data-page="settings"] .settings-subsection-grid--three,
+body[data-page="settings"] .tool-toggles--page,
+body[data-page="settings"] .settings-inline-grid,
+body[data-page="settings"] .rag-settings-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+body[data-page="settings"] .settings-page-content,
+body[data-page="settings"] .settings-tab-panels,
+body[data-page="settings"] .settings-tab-panel,
+body[data-page="settings"] .settings-page-grid,
+body[data-page="settings"] .settings-page-stack {
+  gap: 14px;
+}
+
+body[data-page="settings"] .settings-page-shell {
+  gap: 20px;
+  padding: 18px 0 24px;
+}
+
+body[data-page="settings"] .settings-page-sidebar__intro,
+body[data-page="settings"] .settings-page-toolbar,
+body[data-page="settings"] .settings-page-section-card,
+body[data-page="settings"] .settings-stat-card {
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.14);
+  backdrop-filter: none;
+}
+
+body[data-page="settings"] .settings-page-sidebar__intro,
+body[data-page="settings"] .settings-page-toolbar,
+body[data-page="settings"] .settings-page-section-card {
+  border-radius: 16px;
+}
+
+body[data-page="settings"] .settings-page-sidebar__intro,
+body[data-page="settings"] .settings-page-toolbar,
+body[data-page="settings"] .settings-page-section-card {
+  padding: 16px;
+}
+
+body[data-page="settings"] .settings-page-section-card {
+  gap: 12px;
+}
+
+body[data-page="settings"] .settings-page-section-card__header {
+  gap: 12px;
+  padding-bottom: 0;
+}
+
+body[data-page="settings"] .settings-page-section-card__header p,
+body[data-page="settings"] .settings-page-toolbar p {
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+body[data-page="settings"] .settings-subsection-grid {
+  gap: 12px;
+}
+
+body[data-page="settings"] .settings-subsection,
+body[data-page="settings"] .settings-toggle-panel,
+body[data-page="settings"] .settings-conditional-group,
+body[data-page="settings"] .tool-permission-section,
+body[data-page="settings"] .rag-setting-group {
+  padding: 12px;
+  border-radius: 12px;
+}
+
+body[data-page="settings"] .settings-subsection {
+  gap: 10px;
+}
+
+body[data-page="settings"] .settings-callout,
+body[data-page="settings"] .settings-collapsible__summary,
+body[data-page="settings"] .settings-collapsible__content {
+  padding: 12px;
+}
+
+body[data-page="settings"] .settings-collapsible {
+  border-radius: 12px;
+}
+
+body[data-page="settings"] .settings-stat-card {
+  padding: 10px 12px;
+  border-radius: 10px;
+}
+
 .settings-page-stack {
   display: flex;
   flex-direction: column;
