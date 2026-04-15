@@ -12530,6 +12530,18 @@ function markSubAgentCanvasPromptShown(conversationId, assistantMessageId, trace
   }
 }
 
+function clearSubAgentCanvasPromptShown(conversationId, assistantMessageId, traceIndex) {
+  const storageKey = getSubAgentCanvasPromptStorageKey(conversationId, assistantMessageId, traceIndex);
+  if (!storageKey) {
+    return;
+  }
+  try {
+    localStorage.removeItem(storageKey);
+  } catch (_) {
+    // Ignore storage errors.
+  }
+}
+
 function findPersistedAssistantEntryForSubAgentPrompt(preferredAssistantId = null) {
   const normalizedPreferredId = Number(preferredAssistantId || 0);
   if (!isPersistedMessageId(normalizedPreferredId)) {
@@ -12580,7 +12592,10 @@ function buildSubAgentResearchCanvasContent(entry) {
   return lines.join("\n").trim();
 }
 
-async function saveSubAgentResearchToCanvas(assistantMessageId, traceIndex, traceEntry) {
+async function saveSubAgentResearchToCanvas(assistantMessageId, traceIndex, traceEntry, options = {}) {
+  const openCanvasOnSave = options?.openCanvasOnSave !== false;
+  const statusMessage = String(options?.statusMessage || "Research saved to Canvas.").trim() || "Research saved to Canvas.";
+  const toastMessage = String(options?.toastMessage || statusMessage).trim() || statusMessage;
   if (!currentConvId) {
     showError("Create a conversation first so the research can be saved to Canvas.");
     return;
@@ -12612,9 +12627,13 @@ async function saveSubAgentResearchToCanvas(assistantMessageId, traceIndex, trac
   renderCanvasPanel();
   lastConversationSignature = getConversationSignature(history);
   loadSidebar();
-  openCanvas(null, { deferPanelRender: false });
-  setCanvasStatus("Research saved to Canvas.", "success");
-  showToast("Research saved to Canvas.", "success");
+  if (openCanvasOnSave) {
+    openCanvas(null, { deferPanelRender: false });
+  } else {
+    setCanvasAttention(true);
+  }
+  setCanvasStatus(statusMessage, "success");
+  showToast(toastMessage, "success");
 }
 
 function maybePromptToSaveSubAgentResearch(assistantEntry) {
@@ -12641,18 +12660,18 @@ function maybePromptToSaveSubAgentResearch(assistantEntry) {
     String(pendingTrace.entry.task_full || pendingTrace.entry.task || pendingTrace.entry.summary || "Research").trim(),
   );
 
-  openCanvasConfirmModal({
-    title: "Should the research be saved to the Canvas?",
-    message: `${taskHeading} is ready. If you save it to the Canvas, future turns can rely on the Canvas copy instead of the raw sub-agent research text.`,
-    confirmLabel: "Save to Canvas",
-    cancelLabel: "Not now",
-    onConfirm: async () => {
-      try {
-        await saveSubAgentResearchToCanvas(resolvedEntry.id, pendingTrace.index, pendingTrace.entry);
-      } catch (error) {
-        showError(error.message || "Research could not be saved to Canvas.");
-      }
+  void saveSubAgentResearchToCanvas(
+    resolvedEntry.id,
+    pendingTrace.index,
+    pendingTrace.entry,
+    {
+      openCanvasOnSave: false,
+      statusMessage: `${taskHeading} auto-saved to Canvas.`,
+      toastMessage: "Research auto-saved to Canvas.",
     },
+  ).catch((error) => {
+    clearSubAgentCanvasPromptShown(currentConvId, resolvedEntry.id, pendingTrace.index);
+    showError(error.message || "Research could not be saved to Canvas.");
   });
 }
 

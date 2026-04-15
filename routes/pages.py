@@ -29,7 +29,6 @@ from config import (
     SCRATCHPAD_SECTION_METADATA,
     SCRATCHPAD_SECTION_ORDER,
     SCRATCHPAD_SECTION_SETTING_KEYS,
-    SUB_AGENT_ALLOWED_TOOL_NAMES,
     SUB_AGENT_MAX_STEPS_MAX,
     SUB_AGENT_MAX_STEPS_MIN,
     WEB_CACHE_TTL_HOURS_MAX,
@@ -173,7 +172,7 @@ from proxy_settings import (
     PROXY_OPERATION_SEARCH_WEB,
     normalize_proxy_enabled_operations,
 )
-from tool_registry import TOOL_SPEC_BY_NAME
+from tool_registry import TOOL_SPEC_BY_NAME, get_tool_runtime_metadata
 
 TOOL_PERMISSION_LABELS = {
     "save_to_conversation_memory": "Save chat memory",
@@ -396,7 +395,11 @@ def build_tool_permission_sections() -> list[dict[str, object]]:
 
 
 def build_sub_agent_web_tool_sections() -> list[dict[str, object]]:
-    allowed_tools = set(SUB_AGENT_ALLOWED_TOOL_NAMES)
+    allowed_tools = {
+        tool_name
+        for tool_name in TOOL_SPEC_BY_NAME
+        if tool_name != "sub_agent" and get_tool_runtime_metadata(tool_name).get("read_only") is True
+    }
     sections: list[dict[str, object]] = []
     for section in build_tool_permission_sections():
         filtered_tools = [tool for tool in section["tools"] if tool["name"] in allowed_tools]

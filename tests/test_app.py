@@ -181,7 +181,7 @@ from routes.chat import (
     build_summary_prompt_messages,
     preload_dependencies,
 )
-from routes.pages import build_tool_permission_options, build_tool_permission_sections
+from routes.pages import build_sub_agent_web_tool_sections, build_tool_permission_options, build_tool_permission_sections
 from tests.support.app_harness import BaseAppRoutesTestCase
 from tests.support.stream_events import build_stream_chunk, build_stream_chunk_openrouter, build_tool_call_chunk
 from token_utils import estimate_text_tokens
@@ -702,6 +702,42 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertNotIn("legacy_unused", payload["operation_model_preferences"])
         self.assertEqual(payload["operation_model_fallback_preferences"]["sub_agent"], ["deepseek-chat"])
         self.assertNotIn("legacy_unused", payload["operation_model_fallback_preferences"])
+
+    def test_settings_patch_accepts_read_only_sub_agent_tools_and_drops_non_read_only(self):
+        response = self.client.patch(
+            "/api/settings",
+            json={
+                "sub_agent_allowed_tool_names": [
+                    "search_web",
+                    "read_file",
+                    "expand_canvas_document",
+                    "create_file",
+                    "sub_agent",
+                ]
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(
+            payload["sub_agent_allowed_tool_names"],
+            ["search_web", "read_file", "expand_canvas_document"],
+        )
+
+    def test_sub_agent_tool_sections_include_runtime_read_only_tools(self):
+        sections = build_sub_agent_web_tool_sections()
+        available_tools = {
+            tool["name"]
+            for section in sections
+            for tool in section.get("tools", [])
+            if isinstance(tool, dict)
+        }
+
+        self.assertIn("search_web", available_tools)
+        self.assertIn("read_file", available_tools)
+        self.assertIn("search_canvas_document", available_tools)
+        self.assertNotIn("create_file", available_tools)
+        self.assertNotIn("sub_agent", available_tools)
 
     def test_persona_crud_and_conversation_persona_override(self):
         response = self.client.post(

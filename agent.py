@@ -151,6 +151,7 @@ from tool_registry import (
     CANVAS_READ_BARRIER_TOOL_NAMES,
     TOOL_SPEC_BY_NAME,
     WEB_TOOL_NAMES,
+    get_tool_runtime_metadata,
     get_ui_hidden_tool_names,
     get_openai_tool_specs,
     is_tool_parallel_safe,
@@ -1248,7 +1249,19 @@ def _is_session_cacheable_tool(tool_name: str) -> bool:
 
 
 def _resolve_sub_agent_tool_names(settings: dict) -> list[str]:
-    return get_sub_agent_allowed_tool_names(settings)
+    configured_tool_names = get_sub_agent_allowed_tool_names(settings)
+    normalized_tool_names: list[str] = []
+    for tool_name in configured_tool_names:
+        normalized_tool_name = _normalize_tool_name(tool_name)
+        if normalized_tool_name == "sub_agent":
+            continue
+        if normalized_tool_name not in TOOL_SPEC_BY_NAME:
+            continue
+        if get_tool_runtime_metadata(normalized_tool_name).get("read_only") is not True:
+            continue
+        if normalized_tool_name not in normalized_tool_names:
+            normalized_tool_names.append(normalized_tool_name)
+    return normalized_tool_names
 
 
 def _normalize_sub_agent_tool_calls(tool_calls) -> list[dict]:

@@ -127,7 +127,7 @@ from config import (
     CHAT_SUMMARY_MODEL,
 )
 from proxy_settings import normalize_proxy_enabled_operations
-from tool_registry import TOOL_SPEC_BY_NAME
+from tool_registry import TOOL_SPEC_BY_NAME, get_tool_runtime_metadata
 from token_utils import estimate_text_tokens
 
 _db_path = DB_PATH
@@ -4398,8 +4398,15 @@ def normalize_active_tool_names(raw_value) -> list[str]:
 
 
 def normalize_sub_agent_allowed_tool_names(raw_value) -> list[str]:
+    allowed = {
+        tool_name
+        for tool_name in TOOL_SPEC_BY_NAME
+        if tool_name != "sub_agent"
+        and get_tool_runtime_metadata(tool_name).get("read_only") is True
+    }
+
     if raw_value in (None, ""):
-        return list(SUB_AGENT_ALLOWED_TOOL_NAMES)
+        return [tool_name for tool_name in SUB_AGENT_ALLOWED_TOOL_NAMES if tool_name in allowed]
 
     if isinstance(raw_value, list):
         names = raw_value
@@ -4410,7 +4417,6 @@ def normalize_sub_agent_allowed_tool_names(raw_value) -> list[str]:
             names = []
 
     normalized = []
-    allowed = set(SUB_AGENT_ALLOWED_TOOL_NAMES)
     for name in names:
         if isinstance(name, str) and name in allowed and name not in normalized:
             normalized.append(name)
