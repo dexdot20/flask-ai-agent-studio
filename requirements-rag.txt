@@ -1,4 +1,4 @@
-## Optional RAG stack for embeddings, chunking, retrieval sync, and ChromaDB vector storage.
+## Optional RAG stack (embeddings, chunking, retrieval sync, and ChromaDB persistence).
 chromadb>=0.5
 sentence-transformers>=3.0
 torch>=2.3

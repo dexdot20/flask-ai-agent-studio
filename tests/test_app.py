@@ -2567,6 +2567,90 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["title"], "Better Title")
 
+    def test_generate_title_returns_existing_when_set_via_title_tool(self):
+        with patch("routes.conversations.sync_conversations_to_rag_safe"):
+            conversation_id = self._create_conversation(title="New Chat")
+
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE conversations SET title = ?, updated_at = datetime('now') WHERE id = ?",
+                ("Agent Generated Title", conversation_id),
+            )
+            insert_message(
+                conn,
+                conversation_id,
+                "assistant",
+                "Done",
+                metadata=serialize_message_metadata(
+                    {
+                        "tool_results": [
+                            {
+                                "tool_name": "set_conversation_title",
+                                "summary": "Conversation title set: Agent Generated Title",
+                            }
+                        ]
+                    }
+                ),
+            )
+
+        with patch("routes.chat.collect_agent_response") as mocked_collect:
+            response = self.client.post(f"/api/conversations/{conversation_id}/generate-title")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["title"], "Agent Generated Title")
+        mocked_collect.assert_not_called()
+
+    def test_chat_first_turn_enables_set_conversation_title_tool(self):
+        captured = {}
+        with patch("routes.conversations.sync_conversations_to_rag_safe"):
+            conversation_id = self._create_conversation(title="New Chat")
+
+        save_app_settings(
+            {
+                "user_preferences": "",
+                "max_steps": "1",
+                "active_tools": json.dumps(["search_web"], ensure_ascii=False),
+                "rag_auto_inject": "false",
+            }
+        )
+
+        def fake_run_agent_stream(api_messages, *args, **kwargs):
+            captured["api_messages"] = api_messages
+            captured["args"] = args
+            captured["prompt_tool_names"] = kwargs.get("prompt_tool_names")
+            return iter(
+                [
+                    {"type": "answer_start"},
+                    {"type": "answer_delta", "text": "OK"},
+                    {"type": "tool_capture", "tool_results": []},
+                    {"type": "done"},
+                ]
+            )
+
+        with patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream), patch(
+            "routes.chat.sync_conversations_to_rag_safe"
+        ):
+            response = self.client.post(
+                "/chat",
+                json={
+                    "conversation_id": conversation_id,
+                    "model": "deepseek-chat",
+                    "messages": [{"role": "user", "content": "Yeni tur"}],
+                },
+            )
+            response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("set_conversation_title", captured["args"][2])
+        self.assertIn("set_conversation_title", captured["prompt_tool_names"])
+        system_text = "\n\n".join(
+            str(message.get("content") or "")
+            for message in captured["api_messages"]
+            if message.get("role") == "system"
+        )
+        self.assertIn("First Turn Conversation Title", system_text)
+        self.assertIn("set_conversation_title", system_text)
+
     def test_manual_prune_endpoint_updates_message_and_preserves_original(self):
         conversation_id = self._create_conversation()
         with get_db() as conn:

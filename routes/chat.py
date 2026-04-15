@@ -978,6 +978,14 @@ def _build_fallback_title_from_source(source_text: str) -> str:
     return _normalize_generated_title(title)
 
 
+def _conversation_uses_default_title(conversation_id: int) -> bool:
+    with get_db() as conn:
+        row = conn.execute("SELECT title FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
+    if not row:
+        return False
+    return str(row["title"] or "").strip() == TITLE_FALLBACK
+
+
 def _acquire_summary_lock_state(conversation_id: int) -> _ConversationSummaryLockState:
     with _SUMMARY_LOCKS_GUARD:
         state = _SUMMARY_LOCKS.get(conversation_id)
@@ -2754,6 +2762,7 @@ def _build_budgeted_prompt_messages(
     workspace_root: str | None = None,
     model_id: str | None = None,
     previous_canvas_content_hash: str | None = None,
+    is_first_turn: bool = False,
     double_check: bool = False,
     double_check_query: str = "",
 ) -> tuple[list[dict], list[dict], dict, str | None]:
@@ -2808,6 +2817,7 @@ def _build_budgeted_prompt_messages(
     base_runtime_messages = [stable_runtime_message]
     base_context_injection = build_runtime_context_injection(
         active_tool_names=runtime_tool_names,
+        is_first_turn=is_first_turn,
         clarification_response=clarification_response,
         all_clarification_rounds=all_clarification_rounds,
         double_check=double_check,
@@ -2918,6 +2928,7 @@ def _build_budgeted_prompt_messages(
 
     current_context_injection = build_runtime_context_injection(
         active_tool_names=runtime_tool_names,
+        is_first_turn=is_first_turn,
         clarification_response=clarification_response,
         all_clarification_rounds=all_clarification_rounds,
         double_check=double_check,
@@ -4742,6 +4753,15 @@ def register_chat_routes(app) -> None:
         max_steps = max(1, min(50, int(settings.get("max_steps", 5))))
         temperature = get_model_temperature(settings)
         active_tool_names = get_active_tool_names(settings)
+        is_first_turn = False
+        if conv_id is not None:
+            try:
+                if _conversation_uses_default_title(conv_id):
+                    is_first_turn = True
+                    if "set_conversation_title" not in active_tool_names:
+                        active_tool_names.append("set_conversation_title")
+            except Exception:
+                LOGGER.exception("Failed to evaluate first-turn title state for conversation_id=%s", conv_id)
         if not can_answer_image_questions(settings, fallback_model_id=model):
             active_tool_names = [name for name in active_tool_names if name != "image_explain"]
         fetch_url_clip_aggressiveness = get_fetch_url_clip_aggressiveness(settings)
@@ -5024,6 +5044,7 @@ def register_chat_routes(app) -> None:
             active_tool_names,
             clarification_response,
             clarification_rounds_for_prompt or None,
+            is_first_turn=is_first_turn,
             double_check=double_check,
             double_check_query=double_check_query,
             retrieved_context=retrieved_context,
@@ -5784,6 +5805,18 @@ def register_chat_routes(app) -> None:
             ).fetchone()
             if not conversation:
                 return jsonify({"error": "Not found."}), 404
+            current_title = str(conversation["title"] or "").strip()
+            if current_title and current_title != TITLE_FALLBACK:
+                title_set_via_tool = conn.execute(
+                    """SELECT 1 FROM messages
+                       WHERE conversation_id = ?
+                         AND role = 'assistant'
+                         AND metadata LIKE ?
+                       LIMIT 1""",
+                    (conv_id, '%"tool_name": "set_conversation_title"%'),
+                ).fetchone()
+                if title_set_via_tool:
+                    return jsonify({"title": current_title})
             messages = conn.execute(
                 """SELECT role, content, metadata FROM messages
                     WHERE conversation_id = ?

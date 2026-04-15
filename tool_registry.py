@@ -620,6 +620,33 @@ TOOL_SPECS = [
         },
     },
     {
+        "name": "set_conversation_title",
+        "description": (
+            "Set a concise conversation title for the current chat. "
+            "Use this on the first turn to replace the default title when the topic is clear."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Short topic title, typically 2-5 words.",
+                }
+            },
+            "required": ["title"],
+        },
+        "prompt": {
+            "purpose": "Sets the conversation title shown in chat history.",
+            "inputs": {
+                "title": "short conversation topic title",
+            },
+            "guidance": (
+                "Use this only when the conversation topic is clear. "
+                "Prefer 2-5 words, avoid generic labels, and match the user's language when clear."
+            ),
+        },
+    },
+    {
         "name": "sub_agent",
         "description": (
             "Delegate a bounded research or inspection task to a helper sub-agent that can use only read-only tools, including exposed web search and URL fetch tools. "
@@ -2139,6 +2166,7 @@ _TOOL_RUNTIME_DEFAULTS = {
     "exclusive_turn": False,
     "session_cacheable": False,
     "prompt_visible": True,
+    "ui_hidden": False,
     "depends_on_tool_outputs": False,
     "state_domains": (),
 }
@@ -2147,6 +2175,11 @@ _TOOL_RUNTIME_METADATA_OVERRIDES = {
     "ask_clarifying_question": {
         "exclusive_turn": True,
         "state_domains": ("clarification",),
+    },
+    "set_conversation_title": {
+        "ui_hidden": True,
+        "prompt_visible": True,
+        "state_domains": ("conversation",),
     },
     "sub_agent": {
         "read_only": True,
@@ -2372,6 +2405,15 @@ def get_prompt_visible_tool_names(tool_names=None) -> list[str]:
         tool_name
         for tool_name in normalized_tool_names
         if get_tool_runtime_metadata(tool_name).get("prompt_visible") is not False
+    ]
+
+
+def get_ui_hidden_tool_names(tool_names=None) -> list[str]:
+    normalized_tool_names = _normalize_runtime_tool_name_list(tool_names)
+    return [
+        tool_name
+        for tool_name in normalized_tool_names
+        if get_tool_runtime_metadata(tool_name).get("ui_hidden") is True
     ]
 
 

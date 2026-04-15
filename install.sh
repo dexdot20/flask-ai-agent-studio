@@ -360,13 +360,14 @@ if [[ "${ACCELERATOR}" == "CUDA" ]]; then
   if [[ "${RAG_ENABLED_VALUE}" == "false" ]]; then
     BGE_PRELOAD="false"
   fi
-  if [[ "${RAG_ENABLED_VALUE}" == "true" ]]; then
-    BGE_MODEL_PATH="${RAG_MODEL_DIR}"
-  fi
 else
   BGE_DEVICE="cpu"
   BGE_PRELOAD="false"
-  RAG_ENABLED_VALUE="false"
+fi
+
+if [[ "${RAG_ENABLED_VALUE}" == "true" ]]; then
+  BGE_MODEL_PATH="${RAG_MODEL_DIR}"
+else
   BGE_MODEL_PATH="BAAI/bge-m3"
 fi
 
@@ -376,7 +377,6 @@ fi
 
 write_env "${ENV_FILE}" \
   "DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}" \
-  "YOUTUBE_TRANSCRIPTS_ENABLED=${YOUTUBE_TRANSCRIPTS_VALUE}" \
   "OPENROUTER_API_KEY=${OPENROUTER_API_KEY}" \
   "OPENROUTER_HTTP_REFERER=${OPENROUTER_HTTP_REFERER}" \
   "OPENROUTER_APP_TITLE=${OPENROUTER_APP_TITLE}" \

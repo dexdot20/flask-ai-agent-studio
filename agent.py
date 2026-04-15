@@ -107,6 +107,7 @@ from db import (
     get_fetch_url_token_threshold,
     get_all_scratchpad_sections,
     get_app_settings,
+    get_db,
     get_clarification_max_questions,
     get_model_temperature,
     get_prompt_max_input_tokens,
@@ -150,6 +151,7 @@ from tool_registry import (
     CANVAS_READ_BARRIER_TOOL_NAMES,
     TOOL_SPEC_BY_NAME,
     WEB_TOOL_NAMES,
+    get_ui_hidden_tool_names,
     get_openai_tool_specs,
     is_tool_parallel_safe,
     is_tool_session_cacheable,
@@ -6001,6 +6003,53 @@ def _run_clear_canvas(tool_args: dict, runtime_state: dict):
     return result, f"Canvas cleared ({result.get('cleared_count', 0)} documents removed)"
 
 
+def _normalize_conversation_title_for_tool(raw_title: str) -> str:
+    text = re.sub(r"\s+", " ", str(raw_title or "").replace("\n", " ")).strip()
+    if not text:
+        return ""
+    text = re.sub(r"^[\s\-*>#`\"'“”‘’\[\](){}:;,.!?]+", "", text)
+    text = re.sub(r"[\s\-*>#`\"'“”‘’\[\](){}:;,.!?]+$", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return ""
+    words = text.split(" ")
+    if len(words) > 5:
+        text = " ".join(words[:5]).strip()
+    return text[:48].strip()
+
+
+def _run_set_conversation_title(tool_args: dict, runtime_state: dict):
+    agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
+    conv_id = _coerce_int_range(agent_context.get("conversation_id"), 0, 0, 2_147_483_647)
+    if conv_id <= 0:
+        return {"status": "error", "error": "Missing conversation id."}, "Missing conversation id"
+
+    requested_title = _normalize_conversation_title_for_tool(tool_args.get("title", ""))
+    if not requested_title:
+        return {"status": "error", "error": "Title is empty."}, "Title is empty"
+
+    with get_db() as conn:
+        row = conn.execute("SELECT title FROM conversations WHERE id = ?", (conv_id,)).fetchone()
+        if not row:
+            return {"status": "error", "error": "Conversation not found."}, "Conversation not found"
+
+        current_title = str(row["title"] or "").strip()
+        if current_title and current_title != "New Chat":
+            return {
+                "status": "ok",
+                "updated": False,
+                "title": current_title,
+                "reason": "title_already_set",
+            }, f"Conversation title already set: {current_title}"
+
+        conn.execute(
+            "UPDATE conversations SET title = ?, updated_at = datetime('now') WHERE id = ?",
+            (requested_title, conv_id),
+        )
+
+    return {"status": "ok", "updated": True, "title": requested_title}, f"Conversation title set: {requested_title}"
+
+
 _TOOL_EXECUTORS = {
     "append_scratchpad": _run_append_scratchpad,
     "replace_scratchpad": _run_replace_scratchpad,
@@ -6010,6 +6059,7 @@ _TOOL_EXECUTORS = {
     "save_to_persona_memory": _run_save_to_persona_memory,
     "delete_persona_memory_entry": _run_delete_persona_memory_entry,
     "ask_clarifying_question": _run_ask_clarifying_question,
+    "set_conversation_title": _run_set_conversation_title,
     "sub_agent": _run_sub_agent,
     "image_explain": _run_image_explain,
     "transcribe_youtube_video": _run_transcribe_youtube_video,
@@ -7086,6 +7136,7 @@ def run_agent_stream(
     }
     openrouter_cache_estimate_state = {"previous_cacheable_text": ""}
     normalized_enabled_tool_names = _normalize_tool_name_list(enabled_tool_names)
+    ui_hidden_tool_names = set(get_ui_hidden_tool_names(normalized_enabled_tool_names))
     normalized_prompt_tool_names = [
         name
         for name in _normalize_tool_name_list(prompt_tool_names if prompt_tool_names is not None else enabled_tool_names)
@@ -7181,9 +7232,14 @@ def run_agent_stream(
         current_canvas_documents = current_canvas_snapshot.get("documents") or []
         active_canvas_document_id = current_canvas_snapshot.get("active_document_id")
         sub_agent_traces = runtime_state.get("sub_agent_traces") if isinstance(runtime_state.get("sub_agent_traces"), list) else []
+        visible_tool_results = [
+            entry
+            for entry in persisted_tool_results
+            if str((entry or {}).get("tool_name") or "").strip() not in ui_hidden_tool_names
+        ]
         return {
             "type": "tool_capture",
-            "tool_results": persisted_tool_results,
+            "tool_results": visible_tool_results,
             "canvas_documents": current_canvas_documents,
             "active_document_id": active_canvas_document_id,
             "canvas_viewports": current_canvas_snapshot.get("viewports") or {},
@@ -8177,9 +8233,42 @@ def run_agent_stream(
             slot["is_canvas"] = tool_name in CANVAS_TOOL_NAMES
             slots.append(slot)
 
+        hidden_tool_call_ids = {
+            str(slot.get("call_id") or "").strip()
+            for slot in slots
+            if str(slot.get("tool_name") or "").strip() in ui_hidden_tool_names
+        }
+
+        def _build_public_tool_history_messages(assistant_message: dict, tool_msgs: list[dict]) -> list[dict]:
+            if not hidden_tool_call_ids:
+                return [assistant_message, *tool_msgs]
+
+            visible_tool_calls = [
+                tool_call
+                for tool_call in (assistant_message.get("tool_calls") if isinstance(assistant_message.get("tool_calls"), list) else [])
+                if str(tool_call.get("id") or "").strip() not in hidden_tool_call_ids
+            ]
+
+            public_messages: list[dict] = []
+            public_assistant_message = dict(assistant_message)
+            if visible_tool_calls:
+                public_assistant_message["tool_calls"] = visible_tool_calls
+            else:
+                public_assistant_message.pop("tool_calls", None)
+
+            if str(public_assistant_message.get("content") or "").strip() or public_assistant_message.get("tool_calls"):
+                public_messages.append(public_assistant_message)
+
+            public_messages.extend(
+                message
+                for message in tool_msgs
+                if str(message.get("tool_call_id") or "").strip() not in hidden_tool_call_ids
+            )
+            return public_messages
+
         # ---- Phase 1b: yield step_update events for all non-error, non-disabled calls ----
         for slot in slots:
-            if slot.get("has_step_update"):
+            if slot.get("has_step_update") and str(slot.get("tool_name") or "").strip() not in ui_hidden_tool_names:
                 yield {
                     "type": "step_update",
                     "step": step,
@@ -8311,7 +8400,8 @@ def run_agent_stream(
                 error = slot["error"]
                 if tool_name == "ask_clarifying_question" and clarification_repair_error is None:
                     clarification_repair_error = error
-                yield {"type": "tool_error", "step": step, "tool": tool_name, "error": error, "call_id": call_id}
+                if tool_name not in ui_hidden_tool_names:
+                    yield {"type": "tool_error", "step": step, "tool": tool_name, "error": error, "call_id": call_id}
                 tool_messages.append(
                     {
                         "id": call_id,
@@ -8336,14 +8426,15 @@ def run_agent_stream(
                 summary = slot["summary"]
                 transcript_result = slot["transcript_result"]
                 storage_entry = slot["storage_entry"]
-                yield {
-                    "type": "tool_result",
-                    "step": step,
-                    "tool": tool_name,
-                    "summary": f"{summary} (cached)",
-                    "call_id": call_id,
-                    "cached": True,
-                }
+                if tool_name not in ui_hidden_tool_names:
+                    yield {
+                        "type": "tool_result",
+                        "step": step,
+                        "tool": tool_name,
+                        "summary": f"{summary} (cached)",
+                        "call_id": call_id,
+                        "cached": True,
+                    }
                 tool_messages.append(
                     {
                         "id": call_id,
@@ -8387,14 +8478,15 @@ def run_agent_stream(
                 result = slot["result"]
                 summary = slot["summary"]
                 transcript_result = slot["transcript_result"]
-                yield {
-                    "type": "tool_result",
-                    "step": step,
-                    "tool": tool_name,
-                    "summary": f"{summary} (cached)",
-                    "call_id": call_id,
-                    "cached": True,
-                }
+                if tool_name not in ui_hidden_tool_names:
+                    yield {
+                        "type": "tool_result",
+                        "step": step,
+                        "tool": tool_name,
+                        "summary": f"{summary} (cached)",
+                        "call_id": call_id,
+                        "cached": True,
+                    }
                 tool_messages.append(
                     {
                         "id": call_id,
@@ -8489,14 +8581,15 @@ def run_agent_stream(
                         result=result,
                         transcript_result=transcript_result,
                     )
-                    yield {
-                        "type": "tool_result",
-                        "step": step,
-                        "tool": tool_name,
-                        "summary": summary,
-                        "call_id": call_id,
-                        "cached": False,
-                    }
+                    if tool_name not in ui_hidden_tool_names:
+                        yield {
+                            "type": "tool_result",
+                            "step": step,
+                            "tool": tool_name,
+                            "summary": summary,
+                            "call_id": call_id,
+                            "cached": False,
+                        }
                     tool_messages.append(
                         {
                             "role": "tool",
@@ -8550,11 +8643,13 @@ def run_agent_stream(
                             step=step,
                             clarification=clarification_event.get("clarification"),
                         )
-                        yield {
-                            "type": "tool_history",
-                            "step": step,
-                            "messages": [assistant_tool_call_message, *tool_messages],
-                        }
+                        public_history_messages = _build_public_tool_history_messages(assistant_tool_call_message, tool_messages)
+                        if public_history_messages:
+                            yield {
+                                "type": "tool_history",
+                                "step": step,
+                                "messages": public_history_messages,
+                            }
                         yield clarification_event
                         if usage_totals["total_tokens"]:
                             yield usage_event()
@@ -8574,7 +8669,8 @@ def run_agent_stream(
                         tool_args=tool_args,
                         error=error,
                     )
-                    yield {"type": "tool_error", "step": step, "tool": tool_name, "error": error, "call_id": call_id}
+                    if tool_name not in ui_hidden_tool_names:
+                        yield {"type": "tool_error", "step": step, "tool": tool_name, "error": error, "call_id": call_id}
                     tool_messages.append(
                         {
                             "role": "tool",
@@ -8624,11 +8720,13 @@ def run_agent_stream(
             step=step,
             transcript_results=transcript_results,
         )
-        yield {
-            "type": "tool_history",
-            "step": step,
-            "messages": [assistant_tool_call_message, *tool_messages],
-        }
+        public_history_messages = _build_public_tool_history_messages(assistant_tool_call_message, tool_messages)
+        if public_history_messages:
+            yield {
+                "type": "tool_history",
+                "step": step,
+                "messages": public_history_messages,
+            }
         messages.extend(tool_messages)
         _merge_tool_execution_result_message(messages, tool_execution_result_message)
         if canvas_context_refresh_needed:

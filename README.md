@@ -49,7 +49,7 @@ It is not a minimal prompt/response demo. The app keeps conversation history in 
 - Persist messages, usage metadata, tool traces, reasoning content, and canvas state in SQLite
 - Cancel an active response mid-stream
 - Clear the current chat view without deleting stored conversations
-- Automatically generate a short title after the first exchange or on demand
+- Automatically set a concise title on the first turn through an internal tool call (`set_conversation_title`) and support manual title refresh on demand
 - Edit a previous user message, delete later turns, and regenerate from that branch
 - Restore assistant metadata, reasoning, tool results, and canvas state when reopening a conversation
 - Show a slash-command picker in the composer when the user types `/`, with registry-backed command insertion and keyboard navigation
@@ -66,7 +66,7 @@ It is not a minimal prompt/response demo. The app keeps conversation history in 
 - Validates tool names and tool argument schemas before execution
 - Supports native function calls from the model
 - Supports model-emitted tool JSON fallback handling
-- Uses centralized tool-runtime metadata (`tool_registry.py`) to keep prompt guidance and runtime scheduling aligned for read-only parallel-safe tools, cacheable tools, and canvas read barriers
+- Uses centralized tool-runtime metadata (`tool_registry.py`) to keep prompt guidance and runtime scheduling aligned for read-only parallel-safe tools, cacheable tools, canvas read barriers, and UI-hidden internal tools
 - Limits tool rounds with configurable `max_steps` from 1 to 50
 - Encourages the model to batch independent read-only tool calls in one turn (instead of serial one-by-one fan-out), then reason across the combined results
 - Keeps canvas mutation+read safety barriers in place so same-turn canvas reads do not observe stale pre-mutation state
@@ -135,11 +135,13 @@ Manual smoke test checklist for the Canvas UI is available in [docs/canvas-ui-sm
 7. If tool-memory auto-injection is enabled, the same query searches remembered web results.
 8. The runtime builds a stable top-loaded system prefix first, then injects current-turn dynamic context (time, memory, retrieval, tool trace, canvas state, and active tools) later in the prompt immediately before the latest user message; when older turns are replayed, only the cache-friendly durable subset of any stored context injection is kept.
 9. Prompt-visible tools are now resolved from centralized runtime metadata, so the main agent can see the same controlled web and read-only tools that the scheduler can execute safely.
-10. The agent resolves the selected model to the correct provider client and streams model output.
-11. Tool calls are validated, executed, cached, and appended to the transcript.
-12. Tool progress, reasoning deltas, answer deltas, usage, and message IDs are streamed back as NDJSON.
-13. The final assistant message is stored with metadata such as reasoning, usage, tool trace, canvas state, and stored tool results.
-14. After a turn finishes, the app may summarize older context, prune older visible messages, apply entropy-aware history selection, and sync conversations or tool results into the RAG store.
+10. On first-turn conversations (title still `New Chat`), the runtime asks the model to call `set_conversation_title` once with a concise topic label before finishing the answer.
+11. The agent resolves the selected model to the correct provider client and streams model output.
+12. Tool calls are validated, executed, cached, and appended to the transcript.
+13. Tool progress, reasoning deltas, answer deltas, usage, and message IDs are streamed back as NDJSON.
+14. UI-hidden internal tools (for example `set_conversation_title`) execute normally but are filtered out of public tool events.
+15. The final assistant message is stored with metadata such as reasoning, usage, tool trace, canvas state, and stored tool results.
+16. After a turn finishes, the app may summarize older context, prune older visible messages, apply entropy-aware history selection, and sync conversations or tool results into the RAG store.
 
 ## Project structure
 
@@ -257,6 +259,7 @@ YOUTUBE_TRANSCRIPT_DEFAULT_LANGUAGE=
 
 RAG can now fall back to CPU-only embedding, and OCR-only image handling can run without any local vision model.
 
+- `install.sh` now supports RAG-enabled setups on both CPU and CUDA profiles. When RAG is enabled, it downloads the local BGE-M3 cache and points `BGE_M3_MODEL_PATH` to that local directory.
 - RAG embeddings work on CPU or CUDA; set `BGE_M3_DEVICE=cpu` for a CPU-only path, leave it on auto to use CUDA when available, and explicit CUDA requests fall back to CPU with a warning if the CUDA stack is unavailable.
 - Local OCR can run in OCR-only mode with EasyOCR or PaddleOCR.
 - PaddleOCR GPU installs can require a CUDA-specific PaddlePaddle wheel; `install.sh` attempts a best-effort install and falls back to CPU PaddlePaddle when needed.
@@ -596,7 +599,8 @@ Implementation note for future commands:
 
 ### Title, summary, and pruning actions
 
-- Use Generate Title to refresh a conversation title manually.
+- First-turn conversations can receive an automatic internal title update through `set_conversation_title` when the topic is clear.
+- Use Generate Title to refresh a conversation title manually when needed; if a title was already set by the internal title tool, the endpoint returns the existing title directly.
 - Use Summarize to force a summary pass for the current conversation.
 - Use Undo on a summary message to restore the summarized messages.
 - Use Prune history to prune the first N eligible unpruned messages in the current conversation.
@@ -785,6 +789,15 @@ The Settings page can scope retrieval to conversation, tool result, tool memory,
 Only tools enabled in Settings are exposed to the model. If RAG is disabled, `search_knowledge_base` is removed from the tool list even if it is enabled in settings.
 
 ### Memory and personalization
+
+#### `set_conversation_title`
+
+Set a concise title for the current conversation.
+
+- This tool is primarily used for first-turn title initialization and is hidden from public streaming tool events.
+
+- Arguments:
+  - `title` (string, required) - short topic title, typically 2-5 words
 
 #### `save_to_conversation_memory`
 
@@ -1192,7 +1205,7 @@ Workspace tools let the assistant validate and edit files in the conversation sa
 | `PATCH` | `/api/settings` | Update persisted settings |
 | `POST` | `/api/fix-text` | Rewrite the current draft before sending |
 | `POST` | `/chat` | Main streamed chat endpoint; accepts JSON or multipart uploads |
-| `POST` | `/api/conversations/<id>/generate-title` | Generate a title from conversation content |
+| `POST` | `/api/conversations/<id>/generate-title` | Generate or refresh a title from conversation content; returns the existing title directly when it was already set by the internal title tool |
 | `POST` | `/api/conversations/<id>/summarize` | Manually summarize a conversation |
 | `POST` | `/api/conversations/<id>/summaries/<summary_id>/undo` | Undo a summary message |
 | `POST` | `/api/messages/<id>/prune` | Prune a visible user or assistant message |

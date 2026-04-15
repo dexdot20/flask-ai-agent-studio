@@ -1,7 +1,8 @@
-# Full development install: core runtime, optional stacks, and lint/test tooling.
+# Full development install: core runtime + all optional feature stacks + lint/test tooling.
 -r requirements.txt
 -r requirements-rag.txt
 -r requirements-ocr-easy.txt
 -r requirements-ocr-paddle.txt
+-r requirements-youtube-transcript.txt
 ruff>=0.11,<0.12
 pytest>=9.0.2

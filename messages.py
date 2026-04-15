@@ -2189,6 +2189,7 @@ def _count_summary_messages(messages: list[dict] | None) -> int:
 def _build_runtime_volatile_parts(
     *,
     active_tool_names: list[str],
+    is_first_turn: bool = False,
     clarification_response: dict | None = None,
     all_clarification_rounds: list[dict] | None = None,
     retrieved_context=None,
@@ -2214,6 +2215,16 @@ def _build_runtime_volatile_parts(
 
     if include_time_context:
         volatile_parts.append(_build_current_time_context(now))
+
+    if is_first_turn and "set_conversation_title" in set(active_tool_names or []):
+        volatile_parts.append("## First Turn Conversation Title")
+        volatile_parts.append(
+            "- This is the first turn of the conversation. Call `set_conversation_title` once with a concise 2-5 word topic title before finishing your response."
+        )
+        volatile_parts.append(
+            "- Use a concrete topic label, match the user's language when clear, and avoid generic labels like 'New Chat' unless the topic is unclear."
+        )
+        volatile_parts.append("")
 
     if double_check:
         normalized_double_check_query = str(double_check_query or "").strip()
@@ -2510,6 +2521,7 @@ def _build_runtime_static_parts(
 
 def build_runtime_context_injection(
     active_tool_names=None,
+    is_first_turn: bool = False,
     clarification_response: dict | None = None,
     all_clarification_rounds: list[dict] | None = None,
     retrieved_context=None,
@@ -2563,6 +2575,7 @@ def build_runtime_context_injection(
     parts.extend(
         _build_runtime_volatile_parts(
             active_tool_names=resolved_tool_names,
+            is_first_turn=is_first_turn,
             clarification_response=clarification_response,
             all_clarification_rounds=all_clarification_rounds,
             double_check=double_check,
