@@ -1689,20 +1689,19 @@ def _build_summary_prompt_payload(
     continuation_focus: str = "",
 ) -> tuple[list[dict], dict]:
     instruction = (
-        "You are compressing earlier conversation history for later reuse. "
-        "Analyze the dominant language of the conversation and write the summary in that language.\n\n"
+        "Summarize earlier conversation history for continuation. "
+        "Use the dominant conversation language.\n\n"
         "Capture these sections: User Goals & Intentions, Key Facts & Information, Decisions & Agreements, Unresolved Questions & Open Issues, Important Context, and Important Tool Findings.\n"
-        "Return ONLY a valid raw JSON object with exactly these keys: facts, decisions, open_issues, entities, tool_outcomes.\n"
-        "All five keys are required. Use [] for keys with no items.\n"
-        "Each key must contain an array of short strings in the conversation language.\n"
+        "Return ONLY a valid JSON object with exactly these keys: "
+        "facts, decisions, open_issues, entities, tool_outcomes.\n"
+        "All keys are required; use [] when empty.\n"
+        "Each value must be an array of short strings.\n"
         "Per-key limits: facts<=10, decisions<=8, open_issues<=8, entities<=14, tool_outcomes<=10.\n"
-        "Include sufficient detail to let a future assistant continue accurately, but keep the output compact and continuation-oriented.\n"
-        "Keep only continuation-critical information. Remove filler, repetition, and low-value chatter.\n"
-        f"Keep the JSON compact, with at most {SUMMARY_MAX_BULLETS} total bullet-like items across all arrays and under {SUMMARY_MAX_OUTPUT_CHARS} characters when serialized. "
-        "The first character of the response must be '{' and the last character must be '}'. "
-        "Do not use markdown headings, code fences, explanations, or extra keys.\n"
-        "Do not mention tool internals unless they materially affect future replies.\n"
-        "You MUST NOT call any tools or functions. Return only valid JSON."
+        f"Keep total bullets <= {SUMMARY_MAX_BULLETS} and serialized output <= {SUMMARY_MAX_OUTPUT_CHARS} characters.\n"
+        "Include sufficient detail for accurate continuation while remaining concise.\n"
+        "Preserve only continuation-critical facts, decisions, unresolved issues, constraints, and important tool findings.\n"
+        "Avoid filler/repetition. No markdown, code fences, commentary, or extra keys.\n"
+        "Do not call tools/functions."
     )
     user_pref_text = (user_preferences or "").strip()
     if user_pref_text:
@@ -3616,7 +3615,7 @@ def maybe_create_conversation_summary(
         resolved_continuation_focus = re.sub(
             r"\s+",
             " ",
-            str(continuation_focus or _extract_summary_continuation_focus(canonical_messages) or ""),
+            str(continuation_focus or ""),
         ).strip()[:400]
         assistant_behavior = build_conversation_assistant_behavior(conversation_id, settings)
         summary_user_preferences_parts = [assistant_behavior] if assistant_behavior else []
