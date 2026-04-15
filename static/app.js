@@ -526,7 +526,7 @@ function updatePrunePanelUi() {
 
   if (pruneSubtitle) {
     pruneSubtitle.textContent = currentConvId
-      ? `Conversation: ${currentConvTitle || `Chat #${currentConvId}`} · threshold ${fmt(pruneTokenThreshold)} tokens · recommended batch ${fmt(pruneRecommendedBatchSize)}`
+      ? `Conversation: ${getCurrentConversationDisplayTitle() || `Chat #${currentConvId}`} · threshold ${fmt(pruneTokenThreshold)} tokens · recommended batch ${fmt(pruneRecommendedBatchSize)}`
       : "Entropy + RAG scores help surface lower-value history first.";
   }
 
@@ -974,6 +974,9 @@ let isFixing = false;
 let currentConvId = null;
 let currentConvTitle = "New Chat";
 let currentConversationPersonaId = null;
+let currentConversationPersonaName = "";
+let currentConversationTitleSource = "system";
+let currentConversationTitleOverridden = false;
 let conversationMemoryEntries = [];
 let conversationMemoryEnabled = false;
 let activeAbortController = null;
@@ -1166,7 +1169,7 @@ function renderConversationMemoryPanel() {
 
   if (memorySubtitle) {
     memorySubtitle.textContent = hasConversation
-      ? `Current conversation: ${currentConvTitle || `Chat #${currentConvId}`}`
+      ? `Current conversation: ${getCurrentConversationDisplayTitle() || `Chat #${currentConvId}`}`
       : "Open or create a conversation to view and manage memory entries.";
   }
 
@@ -5781,7 +5784,7 @@ function updateExportPanel() {
     return;
   }
   exportSubtitle.textContent = currentConvId
-    ? `Current conversation: ${currentConvTitle || `Chat #${currentConvId}`}`
+    ? `Current conversation: ${getCurrentConversationDisplayTitle() || `Chat #${currentConvId}`}`
     : "Open or create a conversation before exporting.";
 }
 
@@ -9178,6 +9181,9 @@ async function refreshConversationFromServer() {
   if (messagesChanged) {
     history = serverHistory;
     currentConvTitle = String(data.conversation?.title || currentConvTitle || "New Chat").trim() || "New Chat";
+    currentConversationTitleSource = String(data.conversation?.title_source || currentConversationTitleSource || "system").trim().toLowerCase() || "system";
+    currentConversationTitleOverridden = data.conversation?.title_overridden === true || Number(data.conversation?.title_overridden || 0) === 1;
+    currentConversationPersonaName = resolveConversationPersonaName(data.conversation?.persona_id, data.conversation?.persona?.name || "");
     latestSummaryStatus = null;
     clearPendingDeleteMessage({ render: false });
     streamingCanvasDocuments = [];
@@ -10093,6 +10099,44 @@ function findPersonaById(personaId) {
   return getKnownPersonas().find((persona) => normalizePersonaId(persona?.id) === normalizedPersonaId) || null;
 }
 
+function resolveConversationPersonaName(personaId, fallbackName = "") {
+  const normalizedFallback = String(fallbackName || "").trim();
+  if (normalizedFallback) {
+    return normalizedFallback;
+  }
+  const persona = findPersonaById(personaId);
+  return String(persona?.name || "").trim();
+}
+
+function getConversationDisplayTitle(conversation) {
+  const source = conversation && typeof conversation === "object" ? conversation : {};
+  const rawTitle = String(source.title || "").trim() || "New Chat";
+  const titleSource = String(source.title_source || "system").trim().toLowerCase() || "system";
+  const titleOverridden = source.title_overridden === true || Number(source.title_overridden || 0) === 1;
+  const personaName = resolveConversationPersonaName(source.persona_id, source.persona_name || source.persona?.name || "");
+
+  if (titleOverridden || titleSource === "manual") {
+    return rawTitle;
+  }
+  if (titleSource === "persona" && personaName) {
+    return personaName;
+  }
+  if (rawTitle === "New Chat" && personaName) {
+    return personaName;
+  }
+  return rawTitle;
+}
+
+function getCurrentConversationDisplayTitle() {
+  return getConversationDisplayTitle({
+    title: currentConvTitle,
+    title_source: currentConversationTitleSource,
+    title_overridden: currentConversationTitleOverridden,
+    persona_id: currentConversationPersonaId,
+    persona_name: currentConversationPersonaName,
+  });
+}
+
 function getDefaultPersonaId() {
   return normalizePersonaId(appSettings.default_persona_id);
 }
@@ -10142,6 +10186,7 @@ function syncPersonaSelectors(value = "") {
 
 function applyConversationPersonaSelection(personaId) {
   currentConversationPersonaId = normalizePersonaId(personaId);
+  currentConversationPersonaName = resolveConversationPersonaName(currentConversationPersonaId, currentConversationPersonaName);
   syncPersonaSelectors(currentConversationPersonaId);
 }
 
@@ -10158,7 +10203,13 @@ async function persistConversationPersona(personaId) {
   if (!response.ok) {
     throw new Error(data.error || "Unable to update conversation persona.");
   }
+  currentConvTitle = String(data.title || currentConvTitle || "New Chat").trim() || "New Chat";
+  currentConversationTitleSource = String(data.title_source || currentConversationTitleSource || "system").trim().toLowerCase() || "system";
+  currentConversationTitleOverridden = data.title_overridden === true || Number(data.title_overridden || 0) === 1;
   applyConversationPersonaSelection(data.persona_id);
+  currentConversationPersonaName = resolveConversationPersonaName(data.persona_id, "");
+  updateExportPanel();
+  await loadSidebar();
 }
 
 function isMobileViewport() {
@@ -10762,12 +10813,21 @@ async function loadSidebar() {
       conversations.forEach((conversation) => {
         if (conversation.id === currentConvId) {
           currentConvTitle = String(conversation.title || "New Chat").trim() || "New Chat";
+          currentConversationTitleSource = String(conversation.title_source || currentConversationTitleSource || "system").trim().toLowerCase() || "system";
+          currentConversationTitleOverridden = conversation.title_overridden === true || Number(conversation.title_overridden || 0) === 1;
+          currentConversationPersonaName = resolveConversationPersonaName(conversation.persona_id, conversation.persona_name || "");
         }
+        const conversationDisplayTitle = getConversationDisplayTitle(conversation);
+        const conversationPersonaName = resolveConversationPersonaName(conversation.persona_id, conversation.persona_name || "");
+        const conversationPersonaBadge = conversationPersonaName
+          ? `<span class="sidebar-persona-label" title="Persona: ${escHtml(conversationPersonaName)}">${escHtml(conversationPersonaName)}</span>`
+          : "";
         const item = document.createElement("div");
         item.className = "sidebar-item" + (conversation.id === currentConvId ? " active" : "");
         item.dataset.id = conversation.id;
         item.innerHTML =
-          `<span class="sidebar-title">${escHtml(conversation.title)}</span>` +
+          `<span class="sidebar-title">${escHtml(conversationDisplayTitle)}</span>` +
+          conversationPersonaBadge +
           `<button class="sidebar-edit" title="Rename" aria-label="Rename" data-id="${conversation.id}">` +
           `  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">` +
           `    <path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>` +
@@ -10811,10 +10871,17 @@ async function loadSidebar() {
   }
 }
 
-function updateConversationTitleInState(conversationId, title) {
-  const normalizedTitle = String(title || "New Chat").trim() || "New Chat";
+function updateConversationTitleInState(conversationId, titleOrPayload) {
+  const payload = titleOrPayload && typeof titleOrPayload === "object"
+    ? titleOrPayload
+    : { title: titleOrPayload };
+  const normalizedTitle = String(payload.title || "New Chat").trim() || "New Chat";
   if (Number(conversationId) === Number(currentConvId)) {
     currentConvTitle = normalizedTitle;
+    currentConversationTitleSource = String(payload.title_source || "manual").trim().toLowerCase() || "manual";
+    currentConversationTitleOverridden = payload.title_overridden === true
+      || Number(payload.title_overridden || 0) === 1
+      || currentConversationTitleSource === "manual";
     updateExportPanel();
   }
 }
@@ -10895,7 +10962,11 @@ function startSidebarRename(conversation, item) {
         throw new Error(data.error || "Unable to rename conversation.");
       }
 
-      updateConversationTitleInState(conversation.id, data.title || nextTitle);
+      updateConversationTitleInState(conversation.id, {
+        title: data.title || nextTitle,
+        title_source: data.title_source || "manual",
+        title_overridden: data.title_overridden,
+      });
       activeSidebarRename = null;
       await loadSidebar();
     } catch (error) {
@@ -10995,7 +11066,10 @@ async function openConversation(id) {
   userScrolledUp = false;
   currentConvId = id;
   currentConvTitle = String(data.conversation?.title || "New Chat").trim() || "New Chat";
+  currentConversationTitleSource = String(data.conversation?.title_source || "system").trim().toLowerCase() || "system";
+  currentConversationTitleOverridden = data.conversation?.title_overridden === true || Number(data.conversation?.title_overridden || 0) === 1;
   currentConversationPersonaId = normalizePersonaId(data.conversation?.persona_id);
+  currentConversationPersonaName = resolveConversationPersonaName(currentConversationPersonaId, data.conversation?.persona?.name || "");
   syncPersonaSelectors(currentConversationPersonaId);
   const conversationModelId = String(data.conversation?.model || "").trim();
   const nextModelId = resolvePreferredModelSelection(conversationModelId);
@@ -11059,6 +11133,9 @@ function startNewChat() {
   currentConvId = null;
   currentConvTitle = "New Chat";
   currentConversationPersonaId = "";
+  currentConversationPersonaName = "";
+  currentConversationTitleSource = "system";
+  currentConversationTitleOverridden = false;
   history = [];
   conversationMemoryEntries = [];
   conversationMemoryEnabled = featureFlags.conversation_memory_enabled !== false;

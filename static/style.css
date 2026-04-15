@@ -2271,6 +2271,26 @@ kbd {
   color: var(--text-primary);
 }
 
+.sidebar-persona-label {
+  flex-shrink: 0;
+  max-width: 120px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(79, 110, 247, 0.24);
+  background: rgba(79, 110, 247, 0.1);
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-item.active .sidebar-persona-label {
+  color: var(--text-primary);
+  border-color: rgba(79, 110, 247, 0.35);
+}
+
 .sidebar-edit,
 .sidebar-del {
   display: none;

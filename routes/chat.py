@@ -980,10 +980,18 @@ def _build_fallback_title_from_source(source_text: str) -> str:
 
 def _conversation_uses_default_title(conversation_id: int) -> bool:
     with get_db() as conn:
-        row = conn.execute("SELECT title FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
+        row = conn.execute(
+            "SELECT title, title_source, title_overridden FROM conversations WHERE id = ?",
+            (conversation_id,),
+        ).fetchone()
     if not row:
         return False
-    return str(row["title"] or "").strip() == TITLE_FALLBACK
+    title_overridden = int(row["title_overridden"] or 0)
+    if title_overridden == 1:
+        return False
+    title = str(row["title"] or "").strip()
+    title_source = str(row["title_source"] or "").strip().lower()
+    return title == TITLE_FALLBACK or title_source in {"system", "persona", ""}
 
 
 def _acquire_summary_lock_state(conversation_id: int) -> _ConversationSummaryLockState:
@@ -5872,7 +5880,14 @@ def register_chat_routes(app) -> None:
 
         with get_db() as conn:
             conn.execute(
-                "UPDATE conversations SET title = ?, updated_at = datetime('now') WHERE id = ?",
+                """
+                UPDATE conversations
+                   SET title = ?,
+                       title_source = 'system',
+                       title_overridden = 0,
+                       updated_at = datetime('now')
+                 WHERE id = ?
+                """,
                 (title, conv_id),
             )
         if RAG_ENABLED:

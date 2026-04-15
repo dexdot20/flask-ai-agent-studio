@@ -245,6 +245,8 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS conversations (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 title      TEXT    NOT NULL DEFAULT 'New Chat',
+                title_source TEXT  NOT NULL DEFAULT 'system',
+                title_overridden INTEGER NOT NULL DEFAULT 0,
                 model      TEXT    NOT NULL DEFAULT 'deepseek-chat',
                 persona_id INTEGER REFERENCES personas(id) ON DELETE SET NULL,
                 created_at TEXT    NOT NULL DEFAULT (datetime('now')),
@@ -443,6 +445,29 @@ def ensure_messages_metadata_column() -> None:
             conn.execute("ALTER TABLE messages ADD COLUMN metadata TEXT")
 
 
+def ensure_conversation_title_columns() -> None:
+    with get_db() as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(conversations)").fetchall()}
+        if "title_source" not in columns:
+            conn.execute("ALTER TABLE conversations ADD COLUMN title_source TEXT NOT NULL DEFAULT 'system'")
+        if "title_overridden" not in columns:
+            conn.execute("ALTER TABLE conversations ADD COLUMN title_overridden INTEGER NOT NULL DEFAULT 0")
+
+        conn.execute(
+            """
+            UPDATE conversations
+               SET title_source = CASE
+                   WHEN COALESCE(title_overridden, 0) = 1 THEN 'manual'
+                   WHEN COALESCE(TRIM(title), '') = '' THEN 'system'
+                   WHEN TRIM(title) = 'New Chat' THEN 'system'
+                   WHEN COALESCE(TRIM(title_source), '') IN ('', 'system') THEN 'manual'
+                   ELSE title_source
+               END
+             WHERE 1 = 1
+            """
+        )
+
+
 def ensure_messages_tool_history_columns() -> None:
     with get_db() as conn:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
@@ -524,6 +549,7 @@ def datetime_utc_now_iso() -> str:
 
 def initialize_database() -> None:
     init_db()
+    ensure_conversation_title_columns()
     ensure_persona_schema()
     ensure_messages_metadata_column()
     ensure_messages_tool_history_columns()

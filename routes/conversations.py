@@ -219,6 +219,26 @@ def _parse_optional_int(value):
         return None
 
 
+def _resolve_initial_conversation_title(
+    data: dict,
+    persona_id: int | None,
+) -> tuple[str, str, bool]:
+    title_provided = "title" in data
+    raw_title = str(data.get("title") or "").strip()[:120]
+    normalized_title = raw_title or "New Chat"
+
+    if title_provided and normalized_title and normalized_title != "New Chat":
+        return normalized_title, "manual", True
+
+    if persona_id is not None:
+        persona = get_persona(persona_id)
+        persona_name = str((persona or {}).get("name") or "").strip()[:120]
+        if persona_name:
+            return persona_name, "persona", False
+
+    return "New Chat", "system", False
+
+
 def _parse_message_id_list(raw_value, *, limit: int = 50) -> list[int] | None:
     if not isinstance(raw_value, list):
         return None
@@ -478,9 +498,11 @@ def register_conversation_routes(app) -> None:
         with get_db() as conn:
             rows = conn.execute(
                 """
-                SELECT c.id, c.title, c.model, c.persona_id, c.updated_at,
+                                SELECT c.id, c.title, c.title_source, c.title_overridden, c.model, c.persona_id,
+                                             p.name AS persona_name, c.updated_at,
                        COUNT(m.id) AS message_count
                 FROM conversations c
+                                    LEFT JOIN personas p ON p.id = c.persona_id
                   LEFT JOIN messages m ON m.conversation_id = c.id AND m.deleted_at IS NULL
                 GROUP BY c.id
                 ORDER BY c.updated_at DESC
@@ -660,7 +682,6 @@ def register_conversation_routes(app) -> None:
     @app.route("/api/conversations", methods=["POST"])
     def create_conversation():
         data = request.get_json(silent=True) or {}
-        title = (data.get("title") or "New Chat")[:120]
         raw_persona_id = data.get("persona_id") if "persona_id" in data else None
         persona_id = _parse_optional_int(raw_persona_id)
         settings = get_app_settings()
@@ -671,10 +692,13 @@ def register_conversation_routes(app) -> None:
             return jsonify({"error": "persona_id must be an integer or empty."}), 400
         if persona_id is not None and get_persona(persona_id) is None:
             return jsonify({"error": "Persona not found."}), 400
+
+        title, title_source, title_overridden = _resolve_initial_conversation_title(data, persona_id)
+
         with get_db() as conn:
             cursor = conn.execute(
-                "INSERT INTO conversations (title, model, persona_id) VALUES (?, ?, ?)",
-                (title, model, persona_id),
+                "INSERT INTO conversations (title, title_source, title_overridden, model, persona_id) VALUES (?, ?, ?, ?, ?)",
+                (title, title_source, 1 if title_overridden else 0, model, persona_id),
             )
             conversation_id = cursor.lastrowid
         if RAG_ENABLED:
@@ -682,6 +706,8 @@ def register_conversation_routes(app) -> None:
         return jsonify({
             "id": conversation_id,
             "title": title,
+            "title_source": title_source,
+            "title_overridden": title_overridden,
             "model": model,
             "persona_id": persona_id,
             "model_label": get_model_label(model, settings),
@@ -1501,23 +1527,53 @@ def register_conversation_routes(app) -> None:
 
         with get_db() as conn:
             conversation = conn.execute(
-                "SELECT id, title, persona_id FROM conversations WHERE id = ?",
+                "SELECT id, title, title_source, title_overridden, persona_id FROM conversations WHERE id = ?",
                 (conv_id,),
             ).fetchone()
             if not conversation:
                 return jsonify({"error": "Not found."}), 404
 
-            next_title = title if title_provided else str(conversation["title"] or "New Chat").strip() or "New Chat"
             next_persona_id = persona_id if persona_provided else conversation["persona_id"]
+
+            if title_provided:
+                next_title = title
+                next_title_source = "manual"
+                next_title_overridden = 1
+            else:
+                next_title = str(conversation["title"] or "New Chat").strip() or "New Chat"
+                next_title_source = str(conversation["title_source"] or "system").strip() or "system"
+                next_title_overridden = int(conversation["title_overridden"] or 0)
+
+                if persona_provided and next_title_overridden == 0:
+                    if next_persona_id is not None:
+                        persona = get_persona(next_persona_id)
+                        persona_name = str((persona or {}).get("name") or "").strip()[:120]
+                        if persona_name:
+                            next_title = persona_name
+                            next_title_source = "persona"
+                    elif next_title_source == "persona":
+                        next_title = "New Chat"
+                        next_title_source = "system"
+
             conn.execute(
-                "UPDATE conversations SET title = ?, persona_id = ?, updated_at = datetime('now') WHERE id = ?",
-                (next_title, next_persona_id, conv_id),
+                """
+                UPDATE conversations
+                   SET title = ?,
+                       title_source = ?,
+                       title_overridden = ?,
+                       persona_id = ?,
+                       updated_at = datetime('now')
+                 WHERE id = ?
+                """,
+                (next_title, next_title_source, next_title_overridden, next_persona_id, conv_id),
             )
         if RAG_ENABLED:
             sync_conversations_to_rag_safe(conversation_id=conv_id)
         return jsonify({
             "id": conv_id,
             "title": next_title,
+            "title_source": next_title_source,
+            "title_overridden": bool(next_title_overridden),
             "persona_id": int(next_persona_id) if next_persona_id is not None else None,
         })
 

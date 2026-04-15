@@ -818,6 +818,92 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(payload["persona_memory"], [])
         self.assertEqual(get_persona_memory(persona["id"]), [])
 
+    def test_conversation_title_defaults_to_persona_name_when_not_manually_set(self):
+        response = self.client.post(
+            "/api/personas",
+            json={
+                "name": "Study Mentor",
+                "general_instructions": "Guide with examples.",
+                "ai_personality": "Sound supportive.",
+            },
+        )
+        self.assertEqual(response.status_code, 201)
+        persona = response.get_json()["persona"]
+
+        response = self.client.post(
+            "/api/conversations",
+            json={"model": "deepseek-chat", "persona_id": persona["id"]},
+        )
+        self.assertEqual(response.status_code, 201)
+        payload = response.get_json()
+
+        self.assertEqual(payload["title"], "Study Mentor")
+        self.assertEqual(payload["title_source"], "persona")
+        self.assertFalse(payload["title_overridden"])
+
+        list_response = self.client.get("/api/conversations")
+        self.assertEqual(list_response.status_code, 200)
+        listed = next(item for item in list_response.get_json() if item["id"] == payload["id"])
+        self.assertEqual(listed["persona_name"], "Study Mentor")
+        self.assertEqual(listed["title"], "Study Mentor")
+        self.assertEqual(listed["title_source"], "persona")
+        self.assertEqual(int(listed["title_overridden"]), 0)
+
+    def test_manual_conversation_title_override_persists_across_persona_changes(self):
+        response = self.client.post(
+            "/api/personas",
+            json={
+                "name": "Persona A",
+                "general_instructions": "Guide with examples.",
+                "ai_personality": "Sound supportive.",
+            },
+        )
+        self.assertEqual(response.status_code, 201)
+        persona_a = response.get_json()["persona"]
+
+        response = self.client.post(
+            "/api/personas",
+            json={
+                "name": "Persona B",
+                "general_instructions": "Challenge assumptions.",
+                "ai_personality": "Sound rigorous.",
+            },
+        )
+        self.assertEqual(response.status_code, 201)
+        persona_b = response.get_json()["persona"]
+
+        response = self.client.post(
+            "/api/conversations",
+            json={"model": "deepseek-chat", "persona_id": persona_a["id"]},
+        )
+        self.assertEqual(response.status_code, 201)
+        conversation_id = response.get_json()["id"]
+
+        response = self.client.patch(
+            f"/api/conversations/{conversation_id}",
+            json={"title": "Custom Manual Title"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["title"], "Custom Manual Title")
+        self.assertEqual(response.get_json()["title_source"], "manual")
+        self.assertTrue(response.get_json()["title_overridden"])
+
+        response = self.client.patch(
+            f"/api/conversations/{conversation_id}",
+            json={"persona_id": persona_b["id"]},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["title"], "Custom Manual Title")
+        self.assertEqual(response.get_json()["title_source"], "manual")
+        self.assertTrue(response.get_json()["title_overridden"])
+
+        response = self.client.get(f"/api/conversations/{conversation_id}")
+        self.assertEqual(response.status_code, 200)
+        conversation_payload = response.get_json()["conversation"]
+        self.assertEqual(conversation_payload["title"], "Custom Manual Title")
+        self.assertEqual(conversation_payload["title_source"], "manual")
+        self.assertEqual(int(conversation_payload["title_overridden"]), 1)
+
     def test_execute_tool_saves_persona_memory_and_chat_route_injects_it_for_same_persona(self):
         response = self.client.post(
             "/api/personas",

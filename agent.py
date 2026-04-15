@@ -6046,12 +6046,16 @@ def _run_set_conversation_title(tool_args: dict, runtime_state: dict):
         return {"status": "error", "error": "Missing conversation id."}, "Missing conversation id"
 
     with get_db() as conn:
-        row = conn.execute("SELECT title FROM conversations WHERE id = ?", (conv_id,)).fetchone()
+        row = conn.execute(
+            "SELECT title, title_source, title_overridden FROM conversations WHERE id = ?",
+            (conv_id,),
+        ).fetchone()
         if not row:
             return {"status": "error", "error": "Conversation not found."}, "Conversation not found"
 
         current_title = str(row["title"] or "").strip()
-        if current_title and current_title != "New Chat":
+        current_title_overridden = int(row["title_overridden"] or 0)
+        if current_title_overridden == 1:
             return {
                 "status": "ok",
                 "updated": False,
@@ -6070,7 +6074,14 @@ def _run_set_conversation_title(tool_args: dict, runtime_state: dict):
 
     with get_db() as conn:
         conn.execute(
-            "UPDATE conversations SET title = ?, updated_at = datetime('now') WHERE id = ?",
+            """
+            UPDATE conversations
+               SET title = ?,
+                   title_source = 'system',
+                   title_overridden = 0,
+                   updated_at = datetime('now')
+             WHERE id = ?
+            """,
             (final_title, conv_id),
         )
 
