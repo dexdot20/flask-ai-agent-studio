@@ -209,10 +209,11 @@ def _build_archived_conversation_record(role: str, content: str, metadata: dict 
     if not normalized_content:
         return None
 
-    prefix = f"Hidden transcript message from this conversation. Original role: {normalized_role or 'unknown'}."
     deleted_at_text = str(deleted_at or "").strip()
+    archived_info = f"original role: {normalized_role or 'unknown'}"
     if deleted_at_text:
-        prefix += f" Hidden at: {deleted_at_text}."
+        archived_info += f", archived: {deleted_at_text}"
+    prefix = f"[Archived past message from a different conversation — {archived_info}]"
 
     tool_lines: list[str] = []
     for entry in extract_message_tool_results(metadata):

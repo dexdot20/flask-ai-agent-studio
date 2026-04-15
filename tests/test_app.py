@@ -1739,7 +1739,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         )
         self.assertEqual(records[0]["tool_results"], [])
         self.assertEqual(len(records[0]["archived_messages"]), 1)
-        self.assertIn("Hidden transcript message from this conversation.", records[0]["archived_messages"][0]["content"])
+        self.assertIn("[Archived past message from a different conversation", records[0]["archived_messages"][0]["content"])
         self.assertIn("Outdated answer", records[0]["archived_messages"][0]["content"])
 
     def test_get_conversation_records_for_rag_compacts_clarification_response_messages(self):

@@ -435,7 +435,26 @@ def format_knowledge_base_auto_context(retrieved_context) -> str:
         source_name = str(match.get("source_name") or match.get("source") or f"Match {index}").strip() or f"Match {index}"
         similarity = match.get("similarity")
         excerpt = str(match.get("text") or match.get("excerpt") or "").strip()
-        block_parts = [f"Source: {source_name}"]
+        is_archived = match.get("archived_conversation") is True
+
+        # Build a human-readable source label so the model cannot mistake
+        # retrieved chunks for messages from the current conversation.
+        if source_name.startswith("conversation_archive:"):
+            remainder = source_name[len("conversation_archive:"):]
+            _parts = remainder.split(":", 1)
+            title = (_parts[1].strip() if len(_parts) == 2 else _parts[0].strip()) or "Untitled"
+            source_label = f"Retrieved from a different archived past conversation: {title}"
+        elif source_name.startswith("conversation:"):
+            remainder = source_name[len("conversation:"):]
+            _parts = remainder.split(":", 1)
+            title = (_parts[1].strip() if len(_parts) == 2 else _parts[0].strip()) or "Untitled"
+            source_label = f"Retrieved from a different past conversation: {title}"
+        else:
+            source_label = source_name
+        if is_archived:
+            source_label += " [Archived]"
+
+        block_parts = [f"Source: {source_label}"]
         if isinstance(similarity, (int, float)):
             block_parts.append(f"Similarity: {float(similarity):.2f}")
         if excerpt:

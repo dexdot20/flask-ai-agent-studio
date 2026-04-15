@@ -31,12 +31,12 @@ def chunks_from_records(
     metadata: dict | None = None,
 ) -> list[Chunk]:
     parts: list[str] = []
-    for index, record in enumerate(records, start=1):
+    for record in records:
         role = str(record.get("role") or "unknown").strip() or "unknown"
         content = str(record.get("content") or "").strip()
         if not content or len(content) < MIN_RECORD_CONTENT_LENGTH:
             continue
-        parts.append(f"[{index}] {role}: {content}")
+        parts.append(f"[PAST-{role}] {content}")
     if not parts:
         return []
     return chunks_from_text(
