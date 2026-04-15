@@ -44,11 +44,10 @@ MODEL_OPERATION_KEYS = (
 )
 DEFAULT_OPERATION_MODEL_PREFERENCES = {key: "" for key in MODEL_OPERATION_KEYS}
 DEFAULT_OPERATION_MODEL_FALLBACK_PREFERENCES = {key: [] for key in MODEL_OPERATION_KEYS}
-_EMPTY_PRICING = {"input": 0.0, "input_cache_hit": 0.0, "output": 0.0}
+_EMPTY_PRICING = {"input": 0.0, "input_cache_hit": 0.0, "input_cache_write": 0.0, "output": 0.0}
 _OPENROUTER_PROVIDER_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9._/-]{0,199}$")
 _OPENROUTER_GEMINI_CACHE_BREAKPOINT_MIN_TOKENS_DEFAULT = 1028
 _OPENROUTER_GEMINI_CACHE_BREAKPOINT_MIN_TOKENS_PRO = 2048
-_OPENROUTER_ANTHROPIC_CACHE_BREAKPOINT_MIN_TOKENS = 2048
 _OPENROUTER_IMPLICIT_PROMPT_CACHE_MODEL_PREFIXES = (
     "deepseek/",
     "openai/",
@@ -57,6 +56,23 @@ _OPENROUTER_IMPLICIT_PROMPT_CACHE_MODEL_PREFIXES = (
     "moonshotai/",
     "groq/",
 )
+_OPENROUTER_ANTHROPIC_CACHE_MAX_BREAKPOINTS = 2
+
+
+def _openrouter_anthropic_cache_min_tokens(api_model: str) -> int:
+    """Return the minimum token threshold for Anthropic cache breakpoints.
+
+    Thresholds per model family (per OpenRouter/Anthropic documentation):
+    - 4096 tokens: claude-opus-4-5, claude-opus-4-6, claude-haiku-4-5
+    - 2048 tokens: claude-sonnet-4-6, claude-haiku-3-5
+    - 1024 tokens: all other Anthropic models
+    """
+    model_lower = api_model.lower()
+    if any(s in model_lower for s in ("claude-opus-4-5", "claude-opus-4-6", "claude-haiku-4-5")):
+        return 4096
+    if any(s in model_lower for s in ("claude-sonnet-4-6", "claude-haiku-3-5")):
+        return 2048
+    return 1024
 
 
 def _is_openrouter_prompt_cache_enabled(settings: dict[str, Any] | None) -> bool:
@@ -438,7 +454,15 @@ def _openrouter_gemini_cache_min_tokens(api_model: Any) -> int:
     return _OPENROUTER_GEMINI_CACHE_BREAKPOINT_MIN_TOKENS_DEFAULT
 
 
-def _with_openrouter_cache_breakpoint(content: Any, *, min_tokens: int) -> tuple[Any, bool]:
+def _build_cache_control(ttl: str) -> dict[str, Any]:
+    """Build the cache_control dict. ttl: '5m' → ephemeral (5 min), '1h' → ephemeral with ttl=1h."""
+    if ttl == "1h":
+        return {"type": "ephemeral", "ttl": "1h"}
+    return {"type": "ephemeral"}
+
+
+def _with_openrouter_cache_breakpoint(content: Any, *, min_tokens: int, ttl: str = "5m") -> tuple[Any, bool]:
+    cache_control = _build_cache_control(ttl)
     if isinstance(content, list):
         normalized_blocks: list[dict[str, Any]] = []
         last_text_index: int | None = None
@@ -456,13 +480,13 @@ def _with_openrouter_cache_breakpoint(content: Any, *, min_tokens: int) -> tuple
             normalized_blocks.append(copied_block)
         if last_text_index is None or estimate_text_tokens("\n\n".join(text_parts)) < min_tokens:
             return content, False
-        normalized_blocks[last_text_index]["cache_control"] = {"type": "ephemeral"}
+        normalized_blocks[last_text_index]["cache_control"] = cache_control
         return normalized_blocks, True
 
     text = str(content or "").strip()
     if not text or estimate_text_tokens(text) < min_tokens:
         return content, False
-    return ([{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}], True)
+    return ([{"type": "text", "text": text, "cache_control": cache_control}], True)
 
 
 def _serialize_openrouter_cache_payload(value: Any) -> str:
@@ -673,18 +697,28 @@ def _prepare_model_request_messages(messages: Any, record: dict[str, Any] | None
     cache_min_tokens = (
         _openrouter_gemini_cache_min_tokens(api_model)
         if supports_explicit_breakpoints
-        else _OPENROUTER_ANTHROPIC_CACHE_BREAKPOINT_MIN_TOKENS
+        else _openrouter_anthropic_cache_min_tokens(api_model)
     )
+    # TTL only applies to Anthropic; Gemini uses ephemeral (5m) only
+    if supports_top_level_cache and isinstance(settings, dict):
+        raw_ttl = str(settings.get("openrouter_anthropic_cache_ttl") or "").strip().lower()
+        cache_ttl = "1h" if raw_ttl == "1h" else "5m"
+    else:
+        cache_ttl = "5m"
+    max_breakpoints = 1 if supports_explicit_breakpoints else _OPENROUTER_ANTHROPIC_CACHE_MAX_BREAKPOINTS
+    breakpoints_placed = 0
     for index, message in enumerate(prepared_messages):
         if not isinstance(message, dict):
-            return prepared_messages
+            break
         role = str(message.get("role") or "").strip().lower()
         if role not in {"system", "developer"}:
-            return prepared_messages
-        updated_content, applied = _with_openrouter_cache_breakpoint(message.get("content"), min_tokens=cache_min_tokens)
+            break
+        if breakpoints_placed >= max_breakpoints:
+            break
+        updated_content, applied = _with_openrouter_cache_breakpoint(message.get("content"), min_tokens=cache_min_tokens, ttl=cache_ttl)
         if applied:
             prepared_messages[index] = {**prepared_messages[index], "content": updated_content}
-        return prepared_messages
+            breakpoints_placed += 1
     return prepared_messages
 
 
@@ -1046,7 +1080,7 @@ def get_provider_client(provider: str) -> OpenAI:
         if http_referer:
             default_headers["HTTP-Referer"] = http_referer
         if app_title:
-            default_headers["X-OpenRouter-Title"] = app_title
+            default_headers["X-Title"] = app_title
 
         kwargs: dict[str, Any] = {
             "api_key": (config.OPENROUTER_API_KEY or "").strip(),

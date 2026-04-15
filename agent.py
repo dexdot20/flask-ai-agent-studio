@@ -7257,10 +7257,12 @@ def run_agent_stream(
         completion_tokens,
         prompt_cache_hit_tokens=0,
         prompt_cache_miss_tokens=None,
+        prompt_cache_write_tokens=0,
     ):
         prompt_tokens = _coerce_usage_int(prompt_tokens)
         completion_tokens = _coerce_usage_int(completion_tokens)
         prompt_cache_hit_tokens = _coerce_usage_int(prompt_cache_hit_tokens)
+        prompt_cache_write_tokens = _coerce_usage_int(prompt_cache_write_tokens)
         if prompt_cache_miss_tokens is None:
             prompt_cache_miss_tokens = prompt_tokens if prompt_cache_hit_tokens <= 0 else max(0, prompt_tokens - prompt_cache_hit_tokens)
         else:
@@ -7270,7 +7272,9 @@ def run_agent_stream(
                 prompt_cache_miss_tokens += prompt_tokens - accounted_prompt_tokens
 
         cache_hit_input_rate = pricing.get("input_cache_hit", pricing["input"]) or pricing["input"]
+        cache_write_input_rate = pricing.get("input_cache_write", pricing["input"]) or pricing["input"]
         input_cost = (prompt_cache_hit_tokens / 1_000_000) * cache_hit_input_rate
+        input_cost += (prompt_cache_write_tokens / 1_000_000) * cache_write_input_rate
         input_cost += (prompt_cache_miss_tokens / 1_000_000) * pricing["input"]
         output_cost = (completion_tokens / 1_000_000) * pricing["output"]
         return round(input_cost + output_cost, 6)
@@ -7365,6 +7369,7 @@ def run_agent_stream(
                 usage_totals["completion_tokens"],
                 prompt_cache_hit_tokens=usage_totals["prompt_cache_hit_tokens"],
                 prompt_cache_miss_tokens=usage_totals["prompt_cache_miss_tokens"] if cache_usage_available else None,
+                prompt_cache_write_tokens=usage_totals["prompt_cache_write_tokens"],
             )
         return {
             "type": "usage",

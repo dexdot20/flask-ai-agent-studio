@@ -19,6 +19,7 @@ from config import (
     MAX_PARALLEL_TOOLS_MIN,
     OCR_SUPPORTED_PROVIDERS,
     OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED,
+    OPENROUTER_ANTHROPIC_CACHE_TTL_DEFAULT,
     RAG_CONTEXT_SIZE_PRESETS,
     RAG_ENABLED,
     RAG_SENSITIVITY_PRESETS,
@@ -85,6 +86,7 @@ from db import (
     get_openrouter_app_title,
     get_openrouter_http_referer,
     get_openrouter_prompt_cache_enabled,
+    get_openrouter_anthropic_cache_ttl,
     get_prompt_max_input_tokens,
     get_prompt_preflight_summary_token_count,
     get_prompt_rag_max_tokens,
@@ -506,6 +508,7 @@ def build_settings_payload() -> dict:
         "sub_agent_allowed_tool_names": get_sub_agent_allowed_tool_names(raw),
         "web_cache_ttl_hours": get_web_cache_ttl_hours(raw),
         "openrouter_prompt_cache_enabled": get_openrouter_prompt_cache_enabled(raw),
+        "openrouter_anthropic_cache_ttl": get_openrouter_anthropic_cache_ttl(raw),
         "openrouter_http_referer": get_openrouter_http_referer(raw),
         "openrouter_app_title": get_openrouter_app_title(raw),
         "login_session_timeout_minutes": get_login_session_timeout_minutes(raw),
@@ -705,6 +708,7 @@ def register_page_routes(app) -> None:
         sub_agent_allowed_tool_names_raw = data.get("sub_agent_allowed_tool_names")
         web_cache_ttl_hours_raw = data.get("web_cache_ttl_hours")
         openrouter_prompt_cache_enabled_raw = data.get("openrouter_prompt_cache_enabled")
+        openrouter_anthropic_cache_ttl_raw = data.get("openrouter_anthropic_cache_ttl")
         openrouter_http_referer_raw = data.get("openrouter_http_referer")
         openrouter_app_title_raw = data.get("openrouter_app_title")
         login_session_timeout_minutes_raw = data.get("login_session_timeout_minutes")
@@ -808,6 +812,7 @@ def register_page_routes(app) -> None:
             and sub_agent_allowed_tool_names_raw is None
             and web_cache_ttl_hours_raw is None
             and openrouter_prompt_cache_enabled_raw is None
+            and openrouter_anthropic_cache_ttl_raw is None
             and openrouter_http_referer_raw is None
             and openrouter_app_title_raw is None
             and login_session_timeout_minutes_raw is None
@@ -1840,6 +1845,12 @@ def register_page_routes(app) -> None:
                     if normalized_prompt_cache in {"1", "true", "yes", "on"}
                     else "false"
                 )
+
+        if openrouter_anthropic_cache_ttl_raw is not None:
+            normalized_ttl = str(openrouter_anthropic_cache_ttl_raw).strip().lower()
+            if normalized_ttl not in {"5m", "1h"}:
+                return jsonify({"error": "openrouter_anthropic_cache_ttl must be '5m' or '1h'."}), 400
+            settings["openrouter_anthropic_cache_ttl"] = normalized_ttl
 
         save_app_settings(settings)
         return jsonify(build_settings_payload())

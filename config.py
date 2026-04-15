@@ -193,6 +193,7 @@ WEB_CACHE_TTL_HOURS_MIN = 0
 WEB_CACHE_TTL_HOURS_MAX = 168
 DEFAULT_WEB_CACHE_TTL_HOURS = 24
 OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED = True
+OPENROUTER_ANTHROPIC_CACHE_TTL_DEFAULT = "5m"  # "5m" (ephemeral, 5 min) or "1h" (ephemeral, 1 hour)
 
 FETCH_TIMEOUT = 20
 FETCH_MAX_SIZE = 5 * 1024 * 1024
@@ -481,6 +482,7 @@ DEFAULT_SETTINGS = {
     "sub_agent_allowed_tool_names": json.dumps(SUB_AGENT_ALLOWED_TOOL_NAMES, ensure_ascii=False),
     "web_cache_ttl_hours": str(DEFAULT_WEB_CACHE_TTL_HOURS),
     "openrouter_prompt_cache_enabled": "true" if OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED else "false",
+    "openrouter_anthropic_cache_ttl": OPENROUTER_ANTHROPIC_CACHE_TTL_DEFAULT,
     "openrouter_http_referer": OPENROUTER_HTTP_REFERER,
     "openrouter_app_title": OPENROUTER_APP_TITLE,
     "login_session_timeout_minutes": str(LOGIN_SESSION_TIMEOUT_MINUTES),

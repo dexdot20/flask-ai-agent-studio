@@ -39,6 +39,7 @@ from config import (
     DEFAULT_WEB_CACHE_TTL_HOURS,
     DEFAULT_SETTINGS,
     OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED,
+    OPENROUTER_ANTHROPIC_CACHE_TTL_DEFAULT,
     PRUNING_MIN_TARGET_TOKENS,
     PRUNING_TARGET_REDUCTION_RATIO,
     SCRATCHPAD_DEFAULT_SECTION,
@@ -4906,6 +4907,15 @@ def get_openrouter_prompt_cache_enabled(settings: dict | None = None) -> bool:
     if raw_value is None:
         return OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED
     return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def get_openrouter_anthropic_cache_ttl(settings: dict | None = None) -> str:
+    """Return the Anthropic prompt cache TTL setting: '5m' or '1h'."""
+    source = settings if settings is not None else get_app_settings()
+    raw_value = str(source.get("openrouter_anthropic_cache_ttl") or "").strip().lower()
+    if raw_value == "1h":
+        return "1h"
+    return OPENROUTER_ANTHROPIC_CACHE_TTL_DEFAULT
 
 
 def get_sub_agent_timeout_seconds(settings: dict | None = None) -> int:

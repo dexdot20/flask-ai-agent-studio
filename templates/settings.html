@@ -1248,6 +1248,11 @@
                 <div class="settings-toggle-panel">
                   <label class="tool-toggle"><input type="checkbox" id="openrouter-prompt-cache-enabled-toggle" /> <span>Enable OpenRouter prompt cache when the selected model supports it</span></label>
                   <p class="settings-copy">This only activates when the chosen OpenRouter model and provider actually support prompt caching.</p>
+                  <div id="openrouter-anthropic-cache-ttl-row" class="settings-cache-ttl-row">
+                    <span class="settings-label">Anthropic cache TTL</span>
+                    <label class="settings-cache-ttl-option"><input type="radio" name="openrouter-anthropic-cache-ttl" value="5m" /> 5 minutes <span class="settings-copy settings-copy--inline">(1.25× write cost)</span></label>
+                    <label class="settings-cache-ttl-option"><input type="radio" name="openrouter-anthropic-cache-ttl" value="1h" /> 1 hour <span class="settings-copy settings-copy--inline">(2× write cost)</span></label>
+                  </div>
                 </div>
               </div>
             </div>

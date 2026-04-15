@@ -91,7 +91,7 @@ class TestOpenRouterModelRegistry(BaseAppRoutesTestCase):
             client._base_kwargs.get("default_headers"),
             {
                 "HTTP-Referer": "https://example.com/runtime",
-                "X-OpenRouter-Title": "Runtime Header Test",
+                "X-Title": "Runtime Header Test",
             },
         )
 

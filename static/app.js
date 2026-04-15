@@ -4851,6 +4851,9 @@ function flushDeferredCanvasRenderWork() {
     deferredCanvasPanelRender = false;
     deferredCanvasPreviewRender = false;
     renderCanvasPanel();
+    if (streamingCanvasPreviews.size) {
+      scheduleCanvasPreviewRender({ allowWhileAnswerPending: true });
+    }
     return;
   }
 
@@ -10265,14 +10268,14 @@ if (canvasCancelBtn) {
   });
 }
 if (mobileCanvasBtn) {
-  mobileCanvasBtn.addEventListener("click", () => openCanvas(mobileToolsBtn || mobileCanvasBtn));
+  mobileCanvasBtn.addEventListener("click", () => openCanvas(mobileToolsBtn || mobileCanvasBtn, { deferPanelRender: false }));
 }
 if (canvasToggleBtn) {
   canvasToggleBtn.addEventListener("click", () => {
     if (isCanvasOpen()) {
       closeCanvas();
     } else {
-      openCanvas(canvasToggleBtn);
+      openCanvas(canvasToggleBtn, { deferPanelRender: false });
     }
   });
 }
@@ -10658,7 +10661,7 @@ window.addEventListener("keydown", (event) => {
     if (isCanvasOpen()) {
       closeCanvas();
     } else {
-      openCanvas();
+      openCanvas(null, { deferPanelRender: false });
     }
     return;
   }
@@ -12524,7 +12527,7 @@ async function saveSubAgentResearchToCanvas(assistantMessageId, traceIndex, trac
   renderCanvasPanel();
   lastConversationSignature = getConversationSignature(history);
   loadSidebar();
-  openCanvas();
+  openCanvas(null, { deferPanelRender: false });
   setCanvasStatus("Research saved to Canvas.", "success");
   showToast("Research saved to Canvas.", "success");
 }
@@ -13948,7 +13951,7 @@ async function sendMessage(options = {}) {
         if (!isCanvasOpen()) {
           openCanvas(null, { focusPanel: false });
         } else {
-          requestCanvasPanelRender({ deferForStreaming: true });
+          requestCanvasPanelRender({ deferForStreaming: false });
         }
         setCanvasStatus(getCanvasStreamingStatusMessage(event.tool, previewDocument, "loading"), "muted");
       } else if (event.type === "canvas_executing") {

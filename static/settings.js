@@ -106,6 +106,8 @@ const subAgentRetryDelaySecondsEl = document.getElementById("sub-agent-retry-del
 const subAgentMaxParallelToolsEl = document.getElementById("sub-agent-max-parallel-tools-input");
 const webCacheTtlHoursEl = document.getElementById("web-cache-ttl-hours-input");
 const openrouterPromptCacheEnabledEl = document.getElementById("openrouter-prompt-cache-enabled-toggle");
+const openrouterAnthropicCacheTtlEls = document.querySelectorAll("input[name='openrouter-anthropic-cache-ttl']");
+const openrouterAnthropicCacheTtlRowEl = document.getElementById("openrouter-anthropic-cache-ttl-row");
 const clarificationMaxQuestionsEl = document.getElementById("clarification-max-questions-input");
 const summaryModeEl = document.getElementById("summary-mode-select");
 const summaryDetailLevelEl = document.getElementById("summary-detail-level-select");
@@ -2757,6 +2759,10 @@ function applySettingsToForm() {
   if (subAgentMaxParallelToolsEl) subAgentMaxParallelToolsEl.value = String(appSettings.sub_agent_max_parallel_tools ?? appSettings.max_parallel_tools ?? 2);
   if (webCacheTtlHoursEl) webCacheTtlHoursEl.value = String(appSettings.web_cache_ttl_hours ?? 24);
   if (openrouterPromptCacheEnabledEl) openrouterPromptCacheEnabledEl.checked = Boolean(appSettings.openrouter_prompt_cache_enabled ?? true);
+  const _cacheEnabled = Boolean(appSettings.openrouter_prompt_cache_enabled ?? true);
+  if (openrouterAnthropicCacheTtlRowEl) openrouterAnthropicCacheTtlRowEl.hidden = !_cacheEnabled;
+  const _activeTtl = appSettings.openrouter_anthropic_cache_ttl || "5m";
+  openrouterAnthropicCacheTtlEls.forEach(el => { el.checked = el.value === _activeTtl; });
   if (openrouterHttpRefererEl) openrouterHttpRefererEl.value = String(appSettings.openrouter_http_referer || "");
   if (openrouterAppTitleEl) openrouterAppTitleEl.value = String(appSettings.openrouter_app_title || "");
   if (loginSessionTimeoutMinutesEl) loginSessionTimeoutMinutesEl.value = String(appSettings.login_session_timeout_minutes ?? 30);
@@ -2942,6 +2948,7 @@ function applyServerSettingsData(data) {
   appSettings.sub_agent_max_parallel_tools = data.sub_agent_max_parallel_tools ?? data.max_parallel_tools ?? 2;
   appSettings.web_cache_ttl_hours = data.web_cache_ttl_hours ?? 24;
   appSettings.openrouter_prompt_cache_enabled = Boolean(data.openrouter_prompt_cache_enabled ?? true);
+  appSettings.openrouter_anthropic_cache_ttl = data.openrouter_anthropic_cache_ttl || "5m";
   appSettings.openrouter_http_referer = data.openrouter_http_referer || "";
   appSettings.openrouter_app_title = data.openrouter_app_title || "";
   appSettings.login_session_timeout_minutes = data.login_session_timeout_minutes ?? 30;
@@ -3082,6 +3089,7 @@ async function saveSettings() {
     sub_agent_max_parallel_tools: readNumericSetting(subAgentMaxParallelToolsEl, 2, { allowZero: false }),
     web_cache_ttl_hours: readNumericSetting(webCacheTtlHoursEl, 24),
     openrouter_prompt_cache_enabled: Boolean(openrouterPromptCacheEnabledEl?.checked),
+    openrouter_anthropic_cache_ttl: (() => { const r = [...openrouterAnthropicCacheTtlEls].find(el => el.checked); return r ? r.value : "5m"; })(),
     openrouter_http_referer: String(openrouterHttpRefererEl?.value || "").trim(),
     openrouter_app_title: String(openrouterAppTitleEl?.value || "").trim(),
     login_session_timeout_minutes: readNumericSetting(loginSessionTimeoutMinutesEl, 30, { allowZero: false }),
@@ -3555,7 +3563,11 @@ function registerDirtyListeners() {
   subAgentRetryDelaySecondsEl?.addEventListener("input", markDirty);
   subAgentMaxParallelToolsEl?.addEventListener("input", markDirty);
   webCacheTtlHoursEl?.addEventListener("input", markDirty);
-  openrouterPromptCacheEnabledEl?.addEventListener("change", markDirty);
+  openrouterPromptCacheEnabledEl?.addEventListener("change", () => {
+    if (openrouterAnthropicCacheTtlRowEl) openrouterAnthropicCacheTtlRowEl.hidden = !openrouterPromptCacheEnabledEl.checked;
+    markDirty();
+  });
+  openrouterAnthropicCacheTtlEls.forEach(el => el.addEventListener("change", markDirty));
   clarificationMaxQuestionsEl?.addEventListener("input", markDirty);
   summaryModeEl?.addEventListener("change", markDirty);
   summaryDetailLevelEl?.addEventListener("change", markDirty);
