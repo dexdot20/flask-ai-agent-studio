@@ -1,0 +1,3 @@
+Data hierarchy must be optimized for "cache-friendliness" to reduce latency and minimize token consumption:
+* **Static Pinning (Top-Loading):** Immutable system instructions, core rules, and global frameworks must be pinned to the very top of the prompt. This allows provider-side (e.g., Anthropic, OpenAI) caching layers to recognize and reuse these blocks efficiently.
+* **Dynamic Data Positioning (Bottom-Loading):** Variable inputs, such as user messages, real-time logs, and request-specific data, must be placed at the bottom. This ensures that the static prefix remains intact, maximizing cache hit rates.

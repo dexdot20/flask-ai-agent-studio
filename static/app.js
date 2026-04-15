@@ -7723,6 +7723,10 @@ function buildAssistantMetadata({
   sub_agent_traces = null,
   canvasDocuments = [],
   canvas_documents = null,
+  activeDocumentId = null,
+  active_document_id = null,
+  canvasCleared = false,
+  canvas_cleared = null,
   usage = null,
   pendingClarification = null,
   pending_clarification = null,
@@ -7731,19 +7735,23 @@ function buildAssistantMetadata({
   const normalizedToolResults = Array.isArray(tool_results) ? tool_results : toolResults;
   const normalizedSubAgentTraces = Array.isArray(sub_agent_traces) ? sub_agent_traces : subAgentTraces;
   const normalizedCanvasDocuments = Array.isArray(canvas_documents) ? canvas_documents : canvasDocuments;
+  const normalizedActiveDocumentId = String(active_document_id || activeDocumentId || "").trim() || null;
+  const normalizedCanvasCleared = canvas_cleared === true || canvasCleared === true;
   const normalizedPendingClarification = pending_clarification && typeof pending_clarification === "object"
     ? pending_clarification
     : pendingClarification && typeof pendingClarification === "object"
       ? pendingClarification
       : null;
 
-  return reasoning || usage || normalizedToolResults.length || normalizedToolTrace.length || normalizedSubAgentTraces.length || normalizedCanvasDocuments.length || normalizedPendingClarification
+  return reasoning || usage || normalizedToolResults.length || normalizedToolTrace.length || normalizedSubAgentTraces.length || normalizedCanvasDocuments.length || normalizedActiveDocumentId || normalizedCanvasCleared || normalizedPendingClarification
     ? {
         ...(reasoning ? { reasoning_content: reasoning } : {}),
         ...(normalizedToolTrace.length ? { tool_trace: normalizedToolTrace } : {}),
         ...(normalizedToolResults.length ? { tool_results: normalizedToolResults } : {}),
         ...(normalizedSubAgentTraces.length ? { sub_agent_traces: normalizedSubAgentTraces } : {}),
         ...(normalizedCanvasDocuments.length ? { canvas_documents: normalizedCanvasDocuments } : {}),
+        ...(normalizedActiveDocumentId ? { active_document_id: normalizedActiveDocumentId } : {}),
+        ...(normalizedCanvasCleared ? { canvas_cleared: true } : {}),
         ...(normalizedPendingClarification ? { pending_clarification: normalizedPendingClarification } : {}),
         ...(usage ? { usage } : {}),
       }
@@ -13461,6 +13469,8 @@ async function sendMessage(options = {}) {
   let assistantSubAgentTraces = [];
   let assistantToolHistory = [];
   let pendingClarification = null;
+  let assistantCanvasActiveDocumentId = null;
+  let assistantCanvasCleared = false;
   let persistedMessageIds = null;
   let receivedHistorySync = false;
   const stepItems = {};
@@ -14009,6 +14019,8 @@ async function sendMessage(options = {}) {
         streamingCanvasDocuments = nextDocuments;
         if (streamingCanvasDocuments.length) {
           activeCanvasDocumentId = String(nextActiveCandidate?.id || "").trim() || streamingCanvasDocuments[streamingCanvasDocuments.length - 1].id;
+          assistantCanvasActiveDocumentId = activeCanvasDocumentId;
+          assistantCanvasCleared = false;
           const shouldPrioritizeCommittedCanvasRender = hadStreamingPreviewForDoc || isCanvasOpen();
           requestCanvasPanelRender({ deferForStreaming: !shouldPrioritizeCommittedCanvasRender });
           const pendingCanvasRequest = pendingDocumentCanvasOpen;
@@ -14047,6 +14059,8 @@ async function sendMessage(options = {}) {
           isCanvasEditing = false;
           editingCanvasDocumentId = null;
           activeCanvasDocumentId = null;
+          assistantCanvasActiveDocumentId = null;
+          assistantCanvasCleared = true;
           requestCanvasPanelRender({ deferForStreaming: true });
           if (isCanvasOpen()) {
             closeCanvas();
@@ -14109,6 +14123,8 @@ async function sendMessage(options = {}) {
         tool_results: assistantToolResults,
         sub_agent_traces: assistantSubAgentTraces,
         canvas_documents: streamingCanvasDocuments,
+        active_document_id: assistantCanvasActiveDocumentId || activeCanvasDocumentId,
+        canvas_cleared: assistantCanvasCleared,
         usage: latestUsage,
         pending_clarification: pendingClarification,
       }),
@@ -14160,6 +14176,8 @@ async function sendMessage(options = {}) {
           tool_results: assistantToolResults,
           sub_agent_traces: assistantSubAgentTraces,
           canvas_documents: streamingCanvasDocuments,
+          active_document_id: assistantCanvasActiveDocumentId || activeCanvasDocumentId,
+          canvas_cleared: assistantCanvasCleared,
           usage: latestUsage,
           pending_clarification: pendingClarification,
         }),

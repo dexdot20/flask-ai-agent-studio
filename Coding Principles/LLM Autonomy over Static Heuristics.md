@@ -1,0 +1,7 @@
+**Principle: LLM Autonomy over Static Heuristics**
+
+* **Avoid Primitive Logic Gates:** Do not use hardcoded heuristics, keyword-based triggers, or rigid state machines to force tool usage. Primitive logic ("if keywords exist, then force tool X") is obsolete for reasoning-tier models (o1, R1, Gemini 3 Reasoning).
+* **Trust Model Contextualization:** Rely on the LLM's ability to determine tool necessity from the full conversation context. Static backend overrides often conflict with real-time user intent, leading to logic loops and degraded performance.
+* **Priority of Explicit Constraints:** Always prioritize explicit user constraints—especially negative ones (e.g., *"Don't touch the file"*, *"No tool usage"*)—over backend orchestrator expectations.
+* **Minimize Forced Retries:** Avoid "Instruction Injection" that forces the model to repeat a failed path. If a model intentionally skips a tool call (e.g., `canvas_mutation_skipped`), the orchestrator must evaluate the reasoning before forcing a retry to prevent token waste and latency.
+* **Dynamic Tool Gating:** Instead of forcing tool usage, use dynamic tool gating. If the context makes a tool redundant or forbidden, remove it from the `Callable tools` list for that turn rather than letting the backend "scold" the model for not using it.

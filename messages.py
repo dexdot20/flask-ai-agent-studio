@@ -520,9 +520,32 @@ def _normalize_clarification_rounds(
         return []
 
     normalized_rounds: list[dict] = []
+    current_assistant_message_id = str((clarification_response or {}).get("assistant_message_id") or "").strip()
     raw_rounds = all_clarification_rounds if isinstance(all_clarification_rounds, list) else []
     if not raw_rounds:
         raw_rounds = [clarification_response] if isinstance(clarification_response, dict) else []
+
+    # Freshness guard:
+    # - If historical rounds include explicit assistant_message_id values,
+    #   the current clarification response must match one of them.
+    # - When matched, only include rounds up to that matched point so future
+    #   stale rounds (if any) cannot leak into the current turn injection.
+    has_round_assistant_ids = any(
+        str((round_payload or {}).get("assistant_message_id") or "").strip()
+        for round_payload in raw_rounds
+        if isinstance(round_payload, dict)
+    )
+    if current_assistant_message_id and has_round_assistant_ids:
+        matched_index = -1
+        for round_index, round_payload in enumerate(raw_rounds):
+            if not isinstance(round_payload, dict):
+                continue
+            if str(round_payload.get("assistant_message_id") or "").strip() == current_assistant_message_id:
+                matched_index = round_index
+                break
+        if matched_index < 0:
+            return []
+        raw_rounds = raw_rounds[: matched_index + 1]
 
     for round_payload in raw_rounds[:10]:
         if not isinstance(round_payload, dict):
@@ -559,6 +582,7 @@ def _normalize_clarification_rounds(
 
         normalized_rounds.append(
             {
+                "assistant_message_id": str(round_payload.get("assistant_message_id") or "").strip() or None,
                 "questions": normalized_questions,
                 "answers": normalized_answers,
             }
@@ -1101,13 +1125,36 @@ def _filter_clarification_answers_for_questions(
 
 def _collect_answered_clarification_skip_indexes(messages: list[dict]) -> set[int]:
     skip_indexes: set[int] = set()
+    answered_assistant_ids: set[str] = set()
+
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("role") or "").strip() != "user":
+            continue
+        metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+        clarification_response = extract_clarification_response(metadata)
+        answers = clarification_response.get("answers") if isinstance(clarification_response, dict) else {}
+        assistant_message_id = str((clarification_response or {}).get("assistant_message_id") or "").strip()
+        if isinstance(answers, dict) and answers and assistant_message_id:
+            answered_assistant_ids.add(assistant_message_id)
+
+    if not answered_assistant_ids:
+        return skip_indexes
+
     for assistant_index, assistant_message in enumerate(messages):
         if not isinstance(assistant_message, dict):
             continue
         assistant_metadata = assistant_message.get("metadata") if isinstance(assistant_message.get("metadata"), dict) else {}
         if not extract_pending_clarification(assistant_metadata):
             continue
+        assistant_message_id = str(assistant_message.get("id") or "").strip()
+        if not assistant_message_id or assistant_message_id not in answered_assistant_ids:
+            continue
 
+        # Keep the pending-clarification assistant message itself so the model
+        # still sees the asked question text, but strip obsolete tool-call/tool
+        # scaffolding when it exists.
         tool_indexes: list[int] = []
         probe_index = assistant_index - 1
         while probe_index >= 0 and str(messages[probe_index].get("role") or "").strip() == "tool":
@@ -2219,10 +2266,10 @@ def _build_runtime_volatile_parts(
     if is_first_turn and "set_conversation_title" in set(active_tool_names or []):
         volatile_parts.append("## First Turn Conversation Title")
         volatile_parts.append(
-            "- This is the first turn of the conversation. Call `set_conversation_title` once with a concise 2-5 word topic title before finishing your response."
+            "- This is the first turn of the conversation. You may call `set_conversation_title` once with a concise 2-5 word topic title when it adds clear value."
         )
         volatile_parts.append(
-            "- Use a concrete topic label, match the user's language when clear, and avoid generic labels like 'New Chat' unless the topic is unclear."
+            "- If you set a title, use a concrete topic label, match the user's language when clear, and avoid generic labels like 'New Chat' unless the topic is unclear."
         )
         volatile_parts.append("")
 

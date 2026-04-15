@@ -181,7 +181,6 @@ CONTEXT_OVERFLOW_RECOVERY_ERROR_TEXT = (
 )
 USER_CANCELLED_ERROR_TEXT = "Cancelled by user."
 MISSING_FINAL_ANSWER_MARKER = "[INSTRUCTION: MISSING FINAL ANSWER"
-CLARIFICATION_TOOL_REPAIR_MARKER = "[INSTRUCTION: CLARIFICATION TOOL REPAIR"
 TOOL_EXECUTION_RESULTS_MARKER = "[TOOL EXECUTION RESULTS]"
 REASONING_REPLAY_MARKER = "[AGENT REASONING CONTEXT]"
 MAX_REASONING_REPLAY_ENTRIES = 2
@@ -1738,10 +1737,6 @@ def _has_missing_final_answer_instruction(messages: list[dict]) -> bool:
     return any(MISSING_FINAL_ANSWER_MARKER in str(message.get("content") or "") for message in messages)
 
 
-def _has_clarification_tool_repair_instruction(messages: list[dict]) -> bool:
-    return any(CLARIFICATION_TOOL_REPAIR_MARKER in str(message.get("content") or "") for message in messages)
-
-
 def _get_latest_user_message_index(messages: list[dict]) -> int:
     for index in range(len(messages) - 1, -1, -1):
         message = messages[index]
@@ -1774,22 +1769,6 @@ def _conversation_has_clarification_tool_call(messages: list[dict]) -> bool:
             if tool_name == "ask_clarifying_question":
                 return True
     return False
-
-
-def _build_retry_tool_choice(retry_reason: str | None, prompt_tool_names: list[str] | None):
-    if "ask_clarifying_question" not in set(prompt_tool_names or []):
-        return None
-
-    normalized_reason = str(retry_reason or "").strip().lower()
-    if normalized_reason != "clarification_tool_repair":
-        return None
-
-    return {
-        "type": "function",
-        "function": {
-            "name": "ask_clarifying_question",
-        },
-    }
 
 
 def _is_tool_execution_result_message(message: dict) -> bool:
@@ -4271,35 +4250,6 @@ def _build_missing_final_answer_instruction() -> dict:
             "Continue and respond now using assistant content only.\n"
             "If you need tools, place only the tool_calls JSON in assistant content.\n"
             "Do not place the final answer or tool JSON in reasoning_content."
-        ),
-    }
-
-
-def _build_unfulfilled_canvas_request_instruction() -> dict:
-    return {
-        "role": "system",
-        "content": (
-            "[INSTRUCTION: CANVAS REQUEST NOT COMPLETED]\n\n"
-            "The user asked for a canvas update in this turn, but no successful canvas mutation tool result "
-            "was produced in this run. Do not claim that the canvas was updated. State explicitly that it was "
-            "not changed yet if needed."
-        ),
-    }
-
-
-def _build_clarification_tool_repair_instruction(error: str) -> dict:
-    cleaned_error = _clean_tool_text(error or "", limit=220)
-    return {
-        "role": "system",
-        "content": (
-            "[INSTRUCTION: CLARIFICATION TOOL REPAIR — RETRY]\n\n"
-            "The previous ask_clarifying_question tool call was malformed and could not be executed.\n"
-            f"Validation error: {cleaned_error or 'invalid clarification payload'}\n"
-            "Retry now with exactly one ask_clarifying_question tool call and no assistant prose.\n"
-            "Return a valid JSON object with optional intro, optional submit_label, and a non-empty questions array.\n"
-            "Each question must be an object with id, label, and input_type.\n"
-            "For single_select or multi_select, provide a non-empty options array of {label, value} objects.\n"
-            "Use plain UI text only; no markdown bullets, Q:/A: prefixes, code fences, or <|...|> wrappers."
         ),
     }
 
@@ -7196,7 +7146,6 @@ def run_agent_stream(
     fetch_attempt_counts: dict[str, int] = {}
     tool_call_counts: dict[str, int] = defaultdict(int)
     canvas_modified = False
-    attempted_canvas_mutation = False
     successful_canvas_mutation = False
     usage_totals = {
         "prompt_tokens": 0,
@@ -7631,10 +7580,7 @@ def run_agent_stream(
             )
             if turn_tools:
                 request_kwargs["tools"] = turn_tools
-                forced_tool_choice = _build_retry_tool_choice(retry_reason, prompt_enabled_tool_names)
-                request_kwargs["tool_choice"] = forced_tool_choice or "auto"
-                if forced_tool_choice is not None:
-                    request_kwargs["parallel_tool_calls"] = False
+                request_kwargs["tool_choice"] = "auto"
         request_kwargs = apply_model_target_request_options(request_kwargs, model_target)
         cache_estimate_context = build_openrouter_cache_estimate_context(
             request_kwargs.get("messages"),
@@ -8165,7 +8111,6 @@ def run_agent_stream(
         transcript_results = []
         tool_messages = []
         tool_output_entries = []
-        clarification_repair_error: str | None = None
         canvas_context_refresh_needed = False
 
         # ---- Phase 1: validate, pre-check, build execution slots (sequential) ----
@@ -8174,8 +8119,6 @@ def run_agent_stream(
             tool_name = _normalize_tool_name(tool_call["name"])
             tool_args = tool_call["arguments"]
             call_id = str(tool_call.get("id") or f"step-{step}-call-{call_index}-{tool_name}")
-            if tool_name in CANVAS_MUTATION_TOOL_NAMES:
-                attempted_canvas_mutation = True
             slot = {
                 "call_index": call_index,
                 "tool_name": tool_name,
@@ -8475,8 +8418,6 @@ def run_agent_stream(
 
             if kind == "error":
                 error = slot["error"]
-                if tool_name == "ask_clarifying_question" and clarification_repair_error is None:
-                    clarification_repair_error = error
                 if tool_name not in ui_hidden_tool_names:
                     yield {"type": "tool_error", "step": step, "tool": tool_name, "error": error, "call_id": call_id}
                 tool_messages.append(
@@ -8735,8 +8676,6 @@ def run_agent_stream(
                         return
                 else:
                     error = exec_result["error"]
-                    if tool_name == "ask_clarifying_question" and clarification_repair_error is None:
-                        clarification_repair_error = error
                     _append_working_state_blocker(working_state, tool_name, error)
                     _trace_agent_event(
                         "tool_call_failed",
@@ -8808,17 +8747,6 @@ def run_agent_stream(
         _merge_tool_execution_result_message(messages, tool_execution_result_message)
         if canvas_context_refresh_needed:
             _refresh_latest_canvas_context_injection_message(messages, runtime_state)
-        if clarification_repair_error and not _has_clarification_tool_repair_instruction(messages):
-            messages.append(_build_clarification_tool_repair_instruction(clarification_repair_error))
-            _trace_agent_event(
-                "clarification_tool_repair_requested",
-                trace_id=trace_id,
-                step=step,
-                error=clarification_repair_error,
-            )
-            pending_step_retry_reason = "clarification_tool_repair"
-            step -= 1
-            continue
 
     if fatal_api_error is not None:
         if not answer_started:
@@ -8841,8 +8769,6 @@ def run_agent_stream(
             pending_final_retry_reason = None
             working_memory_instruction = _build_working_state_instruction(working_state)
             final_extra_messages = [working_memory_instruction] if working_memory_instruction is not None else []
-            if attempted_canvas_mutation and not successful_canvas_mutation:
-                final_extra_messages.append(_build_unfulfilled_canvas_request_instruction())
             final_messages, _ = apply_context_compaction(final_extra_messages, reason="pre_final_answer")
             final_messages = [*final_messages, final_instruction_builder()]
             final_messages = _strip_intermediate_tool_call_content(final_messages)

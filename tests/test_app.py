@@ -4138,6 +4138,37 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(response.get_json()["code"], "stale_clarification_response")
         mocked_stream.assert_not_called()
 
+    def test_chat_rejects_clarification_response_without_assistant_message_id(self):
+        conversation_id = self._create_conversation()
+        self._insert_pending_clarification_assistant(conversation_id)
+
+        with patch("routes.chat.run_agent_stream") as mocked_stream:
+            response = self.client.post(
+                "/chat",
+                json={
+                    "conversation_id": conversation_id,
+                    "model": "deepseek-chat",
+                    "user_content": "Q: Budget?\nA: 200-300 TL",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Q: Budget?\nA: 200-300 TL",
+                            "metadata": {
+                                "clarification_response": {
+                                    "answers": {
+                                        "budget": {"display": "200-300 TL"},
+                                    },
+                                }
+                            },
+                        }
+                    ],
+                },
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["code"], "stale_clarification_response")
+        mocked_stream.assert_not_called()
+
     def test_index_uses_external_app_script(self):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
@@ -6455,6 +6486,8 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("function updateClarificationFieldVisibility(form, clarification)", script_text)
         self.assertIn("pending_clarification: pendingClarification", script_text)
         self.assertIn('clarification_response', script_text)
+        self.assertIn('active_document_id: assistantCanvasActiveDocumentId || activeCanvasDocumentId', script_text)
+        self.assertIn('canvas_cleared: assistantCanvasCleared', script_text)
         self.assertIn("A: Type your answer", script_text)
         self.assertIn("Your draft answers stay in this browser until you send them.", script_text)
         self.assertIn("clarification-card__intro", script_text)
@@ -8072,7 +8105,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(mocked_create.call_args_list[0].kwargs["tool_choice"], "auto")
         self.assertEqual(events[-1]["type"], "done")
 
-    def test_run_agent_stream_repairs_invalid_clarification_tool_payload_once(self):
+    def test_run_agent_stream_does_not_force_clarification_repair_tool_choice(self):
         responses = [
             iter(
                 [
@@ -8127,15 +8160,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertTrue(tool_errors)
         self.assertEqual(clarification_event["clarification"]["questions"][0]["options"][0]["value"], "repo")
         self.assertEqual(usage_event["model_call_count"], 2)
-        self.assertEqual(usage_event["model_calls"][1]["retry_reason"], "clarification_tool_repair")
-        self.assertEqual(
-            mocked_create.call_args_list[1].kwargs["tool_choice"],
-            {"type": "function", "function": {"name": "ask_clarifying_question"}},
-        )
-        self.assertFalse(mocked_create.call_args_list[1].kwargs["parallel_tool_calls"])
+        self.assertIsNone(usage_event["model_calls"][1]["retry_reason"])
+        self.assertEqual(mocked_create.call_args_list[1].kwargs["tool_choice"], "auto")
+        self.assertNotIn("parallel_tool_calls", mocked_create.call_args_list[1].kwargs)
         self.assertEqual(events[-1]["type"], "done")
 
-    def test_run_agent_stream_falls_back_when_openrouter_provider_rejects_clarification_repair_tool_choice(self):
+    def test_run_agent_stream_openrouter_keeps_auto_tool_choice_on_invalid_clarification_payload(self):
         responses = [
             iter(
                 [
@@ -8149,9 +8179,6 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                     ),
                     self._stream_chunk_openrouter(usage=SimpleNamespace(prompt_tokens=5, completion_tokens=3, total_tokens=8)),
                 ]
-            ),
-            RuntimeError(
-                "Error code: 404 - {'error': {'message': 'No endpoints found that support the provided tool_choice value.', 'code': 404}}"
             ),
             iter(
                 [
@@ -8201,12 +8228,13 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         tool_errors = [event for event in events if event["type"] == "tool_error" and event["tool"] == "ask_clarifying_question"]
         self.assertTrue(tool_errors)
         self.assertEqual(clarification_event["clarification"]["questions"][0]["id"], "goal")
-        self.assertEqual(mock_create.call_args_list[1].kwargs["tool_choice"], {"type": "function", "function": {"name": "ask_clarifying_question"}})
-        self.assertFalse(mock_create.call_args_list[1].kwargs["parallel_tool_calls"])
-        self.assertEqual(mock_create.call_args_list[2].kwargs["tool_choice"], "auto")
-        self.assertNotIn("parallel_tool_calls", mock_create.call_args_list[2].kwargs)
+        self.assertEqual(mock_create.call_count, 2)
+        self.assertEqual(mock_create.call_args_list[0].kwargs["tool_choice"], "auto")
+        self.assertEqual(mock_create.call_args_list[1].kwargs["tool_choice"], "auto")
+        self.assertNotIn("parallel_tool_calls", mock_create.call_args_list[0].kwargs)
+        self.assertNotIn("parallel_tool_calls", mock_create.call_args_list[1].kwargs)
         self.assertEqual(
-            mock_create.call_args_list[2].kwargs["extra_body"],
+            mock_create.call_args_list[1].kwargs["extra_body"],
             {"provider": {"only": ["deepinfra/turbo"], "allow_fallbacks": False}},
         )
         self.assertEqual(events[-1]["type"], "done")
@@ -13778,6 +13806,49 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 {
                     "role": "user",
                     "content": "- Budget? \u2192 200-300 TL",
+                },
+            ],
+        )
+
+    def test_build_api_messages_strips_answered_clarification_even_without_tool_chain(self):
+        normalized = normalize_chat_messages(
+            [
+                {
+                    "id": 12,
+                    "role": "assistant",
+                    "content": "",
+                    "metadata": {
+                        "pending_clarification": {
+                            "questions": [{"id": "budget", "label": "Budget?", "input_type": "text"}]
+                        }
+                    },
+                },
+                {
+                    "id": 13,
+                    "role": "user",
+                    "content": "Q: Budget?\nA: 200-300 TL",
+                    "metadata": {
+                        "clarification_response": {
+                            "assistant_message_id": 12,
+                            "answers": {"budget": {"display": "200-300 TL"}},
+                        }
+                    },
+                },
+            ]
+        )
+
+        api_messages = build_api_messages(normalized)
+
+        self.assertEqual(
+            api_messages,
+            [
+                {
+                    "role": "assistant",
+                    "content": "Before I answer, I need a few details.\nPlease answer this question:\n1. Budget?",
+                },
+                {
+                    "role": "user",
+                    "content": "- Budget? → 200-300 TL",
                 },
             ],
         )
@@ -19936,6 +20007,25 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         )
         self.assertIn("## Clarification Response", injection)
         self.assertIn("200 TL", injection)
+
+    def test_context_injection_suppresses_clarification_when_round_ids_mismatch_current_response(self):
+        injection = build_runtime_context_injection(
+            active_tool_names=["ask_clarifying_question"],
+            clarification_response={
+                "assistant_message_id": "42",
+                "answers": {"q1": {"display": "200 TL"}},
+            },
+            all_clarification_rounds=[
+                {
+                    "assistant_message_id": "99",
+                    "questions": [{"id": "q1", "text": "Budget?"}],
+                    "answers": {"q1": {"display": "100 TL"}},
+                }
+            ],
+        )
+
+        self.assertNotIn("## Clarification Response", injection)
+        self.assertNotIn("200 TL", injection)
 
     # ------------------------------------------------------------------
     # save_to_conversation_memory result compactness
