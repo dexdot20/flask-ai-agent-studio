@@ -2342,9 +2342,8 @@ def set_canvas_viewport(
     if not viewport_key:
         raise ValueError("Canvas viewport target is missing a stable document key.")
     normalized_ttl_turns = 0 if permanent else max(0, int(ttl_turns or 0))
-    if not permanent and normalized_ttl_turns < 1:
-        normalized_ttl_turns = 3
-    normalized_auto_unpin_on_edit = False if permanent else auto_unpin_on_edit is True
+    is_permanent_viewport = permanent is True or normalized_ttl_turns == 0
+    normalized_auto_unpin_on_edit = False if is_permanent_viewport else auto_unpin_on_edit is True
     _normalize_canvas_viewports(runtime_state)[viewport_key] = {
         "document_id": document.get("id"),
         "document_path": document.get("path"),
@@ -2353,7 +2352,7 @@ def set_canvas_viewport(
         "ttl_turns": normalized_ttl_turns,
         "remaining_turns": normalized_ttl_turns,
         "auto_unpin_on_edit": normalized_auto_unpin_on_edit,
-        "permanent": permanent is True or normalized_ttl_turns == 0,
+        "permanent": is_permanent_viewport,
     }
     if isinstance(page_number, int) and page_number > 0:
         _normalize_canvas_viewports(runtime_state)[viewport_key]["page_number"] = page_number

@@ -6324,6 +6324,195 @@ def _build_already_visible_canvas_expand_result(tool_args: dict, runtime_state: 
     }
 
 
+def _normalize_canvas_document_path_key(value) -> str:
+    return str(value or "").strip().replace("\\", "/")
+
+
+def _register_canvas_document_locator(
+    document_id,
+    document_path,
+    *,
+    doc_ids: set[str],
+    doc_paths: set[str],
+) -> None:
+    normalized_document_id = str(document_id or "").strip()
+    normalized_document_path = _normalize_canvas_document_path_key(document_path)
+    if normalized_document_id:
+        doc_ids.add(normalized_document_id)
+    if normalized_document_path:
+        doc_paths.add(normalized_document_path)
+
+
+def _resolve_canvas_document_locator(
+    canvas_state: dict,
+    *,
+    document_id=None,
+    document_path=None,
+) -> tuple[str, str]:
+    resolved_document_id = ""
+    resolved_document_path = ""
+    try:
+        _, resolved_document = _find_canvas_document(
+            canvas_state,
+            document_id=document_id,
+            document_path=document_path,
+        )
+    except Exception:
+        resolved_document_id = str(document_id or "").strip()
+        resolved_document_path = _normalize_canvas_document_path_key(document_path)
+        return resolved_document_id, resolved_document_path
+
+    resolved_document_id = str(resolved_document.get("id") or "").strip()
+    resolved_document_path = _normalize_canvas_document_path_key(resolved_document.get("path"))
+    return resolved_document_id, resolved_document_path
+
+
+def _resolve_canvas_read_targets(tool_name: str, tool_args: dict, canvas_state: dict) -> list[dict]:
+    normalized_tool_name = _normalize_tool_name(tool_name)
+    normalized_tool_args = tool_args if isinstance(tool_args, dict) else {}
+
+    if normalized_tool_name == "search_canvas_document" and normalized_tool_args.get("all_documents") is True:
+        return []
+
+    raw_targets: list[dict] = []
+    if normalized_tool_name == "batch_read_canvas_documents":
+        request_entries = normalized_tool_args.get("documents") if isinstance(normalized_tool_args.get("documents"), list) else []
+        explicit_target_seen = False
+        for request_entry in request_entries:
+            if not isinstance(request_entry, dict):
+                continue
+            target_document_id = request_entry.get("document_id")
+            target_document_path = request_entry.get("document_path")
+            if target_document_id or target_document_path:
+                explicit_target_seen = True
+            raw_targets.append({"document_id": target_document_id, "document_path": target_document_path})
+        if request_entries and not explicit_target_seen:
+            raw_targets = [{"document_id": None, "document_path": None}]
+    else:
+        raw_targets = [{
+            "document_id": normalized_tool_args.get("document_id"),
+            "document_path": normalized_tool_args.get("document_path"),
+        }]
+
+    resolved_targets: list[dict] = []
+    seen_keys: set[tuple[str, str]] = set()
+    for raw_target in raw_targets:
+        resolved_document_id, resolved_document_path = _resolve_canvas_document_locator(
+            canvas_state,
+            document_id=raw_target.get("document_id"),
+            document_path=raw_target.get("document_path"),
+        )
+        target_key = (resolved_document_id, resolved_document_path)
+        if target_key in seen_keys:
+            continue
+        seen_keys.add(target_key)
+        resolved_targets.append(
+            {
+                "document_id": resolved_document_id,
+                "document_path": resolved_document_path,
+            }
+        )
+    return resolved_targets
+
+
+def _should_skip_canvas_read_after_same_turn_mutation(
+    tool_name: str,
+    tool_args: dict,
+    canvas_state: dict,
+    mutated_doc_ids: set[str],
+    mutated_doc_paths: set[str],
+) -> tuple[bool, str]:
+    normalized_tool_name = _normalize_tool_name(tool_name)
+    if normalized_tool_name not in CANVAS_ALL_READ_TOOL_NAMES:
+        return False, ""
+    if not mutated_doc_ids and not mutated_doc_paths:
+        return False, ""
+
+    read_targets = _resolve_canvas_read_targets(normalized_tool_name, tool_args, canvas_state)
+    for target in read_targets:
+        target_document_id = str(target.get("document_id") or "").strip()
+        target_document_path = _normalize_canvas_document_path_key(target.get("document_path"))
+        if target_document_id and target_document_id in mutated_doc_ids:
+            target_label = target_document_path or target_document_id
+        elif target_document_path and target_document_path in mutated_doc_paths:
+            target_label = target_document_path
+        else:
+            continue
+        guard_message = (
+            f"Skipped: document '{target_label}' was already modified in this turn. "
+            "The mutation result above contains the updated snapshot. "
+            "Re-reading immediately is unnecessary."
+        )
+        return True, guard_message
+
+    return False, ""
+
+
+def _collect_canvas_mutation_locators(tool_name: str, tool_args: dict, result) -> tuple[set[str], set[str]]:
+    normalized_tool_name = _normalize_tool_name(tool_name)
+    if normalized_tool_name not in CANVAS_MUTATION_TOOL_NAMES:
+        return set(), set()
+
+    normalized_tool_args = tool_args if isinstance(tool_args, dict) else {}
+    mutated_doc_ids: set[str] = set()
+    mutated_doc_paths: set[str] = set()
+
+    _register_canvas_document_locator(
+        normalized_tool_args.get("document_id"),
+        normalized_tool_args.get("document_path"),
+        doc_ids=mutated_doc_ids,
+        doc_paths=mutated_doc_paths,
+    )
+
+    targets = normalized_tool_args.get("targets") if isinstance(normalized_tool_args.get("targets"), list) else []
+    for target in targets:
+        if not isinstance(target, dict):
+            continue
+        _register_canvas_document_locator(
+            target.get("document_id"),
+            target.get("document_path"),
+            doc_ids=mutated_doc_ids,
+            doc_paths=mutated_doc_paths,
+        )
+
+    if isinstance(result, dict):
+        _register_canvas_document_locator(
+            result.get("document_id") or result.get("id"),
+            result.get("document_path") or result.get("path"),
+            doc_ids=mutated_doc_ids,
+            doc_paths=mutated_doc_paths,
+        )
+        _register_canvas_document_locator(
+            result.get("deleted_id"),
+            None,
+            doc_ids=mutated_doc_ids,
+            doc_paths=mutated_doc_paths,
+        )
+
+        nested_document = result.get("document") if isinstance(result.get("document"), dict) else None
+        if isinstance(nested_document, dict):
+            _register_canvas_document_locator(
+                nested_document.get("document_id") or nested_document.get("id"),
+                nested_document.get("document_path") or nested_document.get("path"),
+                doc_ids=mutated_doc_ids,
+                doc_paths=mutated_doc_paths,
+            )
+
+        for list_key in ("documents", "results"):
+            list_value = result.get(list_key) if isinstance(result.get(list_key), list) else []
+            for entry in list_value:
+                if not isinstance(entry, dict):
+                    continue
+                _register_canvas_document_locator(
+                    entry.get("document_id") or entry.get("id"),
+                    entry.get("document_path") or entry.get("path"),
+                    doc_ids=mutated_doc_ids,
+                    doc_paths=mutated_doc_paths,
+                )
+
+    return mutated_doc_ids, mutated_doc_paths
+
+
 def collect_agent_response(
     api_messages: list,
     model: str,
@@ -8434,11 +8623,12 @@ def run_agent_stream(
                         if isinstance(event, dict):
                             yield event
 
-            # Canvas self-read guard: track which document IDs were mutated
+            # Canvas self-read guard: track which document IDs/paths were mutated
             # in this batch so that a subsequent same-batch read of the same
             # document can be short-circuited with a helpful message instead
             # of wasting tokens on a redundant inspection.
             _canvas_mutated_doc_ids: set[str] = set()
+            _canvas_mutated_doc_paths: set[str] = set()
 
             for s in sequential_slots:
                 try:
@@ -8449,16 +8639,16 @@ def run_agent_stream(
                     # Self-read guard: if this is a canvas read targeting a
                     # document that was just mutated in the same batch,
                     # return a short-circuit result instead of executing.
-                    if _tool_name in CANVAS_ALL_READ_TOOL_NAMES and _canvas_mutated_doc_ids:
-                        _target_doc_id = str(_tool_args.get("document_id") or "").strip()
-                        if _target_doc_id and _target_doc_id in _canvas_mutated_doc_ids:
-                            _guard_msg = (
-                                f"Skipped: document '{_target_doc_id}' was already modified in this turn. "
-                                "The mutation result above contains the updated snapshot. "
-                                "Re-reading immediately is unnecessary."
-                            )
-                            s["exec_result"] = {"ok": True, "result": _guard_msg, "summary": _guard_msg}
-                            continue
+                    should_skip_read, guard_message = _should_skip_canvas_read_after_same_turn_mutation(
+                        _tool_name,
+                        _tool_args,
+                        runtime_state.get("canvas") if isinstance(runtime_state.get("canvas"), dict) else {},
+                        _canvas_mutated_doc_ids,
+                        _canvas_mutated_doc_paths,
+                    )
+                    if should_skip_read:
+                        s["exec_result"] = {"ok": True, "result": guard_message, "summary": guard_message}
+                        continue
 
                     if _tool_name == "sub_agent":
                         res, summ = yield from _run_sub_agent_stream(_tool_args, runtime_state)
@@ -8468,13 +8658,11 @@ def run_agent_stream(
                         res, summ = _execute_tool(_tool_name, _tool_args, runtime_state=runtime_state)
                     s["exec_result"] = {"ok": True, "result": res, "summary": summ}
 
-                    # Track mutated canvas document IDs for the self-read guard.
+                    # Track mutated canvas document IDs/paths for the self-read guard.
                     if _tool_name in CANVAS_MUTATION_TOOL_NAMES and s["exec_result"].get("ok"):
-                        _mutated_id = str(_tool_args.get("document_id") or "").strip()
-                        if not _mutated_id and isinstance(res, dict):
-                            _mutated_id = str(res.get("document_id") or res.get("id") or "").strip()
-                        if _mutated_id:
-                            _canvas_mutated_doc_ids.add(_mutated_id)
+                        tracked_doc_ids, tracked_doc_paths = _collect_canvas_mutation_locators(_tool_name, _tool_args, res)
+                        _canvas_mutated_doc_ids.update(tracked_doc_ids)
+                        _canvas_mutated_doc_paths.update(tracked_doc_paths)
                 except Exception as exc:
                     s["exec_result"] = {"ok": False, "error": _format_tool_execution_error(exc)}
 

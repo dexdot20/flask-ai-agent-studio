@@ -1,3 +1,0 @@
-To ensure architectural consistency, the client-side (UI) and server-side (Backend) must be treated as a single, unified entity:
-* **Bidirectional Adaptation:** Any structural modification within the user interface must trigger a corresponding update in the business logic and database schema.
-* **Holistic Updates:** When the model proposes or modifies a UI component, it must simultaneously architect the necessary API endpoints, data models, and validation processes to prevent state mismatch.

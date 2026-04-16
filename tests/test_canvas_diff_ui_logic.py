@@ -453,3 +453,30 @@ def test_open_canvas_uses_deferred_panel_render_during_streaming() -> None:
     assert "options.deferPanelRender !== false" in body, (
         "openCanvas should keep deferred panel rendering enabled by default during streaming"
     )
+
+
+def test_send_message_validates_create_conversation_response_before_state_update() -> None:
+    source = _load_app_js_source()
+    send_match = re.search(r"async function sendMessage\(options = \{\}\) \{(?P<body>.*?)\n\}", source, re.S)
+    assert send_match, "sendMessage was not found in static/app.js"
+    body = send_match.group("body")
+
+    create_conv_match = re.search(r"if \(!currentConvId\) \{(?P<section>.*?)\n\s*\}\n\n\s*let userMetadata", body, re.S)
+    assert create_conv_match, "create-conversation bootstrap block was not found in sendMessage"
+    section = create_conv_match.group("section")
+
+    assert "if (!response.ok)" in section, "create-conversation bootstrap must guard non-OK responses"
+    assert "Number.isInteger(Number(conversation?.id))" in section, "create-conversation bootstrap must validate returned conversation id"
+    assert "throw new Error" in section, "create-conversation bootstrap must throw on invalid bootstrap response"
+
+
+def test_is_canvas_streaming_preview_tool_accepts_event_payload_markers() -> None:
+    source = _load_app_js_source()
+    func_match = re.search(r"function isCanvasStreamingPreviewTool\(toolName, eventPayload = null\) \{(?P<body>.*?)\n\}", source, re.S)
+    assert func_match, "isCanvasStreamingPreviewTool(toolName, eventPayload) was not found in static/app.js"
+    body = func_match.group("body")
+
+    assert "eventPayload.preview_key" in body, "preview_key marker should enable streaming preview detection"
+    assert "eventPayload.snapshot" in body, "snapshot marker should enable streaming preview detection"
+    assert "eventPayload.delta" in body, "delta marker should enable streaming preview detection"
+    assert "replace_content" in body, "replace_content marker should enable streaming preview detection"

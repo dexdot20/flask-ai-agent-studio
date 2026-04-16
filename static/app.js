@@ -2532,8 +2532,21 @@ const CANVAS_EDIT_PREVIEW_TOOLS = new Set(["batch_canvas_edits", "transform_canv
 const CANVAS_PAGE_HEADING_TEXT_RE = /^Page\s+(\d+)$/i;
 const PENDING_CANVAS_UPLOAD_PREVIEW_KEY = "pending-canvas-upload";
 
-function isCanvasStreamingPreviewTool(toolName) {
-  return CANVAS_STREAMING_PREVIEW_TOOLS.has(String(toolName || "").trim());
+function isCanvasStreamingPreviewTool(toolName, eventPayload = null) {
+  if (CANVAS_STREAMING_PREVIEW_TOOLS.has(String(toolName || "").trim())) {
+    return true;
+  }
+
+  if (!eventPayload || typeof eventPayload !== "object") {
+    return false;
+  }
+
+  return Boolean(
+    String(eventPayload.preview_key || "").trim()
+    || (eventPayload.snapshot && typeof eventPayload.snapshot === "object")
+    || typeof eventPayload.delta === "string"
+    || Object.prototype.hasOwnProperty.call(eventPayload, "replace_content")
+  );
 }
 
 function getCanvasStreamingPreviewLabel(document) {
@@ -13791,7 +13804,13 @@ async function sendMessage(options = {}) {
         persona_id: currentConversationPersonaId || null,
       }),
     });
-    const conversation = await response.json();
+    const conversation = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(String(conversation?.error || "Unable to create a conversation."));
+    }
+    if (!Number.isInteger(Number(conversation?.id))) {
+      throw new Error("Unable to create a conversation.");
+    }
     currentConvId = conversation.id;
     currentConvTitle = String(conversation.title || "New Chat").trim() || "New Chat";
     currentConversationPersonaId = normalizePersonaId(conversation.persona_id);
@@ -14358,7 +14377,7 @@ async function sendMessage(options = {}) {
           : [];
         assistantToolHistory.push(...nextToolHistory);
       } else if (event.type === "canvas_loading") {
-        if (!isCanvasStreamingPreviewTool(event.tool)) {
+        if (!isCanvasStreamingPreviewTool(event.tool, event)) {
           return;
         }
         const previewDocument = ensureStreamingCanvasPreview(event.tool, event.preview_key, event.snapshot);
@@ -14369,12 +14388,12 @@ async function sendMessage(options = {}) {
         }
         setCanvasStatus(getCanvasStreamingStatusMessage(event.tool, previewDocument, "loading"), "muted");
       } else if (event.type === "canvas_executing") {
-        if (isCanvasStreamingPreviewTool(event.tool)) {
+        if (isCanvasStreamingPreviewTool(event.tool, event)) {
           const executingPreview = [...streamingCanvasPreviews.values()][0] || null;
           setCanvasStatus(getCanvasStreamingStatusMessage(event.tool, executingPreview, "executing"), "muted");
         }
       } else if (event.type === "canvas_content_delta") {
-        if (!isCanvasStreamingPreviewTool(event.tool)) {
+        if (!isCanvasStreamingPreviewTool(event.tool, event)) {
           return;
         }
         const previewDocument = ensureStreamingCanvasPreview(event.tool, event.preview_key, event.snapshot);

@@ -4,9 +4,11 @@ import unittest
 
 from agent import (
     _build_streaming_canvas_tool_preview,
+    _collect_canvas_mutation_locators,
     _execute_tool,
     _extract_partial_json_string_value,
     _parse_tool_call_arguments,
+    _should_skip_canvas_read_after_same_turn_mutation,
 )
 from canvas_service import (
     batch_read_canvas_documents,
@@ -414,6 +416,33 @@ class TestCanvasRuntime(unittest.TestCase):
         self.assertFalse(result["pinned"]["auto_unpin_on_edit"])
         self.assertEqual(result["pinned"]["ttl_turns"], 0)
 
+    def test_set_canvas_viewport_ttl_zero_is_treated_as_permanent(self):
+        runtime_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "doc-1",
+                    "title": "app.py",
+                    "path": "src/app.py",
+                    "format": "code",
+                    "content": "line 1\nline 2\nline 3",
+                }
+            ]
+        )
+
+        result = set_canvas_viewport(
+            runtime_state,
+            document_path="src/app.py",
+            start_line=1,
+            end_line=2,
+            ttl_turns=0,
+            auto_unpin_on_edit=True,
+        )
+
+        self.assertTrue(result["pinned"]["permanent"])
+        self.assertFalse(result["pinned"]["auto_unpin_on_edit"])
+        self.assertEqual(result["pinned"]["ttl_turns"], 0)
+        self.assertEqual(result["pinned"]["remaining_turns"], 0)
+
     def test_set_canvas_viewport_rejects_visual_canvas_documents(self):
         runtime_state = create_canvas_runtime_state(
             [
@@ -812,3 +841,110 @@ class TestCanvasRuntime(unittest.TestCase):
         self.assertEqual(preview["tool"], "transform_canvas_lines")
         self.assertEqual(preview["content_mode"], "replace")
         self.assertEqual(preview["content"], "DEBUG = True\nprint('done')")
+
+    def test_canvas_self_read_guard_skips_path_target_after_same_turn_mutation(self):
+        canvas_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "doc-1",
+                    "title": "app.py",
+                    "path": "src/app.py",
+                    "format": "code",
+                    "language": "python",
+                    "content": "print('x')",
+                }
+            ],
+            active_document_id="doc-1",
+        )
+
+        should_skip, guard_message = _should_skip_canvas_read_after_same_turn_mutation(
+            "scroll_canvas_document",
+            {"document_path": "src/app.py", "start_line": 1, "end_line": 1},
+            canvas_state,
+            mutated_doc_ids=set(),
+            mutated_doc_paths={"src/app.py"},
+        )
+
+        self.assertTrue(should_skip)
+        self.assertIn("src/app.py", guard_message)
+
+    def test_canvas_self_read_guard_skips_default_active_document_after_mutation(self):
+        canvas_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "doc-1",
+                    "title": "README.md",
+                    "path": "README.md",
+                    "format": "markdown",
+                    "content": "# hi",
+                }
+            ],
+            active_document_id="doc-1",
+        )
+
+        should_skip, guard_message = _should_skip_canvas_read_after_same_turn_mutation(
+            "expand_canvas_document",
+            {},
+            canvas_state,
+            mutated_doc_ids={"doc-1"},
+            mutated_doc_paths=set(),
+        )
+
+        self.assertTrue(should_skip)
+        self.assertIn("README.md", guard_message)
+
+    def test_canvas_self_read_guard_does_not_skip_all_documents_search(self):
+        canvas_state = create_canvas_runtime_state(
+            [
+                {
+                    "id": "doc-1",
+                    "title": "a.py",
+                    "path": "src/a.py",
+                    "format": "code",
+                    "content": "alpha",
+                },
+                {
+                    "id": "doc-2",
+                    "title": "b.py",
+                    "path": "src/b.py",
+                    "format": "code",
+                    "content": "beta",
+                },
+            ],
+            active_document_id="doc-1",
+        )
+
+        should_skip, guard_message = _should_skip_canvas_read_after_same_turn_mutation(
+            "search_canvas_document",
+            {"query": "a", "all_documents": True},
+            canvas_state,
+            mutated_doc_ids={"doc-1"},
+            mutated_doc_paths={"src/a.py"},
+        )
+
+        self.assertFalse(should_skip)
+        self.assertEqual(guard_message, "")
+
+    def test_collect_canvas_mutation_locators_includes_paths_from_targets_and_result(self):
+        tracked_ids, tracked_paths = _collect_canvas_mutation_locators(
+            "batch_canvas_edits",
+            {
+                "targets": [
+                    {
+                        "document_path": "src/app.py",
+                        "operations": [{"action": "replace", "start_line": 1, "end_line": 1, "lines": ["print('ok')"]}],
+                    }
+                ]
+            },
+            {
+                "documents": [
+                    {"document_id": "doc-1", "document_path": "src/app.py"},
+                    {"document_id": "doc-2", "document_path": "src/lib/util.py"},
+                ]
+            },
+        )
+
+        self.assertIn("doc-1", tracked_ids)
+        self.assertIn("doc-2", tracked_ids)
+        self.assertIn("src/app.py", tracked_paths)
+        self.assertIn("src/lib/util.py", tracked_paths)
