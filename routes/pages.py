@@ -176,6 +176,23 @@ from proxy_settings import (
 )
 from tool_registry import TOOL_SPEC_BY_NAME, get_tool_runtime_metadata
 
+SETTINGS_VISIBLE_OPERATION_MODEL_KEYS = tuple(
+    key for key in MODEL_OPERATION_KEYS if key not in {"prune", "generate_title"}
+)
+
+
+def _filter_visible_operation_model_preferences(preferences: dict | None) -> dict:
+    source = preferences if isinstance(preferences, dict) else {}
+    return {key: source.get(key, "") for key in SETTINGS_VISIBLE_OPERATION_MODEL_KEYS}
+
+
+def _filter_visible_operation_model_fallback_preferences(preferences: dict | None) -> dict:
+    source = preferences if isinstance(preferences, dict) else {}
+    return {
+        key: list(source.get(key) or [])
+        for key in SETTINGS_VISIBLE_OPERATION_MODEL_KEYS
+    }
+
 TOOL_PERMISSION_LABELS = {
     "save_to_conversation_memory": "Save chat memory",
     "delete_conversation_memory_entry": "Delete chat memory",
@@ -507,8 +524,10 @@ def build_settings_payload() -> dict:
         "custom_models": normalize_custom_models(raw.get("custom_models")),
         "visible_model_order": [model["id"] for model in visible_chat_models],
         "default_chat_model": get_default_chat_model_id(raw),
-        "operation_model_preferences": get_operation_model_preferences(raw),
-        "operation_model_fallback_preferences": get_operation_model_fallback_preferences(raw),
+        "operation_model_preferences": _filter_visible_operation_model_preferences(get_operation_model_preferences(raw)),
+        "operation_model_fallback_preferences": _filter_visible_operation_model_fallback_preferences(
+            get_operation_model_fallback_preferences(raw)
+        ),
         "image_processing_method": normalize_image_processing_method(raw.get("image_processing_method")),
         "image_helper_model": get_image_helper_model_id(raw),
         "active_tools": configured_active_tools,
@@ -1080,7 +1099,7 @@ def register_page_routes(app) -> None:
             filtered_operation_preferences = {
                 key: value
                 for key, value in operation_model_preferences_raw.items()
-                if key in MODEL_OPERATION_KEYS
+                if key in SETTINGS_VISIBLE_OPERATION_MODEL_KEYS
             }
             resolved_operation_preferences: dict[str, str] = {}
 
@@ -1100,7 +1119,7 @@ def register_page_routes(app) -> None:
             filtered_operation_fallback_preferences = {
                 key: value
                 for key, value in operation_model_fallback_preferences_raw.items()
-                if key in MODEL_OPERATION_KEYS
+                if key in SETTINGS_VISIBLE_OPERATION_MODEL_KEYS
             }
             resolved_operation_fallback_preferences: dict[str, list[str] | str] = {}
 

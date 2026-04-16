@@ -308,9 +308,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             {
                 "summarize": "",
                 "fetch_summarize": "",
-                "prune": "",
                 "fix_text": "",
-                "generate_title": "",
                 "upload_metadata": "",
                 "sub_agent": "",
             },
@@ -320,9 +318,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             {
                 "summarize": [],
                 "fetch_summarize": [],
-                "prune": [],
                 "fix_text": [],
-                "generate_title": [],
                 "upload_metadata": [],
                 "sub_agent": [],
             },
