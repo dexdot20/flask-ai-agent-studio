@@ -2918,6 +2918,7 @@ def _normalize_message_usage(value: dict | None) -> dict | None:
         return None
 
     cleaned = {}
+    provider_usage_partial = value.get("provider_usage_partial") is True
     for key in (
         "prompt_tokens",
         "prompt_cache_hit_tokens",
@@ -2935,7 +2936,8 @@ def _normalize_message_usage(value: dict | None) -> dict | None:
 
     normalized_breakdown = _normalize_usage_breakdown(
         value.get("input_breakdown"),
-        target_total=cleaned.get("prompt_tokens") or cleaned.get("estimated_input_tokens"),
+        target_total=(cleaned.get("prompt_tokens") if not provider_usage_partial else None)
+        or cleaned.get("estimated_input_tokens"),
     )
     if normalized_breakdown:
         cleaned["input_breakdown"] = normalized_breakdown
@@ -2965,7 +2967,7 @@ def _normalize_message_usage(value: dict | None) -> dict | None:
         cleaned["cost_available"] = value["cost_available"]
     if value.get("cache_metrics_estimated") is True:
         cleaned["cache_metrics_estimated"] = True
-    if value.get("provider_usage_partial") is True:
+    if provider_usage_partial:
         cleaned["provider_usage_partial"] = True
 
     currency = str(value.get("currency") or "").strip()[:16]
@@ -2980,8 +2982,10 @@ def _normalize_message_usage(value: dict | None) -> dict | None:
     if model:
         cleaned["model"] = model
 
-    if cleaned.get("prompt_tokens") is not None:
+    if cleaned.get("prompt_tokens") is not None and not provider_usage_partial:
         cleaned["estimated_input_tokens"] = cleaned["prompt_tokens"]
+    elif cleaned.get("estimated_input_tokens") is not None and provider_usage_partial:
+        cleaned["estimated_input_tokens"] = cleaned["estimated_input_tokens"]
     elif normalized_breakdown:
         cleaned["estimated_input_tokens"] = sum(normalized_breakdown.values())
 
@@ -3312,7 +3316,8 @@ def extract_message_usage(
     if fallback_total is not None and "total_tokens" not in usage:
         usage["total_tokens"] = fallback_total
 
-    target_total = usage.get("prompt_tokens")
+    provider_usage_partial = usage.get("provider_usage_partial") is True
+    target_total = usage.get("prompt_tokens") if not provider_usage_partial else None
     normalized_breakdown = _normalize_usage_breakdown(
         usage.get("input_breakdown"),
         target_total=target_total or usage.get("estimated_input_tokens"),
@@ -3321,6 +3326,8 @@ def extract_message_usage(
         usage["input_breakdown"] = normalized_breakdown
     if target_total is not None:
         usage["estimated_input_tokens"] = target_total
+    elif provider_usage_partial and usage.get("estimated_input_tokens") is not None:
+        usage["estimated_input_tokens"] = usage["estimated_input_tokens"]
     elif normalized_breakdown:
         usage["estimated_input_tokens"] = sum(normalized_breakdown.values())
 

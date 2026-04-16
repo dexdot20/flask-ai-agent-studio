@@ -3956,12 +3956,6 @@ kbd {
   background: var(--surface-hover);
 }
 
-.stats-panel > .stats-section {
-  padding: 16px 18px;
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-
 .stats-panel {
   background:
     radial-gradient(circle at top right, rgba(79, 110, 247, 0.08), transparent 34%),
@@ -6038,12 +6032,16 @@ kbd {
 }
 
 .stats-panel > .stats-section {
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
 .stats-section-title {
+  margin-bottom: 12px;
   font-size: 0.72rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -6552,11 +6550,6 @@ kbd {
 
 .rag-settings-grid.is-disabled {
   opacity: 0.7;
-}
-
-/* ── Stats Panel ─────────────────────────────────────────── */
-.stats-section-title {
-  margin-bottom: 12px;
 }
 
 .stats-section-intro {

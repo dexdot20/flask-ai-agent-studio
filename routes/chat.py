@@ -2961,6 +2961,9 @@ def _build_budgeted_prompt_messages(
         tool_memory_context,
         min(tool_memory_budget_cap, remaining_context_budget),
     )
+    runtime_budget_stats = {
+        "remaining_context_budget": remaining_context_budget,
+    }
 
     current_context_injection = build_runtime_context_injection(
         active_tool_names=runtime_tool_names,
@@ -2990,6 +2993,7 @@ def _build_budgeted_prompt_messages(
         include_time_context=True,
         now=prompt_now,
         previous_canvas_content_hash=previous_canvas_content_hash,
+        runtime_budget_stats=runtime_budget_stats,
         include_dynamic_context=True,
     )
 
@@ -3026,6 +3030,7 @@ def _build_budgeted_prompt_messages(
         runtime_message=stable_runtime_message,
         now=prompt_now,
         previous_canvas_content_hash=previous_canvas_content_hash,
+        runtime_budget_stats=runtime_budget_stats,
     )
 
     request_prompt_history_api = build_api_messages(
@@ -3066,6 +3071,7 @@ def _build_budgeted_prompt_messages(
         runtime_message=stable_runtime_message,
         now=prompt_now,
         previous_canvas_content_hash=previous_canvas_content_hash,
+        runtime_budget_stats=runtime_budget_stats,
     )
 
     estimated_total_tokens = _estimate_prompt_tokens(api_messages)

@@ -7229,6 +7229,10 @@ function normalizeBreakdown(rawBreakdown, targetTotal = null) {
   return alignBreakdownToTotal(normalized, targetTotal);
 }
 
+function shouldAlignUsageBreakdownToPromptTotal(entry) {
+  return !(entry && typeof entry === "object" && entry.provider_usage_partial === true);
+}
+
 function sumBreakdown(breakdown) {
   return INPUT_BREAKDOWN_ORDER.reduce((sum, key) => sum + toFiniteNumber(breakdown[key], 0), 0);
 }
@@ -7261,7 +7265,8 @@ function hasCacheUsageMetrics(entry) {
   return Boolean(
     entry && typeof entry === "object" && (
       entry.prompt_cache_hit_tokens !== null ||
-      entry.prompt_cache_miss_tokens !== null
+      entry.prompt_cache_miss_tokens !== null ||
+      entry.prompt_cache_write_tokens !== null
     )
   );
 }
@@ -7271,9 +7276,13 @@ function normalizeModelCallPayload(callEntry) {
   const promptTokens = toNonNegativeIntOrNull(source.prompt_tokens);
   const promptCacheHitTokens = toNonNegativeIntOrNull(source.prompt_cache_hit_tokens);
   const promptCacheMissTokens = toNonNegativeIntOrNull(source.prompt_cache_miss_tokens);
+  const promptCacheWriteTokens = toNonNegativeIntOrNull(source.prompt_cache_write_tokens);
   const completionTokens = toNonNegativeIntOrNull(source.completion_tokens);
   const totalTokens = toNonNegativeIntOrNull(source.total_tokens);
-  const estimatedTarget = promptTokens ?? toNonNegativeIntOrNull(source.estimated_input_tokens);
+  const providerUsagePartial = source.missing_provider_usage === true;
+  const estimatedTarget = shouldAlignUsageBreakdownToPromptTotal({ provider_usage_partial: providerUsagePartial })
+    ? (promptTokens ?? toNonNegativeIntOrNull(source.estimated_input_tokens))
+    : toNonNegativeIntOrNull(source.estimated_input_tokens);
   const inputBreakdown = normalizeBreakdown(source.input_breakdown, estimatedTarget);
 
   return {
@@ -7287,6 +7296,7 @@ function normalizeModelCallPayload(callEntry) {
     prompt_tokens: promptTokens,
     prompt_cache_hit_tokens: promptCacheHitTokens,
     prompt_cache_miss_tokens: promptCacheMissTokens,
+    prompt_cache_write_tokens: promptCacheWriteTokens,
     completion_tokens: completionTokens,
     total_tokens: totalTokens,
     estimated_input_tokens: estimatedTarget ?? sumBreakdown(inputBreakdown),
@@ -7315,16 +7325,24 @@ function normalizeUsagePayload(usage) {
   const promptTokens = Math.max(0, Math.round(toFiniteNumber(source.prompt_tokens, 0)));
   const promptCacheHitTokens = toNonNegativeIntOrNull(source.prompt_cache_hit_tokens);
   const promptCacheMissTokens = toNonNegativeIntOrNull(source.prompt_cache_miss_tokens);
+  const promptCacheWriteTokens = toNonNegativeIntOrNull(source.prompt_cache_write_tokens);
   const estimatedSourceTokens = Math.max(0, Math.round(toFiniteNumber(source.estimated_input_tokens, 0)));
-  const inputBreakdown = normalizeBreakdown(source.input_breakdown, promptTokens || estimatedSourceTokens || null);
   const modelCalls = Array.isArray(source.model_calls)
     ? source.model_calls.map(normalizeModelCallPayload)
     : [];
+  const providerUsagePartial = source.provider_usage_partial === true
+    || modelCalls.some((call) => call && typeof call === "object" && call.missing_provider_usage === true);
+  const breakdownTargetTotal = shouldAlignUsageBreakdownToPromptTotal({ provider_usage_partial: providerUsagePartial })
+    ? (promptTokens || estimatedSourceTokens || null)
+    : (estimatedSourceTokens || null);
+  const inputBreakdown = normalizeBreakdown(source.input_breakdown, breakdownTargetTotal);
   const modelCallCount = Math.max(
     modelCalls.length,
     Math.round(toFiniteNumber(source.model_call_count, 0)),
   );
-  const estimatedInputTokens = promptTokens || sumBreakdown(inputBreakdown) || estimatedSourceTokens;
+  const estimatedInputTokens = shouldAlignUsageBreakdownToPromptTotal({ provider_usage_partial: providerUsagePartial })
+    ? (promptTokens || sumBreakdown(inputBreakdown) || estimatedSourceTokens)
+    : (estimatedSourceTokens || sumBreakdown(inputBreakdown) || promptTokens);
   const configuredPromptMaxInputTokens = toNonNegativeIntOrNull(source.configured_prompt_max_input_tokens);
   const maxInputTokensPerCall =
     toNonNegativeIntOrNull(source.max_input_tokens_per_call) ??
@@ -7340,6 +7358,7 @@ function normalizeUsagePayload(usage) {
     prompt_tokens: promptTokens,
     prompt_cache_hit_tokens: promptCacheHitTokens,
     prompt_cache_miss_tokens: promptCacheMissTokens,
+    prompt_cache_write_tokens: promptCacheWriteTokens,
     completion_tokens: Math.max(0, Math.round(toFiniteNumber(source.completion_tokens, 0))),
     total_tokens: Math.max(0, Math.round(toFiniteNumber(source.total_tokens, 0))),
     estimated_input_tokens: estimatedInputTokens,
@@ -7352,7 +7371,7 @@ function normalizeUsagePayload(usage) {
     provider: String(source.provider || "").trim() || null,
     model: String(source.model || "—") || "—",
     cache_metrics_estimated: source.cache_metrics_estimated === true,
-    provider_usage_partial: source.provider_usage_partial === true,
+    provider_usage_partial: providerUsagePartial,
     cost,
     cost_available: costAvailable,
     currency,
@@ -7525,12 +7544,12 @@ function renderModelCallItem(call) {
     ? `<span class="turn-call-stat">${fmt(call.prompt_tokens)} prompt</span>`
     : `<span class="turn-call-stat">${fmt(call.estimated_input_tokens)} estimated prompt</span>`;
   const cacheHitLabel = call.cache_metrics_estimated ? "estimated cache hit" : "cache hit";
-  const cacheMissLabel = call.cache_metrics_estimated ? "estimated cache miss" : "cache miss";
+  const cacheWriteLabel = call.cache_metrics_estimated ? "estimated cache write" : "cache write";
   const cacheHitStat = call.prompt_cache_hit_tokens !== null
     ? `<span class="turn-call-stat">${formatCacheMetricValue(call.prompt_cache_hit_tokens, call.cache_metrics_estimated)} ${cacheHitLabel}</span>`
     : "";
-  const cacheMissStat = call.prompt_cache_miss_tokens !== null
-    ? `<span class="turn-call-stat">${formatCacheMetricValue(call.prompt_cache_miss_tokens, call.cache_metrics_estimated)} ${cacheMissLabel}</span>`
+  const cacheWriteStat = call.prompt_cache_write_tokens !== null
+    ? `<span class="turn-call-stat">${formatCacheMetricValue(call.prompt_cache_write_tokens, call.cache_metrics_estimated)} ${cacheWriteLabel}</span>`
     : "";
   const completionStat = call.completion_tokens !== null
     ? `<span class="turn-call-stat">${fmt(call.completion_tokens)} completion</span>`
@@ -7552,7 +7571,7 @@ function renderModelCallItem(call) {
         missingBadge +
       `</div>` +
       `<div class="turn-call-meta">` +
-        promptStat + cacheHitStat + cacheMissStat + completionStat + messageCountStat + schemaStat +
+        promptStat + cacheHitStat + cacheWriteStat + completionStat + messageCountStat + schemaStat +
       `</div>` +
       `<div class="turn-call-breakdown">${renderBreakdownChips(call.input_breakdown, "turn-call-breakdown-chip")}</div>` +
     `</div>`
@@ -7608,44 +7627,44 @@ function renderTokenStats() {
       : tokenTurns.length !== turnsWithKnownCost.length
         ? `${formatUsageCost(sessionCost, sessionCostCurrencies[0])} partial`
         : formatUsageCost(sessionCost, sessionCostCurrencies[0]);
-  const sessionBreakdown = aggregateBreakdown(tokenTurns);
   const lastTurn = tokenTurns.length ? tokenTurns[tokenTurns.length - 1] : null;
   const sessionHasCacheMetrics = tokenTurns.some(hasCacheUsageMetrics);
   const sessionHasEstimatedCacheMetrics = tokenTurns.some((turn) => turn?.cache_metrics_estimated === true);
   const sessionHasPartialProviderUsage = tokenTurns.some(hasPartialProviderUsage);
   const lastTurnHasCacheMetrics = hasCacheUsageMetrics(lastTurn);
   const lastTurnHasPartialProviderUsage = hasPartialProviderUsage(lastTurn);
-  const sessionProviders = summarizeValueList(tokenTurns.map((turn) => turn.provider));
+  const lastModelProvider = lastTurn
+    ? [String(lastTurn.provider || "").trim(), String(lastTurn.model || "").trim()].filter(Boolean).join(" · ") || "—"
+    : "—";
 
   document.getElementById("stat-user").textContent = formatPartialSummaryValue(totalUser, sessionHasPartialProviderUsage);
-  document.getElementById("stat-cache-hit").textContent = sessionHasCacheMetrics
+  document.getElementById("stat-cache-read").textContent = sessionHasCacheMetrics
     ? formatPartialSummaryText(
-      formatCacheMetricValue(totalCacheHit, sessionHasEstimatedCacheMetrics),
+      formatCacheMetricValue(totalCacheRead, sessionHasEstimatedCacheMetrics),
       sessionHasPartialProviderUsage,
     )
     : formatPartialSummaryText("—", sessionHasPartialProviderUsage);
-  document.getElementById("stat-cache-miss").textContent = sessionHasCacheMetrics
+  document.getElementById("stat-cache-write").textContent = sessionHasCacheMetrics
     ? formatPartialSummaryText(
-      formatCacheMetricValue(totalCacheMiss, sessionHasEstimatedCacheMetrics),
+      formatCacheMetricValue(totalCacheWrite, sessionHasEstimatedCacheMetrics),
       sessionHasPartialProviderUsage,
     )
     : formatPartialSummaryText("—", sessionHasPartialProviderUsage);
   document.getElementById("stat-asst").textContent = formatPartialSummaryValue(totalAsst, sessionHasPartialProviderUsage);
   document.getElementById("stat-total").textContent = formatPartialSummaryValue(grandTotal, sessionHasPartialProviderUsage);
   document.getElementById("stat-cost").textContent = formatPartialSummaryText(sessionCostLabel, sessionHasPartialProviderUsage);
-  document.getElementById("stat-session-providers").textContent = sessionProviders;
   document.getElementById("stat-last-input").textContent = lastTurn
     ? formatPartialSummaryValue(lastTurn.prompt_tokens, lastTurnHasPartialProviderUsage)
     : "—";
-  document.getElementById("stat-last-cache-hit").textContent = lastTurnHasCacheMetrics
+  document.getElementById("stat-last-cache-read").textContent = lastTurnHasCacheMetrics
     ? formatPartialSummaryText(
       formatCacheMetricValue(toFiniteNumber(lastTurn.prompt_cache_hit_tokens, 0), lastTurn?.cache_metrics_estimated === true),
       lastTurnHasPartialProviderUsage,
     )
     : formatPartialSummaryText("—", lastTurnHasPartialProviderUsage);
-  document.getElementById("stat-last-cache-miss").textContent = lastTurnHasCacheMetrics
+  document.getElementById("stat-last-cache-write").textContent = lastTurnHasCacheMetrics
     ? formatPartialSummaryText(
-      formatCacheMetricValue(toFiniteNumber(lastTurn.prompt_cache_miss_tokens, 0), lastTurn?.cache_metrics_estimated === true),
+      formatCacheMetricValue(toFiniteNumber(lastTurn.prompt_cache_write_tokens, 0), lastTurn?.cache_metrics_estimated === true),
       lastTurnHasPartialProviderUsage,
     )
     : formatPartialSummaryText("—", lastTurnHasPartialProviderUsage);
@@ -7667,22 +7686,12 @@ function renderTokenStats() {
   document.getElementById("stat-last-cost").textContent = lastTurn?.cost_available === true && Number.isFinite(lastTurn.cost)
     ? formatPartialSummaryText(formatUsageCost(lastTurn.cost, lastTurn.currency || "USD"), lastTurnHasPartialProviderUsage)
     : formatPartialSummaryText("—", lastTurnHasPartialProviderUsage);
-  document.getElementById("stat-last-model").textContent = lastTurn ? lastTurn.model : "—";
-  document.getElementById("stat-last-provider").textContent = lastTurn?.provider || "—";
-  const archivedPromptBudget = lastTurn?.preflight_prompt_budget;
-  document.getElementById("stat-last-archived-rag").textContent = archivedPromptBudget && archivedPromptBudget.archived_conversation_match_count > 0
-    ? `${fmt(archivedPromptBudget.archived_conversation_match_count)} matches · ${fmt(archivedPromptBudget.archived_conversation_message_count)} hidden msgs · ~${fmt(archivedPromptBudget.archived_conversation_tokens)} tokens`
-    : "—";
-  document.getElementById("stat-breakdown-session-total").textContent = formatPartialSummaryValue(
-    sumBreakdown(sessionBreakdown),
-    sessionHasPartialProviderUsage,
-  );
+  document.getElementById("stat-last-model-provider").textContent = formatPartialSummaryText(lastModelProvider, lastTurnHasPartialProviderUsage);
   document.getElementById("stat-breakdown-latest-total").textContent = lastTurn
     ? formatPartialSummaryValue(lastTurn.estimated_input_tokens, lastTurnHasPartialProviderUsage)
     : "—";
   tokensBadge.textContent = fmt(grandTotal);
 
-  renderBreakdownList("session-breakdown-list", sessionBreakdown, { totalTokens: totalUser });
   renderBreakdownList("latest-breakdown-list", lastTurn ? lastTurn.input_breakdown : createEmptyBreakdown(), {
     totalTokens: lastTurn ? lastTurn.prompt_tokens : 0,
   });
@@ -7701,14 +7710,11 @@ function renderTokenStats() {
         const peakPromptStat = turn.max_input_tokens_per_call
           ? `<span class="turn-stat">${fmt(turn.max_input_tokens_per_call)} peak call prompt</span>`
           : "";
-        const promptCapStat = turn.configured_prompt_max_input_tokens !== null
-          ? `<span class="turn-stat">${fmt(turn.configured_prompt_max_input_tokens)} per-call prompt cap</span>`
+        const cacheReadStat = hasCacheUsageMetrics(turn)
+          ? `<span class="turn-stat">${formatCacheMetricValue(toFiniteNumber(turn.prompt_cache_hit_tokens, 0), turn.cache_metrics_estimated === true)} ${turn.cache_metrics_estimated === true ? "estimated cache read" : "cache read"}</span>`
           : "";
-        const cacheHitStat = hasCacheUsageMetrics(turn)
-          ? `<span class="turn-stat">${formatCacheMetricValue(toFiniteNumber(turn.prompt_cache_hit_tokens, 0), turn.cache_metrics_estimated === true)} ${turn.cache_metrics_estimated === true ? "estimated cache hit" : "cache hit"}</span>`
-          : "";
-        const cacheMissStat = hasCacheUsageMetrics(turn)
-          ? `<span class="turn-stat">${formatCacheMetricValue(toFiniteNumber(turn.prompt_cache_miss_tokens, 0), turn.cache_metrics_estimated === true)} ${turn.cache_metrics_estimated === true ? "estimated cache miss" : "cache miss"}</span>`
+        const cacheWriteStat = hasCacheUsageMetrics(turn)
+          ? `<span class="turn-stat">${formatCacheMetricValue(toFiniteNumber(turn.prompt_cache_write_tokens, 0), turn.cache_metrics_estimated === true)} ${turn.cache_metrics_estimated === true ? "estimated cache write" : "cache write"}</span>`
           : "";
         const costStat = turn.cost_available === true && Number.isFinite(turn.cost)
           ? `<span class="turn-stat">${formatPartialSummaryText(formatUsageCost(turn.cost, turn.currency || "USD"), turnHasPartialProviderUsage)} cost</span>`
@@ -7725,10 +7731,6 @@ function renderTokenStats() {
         const totalStatLabel = turnHasPartialProviderUsage && turn.total_tokens <= 0
           ? "Provider total unavailable"
           : `${formatPartialSummaryValue(turn.total_tokens, turnHasPartialProviderUsage)} total`;
-        const archivedPromptBudget = turn.preflight_prompt_budget;
-        const archivedRagStat = archivedPromptBudget && archivedPromptBudget.archived_conversation_match_count > 0
-          ? `<span class="turn-stat">${fmt(archivedPromptBudget.archived_conversation_match_count)} archived RAG matches · ${fmt(archivedPromptBudget.archived_conversation_message_count)} hidden msgs</span>`
-          : "";
         return (
         `<div class="turn-item">` +
           `<div class="turn-header">` +
@@ -7744,11 +7746,9 @@ function renderTokenStats() {
           `<div class="turn-details">` +
             `<span class="turn-stat"><span class="stats-dot dot-user"></span>${escHtml(promptStatLabel)}</span>` +
             peakPromptStat +
-            promptCapStat +
-            cacheHitStat +
-            cacheMissStat +
+            cacheReadStat +
+            cacheWriteStat +
             costStat +
-            archivedRagStat +
             `<span class="turn-stat"><span class="stats-dot dot-asst"></span>${escHtml(completionStatLabel)}</span>` +
             `<span class="turn-stat">${escHtml(totalStatLabel)}</span>` +
           `</div>` +

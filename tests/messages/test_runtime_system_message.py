@@ -309,6 +309,8 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         content = message["content"]
         self.assertIn("## Active Canvas Document", content)
         self.assertIn("- Language: python", content)
+        self.assertIn("- Total tokens (estimated): ~", content)
+        self.assertIn("- Visible excerpt tokens (estimated): ~", content)
         self.assertIn("1: print('hello')", content)
         self.assertIn("2: print('world')", content)
         self.assertIn("## Canvas Editing Guidance", content)
@@ -459,7 +461,9 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         self.assertIn("- Working mode: project", content)
         self.assertIn("- Project label: demo-app", content)
         self.assertIn("- Active file: src/app.py", content)
+        self.assertIn("- Active file size: src/app.py — 3 lines", content)
         self.assertIn("- Other files: src/config.py", content)
+        self.assertIn("- Other file sizes: src/config.py — 1 line", content)
         self.assertNotIn("- Path: src/app.py", content)
         self.assertIn("- Role: source", content)
         self.assertIn("- Active document id: canvas-1", content)
@@ -476,6 +480,16 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         self.assertNotIn("## Canvas Project Manifest", content)
         self.assertNotIn("## Canvas Relationship Map", content)
         self.assertNotIn("## Other Canvas Documents", content)
+
+    def test_runtime_system_message_includes_remaining_context_budget_status(self):
+        message = build_runtime_system_message(
+            active_tool_names=["search_web"],
+            runtime_budget_stats={"remaining_context_budget": 3210},
+        )
+
+        content = message["content"]
+        self.assertIn("## Prompt Budget Status", content)
+        self.assertIn("Remaining context budget ≈ 3210 tokens", content)
 
     def test_runtime_system_message_uses_document_titles_when_canvas_paths_are_missing(self):
         message = build_runtime_system_message(

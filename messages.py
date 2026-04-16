@@ -49,6 +49,7 @@ from db import (
     parse_message_tool_calls,
     read_image_asset_bytes,
 )
+from token_utils import estimate_text_tokens
 from tool_registry import PARALLEL_SAFE_READ_ONLY_TOOL_NAMES, resolve_runtime_tool_names
 
 SUMMARY_LABEL = "Conversation summary (generated from deleted messages):"
@@ -1385,6 +1386,37 @@ def build_api_messages(
     return _sanitize_tool_call_chain(api_messages)
 
 
+def _estimate_canvas_document_line_count(document: dict | None) -> int:
+    if not isinstance(document, dict):
+        return 0
+    stored_line_count = int(document.get("line_count") or 0)
+    if stored_line_count > 0:
+        return stored_line_count
+    content = str(document.get("content") or "")
+    if not content:
+        return 0
+    return len(content.split("\n"))
+
+
+def _estimate_canvas_document_token_count(document: dict | None) -> int:
+    if not isinstance(document, dict):
+        return 0
+    content = str(document.get("content") or "")
+    if not content:
+        return 0
+    return estimate_text_tokens(content)
+
+
+def _with_canvas_document_prompt_metrics(document: dict) -> dict:
+    if not isinstance(document, dict):
+        return {}
+    return {
+        **document,
+        "line_count": _estimate_canvas_document_line_count(document),
+        "token_count": _estimate_canvas_document_token_count(document),
+    }
+
+
 def _build_canvas_prompt_payload(
     canvas_documents,
     active_document_id: str | None = None,
@@ -1418,18 +1450,19 @@ def _build_canvas_prompt_payload(
 
     manifest_file_list = (manifest or {}).get("file_list") if isinstance((manifest or {}).get("file_list"), list) else []
     ignored_documents = [
-        entry
+        _with_canvas_document_prompt_metrics(entry)
         for entry in manifest_file_list
         if isinstance(entry, dict) and entry.get("ignored") is True
     ]
     ignored_document_ids = {str(entry.get("id") or "").strip() for entry in ignored_documents}
     other_documents = [
-        entry
+        _with_canvas_document_prompt_metrics(entry)
         for entry in manifest_file_list
         if isinstance(entry, dict)
         and str(entry.get("id") or "").strip() != str(active_document.get("id") or "").strip()
         and str(entry.get("id") or "").strip() not in ignored_document_ids
     ]
+    active_document = _with_canvas_document_prompt_metrics(active_document)
     filtered_viewports = [
         viewport
         for viewport in (canvas_viewports or [])
@@ -1440,6 +1473,7 @@ def _build_canvas_prompt_payload(
     content = str(active_document.get("content") or "")
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
     all_lines = content.split("\n") if content else []
+    active_document_token_count = int(active_document.get("token_count") or 0)
     visible_lines = []
     visible_char_count = 0
     clipped_line_count = 0
@@ -1462,6 +1496,8 @@ def _build_canvas_prompt_payload(
             "is_truncated": False,
             "visible_line_end": 0,
             "total_lines": int(active_document.get("line_count") or len(all_lines)),
+            "active_document_token_count": active_document_token_count,
+            "visible_excerpt_token_count": 0,
             "viewports": filtered_viewports,
             "content_hash": content_hash,
         }
@@ -1481,6 +1517,8 @@ def _build_canvas_prompt_payload(
             "is_truncated": False,
             "visible_line_end": 0,
             "total_lines": int(active_document.get("line_count") or len(all_lines)),
+            "active_document_token_count": active_document_token_count,
+            "visible_excerpt_token_count": 0,
             "viewports": filtered_viewports,
             "content_hash": content_hash,
         }
@@ -1536,6 +1574,8 @@ def _build_canvas_prompt_payload(
                     hi = mid - 1
             visible_lines = visible_lines[:lo]
 
+    visible_excerpt_token_count = estimate_text_tokens("\n".join(visible_lines)) if visible_lines else 0
+
     return {
         "mode": (manifest or {}).get("mode") or "document",
         "manifest": manifest,
@@ -1550,6 +1590,8 @@ def _build_canvas_prompt_payload(
         "is_truncated": len(visible_lines) < len(all_lines),
         "visible_line_end": len(visible_lines),
         "total_lines": int(active_document.get("line_count") or len(all_lines)),
+        "active_document_token_count": active_document_token_count,
+        "visible_excerpt_token_count": visible_excerpt_token_count,
         "viewports": filtered_viewports,
         "content_hash": content_hash,
     }
@@ -1574,6 +1616,23 @@ def _build_canvas_workspace_summary(canvas_payload: dict) -> list[str]:
             return str(entry.get("path") or entry.get("title") or entry.get("id") or "Canvas").strip() or "Canvas"
         return str(entry.get("title") or entry.get("path") or entry.get("id") or "Canvas").strip() or "Canvas"
 
+    def _document_size_summary(entry: dict) -> str | None:
+        if not isinstance(entry, dict):
+            return None
+        label = _document_label(entry)
+        if not label:
+            return None
+        line_count = int(entry.get("line_count") or 0)
+        token_count = int(entry.get("token_count") or 0)
+        size_parts = []
+        if line_count > 0:
+            size_parts.append(f"{line_count} line{'s' if line_count != 1 else ''}")
+        if token_count > 0:
+            size_parts.append(f"~{token_count} tokens")
+        if not size_parts:
+            return label
+        return f"{label} — {', '.join(size_parts)}"
+
     lines = ["## Canvas File Set Summary"]
     lines.append(f"- Working mode: {canvas_payload.get('mode') or 'document'}")
 
@@ -1583,6 +1642,9 @@ def _build_canvas_workspace_summary(canvas_payload: dict) -> list[str]:
 
     active_label = _document_label(active_document)
     lines.append(f"- {'Active file' if is_project_mode and has_explicit_paths else 'Active document'}: {active_label}")
+    active_size_summary = _document_size_summary(active_document)
+    if active_size_summary:
+        lines.append(f"- Active file size: {active_size_summary}")
 
     total_lines = int(active_document.get("line_count") or 0)
     total_pages = int(active_document.get("page_count") or 0)
@@ -1614,6 +1676,16 @@ def _build_canvas_workspace_summary(canvas_payload: dict) -> list[str]:
         lines.append(f"- {'Other files' if is_project_mode and has_explicit_paths else 'Other canvas documents'}: {', '.join(shown_labels)}")
         if len(other_labels) > len(shown_labels):
             lines.append(f"- Additional documents omitted: {len(other_labels) - len(shown_labels)}")
+    other_size_summaries = [
+        _document_size_summary(entry)
+        for entry in other_documents[:4]
+        if _document_size_summary(entry)
+    ]
+    if other_size_summaries:
+        lines.append(
+            f"- {'Other file sizes' if is_project_mode and has_explicit_paths else 'Other document sizes'}: "
+            + "; ".join(other_size_summaries)
+        )
 
     ignored_documents = canvas_payload.get("ignored_documents") if isinstance(canvas_payload.get("ignored_documents"), list) else []
     ignored_labels = [
@@ -1629,6 +1701,17 @@ def _build_canvas_workspace_summary(canvas_payload: dict) -> list[str]:
         )
         if len(ignored_labels) > len(shown_ignored_labels):
             lines.append(f"- Additional ignored documents omitted: {len(ignored_labels) - len(shown_ignored_labels)}")
+    ignored_size_summaries = [
+        _document_size_summary(entry)
+        for entry in ignored_documents[:4]
+        if isinstance(entry, dict) and str(entry.get("id") or "").strip() != str(active_document.get("id") or "").strip()
+        if _document_size_summary(entry)
+    ]
+    if ignored_size_summaries:
+        lines.append(
+            f"- {'Ignored file sizes' if is_project_mode and has_explicit_paths else 'Ignored document sizes'}: "
+            + "; ".join(ignored_size_summaries)
+        )
 
     lines.append("")
     return lines
@@ -1899,6 +1982,9 @@ def _build_canvas_runtime_context_sections(
     if active_document.get("language"):
         active_lines.append(f"- Language: {active_document['language']}")
     active_lines.append(f"- Total lines: {canvas_payload['total_lines']}")
+    active_lines.append(
+        f"- Total tokens (estimated): ~{int(canvas_payload.get('active_document_token_count') or 0)}"
+    )
     if int(active_document.get("page_count") or 0) > 1:
         active_lines.append(f"- Total pages: {int(active_document.get('page_count') or 0)}")
     if active_document_ignored:
@@ -1910,6 +1996,9 @@ def _build_canvas_runtime_context_sections(
         active_lines.append(
             f"- Visible lines in prompt: 1-{canvas_payload['visible_line_end']}"
             + (" (truncated excerpt)" if canvas_payload["is_truncated"] else "")
+        )
+        active_lines.append(
+            f"- Visible excerpt tokens (estimated): ~{int(canvas_payload.get('visible_excerpt_token_count') or 0)}"
         )
     else:
         active_lines.append("- Visual preview: page images are available in the UI, but line excerpts are not injected for this document type.")
@@ -2263,6 +2352,7 @@ def _build_runtime_volatile_parts(
     summary_count: int = 0,
     include_time_context: bool = True,
     previous_canvas_content_hash: str | None = None,
+    runtime_budget_stats: dict | None = None,
     double_check: bool = False,
     double_check_query: str = "",
 ) -> list[str]:
@@ -2270,6 +2360,19 @@ def _build_runtime_volatile_parts(
 
     if include_time_context:
         volatile_parts.append(_build_current_time_context(now))
+
+    remaining_context_budget = None
+    if isinstance(runtime_budget_stats, dict):
+        try:
+            remaining_context_budget = max(0, int(runtime_budget_stats.get("remaining_context_budget") or 0))
+        except (TypeError, ValueError):
+            remaining_context_budget = None
+    if remaining_context_budget is not None:
+        volatile_parts.append("## Prompt Budget Status")
+        volatile_parts.append(
+            f"- Remaining context budget ≈ {remaining_context_budget} tokens. Keep optional tool calls, excerpts, and verbosity proportional to this remaining space."
+        )
+        volatile_parts.append("")
 
     if is_first_turn and "set_conversation_title" in set(active_tool_names or []):
         volatile_parts.append("## First Turn Conversation Title")
@@ -2602,6 +2705,7 @@ def build_runtime_context_injection(
     summary_count: int = 0,
     include_time_context: bool = True,
     previous_canvas_content_hash: str | None = None,
+    runtime_budget_stats: dict | None = None,
     include_dynamic_context: bool = False,
     double_check: bool = False,
     double_check_query: str = "",
@@ -2651,6 +2755,7 @@ def build_runtime_context_injection(
             summary_count=summary_count,
             include_time_context=include_time_context,
             previous_canvas_content_hash=previous_canvas_content_hash,
+            runtime_budget_stats=runtime_budget_stats,
         )
     )
     return _finalize_prompt_text(parts)
@@ -2689,6 +2794,7 @@ def build_runtime_system_message(
     canvas_payload: dict | None = None,
     summary_count: int = 0,
     previous_canvas_content_hash: str | None = None,
+    runtime_budget_stats: dict | None = None,
     double_check: bool = False,
     double_check_query: str = "",
 ):
@@ -2761,6 +2867,7 @@ def build_runtime_system_message(
                 summary_count=summary_count,
                 include_time_context=include_time_context,
                 previous_canvas_content_hash=previous_canvas_content_hash,
+                runtime_budget_stats=runtime_budget_stats,
             )
         )
     elif include_time_context:
@@ -2804,6 +2911,7 @@ def prepend_runtime_context(
     runtime_message: dict | None = None,
     now: datetime | None = None,
     previous_canvas_content_hash: str | None = None,
+    runtime_budget_stats: dict | None = None,
     double_check: bool = False,
     double_check_query: str = "",
 ):
@@ -2912,6 +3020,7 @@ def prepend_runtime_context(
             include_time_context=True,
             now=normalized_now,
             previous_canvas_content_hash=previous_canvas_content_hash,
+            runtime_budget_stats=runtime_budget_stats,
             include_dynamic_context=True,
         )
 

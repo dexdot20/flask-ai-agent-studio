@@ -6695,6 +6695,27 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertTrue(usage["provider_usage_partial"])
         self.assertTrue(usage["model_calls"][0]["missing_provider_usage"])
 
+    def test_extract_message_usage_does_not_force_prompt_total_alignment_when_provider_usage_is_partial(self):
+        usage = extract_message_usage(
+            {
+                "usage": {
+                    "prompt_tokens": 42,
+                    "estimated_input_tokens": 18,
+                    "provider_usage_partial": True,
+                    "input_breakdown": {
+                        "core_instructions": 6,
+                        "user_messages": 12,
+                    },
+                }
+            }
+        )
+
+        self.assertTrue(usage["provider_usage_partial"])
+        self.assertEqual(usage["estimated_input_tokens"], 18)
+        self.assertEqual(usage["input_breakdown"]["core_instructions"], 6)
+        self.assertEqual(usage["input_breakdown"]["user_messages"], 12)
+        self.assertNotIn("unknown_provider_overhead", usage["input_breakdown"])
+
     def test_extract_usage_metrics_normalizes_openrouter_prompt_tokens_details(self):
         # OpenRouter returns cached_tokens inside prompt_tokens_details
         usage = SimpleNamespace(
@@ -6802,23 +6823,25 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("msg-group.user .msg-actions--footer", style_text)
         self.assertNotIn('openBtn.textContent = "Open canvas";', script_text)
 
-    def test_usage_panel_exposes_cache_hit_and_miss_metrics(self):
+    def test_usage_panel_exposes_cache_read_write_and_cost_metrics(self):
         html_text = self.client.get("/").get_data(as_text=True)
         script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
         script_text = script_path.read_text(encoding="utf-8")
 
         self.assertIn("Token Usage", html_text)
-        self.assertIn('id="stat-cache-hit"', html_text)
-        self.assertIn('id="stat-cache-miss"', html_text)
-        self.assertIn('id="stat-last-cache-hit"', html_text)
-        self.assertIn('id="stat-last-cache-miss"', html_text)
+        self.assertIn('id="stat-cache-read"', html_text)
+        self.assertIn('id="stat-cache-write"', html_text)
+        self.assertIn('id="stat-last-cache-read"', html_text)
+        self.assertIn('id="stat-last-cache-write"', html_text)
         self.assertIn('id="stat-cost"', html_text)
         self.assertIn('id="stat-last-cost"', html_text)
+        self.assertIn('id="stat-last-model-provider"', html_text)
         self.assertIn("prompt_cache_hit_tokens", script_text)
-        self.assertIn("prompt_cache_miss_tokens", script_text)
+        self.assertIn("prompt_cache_write_tokens", script_text)
         self.assertIn("cache_metrics_estimated", script_text)
         self.assertIn("cost_available", script_text)
         self.assertIn("formatUsageCost", script_text)
+        self.assertIn("shouldAlignUsageBreakdownToPromptTotal", script_text)
 
     def test_frontend_exposes_delete_and_clipboard_fallback_hooks(self):
         script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
