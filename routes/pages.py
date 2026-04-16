@@ -411,6 +411,21 @@ def build_sub_agent_web_tool_sections() -> list[dict[str, object]]:
     return sections
 
 
+def build_tool_catalog() -> list[dict[str, str]]:
+    """Build a flat list of all tools with their metadata for API/UI consumption."""
+    catalog: list[dict[str, str]] = []
+    for section in build_tool_permission_sections():
+        section_key = section.get("key", "")
+        for tool in section.get("tools", []):
+            catalog.append({
+                "name": tool.get("name", ""),
+                "group": section_key,
+                "label": tool.get("label", ""),
+                "description": tool.get("description", ""),
+            })
+    return catalog
+
+
 def _normalize_bool_setting_value(value) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -577,6 +592,7 @@ def build_settings_payload() -> dict:
         "fetch_url_summarized_max_input_chars": get_fetch_url_summarized_max_input_chars(raw),
         "fetch_url_summarized_max_output_tokens": get_fetch_url_summarized_max_output_tokens(raw),
         "features": get_feature_flags(raw),
+        "tool_catalog": build_tool_catalog(),
     }
 
 

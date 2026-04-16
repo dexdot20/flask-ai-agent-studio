@@ -178,6 +178,7 @@ const mobileCanvasBtn = document.getElementById("mobile-canvas-btn");
 const mobileMemoryBtn = document.getElementById("mobile-memory-btn");
 const mobileExportBtn = document.getElementById("mobile-export-btn");
 const mobilePruneBtn = document.getElementById("mobile-prune-btn");
+const mobileConvToolsBtn = document.getElementById("mobile-conv-tools-btn");
 const mobileSettingsBtn = document.getElementById("mobile-settings-btn");
 const mobileLogoutBtn = document.getElementById("mobile-logout-btn");
 const mobileTokensBtn = document.getElementById("mobile-tokens-btn");
@@ -203,6 +204,9 @@ const memoryAddBtn = document.getElementById("memory-add-btn");
 const memoryNewTypeEl = document.getElementById("memory-new-type");
 const memoryNewKeyEl = document.getElementById("memory-new-key");
 const memoryNewValueEl = document.getElementById("memory-new-value");
+const convToolsPanel = document.getElementById("conv-tools-panel");
+const convToolsOverlay = document.getElementById("conv-tools-overlay");
+const convToolsClose = document.getElementById("conv-tools-close");
 const summaryFocusPresetGrid = document.getElementById("summary-focus-presets");
 const summaryFocusInput = document.getElementById("summary-focus-input");
 const summaryDetailSelect = document.getElementById("summary-detail-select");
@@ -979,6 +983,7 @@ let currentConversationTitleSource = "system";
 let currentConversationTitleOverridden = false;
 let conversationMemoryEntries = [];
 let conversationMemoryEnabled = false;
+let currentConversationToolOverrides = null;
 let activeAbortController = null;
 let activeChatRunId = null;
 let activeUserCancelRequested = false;
@@ -1341,6 +1346,110 @@ function applyConversationMemoryState(data) {
     : [];
   lastConversationMemorySignature = getConversationMemorySignature(conversationMemoryEntries);
   renderConversationMemoryPanel();
+}
+
+function applyConversationToolOverridesState(data) {
+  currentConversationToolOverrides = Array.isArray(data?.conversation?.tool_overrides) ? data.conversation.tool_overrides : null;
+}
+
+function isConvToolsPanelOpen() {
+  return Boolean(convToolsPanel?.classList.contains("open"));
+}
+
+function openConvToolsPanel(triggerEl = null) {
+  closeMobileTools();
+  closeStats();
+  closeCanvas();
+  closeExportPanel();
+  closeSummaryPanel();
+  closePrunePanel({ restoreFocus: false });
+  closeMemoryPanel();
+  convToolsPanel?.classList.add("open");
+  convToolsOverlay?.classList.add("open");
+  convToolsPanel?.setAttribute("aria-hidden", "false");
+  syncConvToolsToggleButton();
+  renderConvToolsPanel();
+  window.setTimeout(() => {
+    convToolsClose?.focus();
+  }, 0);
+}
+
+function closeConvToolsPanel({ restoreFocus = true } = {}) {
+  convToolsPanel?.classList.remove("open");
+  convToolsOverlay?.classList.remove("open");
+  convToolsPanel?.setAttribute("aria-hidden", "true");
+  syncConvToolsToggleButton();
+}
+
+function syncConvToolsToggleButton() {
+  const btn = document.getElementById("mobile-conv-tools-btn");
+  if (btn) {
+    btn.classList.toggle("active", isConvToolsPanelOpen());
+  }
+}
+
+function renderConvToolsPanel() {
+  if (!convToolsPanel) return;
+  const useGlobalToggle = convToolsPanel.querySelector("#conv-tools-use-global");
+  const toolsSection = convToolsPanel.querySelector("#conv-tools-checkboxes");
+  const toolsList = convToolsPanel.querySelector("#conv-tools-list");
+  if (!useGlobalToggle || !toolsSection || !toolsList) return;
+
+  useGlobalToggle.checked = currentConversationToolOverrides === null;
+  toolsSection.style.display = currentConversationToolOverrides === null ? "none" : "";
+
+  const catalog = appSettings?.tool_catalog || [];
+  if (catalog.length === 0) {
+    toolsList.innerHTML = '<p class="memory-empty">No tools available.</p>';
+  } else {
+    const fragment = document.createDocumentFragment();
+    const checkedSet = new Set(currentConversationToolOverrides);
+    catalog.forEach((tool) => {
+      const item = document.createElement("label");
+      item.className = "conv-tools-item";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.name = "conv-tool-override";
+      cb.value = tool.name;
+      cb.checked = checkedSet.has(tool.name) || (currentConversationToolOverrides === null && appSettings?.active_tools?.includes(tool.name));
+      cb.addEventListener("change", () => persistConversationToolOverrides());
+      item.appendChild(cb);
+      const label = document.createElement("span");
+      label.textContent = tool.label || tool.name;
+      item.appendChild(label);
+      fragment.appendChild(item);
+    });
+    toolsList.replaceChildren(fragment);
+  }
+}
+
+async function persistConversationToolOverrides() {
+  if (!currentConvId) return;
+
+  const useGlobalToggle = document.getElementById("conv-tools-use-global");
+  const toolsSection = document.getElementById("conv-tools-checkboxes");
+  if (!useGlobalToggle || !toolsSection) return;
+
+  let toolOverrides = null;
+  if (!useGlobalToggle.checked) {
+    const checkboxes = toolsSection.querySelectorAll("input[name='conv-tool-override']");
+    toolOverrides = Array.from(checkboxes).filter((cb) => cb.checked).map((cb) => cb.value);
+  }
+
+  try {
+    const response = await fetch(`/api/conversations/${currentConvId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tool_overrides: toolOverrides }),
+    });
+    const data = await response.json().catch(() => null);
+    if (response.ok && data?.conversation?.tool_overrides !== undefined) {
+      currentConversationToolOverrides = Array.isArray(data.conversation.tool_overrides) ? data.conversation.tool_overrides : null;
+      renderConvToolsPanel();
+    }
+  } catch (error) {
+    showToast("Could not save tool permissions.", "error");
+  }
 }
 
 function isMemoryPanelOpen() {
@@ -9203,6 +9312,8 @@ async function refreshConversationFromServer() {
     applyConversationMemoryState(data);
   }
 
+  applyConversationToolOverridesState(data);
+
   loadSidebar();
   return true;
 }
@@ -10373,6 +10484,31 @@ if (mobilePruneBtn) {
     void pruneConversationHistory();
   });
 }
+if (mobileConvToolsBtn) {
+  mobileConvToolsBtn.addEventListener("click", () => {
+    if (!currentConvId) {
+      showToast("Open a conversation first to change tool permissions.", "warning");
+      return;
+    }
+    if (isConvToolsPanelOpen()) {
+      closeConvToolsPanel();
+    } else {
+      openConvToolsPanel(mobileToolsBtn || mobileConvToolsBtn);
+    }
+  });
+}
+if (convToolsClose) {
+  convToolsClose.addEventListener("click", () => closeConvToolsPanel());
+}
+if (convToolsOverlay) {
+  convToolsOverlay.addEventListener("click", () => closeConvToolsPanel());
+}
+const convToolsUseGlobalToggle = document.getElementById("conv-tools-use-global");
+if (convToolsUseGlobalToggle) {
+  convToolsUseGlobalToggle.addEventListener("change", () => {
+    persistConversationToolOverrides();
+  });
+}
 if (exportClose) {
   exportClose.addEventListener("click", closeExportPanel);
 }
@@ -11092,6 +11228,7 @@ async function openConversation(id) {
 
   history = Array.isArray(data.messages) ? data.messages.map(normalizeHistoryEntry) : [];
   applyConversationMemoryState(data);
+  applyConversationToolOverridesState(data);
   streamingCanvasDocuments = [];
   resetStreamingCanvasPreview();
   activeCanvasDocumentId = getActiveCanvasDocument(history)?.id || null;
@@ -11139,6 +11276,7 @@ function startNewChat() {
   history = [];
   conversationMemoryEntries = [];
   conversationMemoryEnabled = featureFlags.conversation_memory_enabled !== false;
+  currentConversationToolOverrides = null;
   latestSummaryStatus = null;
   selectedSummaryMessageIds = new Set();
   selectedPruneMessageIds = new Set();

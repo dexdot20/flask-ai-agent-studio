@@ -16,7 +16,14 @@ from uuid import uuid4
 
 from flask import Response, current_app, jsonify, request, stream_with_context
 
-from agent import AgentRunCancelledError, FINAL_ANSWER_ERROR_TEXT, FINAL_ANSWER_MISSING_TEXT, USER_CANCELLED_ERROR_TEXT, collect_agent_response, run_agent_stream
+from agent import (
+    AgentRunCancelledError,
+    FINAL_ANSWER_ERROR_TEXT,
+    FINAL_ANSWER_MISSING_TEXT,
+    USER_CANCELLED_ERROR_TEXT,
+    collect_agent_response,
+    run_agent_stream,
+)
 from canvas_service import (
     create_canvas_document,
     create_canvas_runtime_state,
@@ -75,6 +82,7 @@ from db import (
     delete_video_asset,
     find_summary_covering_message_id,
     get_active_tool_names,
+    get_conversation_active_tool_names,
     get_all_scratchpad_sections,
     get_app_settings,
     get_clarification_max_questions,
@@ -180,7 +188,12 @@ from project_workspace_service import (
     restore_temporary_workspace_snapshot,
 )
 from rag import preload_embedder
-from rag_service import build_rag_auto_context, build_tool_memory_auto_context, conversation_archived_rag_source_key, conversation_rag_source_key
+from rag_service import (
+    build_rag_auto_context,
+    build_tool_memory_auto_context,
+    conversation_archived_rag_source_key,
+    conversation_rag_source_key,
+)
 from rag_service import sync_conversations_to_rag_background, sync_conversations_to_rag_safe
 from routes.request_utils import is_valid_model_id, normalize_model_id, parse_messages_payload, parse_optional_int
 from token_utils import estimate_text_tokens
@@ -257,7 +270,9 @@ SUMMARY_TOOL_TRACE_LIMIT = 8
 OMITTED_TOOL_OUTPUT_TEXT = "[Tool output omitted from older history to save context budget.]"
 PROMPT_CONTINUITY_REPLY_MAX_TOKENS = 12
 PROMPT_CONTINUITY_REPLY_MAX_CHARS = 80
-PROMPT_CONTINUITY_SELECTION_REPLY_RE = re.compile(r"^\s*(?:(?:option|seçenek|secenek)\s*)?\d{1,2}[.)]?\s*$", re.IGNORECASE)
+PROMPT_CONTINUITY_SELECTION_REPLY_RE = re.compile(
+    r"^\s*(?:(?:option|seçenek|secenek)\s*)?\d{1,2}[.)]?\s*$", re.IGNORECASE
+)
 PROMPT_CONTINUITY_REPLY_TERM_RE = re.compile(
     r"^\s*(?:yes|no|ok(?:ay)?|sure|continue|proceed|start|implement|go ahead|evet|hay[ıi]r|tamam|devam|başla|basla|uygula|ilerle)\s*[.!?]?\s*$",
     re.IGNORECASE,
@@ -422,7 +437,9 @@ def _schedule_rag_conversation_sync(conversation_id: int | None, *, force: bool 
     if current_app.testing:
         sync_conversations_to_rag_safe(conversation_id=conversation_id, force=force)
         return
-    sync_conversations_to_rag_background(current_app._get_current_object(), conversation_id=conversation_id, force=force)
+    sync_conversations_to_rag_background(
+        current_app._get_current_object(), conversation_id=conversation_id, force=force
+    )
 
 
 def _extract_document_context_body(context_block: str | None) -> str:
@@ -448,15 +465,20 @@ def _build_processed_document_upload_from_attachment(attachment: dict, *, conver
     submission_mode = str(attachment.get("submission_mode") or "text").strip().lower()
     file_id = str(attachment.get("file_id") or "").strip()
     asset = get_file_asset(file_id, conversation_id=conversation_id) if file_id else None
-    doc_name = os.path.basename(
-        str(attachment.get("file_name") or (asset or {}).get("filename") or "document").strip()
-    ) or "document"
+    doc_name = (
+        os.path.basename(str(attachment.get("file_name") or (asset or {}).get("filename") or "document").strip())
+        or "document"
+    )
     doc_mime_type = str(attachment.get("file_mime_type") or (asset or {}).get("mime_type") or "").strip().lower()
 
     if submission_mode == "visual":
         visual_page_image_ids = [
             str(image_id or "").strip()
-            for image_id in (attachment.get("visual_page_image_ids") if isinstance(attachment.get("visual_page_image_ids"), list) else [])
+            for image_id in (
+                attachment.get("visual_page_image_ids")
+                if isinstance(attachment.get("visual_page_image_ids"), list)
+                else []
+            )
             if str(image_id or "").strip()
         ]
         visual_page_count = max(
@@ -611,13 +633,15 @@ def _rollback_edit_replay_snapshot(
     edited_message = snapshot.get("edited_message") if isinstance(snapshot.get("edited_message"), dict) else {}
     edited_message_id = int(edited_message.get("id") or 0)
     later_message_ids = [
-        int(message_id)
-        for message_id in (snapshot.get("later_message_ids") or [])
-        if int(message_id) > 0
+        int(message_id) for message_id in (snapshot.get("later_message_ids") or []) if int(message_id) > 0
     ]
-    conversation_memory_rows = snapshot.get("conversation_memory_rows") if isinstance(snapshot.get("conversation_memory_rows"), list) else []
+    conversation_memory_rows = (
+        snapshot.get("conversation_memory_rows") if isinstance(snapshot.get("conversation_memory_rows"), list) else []
+    )
     user_profile_rows = snapshot.get("user_profile_rows") if isinstance(snapshot.get("user_profile_rows"), list) else []
-    scratchpad_section_values = snapshot.get("scratchpad_section_values") if isinstance(snapshot.get("scratchpad_section_values"), dict) else {}
+    scratchpad_section_values = (
+        snapshot.get("scratchpad_section_values") if isinstance(snapshot.get("scratchpad_section_values"), dict) else {}
+    )
     max_message_id = int(snapshot.get("max_message_id") or 0)
     conversation_model = str(snapshot.get("conversation_model") or "")
 
@@ -716,7 +740,9 @@ def _prioritize_summary_messages(messages: list[dict] | None) -> list[dict]:
     if not summary_messages:
         return ordered_messages
 
-    non_summary_messages = [message for message in ordered_messages if str(message.get("role") or "").strip() != "summary"]
+    non_summary_messages = [
+        message for message in ordered_messages if str(message.get("role") or "").strip() != "summary"
+    ]
     return [*summary_messages, *non_summary_messages]
 
 
@@ -915,18 +941,12 @@ def _looks_related_to_source(title: str, source_text: str) -> bool:
         return True
 
     source_tokens = {
-        token
-        for token in re.findall(r"[^\W_]+", str(source_text or "").lower(), flags=re.UNICODE)
-        if len(token) > 2
+        token for token in re.findall(r"[^\W_]+", str(source_text or "").lower(), flags=re.UNICODE) if len(token) > 2
     }
     if not source_tokens:
         return False
 
-    title_tokens = [
-        token
-        for token in re.findall(r"[^\W_]+", title.lower(), flags=re.UNICODE)
-        if len(token) > 2
-    ]
+    title_tokens = [token for token in re.findall(r"[^\W_]+", title.lower(), flags=re.UNICODE) if len(token) > 2]
     if not title_tokens:
         return False
 
@@ -1035,9 +1055,13 @@ def _normalize_summary_items(values, *, max_items: int, item_limit: int) -> list
 def _build_summary_detail_instruction(summary_detail_level: str) -> str:
     normalized = str(summary_detail_level or "").strip().lower()
     if normalized == "very_concise":
-        return "Write a very concise summary that keeps only the absolute essentials needed to continue the conversation."
+        return (
+            "Write a very concise summary that keeps only the absolute essentials needed to continue the conversation."
+        )
     if normalized == "concise":
-        return "Write a concise summary that keeps only the highest-value reusable facts, decisions, and open questions."
+        return (
+            "Write a concise summary that keeps only the highest-value reusable facts, decisions, and open questions."
+        )
     if normalized == "detailed":
         return (
             "Write a detailed summary that preserves chronology, user intent, constraints, partial progress, failed attempts, "
@@ -1048,9 +1072,7 @@ def _build_summary_detail_instruction(summary_detail_level: str) -> str:
             "Write a comprehensive summary that preserves chronology, task state, constraints, user preferences, decisions, open questions, "
             "important nuance, and any tool findings that may matter for future turns. Favor recall over compression as long as the result stays readable."
         )
-    return (
-        "Write a balanced but context-rich summary that keeps reusable facts, decisions, constraints, open questions, active work, and important nuance."
-    )
+    return "Write a balanced but context-rich summary that keeps reusable facts, decisions, constraints, open questions, active work, and important nuance."
 
 
 def _parse_structured_summary_payload(summary_text: str) -> dict | None:
@@ -1230,7 +1252,10 @@ def _score_summary_message_priority(message: dict, focus_terms: set[str]) -> flo
 
     if "?" in normalized_content:
         score += 1.5
-    if re.search(r"\b(todo|next|need|must|should|blocked|issue|problem|decision|agreed|constraint|fix|implement|plan)\b", normalized_content.lower()):
+    if re.search(
+        r"\b(todo|next|need|must|should|blocked|issue|problem|decision|agreed|constraint|fix|implement|plan)\b",
+        normalized_content.lower(),
+    ):
         score += 1.0
 
     metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else None
@@ -1379,12 +1404,10 @@ def _select_summary_source_messages_with_focus_optimized(
         return []
 
     message_token_costs = [
-        max(1, _estimate_summary_prompt_message_tokens(message))
-        for message in ordered_source_messages
+        max(1, _estimate_summary_prompt_message_tokens(message)) for message in ordered_source_messages
     ]
     message_priority_scores = [
-        _score_summary_message_priority(message, focus_terms)
-        for message in ordered_source_messages
+        _score_summary_message_priority(message, focus_terms) for message in ordered_source_messages
     ]
 
     best_range: tuple[int, int] | None = None
@@ -1462,7 +1485,9 @@ def _compute_active_canvas_content_hash(
     return None
 
 
-def _build_tool_trace_context(canonical_messages: list[dict], max_entries: int = SUMMARY_TOOL_TRACE_LIMIT) -> str | None:
+def _build_tool_trace_context(
+    canonical_messages: list[dict], max_entries: int = SUMMARY_TOOL_TRACE_LIMIT
+) -> str | None:
     trace_entries: list[dict] = []
     _clarification_sentinel_added = False
     for message in reversed(canonical_messages):
@@ -1472,11 +1497,13 @@ def _build_tool_trace_context(canonical_messages: list[dict], max_entries: int =
         for entry in reversed(extract_message_tool_trace(metadata)):
             if str(entry.get("tool_name") or "").strip() == "ask_clarifying_question":
                 if not _clarification_sentinel_added:
-                    trace_entries.append({
-                        "tool_name": "ask_clarifying_question",
-                        "state": "answered",
-                        "preview": "All clarification answers provided by the user",
-                    })
+                    trace_entries.append(
+                        {
+                            "tool_name": "ask_clarifying_question",
+                            "state": "answered",
+                            "preview": "All clarification answers provided by the user",
+                        }
+                    )
                     _clarification_sentinel_added = True
                 continue
             trace_entries.append(entry)
@@ -1587,7 +1614,11 @@ def _iter_message_blocks(messages: list[dict]) -> list[dict]:
                 break
             block_messages.append(candidate)
             candidate_call_id = str(candidate.get("tool_call_id") or "").strip()
-            if candidate_call_id and candidate_call_id in expected_tool_call_ids and candidate_call_id not in seen_tool_call_ids:
+            if (
+                candidate_call_id
+                and candidate_call_id in expected_tool_call_ids
+                and candidate_call_id not in seen_tool_call_ids
+            ):
                 seen_tool_call_ids.append(candidate_call_id)
             probe_index += 1
 
@@ -1624,14 +1655,16 @@ def _resolve_summary_restore_message_ids(
     summary_metadata: dict,
 ) -> list[int]:
     covered_message_ids = summary_metadata.get("covered_message_ids") if isinstance(summary_metadata, dict) else None
-    restored_ids = [
-        int(message_id)
-        for message_id in (covered_message_ids or [])
-        if int(message_id or 0) > 0
-    ]
-    covers_from_position = int(summary_metadata.get("covers_from_position") or 0) if isinstance(summary_metadata, dict) else 0
-    covers_to_position = int(summary_metadata.get("covers_to_position") or 0) if isinstance(summary_metadata, dict) else 0
-    summary_deleted_at = str(summary_metadata.get("generated_at") or "").strip() if isinstance(summary_metadata, dict) else ""
+    restored_ids = [int(message_id) for message_id in (covered_message_ids or []) if int(message_id or 0) > 0]
+    covers_from_position = (
+        int(summary_metadata.get("covers_from_position") or 0) if isinstance(summary_metadata, dict) else 0
+    )
+    covers_to_position = (
+        int(summary_metadata.get("covers_to_position") or 0) if isinstance(summary_metadata, dict) else 0
+    )
+    summary_deleted_at = (
+        str(summary_metadata.get("generated_at") or "").strip() if isinstance(summary_metadata, dict) else ""
+    )
 
     if covers_from_position > 0 and covers_to_position >= covers_from_position:
         for message in _collect_summary_block_messages(canonical_messages, covers_from_position, covers_to_position):
@@ -1672,7 +1705,9 @@ def _expand_summary_source_messages(
     if not ordered_visible_source:
         return []
 
-    selected_ids = {int(message.get("id") or 0) for message in ordered_visible_source if int(message.get("id") or 0) > 0}
+    selected_ids = {
+        int(message.get("id") or 0) for message in ordered_visible_source if int(message.get("id") or 0) > 0
+    }
     start_position = int(ordered_visible_source[0].get("position") or 0)
     last_source_key = _sort_message_key(ordered_visible_source[-1])
     next_visible_position = None
@@ -1682,9 +1717,13 @@ def _expand_summary_source_messages(
             next_visible_position = int(candidate.get("position") or 0)
             break
 
-    end_position = next_visible_position - 1 if next_visible_position is not None else max(
-        (int(message.get("position") or 0) for message in ordered_canonical),
-        default=0,
+    end_position = (
+        next_visible_position - 1
+        if next_visible_position is not None
+        else max(
+            (int(message.get("position") or 0) for message in ordered_canonical),
+            default=0,
+        )
     )
     expanded_messages = _collect_summary_block_messages(ordered_canonical, start_position, end_position)
 
@@ -1763,9 +1802,7 @@ def _build_summary_prompt_payload(
             continue
 
         if prompt_source_messages and role == "assistant" and prompt_source_messages[-1]["role"] == "assistant":
-            prompt_source_messages[-1]["content"] = (
-                f"{prompt_source_messages[-1]['content']}\n\n{content}"
-            ).strip()
+            prompt_source_messages[-1]["content"] = (f"{prompt_source_messages[-1]['content']}\n\n{content}").strip()
             merged_assistant_message_count += 1
             continue
 
@@ -1793,8 +1830,7 @@ def _build_summary_prompt_payload(
     transcript_body = "\n\n".join(transcript_blocks)
     if tool_outcomes:
         transcript_body = (
-            f"{transcript_body}\n\nIMPORTANT TOOL OUTCOMES:\n"
-            + "\n".join(f"- {item}" for item in tool_outcomes)
+            f"{transcript_body}\n\nIMPORTANT TOOL OUTCOMES:\n" + "\n".join(f"- {item}" for item in tool_outcomes)
         ).strip()
 
     transcript_message = {
@@ -1816,7 +1852,9 @@ def _build_summary_prompt_payload(
     }
 
 
-def build_summary_prompt_messages(source_messages: list[dict], user_preferences: str, continuation_focus: str = "") -> list[dict]:
+def build_summary_prompt_messages(
+    source_messages: list[dict], user_preferences: str, continuation_focus: str = ""
+) -> list[dict]:
     prompt_messages, _ = _build_summary_prompt_payload(
         source_messages,
         user_preferences,
@@ -1853,18 +1891,26 @@ def _classify_summary_generation_failure(summary_text: str, summary_errors: list
     first_error = normalized_errors[0] if normalized_errors else ""
     first_error_lower = first_error.lower()
 
-    if "maximum context length" in first_error_lower or ("requested" in first_error_lower and "tokens" in first_error_lower):
+    if "maximum context length" in first_error_lower or (
+        "requested" in first_error_lower and "tokens" in first_error_lower
+    ):
         return "context_too_large", first_error
     if "invalid consecutive assistant" in first_error_lower:
         return "invalid_message_sequence", first_error
     if "tool limit reached" in first_error_lower or summary_text.startswith(FINAL_ANSWER_ERROR_TEXT):
-        return "tool_call_unexpected", first_error or "The model attempted a tool-oriented answer during summary generation."
+        return (
+            "tool_call_unexpected",
+            first_error or "The model attempted a tool-oriented answer during summary generation.",
+        )
     if summary_text.startswith(FINAL_ANSWER_MISSING_TEXT) or not summary_text:
         return "empty_output", first_error or "The provider returned no assistant summary content."
     if normalized_errors:
         return "provider_error", first_error
     if len(summary_text) < SUMMARY_MIN_TEXT_LENGTH:
-        return "too_short", f"Returned text was {len(summary_text)} characters; minimum required is {SUMMARY_MIN_TEXT_LENGTH}."
+        return (
+            "too_short",
+            f"Returned text was {len(summary_text)} characters; minimum required is {SUMMARY_MIN_TEXT_LENGTH}.",
+        )
     return "rejected_output", "Summary output did not pass validation."
 
 
@@ -1979,7 +2025,9 @@ def _trim_text_sections_to_token_budget(text: str | None, max_tokens: int) -> st
         if estimate_text_tokens(value) <= token_budget:
             return value
 
-        clipped_chars = max(1, min(len(value), max(200, int(len(value) * (token_budget / max(estimate_text_tokens(value), 1))))))
+        clipped_chars = max(
+            1, min(len(value), max(200, int(len(value) * (token_budget / max(estimate_text_tokens(value), 1)))))
+        )
         clipped = value[:clipped_chars].rstrip()
         if not clipped:
             return None
@@ -2074,9 +2122,7 @@ def _summarize_archived_rag_matches(retrieved_context: dict | None) -> dict[str,
 
     matches = retrieved_context.get("matches") if isinstance(retrieved_context.get("matches"), list) else []
     archived_matches = [
-        match
-        for match in matches
-        if isinstance(match, dict) and match.get("archived_conversation") is True
+        match for match in matches if isinstance(match, dict) and match.get("archived_conversation") is True
     ]
     if not archived_matches:
         return empty
@@ -2123,9 +2169,7 @@ def _select_tail_messages_by_token_budget(messages: list[dict], max_tokens: int)
 
 def _get_last_user_message_key(messages: list[dict]) -> tuple[int, int] | None:
     user_messages = [
-        message
-        for message in messages
-        if isinstance(message, dict) and _get_message_role(message) == "user"
+        message for message in messages if isinstance(message, dict) and _get_message_role(message) == "user"
     ]
     if not user_messages:
         return None
@@ -2159,11 +2203,7 @@ def _get_block_terminal_key(block: dict) -> tuple[int, int]:
 def _is_tool_protocol_block(block: dict) -> bool:
     block_messages = block.get("messages") if isinstance(block.get("messages"), list) else []
     return any(
-        isinstance(message, dict)
-        and (
-            _get_message_role(message) == "tool"
-            or _is_tool_call_assistant_message(message)
-        )
+        isinstance(message, dict) and (_get_message_role(message) == "tool" or _is_tool_call_assistant_message(message))
         for message in block_messages
     )
 
@@ -2182,7 +2222,7 @@ def _historical_tool_block_is_resolved(
     if not _is_tool_protocol_block(current_block):
         return False
 
-    for next_block in blocks[block_index + 1:]:
+    for next_block in blocks[block_index + 1 :]:
         next_messages = next_block.get("messages") if isinstance(next_block.get("messages"), list) else []
         if not next_messages:
             continue
@@ -2266,11 +2306,7 @@ def _block_contains_code_signal(block_messages: list[dict]) -> bool:
 
 def _block_contains_tool_signal(block_messages: list[dict]) -> bool:
     return any(
-        isinstance(message, dict)
-        and (
-            _get_message_role(message) == "tool"
-            or _is_tool_call_assistant_message(message)
-        )
+        isinstance(message, dict) and (_get_message_role(message) == "tool" or _is_tool_call_assistant_message(message))
         for message in block_messages
     )
 
@@ -2310,7 +2346,9 @@ def _score_prompt_block_entropy(
     later_text: str,
     settings: dict | None,
 ) -> float:
-    joined_text = "\n".join(str(message.get("content") or "") for message in block_messages if isinstance(message, dict))
+    joined_text = "\n".join(
+        str(message.get("content") or "") for message in block_messages if isinstance(message, dict)
+    )
     block_tokens = max(1, estimate_text_tokens(joined_text))
     terms = _extract_entropy_terms(joined_text)
     lexical_score = 0.0
@@ -2392,7 +2430,9 @@ def _select_recent_prompt_window_entropy(
                 "messages": prompt_block_messages,
                 "tokens": block_tokens,
                 "user_count": sum(1 for message in prompt_block_messages if _get_message_role(message) == "user"),
-                "text": "\n".join(str(message.get("content") or "") for message in prompt_block_messages if isinstance(message, dict)),
+                "text": "\n".join(
+                    str(message.get("content") or "") for message in prompt_block_messages if isinstance(message, dict)
+                ),
             }
         )
 
@@ -2574,11 +2614,7 @@ def _find_previous_continuity_anchor_message(source_messages: list[dict], target
         key=_sort_message_key,
     )
     target_index = next(
-        (
-            index
-            for index, message in enumerate(ordered_messages)
-            if _message_identity(message) == target_identity
-        ),
+        (index for index, message in enumerate(ordered_messages) if _message_identity(message) == target_identity),
         -1,
     )
     if target_index <= 0:
@@ -2606,13 +2642,11 @@ def _trim_prompt_history_to_token_budget(
     trimmed = [message for message in messages if isinstance(message, dict)]
     dropped: list[dict] = []
 
-    while trimmed and _estimate_prompt_tokens(build_api_messages(trimmed, canvas_documents=canvas_documents)) > max_tokens:
+    while (
+        trimmed and _estimate_prompt_tokens(build_api_messages(trimmed, canvas_documents=canvas_documents)) > max_tokens
+    ):
         drop_index = next(
-            (
-                index
-                for index, message in enumerate(trimmed)
-                if _message_identity(message) not in required_identities
-            ),
+            (index for index, message in enumerate(trimmed) if _message_identity(message) not in required_identities),
             None,
         )
         if drop_index is None:
@@ -2632,11 +2666,7 @@ def _apply_prompt_history_continuity_guard(
 ) -> tuple[list[dict], dict | None]:
     ordered_history = [message for message in prompt_history if isinstance(message, dict)]
     latest_user_message = next(
-        (
-            message
-            for message in reversed(ordered_history)
-            if _get_message_role(message) == "user"
-        ),
+        (message for message in reversed(ordered_history) if _get_message_role(message) == "user"),
         None,
     )
     if latest_user_message is None or not _is_short_follow_up_user_message(latest_user_message):
@@ -2646,10 +2676,7 @@ def _apply_prompt_history_continuity_guard(
     if anchor_message is None:
         return ordered_history, None
 
-    selected_identities = {
-        _message_identity(message)
-        for message in ordered_history
-    }
+    selected_identities = {_message_identity(message) for message in ordered_history}
     if _message_identity(anchor_message) in selected_identities:
         return ordered_history, {
             "status": "already_selected",
@@ -2684,10 +2711,7 @@ def _apply_prompt_history_continuity_guard(
             },
             canvas_documents=canvas_documents,
         )
-        if _message_identity(anchor_message) not in {
-            _message_identity(message)
-            for message in final_history
-        }:
+        if _message_identity(anchor_message) not in {_message_identity(message) for message in final_history}:
             return ordered_history, {
                 "status": "budget_blocked",
                 "user": _summarize_prompt_selection_message(latest_user_message),
@@ -2888,7 +2912,11 @@ def _build_budgeted_prompt_messages(
         for message in recent_messages
         if isinstance(message, dict) and _message_identity(message) not in prefix_message_ids
     ]
-    prefix_tokens = _estimate_prompt_tokens(build_api_messages(selected_prefix, canvas_documents=canvas_documents)) if selected_prefix else 0
+    prefix_tokens = (
+        _estimate_prompt_tokens(build_api_messages(selected_prefix, canvas_documents=canvas_documents))
+        if selected_prefix
+        else 0
+    )
 
     selected_recent = _select_recent_prompt_window(
         remaining_recent_candidates,
@@ -3073,7 +3101,10 @@ def _build_budgeted_prompt_messages(
         "continuity_guard_anchor": (continuity_guard_details or {}).get("anchor"),
         "continuity_guard_dropped": (continuity_guard_details or {}).get("dropped") or [],
     }
-    if isinstance(continuity_guard_details, dict) and continuity_guard_details.get("status") in {"applied", "budget_blocked"}:
+    if isinstance(continuity_guard_details, dict) and continuity_guard_details.get("status") in {
+        "applied",
+        "budget_blocked",
+    }:
         LOGGER.info(
             "prompt_continuity_guard=%s",
             json.dumps(
@@ -3283,7 +3314,10 @@ def _validate_clarification_response_against_messages(
     questions = pending_clarification.get("questions") if isinstance(pending_clarification, dict) else []
     filtered_answers = _filter_clarification_answers_for_questions(answers, questions)
     if not filtered_answers:
-        return None, "This clarification form no longer matches the latest clarification request. Please answer the latest clarification request."
+        return (
+            None,
+            "This clarification form no longer matches the latest clarification request. Please answer the latest clarification request.",
+        )
 
     normalized_assistant_message_id = response.get("assistant_message_id")
     if normalized_assistant_message_id is None:
@@ -3323,7 +3357,9 @@ def _collect_answered_clarification_rounds(messages: list[dict]) -> list[dict]:
         pending_clarification = None
         assistant_message = assistant_messages_by_id.get(assistant_message_id)
         if isinstance(assistant_message, dict):
-            assistant_metadata = assistant_message.get("metadata") if isinstance(assistant_message.get("metadata"), dict) else {}
+            assistant_metadata = (
+                assistant_message.get("metadata") if isinstance(assistant_message.get("metadata"), dict) else {}
+            )
             pending_clarification = extract_pending_clarification(assistant_metadata)
         questions = pending_clarification.get("questions") if isinstance(pending_clarification, dict) else []
         filtered_answers = _filter_clarification_answers_for_questions(answers, questions)
@@ -3524,9 +3560,11 @@ def _parse_manual_summary_request_options(data: dict, settings: dict) -> tuple[d
     skip_first_override = data.get("skip_first")
     skip_last_override = data.get("skip_last")
     summary_focus = str(data.get("summary_focus") or "").strip()
-    summary_detail_level = str(
-        data.get("summary_detail_level") or settings.get("chat_summary_detail_level") or "comprehensive"
-    ).strip().lower()
+    summary_detail_level = (
+        str(data.get("summary_detail_level") or settings.get("chat_summary_detail_level") or "comprehensive")
+        .strip()
+        .lower()
+    )
     if summary_detail_level not in {"very_concise", "concise", "balanced", "detailed", "comprehensive"}:
         summary_detail_level = str(settings.get("chat_summary_detail_level") or "comprehensive").strip().lower()
         if summary_detail_level not in {"very_concise", "concise", "balanced", "detailed", "comprehensive"}:
@@ -3683,7 +3721,9 @@ def maybe_create_conversation_summary(
         retry_min_source_tokens = get_summary_retry_min_source_tokens(settings)
 
         all_candidates = get_unsummarized_visible_messages(
-            canonical_messages, skip_first=skip_first, skip_last=skip_last,
+            canonical_messages,
+            skip_first=skip_first,
+            skip_last=skip_last,
         )
         eligible_message_count = len(all_candidates)
         manual_source_messages: list[dict] | None = None
@@ -3700,9 +3740,7 @@ def maybe_create_conversation_summary(
                 requested_message_count = None
         if normalized_include_message_ids:
             manual_candidate_pool = [
-                message
-                for message in all_candidates
-                if int(message.get("id") or 0) in normalized_include_message_ids
+                message for message in all_candidates if int(message.get("id") or 0) in normalized_include_message_ids
             ]
             if exclude_message_ids:
                 manual_candidate_pool = [
@@ -3717,9 +3755,7 @@ def maybe_create_conversation_summary(
             manual_candidate_pool = all_candidates
             if exclude_message_ids:
                 manual_candidate_pool = [
-                    message
-                    for message in all_candidates
-                    if int(message.get("id") or 0) not in exclude_message_ids
+                    message for message in all_candidates if int(message.get("id") or 0) not in exclude_message_ids
                 ]
             manual_excluded_message_count = max(0, len(all_candidates) - len(manual_candidate_pool))
             manual_source_messages = manual_candidate_pool[:requested_message_count]
@@ -3727,9 +3763,7 @@ def maybe_create_conversation_summary(
             manual_candidate_pool = all_candidates
             if exclude_message_ids:
                 manual_candidate_pool = [
-                    message
-                    for message in all_candidates
-                    if int(message.get("id") or 0) not in exclude_message_ids
+                    message for message in all_candidates if int(message.get("id") or 0) not in exclude_message_ids
                 ]
             manual_excluded_message_count = max(0, len(all_candidates) - len(manual_candidate_pool))
             manual_source_messages = list(manual_candidate_pool)
@@ -3772,8 +3806,7 @@ def maybe_create_conversation_summary(
                 source_messages = candidate_source_messages
                 if exclude_message_ids:
                     source_messages = [
-                        m for m in candidate_source_messages
-                        if int(m.get("id") or 0) not in exclude_message_ids
+                        m for m in candidate_source_messages if int(m.get("id") or 0) not in exclude_message_ids
                     ]
                 excluded_message_count = raw_source_message_count - len(source_messages)
             candidate_message_count = len(source_messages)
@@ -3787,7 +3820,9 @@ def maybe_create_conversation_summary(
                     excluded_message_count=excluded_message_count,
                 )
 
-            summary_source_messages = _expand_summary_source_messages(canonical_messages, source_messages, all_candidates)
+            summary_source_messages = _expand_summary_source_messages(
+                canonical_messages, source_messages, all_candidates
+            )
             prompt_messages, prompt_stats = _build_summary_prompt_payload(
                 summary_source_messages,
                 summary_user_preferences,
@@ -3835,7 +3870,9 @@ def maybe_create_conversation_summary(
             summary_errors = result.get("errors") or []
             structured_summary = _parse_structured_summary_payload(summary_text)
             summary_validation_text = build_summary_content(summary_text, structured_summary)
-            is_error_text = summary_text.startswith(FINAL_ANSWER_ERROR_TEXT) or summary_text.startswith(FINAL_ANSWER_MISSING_TEXT)
+            is_error_text = summary_text.startswith(FINAL_ANSWER_ERROR_TEXT) or summary_text.startswith(
+                FINAL_ANSWER_MISSING_TEXT
+            )
 
             if (
                 structured_summary is None
@@ -3861,7 +3898,9 @@ def maybe_create_conversation_summary(
                         )
                 structured_summary = _parse_structured_summary_payload(summary_text)
                 summary_validation_text = build_summary_content(summary_text, structured_summary)
-                is_error_text = summary_text.startswith(FINAL_ANSWER_ERROR_TEXT) or summary_text.startswith(FINAL_ANSWER_MISSING_TEXT)
+                is_error_text = summary_text.startswith(FINAL_ANSWER_ERROR_TEXT) or summary_text.startswith(
+                    FINAL_ANSWER_MISSING_TEXT
+                )
 
             if len(summary_validation_text) >= SUMMARY_MIN_TEXT_LENGTH and not summary_errors and not is_error_text:
                 break
@@ -3907,7 +3946,9 @@ def maybe_create_conversation_summary(
                 **prompt_stats,
             )
 
-        covered_visible_message_ids = [int(message["id"]) for message in source_messages if int(message.get("id") or 0) > 0]
+        covered_visible_message_ids = [
+            int(message["id"]) for message in source_messages if int(message.get("id") or 0) > 0
+        ]
         covered_tool_call_message_ids = [
             int(message["id"])
             for message in summary_source_messages
@@ -4004,7 +4045,9 @@ def maybe_create_conversation_summary(
                     source_message_id=summary_message_id,
                 )
             except Exception:
-                LOGGER.exception("Failed to persist extracted user profile facts for conversation_id=%s", conversation_id)
+                LOGGER.exception(
+                    "Failed to persist extracted user profile facts for conversation_id=%s", conversation_id
+                )
 
         return {
             "applied": True,
@@ -4056,14 +4099,18 @@ def _run_chat_post_response_tasks(
             current_turn_ids,
         )
         if isinstance(summary_outcome, dict) and summary_outcome.get("locked"):
-            LOGGER.debug("Background summary skipped because another pass is running for conversation_id=%s", conversation_id)
+            LOGGER.debug(
+                "Background summary skipped because another pass is running for conversation_id=%s", conversation_id
+            )
     except Exception:
         LOGGER.exception("Background summary task failed for conversation_id=%s", conversation_id)
 
     if not (isinstance(summary_outcome, dict) and summary_outcome.get("applied") is True):
         _maybe_run_conversation_pruning(conversation_id, settings)
     else:
-        LOGGER.debug("Background pruning skipped because summarization already applied for conversation_id=%s", conversation_id)
+        LOGGER.debug(
+            "Background pruning skipped because summarization already applied for conversation_id=%s", conversation_id
+        )
 
     if RAG_ENABLED and conversation_id:
         try:
@@ -4103,8 +4150,12 @@ def parse_chat_request_payload():
     if request.mimetype and request.mimetype.startswith("multipart/form-data"):
         image_files = [file for file in request.files.getlist("image") if getattr(file, "filename", "")]
         document_files = [file for file in request.files.getlist("document") if getattr(file, "filename", "")]
-        raw_document_canvas_action = str(request.form.get("document_canvas_action", "prompt") or "prompt").strip().lower()
-        document_canvas_action = raw_document_canvas_action if raw_document_canvas_action in {"open", "skip", "prompt"} else "prompt"
+        raw_document_canvas_action = (
+            str(request.form.get("document_canvas_action", "prompt") or "prompt").strip().lower()
+        )
+        document_canvas_action = (
+            raw_document_canvas_action if raw_document_canvas_action in {"open", "skip", "prompt"} else "prompt"
+        )
         raw_document_modes = request.form.get("document_modes", "[]")
         try:
             document_modes = json.loads(raw_document_modes)
@@ -4130,7 +4181,9 @@ def parse_chat_request_payload():
 
     data = request.get_json(silent=True) or {}
     raw_document_canvas_action = str(data.get("document_canvas_action", "prompt") or "prompt").strip().lower()
-    document_canvas_action = raw_document_canvas_action if raw_document_canvas_action in {"open", "skip", "prompt"} else "prompt"
+    document_canvas_action = (
+        raw_document_canvas_action if raw_document_canvas_action in {"open", "skip", "prompt"} else "prompt"
+    )
 
     return {
         "messages": parse_messages_payload(data.get("messages", [])),
@@ -4417,7 +4470,9 @@ def register_chat_routes(app) -> None:
         payload_double_check_query = str(payload.get("double_check_query") or "").strip()
         uploaded_images = payload["images"]
         uploaded_documents = payload["documents"]
-        uploaded_document_modes = payload.get("document_modes") if isinstance(payload.get("document_modes"), list) else []
+        uploaded_document_modes = (
+            payload.get("document_modes") if isinstance(payload.get("document_modes"), list) else []
+        )
         document_canvas_action = str(payload.get("document_canvas_action") or "prompt").strip().lower()
         if document_canvas_action not in {"open", "skip", "prompt"}:
             document_canvas_action = "prompt"
@@ -4435,7 +4490,9 @@ def register_chat_routes(app) -> None:
 
         if latest_user_message is not None:
             raw_clarification_response = extract_clarification_response(latest_user_message.get("metadata"))
-            raw_clarification_answers = raw_clarification_response.get("answers") if isinstance(raw_clarification_response, dict) else {}
+            raw_clarification_answers = (
+                raw_clarification_response.get("answers") if isinstance(raw_clarification_response, dict) else {}
+            )
             if isinstance(raw_clarification_answers, dict) and raw_clarification_answers:
                 if conv_id is None:
                     return jsonify(
@@ -4446,14 +4503,20 @@ def register_chat_routes(app) -> None:
                     ), 409
 
                 conversation_messages = get_conversation_messages(conv_id)
-                validated_clarification_response, clarification_error = _validate_clarification_response_against_messages(
-                    raw_clarification_response,
-                    conversation_messages,
+                validated_clarification_response, clarification_error = (
+                    _validate_clarification_response_against_messages(
+                        raw_clarification_response,
+                        conversation_messages,
+                    )
                 )
                 if clarification_error:
                     return jsonify({"error": clarification_error, "code": "stale_clarification_response"}), 409
                 if isinstance(validated_clarification_response, dict):
-                    user_metadata = latest_user_message.get("metadata") if isinstance(latest_user_message.get("metadata"), dict) else {}
+                    user_metadata = (
+                        latest_user_message.get("metadata")
+                        if isinstance(latest_user_message.get("metadata"), dict)
+                        else {}
+                    )
                     latest_user_message["metadata"] = {
                         **user_metadata,
                         "clarification_response": validated_clarification_response,
@@ -4465,9 +4528,13 @@ def register_chat_routes(app) -> None:
             metadata_double_check = extract_double_check_request(latest_user_message.get("metadata"))
             if metadata_double_check:
                 double_check = True
-                double_check_query = str(metadata_double_check.get("double_check_query") or double_check_query or "").strip()
+                double_check_query = str(
+                    metadata_double_check.get("double_check_query") or double_check_query or ""
+                ).strip()
             elif payload_double_check:
-                user_metadata = latest_user_message.get("metadata") if isinstance(latest_user_message.get("metadata"), dict) else {}
+                user_metadata = (
+                    latest_user_message.get("metadata") if isinstance(latest_user_message.get("metadata"), dict) else {}
+                )
                 latest_user_message["metadata"] = {
                     **user_metadata,
                     **_build_double_check_metadata(True, payload_double_check_query),
@@ -4532,13 +4599,21 @@ def register_chat_routes(app) -> None:
                 processing_stage = "document"
                 for document_index, uploaded_document in enumerate(uploaded_documents):
                     doc_name, doc_mime_type, doc_bytes = read_uploaded_document(uploaded_document)
-                    mode_entry = uploaded_document_modes[document_index] if document_index < len(uploaded_document_modes) else {}
+                    mode_entry = (
+                        uploaded_document_modes[document_index] if document_index < len(uploaded_document_modes) else {}
+                    )
                     requested_submission_mode = str((mode_entry or {}).get("submission_mode") or "text").strip().lower()
-                    submission_mode = "visual" if requested_submission_mode == "visual" and doc_mime_type == "application/pdf" else "text"
+                    submission_mode = (
+                        "visual"
+                        if requested_submission_mode == "visual" and doc_mime_type == "application/pdf"
+                        else "text"
+                    )
 
                     if submission_mode == "visual":
                         if not can_model_process_images(model, settings):
-                            raise ValueError("The selected model does not support visual PDF analysis. Choose a vision-capable model or send the PDF as extracted text.")
+                            raise ValueError(
+                                "The selected model does not support visual PDF analysis. Choose a vision-capable model or send the PDF as extracted text."
+                            )
 
                         rendered_pages = render_pdf_pages_for_vision(doc_bytes, max_pages=PDF_VISION_PAGE_LIMIT)
                         if not rendered_pages:
@@ -4763,7 +4838,11 @@ def register_chat_routes(app) -> None:
 
         max_steps = max(1, min(50, int(settings.get("max_steps", 5))))
         temperature = get_model_temperature(settings)
-        active_tool_names = get_active_tool_names(settings)
+        if conv_id is not None:
+            override_names = get_conversation_active_tool_names(conv_id, settings)
+            active_tool_names = override_names if override_names is not None else get_active_tool_names(settings)
+        else:
+            active_tool_names = get_active_tool_names(settings)
         is_first_turn = False
         if conv_id is not None:
             try:
@@ -4781,13 +4860,15 @@ def register_chat_routes(app) -> None:
         rag_query_text = ""
         if latest_user_message is not None:
             clarification_response = extract_clarification_response(latest_user_message.get("metadata"))
-            clarification_answers = clarification_response.get("answers") if isinstance(clarification_response, dict) else {}
+            clarification_answers = (
+                clarification_response.get("answers") if isinstance(clarification_response, dict) else {}
+            )
             if isinstance(clarification_answers, dict) and clarification_answers:
-                freeform_clarification_content = extract_freeform_clarification_user_content(latest_user_message["content"])
+                freeform_clarification_content = extract_freeform_clarification_user_content(
+                    latest_user_message["content"]
+                )
                 if not freeform_clarification_content:
-                    active_tool_names = [
-                        name for name in active_tool_names if name != "ask_clarifying_question"
-                    ]
+                    active_tool_names = [name for name in active_tool_names if name != "ask_clarifying_question"]
             rag_query_text = _build_clarification_rag_query(
                 latest_user_message["content"],
                 clarification_response,
@@ -4827,7 +4908,9 @@ def register_chat_routes(app) -> None:
                     if not existing_message:
                         summary_message = find_summary_covering_message_id(conv_id, edited_message_id)
                         if summary_message is not None:
-                            return jsonify({"error": "This message can no longer be edited because it was summarized."}), 400
+                            return jsonify(
+                                {"error": "This message can no longer be edited because it was summarized."}
+                            ), 400
                         return jsonify({"error": "Edited message not found."}), 404
                     if existing_message["role"] != "user":
                         return jsonify({"error": "Only user messages can be edited."}), 400
@@ -4924,7 +5007,11 @@ def register_chat_routes(app) -> None:
                     file_id = str(attachment.get("file_id") or "").strip()
                     if file_id:
                         update_file_asset(file_id, message_id=persisted_user_message_id)
-                    visual_page_image_ids = attachment.get("visual_page_image_ids") if isinstance(attachment.get("visual_page_image_ids"), list) else []
+                    visual_page_image_ids = (
+                        attachment.get("visual_page_image_ids")
+                        if isinstance(attachment.get("visual_page_image_ids"), list)
+                        else []
+                    )
                     for image_id in visual_page_image_ids:
                         normalized_image_id = str(image_id or "").strip()
                         if normalized_image_id:
@@ -4946,8 +5033,7 @@ def register_chat_routes(app) -> None:
             )
             preflight_summary_required = (
                 chat_summary_mode != "never"
-                and
-                preflight_visible_token_count >= get_prompt_preflight_summary_token_count(settings)
+                and preflight_visible_token_count >= get_prompt_preflight_summary_token_count(settings)
             )
             preflight_summary_outcome = _maybe_run_preflight_summary(
                 conv_id,
@@ -5005,7 +5091,9 @@ def register_chat_routes(app) -> None:
                 pre_created_canvas_state = create_canvas_runtime_state(
                     initial_canvas_documents,
                     active_document_id=initial_canvas_active_document_id,
-                    viewports=latest_canvas_state.get("viewports") if isinstance(latest_canvas_state.get("viewports"), dict) else {},
+                    viewports=latest_canvas_state.get("viewports")
+                    if isinstance(latest_canvas_state.get("viewports"), dict)
+                    else {},
                 )
                 for upload in processed_document_uploads:
                     canvas_doc = create_canvas_document(
@@ -5048,37 +5136,41 @@ def register_chat_routes(app) -> None:
         conversation_memory = get_conversation_memory(conv_id) if conv_id and CONVERSATION_MEMORY_ENABLED else []
         clarification_rounds_for_prompt = _collect_answered_clarification_rounds(canonical_messages)
         previous_canvas_content_hash = _extract_previous_canvas_content_hash(canonical_messages)
-        api_messages, request_api_messages, prompt_budget_stats, current_context_injection = _build_budgeted_prompt_messages(
-            canonical_messages,
-            settings,
-            conv_id,
-            active_tool_names,
-            clarification_response,
-            clarification_rounds_for_prompt or None,
-            is_first_turn=is_first_turn,
-            double_check=double_check,
-            double_check_query=double_check_query,
-            retrieved_context=retrieved_context,
-            tool_memory_context=tool_memory_context,
-            model_id=model,
-            persona_memory=persona_memory,
-            conversation_memory=conversation_memory,
-            canvas_documents=initial_canvas_documents,
-            canvas_active_document_id=initial_canvas_active_document_id,
-            canvas_viewports=initial_canvas_viewports,
-            canvas_prompt_max_lines=get_canvas_prompt_max_lines(settings),
-            canvas_prompt_max_chars=get_canvas_prompt_max_chars(settings),
-            canvas_prompt_max_tokens=get_canvas_prompt_max_tokens(settings),
-            canvas_prompt_code_line_max_chars=get_canvas_prompt_code_line_max_chars(settings),
-            canvas_prompt_text_line_max_chars=get_canvas_prompt_text_line_max_chars(settings),
-            workspace_root=workspace_root,
-            previous_canvas_content_hash=previous_canvas_content_hash,
+        api_messages, request_api_messages, prompt_budget_stats, current_context_injection = (
+            _build_budgeted_prompt_messages(
+                canonical_messages,
+                settings,
+                conv_id,
+                active_tool_names,
+                clarification_response,
+                clarification_rounds_for_prompt or None,
+                is_first_turn=is_first_turn,
+                double_check=double_check,
+                double_check_query=double_check_query,
+                retrieved_context=retrieved_context,
+                tool_memory_context=tool_memory_context,
+                model_id=model,
+                persona_memory=persona_memory,
+                conversation_memory=conversation_memory,
+                canvas_documents=initial_canvas_documents,
+                canvas_active_document_id=initial_canvas_active_document_id,
+                canvas_viewports=initial_canvas_viewports,
+                canvas_prompt_max_lines=get_canvas_prompt_max_lines(settings),
+                canvas_prompt_max_chars=get_canvas_prompt_max_chars(settings),
+                canvas_prompt_max_tokens=get_canvas_prompt_max_tokens(settings),
+                canvas_prompt_code_line_max_chars=get_canvas_prompt_code_line_max_chars(settings),
+                canvas_prompt_text_line_max_chars=get_canvas_prompt_text_line_max_chars(settings),
+                workspace_root=workspace_root,
+                previous_canvas_content_hash=previous_canvas_content_hash,
+            )
         )
         persisted_context_injection = prepare_context_injection_for_history(current_context_injection or "")
         persisted_meta_update: dict = {}
         if persisted_context_injection:
             persisted_meta_update["context_injection"] = persisted_context_injection
-        current_canvas_hash = _compute_active_canvas_content_hash(initial_canvas_documents, initial_canvas_active_document_id)
+        current_canvas_hash = _compute_active_canvas_content_hash(
+            initial_canvas_documents, initial_canvas_active_document_id
+        )
         if current_canvas_hash:
             persisted_meta_update["canvas_content_hash"] = current_canvas_hash
         if persisted_user_message_id is not None and persisted_meta_update:
@@ -5099,7 +5191,9 @@ def register_chat_routes(app) -> None:
             stored_sub_agent_traces = []
             canvas_documents = extract_canvas_documents({"canvas_documents": initial_canvas_documents})
             active_document_id = initial_canvas_active_document_id
-            canvas_viewports = latest_canvas_state.get("viewports") if isinstance(latest_canvas_state.get("viewports"), dict) else {}
+            canvas_viewports = (
+                latest_canvas_state.get("viewports") if isinstance(latest_canvas_state.get("viewports"), dict) else {}
+            )
             canvas_cleared = False
             pending_clarification = None
             persisted_tool_history = []
@@ -5187,8 +5281,12 @@ def register_chat_routes(app) -> None:
                             sub_agent_depth=entry.get("sub_agent_depth") or 0,
                             provider=str(entry.get("provider") or "").strip(),
                             api_model=str(entry.get("api_model") or "").strip(),
-                            request_payload=entry.get("request_payload") if entry.get("request_payload") is not None else {},
-                            response_summary=(entry.get("response_summary") if entry.get("response_summary") is not None else {}),
+                            request_payload=entry.get("request_payload")
+                            if entry.get("request_payload") is not None
+                            else {},
+                            response_summary=(
+                                entry.get("response_summary") if entry.get("response_summary") is not None else {}
+                            ),
                         )
                 model_invocations_persisted = True
 
@@ -5199,7 +5297,10 @@ def register_chat_routes(app) -> None:
                     return None
 
                 next_entry = normalized_entries[0]
-                if stored_sub_agent_traces and str(stored_sub_agent_traces[-1].get("status") or "").strip() == "running":
+                if (
+                    stored_sub_agent_traces
+                    and str(stored_sub_agent_traces[-1].get("status") or "").strip() == "running"
+                ):
                     stored_sub_agent_traces = [*stored_sub_agent_traces[:-1], next_entry]
                 else:
                     stored_sub_agent_traces = [*stored_sub_agent_traces, next_entry]
@@ -5243,11 +5344,16 @@ def register_chat_routes(app) -> None:
                     _cleanup_workspace_snapshot(edit_replay_snapshot.get("workspace_snapshot"))
 
             def current_cancel_reason() -> str:
-                return str(chat_run_state.get("cancel_reason") or USER_CANCELLED_ERROR_TEXT).strip() or USER_CANCELLED_ERROR_TEXT
+                return (
+                    str(chat_run_state.get("cancel_reason") or USER_CANCELLED_ERROR_TEXT).strip()
+                    or USER_CANCELLED_ERROR_TEXT
+                )
 
             def finalize_interrupted_progress(interruption_message: str) -> None:
                 nonlocal stored_sub_agent_traces, tool_trace_entries
-                stored_sub_agent_traces = _finalize_running_sub_agent_traces(stored_sub_agent_traces, interruption_message)
+                stored_sub_agent_traces = _finalize_running_sub_agent_traces(
+                    stored_sub_agent_traces, interruption_message
+                )
                 tool_trace_entries = _finalize_running_tool_trace_entries(tool_trace_entries, interruption_message)
 
             for vision_event in vision_events:
@@ -5257,62 +5363,78 @@ def register_chat_routes(app) -> None:
                 yield json.dumps(video_event, ensure_ascii=False) + "\n"
 
             if preflight_summary_required:
-                yield json.dumps(
-                    {
-                        "type": "status",
-                        "status": "compacting",
-                        "message": "Compacting conversation...",
-                    },
-                    ensure_ascii=False,
-                ) + "\n"
+                yield (
+                    json.dumps(
+                        {
+                            "type": "status",
+                            "status": "compacting",
+                            "message": "Compacting conversation...",
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
 
             if preflight_summary_outcome and preflight_summary_outcome.get("applied"):
-                yield json.dumps(
-                    {
-                        "type": "conversation_summary_applied",
-                        "summary_message_id": preflight_summary_outcome.get("summary_message_id"),
-                        "covered_message_count": preflight_summary_outcome.get("covered_message_count", 0),
-                        "covered_tool_message_count": preflight_summary_outcome.get("covered_tool_message_count", 0),
-                        "mode": preflight_summary_outcome.get("mode") or get_chat_summary_mode(settings),
-                        "trigger_token_count": preflight_summary_outcome.get("trigger_token_count"),
-                        "visible_token_count": preflight_summary_outcome.get("visible_token_count"),
-                        "summary_model": preflight_summary_outcome.get("summary_model") or _resolve_summary_model(),
-                        "checked_at": preflight_summary_outcome.get("checked_at"),
-                        "candidate_message_count": preflight_summary_outcome.get("candidate_message_count"),
-                        "excluded_message_count": preflight_summary_outcome.get("excluded_message_count"),
-                        "prompt_message_count": preflight_summary_outcome.get("prompt_message_count"),
-                        "empty_message_count": preflight_summary_outcome.get("empty_message_count"),
-                        "merged_assistant_message_count": preflight_summary_outcome.get("merged_assistant_message_count"),
-                        "skipped_error_message_count": preflight_summary_outcome.get("skipped_error_message_count"),
-                        "returned_text_length": preflight_summary_outcome.get("returned_text_length"),
-                        "user_assistant_token_count": preflight_summary_outcome.get("user_assistant_token_count"),
-                        "tool_token_count": preflight_summary_outcome.get("tool_token_count"),
-                        "tool_message_count": preflight_summary_outcome.get("tool_message_count"),
-                        "preflight": True,
-                    },
-                    ensure_ascii=False,
-                ) + "\n"
-                yield json.dumps(
-                    {
-                        "type": "history_sync",
-                        "messages": canonical_messages,
-                    },
-                    ensure_ascii=False,
-                ) + "\n"
+                yield (
+                    json.dumps(
+                        {
+                            "type": "conversation_summary_applied",
+                            "summary_message_id": preflight_summary_outcome.get("summary_message_id"),
+                            "covered_message_count": preflight_summary_outcome.get("covered_message_count", 0),
+                            "covered_tool_message_count": preflight_summary_outcome.get(
+                                "covered_tool_message_count", 0
+                            ),
+                            "mode": preflight_summary_outcome.get("mode") or get_chat_summary_mode(settings),
+                            "trigger_token_count": preflight_summary_outcome.get("trigger_token_count"),
+                            "visible_token_count": preflight_summary_outcome.get("visible_token_count"),
+                            "summary_model": preflight_summary_outcome.get("summary_model") or _resolve_summary_model(),
+                            "checked_at": preflight_summary_outcome.get("checked_at"),
+                            "candidate_message_count": preflight_summary_outcome.get("candidate_message_count"),
+                            "excluded_message_count": preflight_summary_outcome.get("excluded_message_count"),
+                            "prompt_message_count": preflight_summary_outcome.get("prompt_message_count"),
+                            "empty_message_count": preflight_summary_outcome.get("empty_message_count"),
+                            "merged_assistant_message_count": preflight_summary_outcome.get(
+                                "merged_assistant_message_count"
+                            ),
+                            "skipped_error_message_count": preflight_summary_outcome.get("skipped_error_message_count"),
+                            "returned_text_length": preflight_summary_outcome.get("returned_text_length"),
+                            "user_assistant_token_count": preflight_summary_outcome.get("user_assistant_token_count"),
+                            "tool_token_count": preflight_summary_outcome.get("tool_token_count"),
+                            "tool_message_count": preflight_summary_outcome.get("tool_message_count"),
+                            "preflight": True,
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+                yield (
+                    json.dumps(
+                        {
+                            "type": "history_sync",
+                            "messages": canonical_messages,
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
 
             if document_events:
                 for document_event in document_events:
                     yield json.dumps(document_event, ensure_ascii=False) + "\n"
                 if document_canvas_action != "skip":
-                    yield json.dumps(
-                        {
-                            "type": "canvas_sync",
-                            "documents": initial_canvas_documents,
-                            "active_document_id": initial_canvas_active_document_id,
-                            "auto_open": document_canvas_action == "open",
-                        },
-                        ensure_ascii=False,
-                    ) + "\n"
+                    yield (
+                        json.dumps(
+                            {
+                                "type": "canvas_sync",
+                                "documents": initial_canvas_documents,
+                                "active_document_id": initial_canvas_active_document_id,
+                                "auto_open": document_canvas_action == "open",
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n"
+                    )
 
             try:
                 for event in agent_stream:
@@ -5328,7 +5450,9 @@ def register_chat_routes(app) -> None:
                         persist_assistant_snapshot()
                     elif event["type"] == "clarification_request":
                         full_response = str(event.get("text") or "").strip()
-                        pending_clarification = event.get("clarification") if isinstance(event.get("clarification"), dict) else None
+                        pending_clarification = (
+                            event.get("clarification") if isinstance(event.get("clarification"), dict) else None
+                        )
                         persist_assistant_snapshot()
                     elif event["type"] == "reasoning_delta":
                         full_reasoning += event["text"]
@@ -5349,87 +5473,116 @@ def register_chat_routes(app) -> None:
                                     history_messages,
                                     trailing_assistant_message_id=persisted_assistant_message_id,
                                 )
-                            yield json.dumps(
-                                {
-                                    "type": "assistant_tool_history",
-                                    "messages": history_messages,
-                                },
-                                ensure_ascii=False,
-                            ) + "\n"
+                            yield (
+                                json.dumps(
+                                    {
+                                        "type": "assistant_tool_history",
+                                        "messages": history_messages,
+                                    },
+                                    ensure_ascii=False,
+                                )
+                                + "\n"
+                            )
                         continue
                     elif event["type"] == "sub_agent_trace_update":
                         live_trace = event.get("entry") if isinstance(event.get("entry"), dict) else None
                         next_trace = upsert_streaming_sub_agent_trace(live_trace) if live_trace else None
                         if next_trace:
-                            yield json.dumps(
-                                {
-                                    "type": "assistant_sub_agent_trace_update",
-                                    "entry": next_trace,
-                                },
-                                ensure_ascii=False,
-                            ) + "\n"
+                            yield (
+                                json.dumps(
+                                    {
+                                        "type": "assistant_sub_agent_trace_update",
+                                        "entry": next_trace,
+                                    },
+                                    ensure_ascii=False,
+                                )
+                                + "\n"
+                            )
                         continue
                     elif event["type"] == "canvas_tool_starting":
-                        yield json.dumps(
-                            {
-                                "type": "canvas_loading",
-                                "tool": str(event.get("tool") or "").strip(),
-                                "preview_key": str(event.get("preview_key") or "").strip(),
-                                "snapshot": event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {},
-                            },
-                            ensure_ascii=False,
-                        ) + "\n"
+                        yield (
+                            json.dumps(
+                                {
+                                    "type": "canvas_loading",
+                                    "tool": str(event.get("tool") or "").strip(),
+                                    "preview_key": str(event.get("preview_key") or "").strip(),
+                                    "snapshot": event.get("snapshot")
+                                    if isinstance(event.get("snapshot"), dict)
+                                    else {},
+                                },
+                                ensure_ascii=False,
+                            )
+                            + "\n"
+                        )
                         continue
                     elif event["type"] == "canvas_content_delta":
-                        yield json.dumps(
-                            {
-                                "type": "canvas_content_delta",
-                                "tool": str(event.get("tool") or "").strip(),
-                                "preview_key": str(event.get("preview_key") or "").strip(),
-                                "delta": str(event.get("delta") or ""),
-                                "snapshot": event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {},
-                                "replace_content": event.get("replace_content") is True,
-                            },
-                            ensure_ascii=False,
-                        ) + "\n"
+                        yield (
+                            json.dumps(
+                                {
+                                    "type": "canvas_content_delta",
+                                    "tool": str(event.get("tool") or "").strip(),
+                                    "preview_key": str(event.get("preview_key") or "").strip(),
+                                    "delta": str(event.get("delta") or ""),
+                                    "snapshot": event.get("snapshot")
+                                    if isinstance(event.get("snapshot"), dict)
+                                    else {},
+                                    "replace_content": event.get("replace_content") is True,
+                                },
+                                ensure_ascii=False,
+                            )
+                            + "\n"
+                        )
                         continue
                     elif event["type"] == "tool_capture":
                         stored_tool_results = extract_message_tool_results({"tool_results": event.get("tool_results")})
-                        stored_sub_agent_traces = extract_sub_agent_traces({"sub_agent_traces": event.get("sub_agent_traces")})
+                        stored_sub_agent_traces = extract_sub_agent_traces(
+                            {"sub_agent_traces": event.get("sub_agent_traces")}
+                        )
                         canvas_documents = extract_canvas_documents({"canvas_documents": event.get("canvas_documents")})
                         active_document_id = str(event.get("active_document_id") or "").strip() or None
-                        canvas_viewports = event.get("canvas_viewports") if isinstance(event.get("canvas_viewports"), dict) else {}
+                        canvas_viewports = (
+                            event.get("canvas_viewports") if isinstance(event.get("canvas_viewports"), dict) else {}
+                        )
                         canvas_modified = event.get("canvas_modified") is True
                         canvas_cleared = event.get("canvas_cleared") is True
                         persist_assistant_snapshot()
                         ui_tool_results = build_tool_results_ui_payload(stored_tool_results)
                         if ui_tool_results:
-                            yield json.dumps(
-                                {
-                                    "type": "assistant_tool_results",
-                                    "tool_results": ui_tool_results,
-                                },
-                                ensure_ascii=False,
-                            ) + "\n"
+                            yield (
+                                json.dumps(
+                                    {
+                                        "type": "assistant_tool_results",
+                                        "tool_results": ui_tool_results,
+                                    },
+                                    ensure_ascii=False,
+                                )
+                                + "\n"
+                            )
                         if stored_sub_agent_traces:
-                            yield json.dumps(
-                                {
-                                    "type": "assistant_sub_agent_traces",
-                                    "sub_agent_traces": stored_sub_agent_traces,
-                                },
-                                ensure_ascii=False,
-                            ) + "\n"
+                            yield (
+                                json.dumps(
+                                    {
+                                        "type": "assistant_sub_agent_traces",
+                                        "sub_agent_traces": stored_sub_agent_traces,
+                                    },
+                                    ensure_ascii=False,
+                                )
+                                + "\n"
+                            )
                         if canvas_documents or canvas_cleared:
-                            yield json.dumps(
-                                {
-                                    "type": "canvas_sync",
-                                    "documents": canvas_documents,
-                                    "active_document_id": active_document_id,
-                                    "auto_open": canvas_modified,
-                                    "cleared": canvas_cleared,
-                                },
-                                ensure_ascii=False,
-                            ) + "\n"
+                            yield (
+                                json.dumps(
+                                    {
+                                        "type": "canvas_sync",
+                                        "documents": canvas_documents,
+                                        "active_document_id": active_document_id,
+                                        "auto_open": canvas_modified,
+                                        "cleared": canvas_cleared,
+                                    },
+                                    ensure_ascii=False,
+                                )
+                                + "\n"
+                            )
                         continue
                     yield json.dumps(event, ensure_ascii=False) + "\n"
             except AgentRunCancelledError as exc:
@@ -5437,23 +5590,29 @@ def register_chat_routes(app) -> None:
                 finalize_interrupted_progress(interruption_message)
                 rollback_edited_replay_state("stream_cancelled")
                 if isinstance(edit_replay_snapshot, dict):
-                    yield json.dumps(
-                        {
-                            "type": "tool_error",
-                            "step": 1,
-                            "tool": "chat",
-                            "error": "Edited replay was cancelled. Previous state restored.",
-                        },
-                        ensure_ascii=False,
-                    ) + "\n"
-                    if conv_id:
-                        yield json.dumps(
+                    yield (
+                        json.dumps(
                             {
-                                "type": "history_sync",
-                                "messages": get_conversation_messages(conv_id),
+                                "type": "tool_error",
+                                "step": 1,
+                                "tool": "chat",
+                                "error": "Edited replay was cancelled. Previous state restored.",
                             },
                             ensure_ascii=False,
-                        ) + "\n"
+                        )
+                        + "\n"
+                    )
+                    if conv_id:
+                        yield (
+                            json.dumps(
+                                {
+                                    "type": "history_sync",
+                                    "messages": get_conversation_messages(conv_id),
+                                },
+                                ensure_ascii=False,
+                            )
+                            + "\n"
+                        )
                     yield json.dumps({"type": "done"}, ensure_ascii=False) + "\n"
                     finalize_edited_replay_snapshot()
                     LOGGER.info("Edited replay cancelled for conversation=%s", conv_id)
@@ -5475,32 +5634,41 @@ def register_chat_routes(app) -> None:
                         pending_clarification=pending_clarification,
                     )
                     persist_model_invocations(cancelled_assistant_message_id)
-                yield json.dumps(
-                    {
-                        "type": "tool_error",
-                        "step": max(1, int((tool_trace_entries[-1].get("step") if tool_trace_entries else 1) or 1)),
-                        "tool": "chat",
-                        "error": interruption_message,
-                    },
-                    ensure_ascii=False,
-                ) + "\n"
+                yield (
+                    json.dumps(
+                        {
+                            "type": "tool_error",
+                            "step": max(1, int((tool_trace_entries[-1].get("step") if tool_trace_entries else 1) or 1)),
+                            "tool": "chat",
+                            "error": interruption_message,
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
                 if cancelled_assistant_message_id is not None or persisted_user_message_id is not None:
-                    yield json.dumps(
-                        {
-                            "type": "message_ids",
-                            "user_message_id": persisted_user_message_id,
-                            "assistant_message_id": cancelled_assistant_message_id,
-                        },
-                        ensure_ascii=False,
-                    ) + "\n"
+                    yield (
+                        json.dumps(
+                            {
+                                "type": "message_ids",
+                                "user_message_id": persisted_user_message_id,
+                                "assistant_message_id": cancelled_assistant_message_id,
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n"
+                    )
                 if conv_id:
-                    yield json.dumps(
-                        {
-                            "type": "history_sync",
-                            "messages": get_conversation_messages(conv_id),
-                        },
-                        ensure_ascii=False,
-                    ) + "\n"
+                    yield (
+                        json.dumps(
+                            {
+                                "type": "history_sync",
+                                "messages": get_conversation_messages(conv_id),
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n"
+                    )
                 yield json.dumps({"type": "done"}, ensure_ascii=False) + "\n"
                 finalize_edited_replay_snapshot()
                 LOGGER.info("Chat stream cancelled for conversation=%s", conv_id)
@@ -5513,23 +5681,29 @@ def register_chat_routes(app) -> None:
             except Exception as exc:
                 rollback_edited_replay_state("stream_error")
                 if isinstance(edit_replay_snapshot, dict):
-                    yield json.dumps(
-                        {
-                            "type": "tool_error",
-                            "step": 1,
-                            "tool": "chat",
-                            "error": "Edited replay failed. Previous state restored.",
-                        },
-                        ensure_ascii=False,
-                    ) + "\n"
-                    if conv_id:
-                        yield json.dumps(
+                    yield (
+                        json.dumps(
                             {
-                                "type": "history_sync",
-                                "messages": get_conversation_messages(conv_id),
+                                "type": "tool_error",
+                                "step": 1,
+                                "tool": "chat",
+                                "error": "Edited replay failed. Previous state restored.",
                             },
                             ensure_ascii=False,
-                        ) + "\n"
+                        )
+                        + "\n"
+                    )
+                    if conv_id:
+                        yield (
+                            json.dumps(
+                                {
+                                    "type": "history_sync",
+                                    "messages": get_conversation_messages(conv_id),
+                                },
+                                ensure_ascii=False,
+                            )
+                            + "\n"
+                        )
                     yield json.dumps({"type": "done"}, ensure_ascii=False) + "\n"
                     finalize_edited_replay_snapshot()
                     LOGGER.warning("Edited replay stream failed: %s", exc)
@@ -5599,29 +5773,36 @@ def register_chat_routes(app) -> None:
                         )
 
                 if persisted_user_message_id is not None or persisted_assistant_message_id is not None:
-                    yield json.dumps(
-                        {
-                            "type": "message_ids",
-                            "user_message_id": persisted_user_message_id,
-                            "assistant_message_id": persisted_assistant_message_id,
-                        },
-                        ensure_ascii=False,
-                    ) + "\n"
+                    yield (
+                        json.dumps(
+                            {
+                                "type": "message_ids",
+                                "user_message_id": persisted_user_message_id,
+                                "assistant_message_id": persisted_assistant_message_id,
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n"
+                    )
 
                 if conv_id and (persisted_user_message_id is not None or persisted_assistant_message_id is not None):
                     current_turn_ids = {
-                        i for i in [persisted_user_message_id, persisted_assistant_message_id]
-                        if i is not None
+                        i for i in [persisted_user_message_id, persisted_assistant_message_id] if i is not None
                     }
-                    yield json.dumps(
-                        {
-                            "type": "history_sync",
-                            "messages": get_conversation_messages(conv_id),
-                        },
-                        ensure_ascii=False,
-                    ) + "\n"
+                    yield (
+                        json.dumps(
+                            {
+                                "type": "history_sync",
+                                "messages": get_conversation_messages(conv_id),
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n"
+                    )
 
-                    preflight_summary_applied = bool(preflight_summary_outcome and preflight_summary_outcome.get("applied"))
+                    preflight_summary_applied = bool(
+                        preflight_summary_outcome and preflight_summary_outcome.get("applied")
+                    )
 
                     if defer_post_response_tasks and not preflight_summary_applied:
                         POST_RESPONSE_EXECUTOR.submit(
@@ -5660,69 +5841,83 @@ def register_chat_routes(app) -> None:
                     if summary_outcome.get("applied"):
                         if RAG_ENABLED:
                             _schedule_rag_conversation_sync(conversation_id=conv_id)
-                        yield json.dumps(
-                            {
-                                "type": "conversation_summary_applied",
-                                "summary_message_id": summary_outcome.get("summary_message_id"),
-                                "covered_message_count": summary_outcome.get("covered_message_count", 0),
-                                "covered_tool_message_count": summary_outcome.get("covered_tool_message_count", 0),
-                                "mode": summary_outcome.get("mode") or get_chat_summary_mode(settings),
-                                "trigger_token_count": summary_outcome.get("trigger_token_count"),
-                                "visible_token_count": summary_outcome.get("visible_token_count"),
-                                "summary_model": summary_outcome.get("summary_model") or _resolve_summary_model(),
-                                "checked_at": summary_outcome.get("checked_at"),
-                                "candidate_message_count": summary_outcome.get("candidate_message_count"),
-                                "excluded_message_count": summary_outcome.get("excluded_message_count"),
-                                "prompt_message_count": summary_outcome.get("prompt_message_count"),
-                                "empty_message_count": summary_outcome.get("empty_message_count"),
-                                "merged_assistant_message_count": summary_outcome.get("merged_assistant_message_count"),
-                                "skipped_error_message_count": summary_outcome.get("skipped_error_message_count"),
-                                "returned_text_length": summary_outcome.get("returned_text_length"),
-                                "user_assistant_token_count": summary_outcome.get("user_assistant_token_count"),
-                                "tool_token_count": summary_outcome.get("tool_token_count"),
-                                "tool_message_count": summary_outcome.get("tool_message_count"),
-                            },
-                            ensure_ascii=False,
-                        ) + "\n"
-                        yield json.dumps(
-                            {
-                                "type": "history_sync",
-                                "messages": _prioritize_summary_messages(
-                                    summary_outcome.get("messages") or get_conversation_messages(conv_id)
-                                ),
-                            },
-                            ensure_ascii=False,
-                        ) + "\n"
+                        yield (
+                            json.dumps(
+                                {
+                                    "type": "conversation_summary_applied",
+                                    "summary_message_id": summary_outcome.get("summary_message_id"),
+                                    "covered_message_count": summary_outcome.get("covered_message_count", 0),
+                                    "covered_tool_message_count": summary_outcome.get("covered_tool_message_count", 0),
+                                    "mode": summary_outcome.get("mode") or get_chat_summary_mode(settings),
+                                    "trigger_token_count": summary_outcome.get("trigger_token_count"),
+                                    "visible_token_count": summary_outcome.get("visible_token_count"),
+                                    "summary_model": summary_outcome.get("summary_model") or _resolve_summary_model(),
+                                    "checked_at": summary_outcome.get("checked_at"),
+                                    "candidate_message_count": summary_outcome.get("candidate_message_count"),
+                                    "excluded_message_count": summary_outcome.get("excluded_message_count"),
+                                    "prompt_message_count": summary_outcome.get("prompt_message_count"),
+                                    "empty_message_count": summary_outcome.get("empty_message_count"),
+                                    "merged_assistant_message_count": summary_outcome.get(
+                                        "merged_assistant_message_count"
+                                    ),
+                                    "skipped_error_message_count": summary_outcome.get("skipped_error_message_count"),
+                                    "returned_text_length": summary_outcome.get("returned_text_length"),
+                                    "user_assistant_token_count": summary_outcome.get("user_assistant_token_count"),
+                                    "tool_token_count": summary_outcome.get("tool_token_count"),
+                                    "tool_message_count": summary_outcome.get("tool_message_count"),
+                                },
+                                ensure_ascii=False,
+                            )
+                            + "\n"
+                        )
+                        yield (
+                            json.dumps(
+                                {
+                                    "type": "history_sync",
+                                    "messages": _prioritize_summary_messages(
+                                        summary_outcome.get("messages") or get_conversation_messages(conv_id)
+                                    ),
+                                },
+                                ensure_ascii=False,
+                            )
+                            + "\n"
+                        )
                     else:
-                        yield json.dumps(
-                            {
-                                "type": "conversation_summary_status",
-                                "applied": False,
-                                "reason": summary_outcome.get("reason") or ("locked" if summary_outcome.get("locked") else "skipped"),
-                                "error": summary_outcome.get("error"),
-                                "mode": summary_outcome.get("mode") or get_chat_summary_mode(settings),
-                                "trigger_token_count": summary_outcome.get("trigger_token_count"),
-                                "visible_token_count": summary_outcome.get("visible_token_count"),
-                                "summary_model": summary_outcome.get("summary_model") or _resolve_summary_model(),
-                                "checked_at": summary_outcome.get("checked_at"),
-                                "failure_stage": summary_outcome.get("failure_stage"),
-                                "failure_detail": summary_outcome.get("failure_detail"),
-                                "token_gap": summary_outcome.get("token_gap"),
-                                "candidate_message_count": summary_outcome.get("candidate_message_count"),
-                                "excluded_message_count": summary_outcome.get("excluded_message_count"),
-                                "prompt_message_count": summary_outcome.get("prompt_message_count"),
-                                "empty_message_count": summary_outcome.get("empty_message_count"),
-                                "merged_assistant_message_count": summary_outcome.get("merged_assistant_message_count"),
-                                "skipped_error_message_count": summary_outcome.get("skipped_error_message_count"),
-                                "returned_text_length": summary_outcome.get("returned_text_length"),
-                                "summary_error_count": summary_outcome.get("summary_error_count"),
-                                "used_max_steps": summary_outcome.get("used_max_steps"),
-                                "user_assistant_token_count": summary_outcome.get("user_assistant_token_count"),
-                                "tool_token_count": summary_outcome.get("tool_token_count"),
-                                "tool_message_count": summary_outcome.get("tool_message_count"),
-                            },
-                            ensure_ascii=False,
-                        ) + "\n"
+                        yield (
+                            json.dumps(
+                                {
+                                    "type": "conversation_summary_status",
+                                    "applied": False,
+                                    "reason": summary_outcome.get("reason")
+                                    or ("locked" if summary_outcome.get("locked") else "skipped"),
+                                    "error": summary_outcome.get("error"),
+                                    "mode": summary_outcome.get("mode") or get_chat_summary_mode(settings),
+                                    "trigger_token_count": summary_outcome.get("trigger_token_count"),
+                                    "visible_token_count": summary_outcome.get("visible_token_count"),
+                                    "summary_model": summary_outcome.get("summary_model") or _resolve_summary_model(),
+                                    "checked_at": summary_outcome.get("checked_at"),
+                                    "failure_stage": summary_outcome.get("failure_stage"),
+                                    "failure_detail": summary_outcome.get("failure_detail"),
+                                    "token_gap": summary_outcome.get("token_gap"),
+                                    "candidate_message_count": summary_outcome.get("candidate_message_count"),
+                                    "excluded_message_count": summary_outcome.get("excluded_message_count"),
+                                    "prompt_message_count": summary_outcome.get("prompt_message_count"),
+                                    "empty_message_count": summary_outcome.get("empty_message_count"),
+                                    "merged_assistant_message_count": summary_outcome.get(
+                                        "merged_assistant_message_count"
+                                    ),
+                                    "skipped_error_message_count": summary_outcome.get("skipped_error_message_count"),
+                                    "returned_text_length": summary_outcome.get("returned_text_length"),
+                                    "summary_error_count": summary_outcome.get("summary_error_count"),
+                                    "used_max_steps": summary_outcome.get("used_max_steps"),
+                                    "user_assistant_token_count": summary_outcome.get("user_assistant_token_count"),
+                                    "tool_token_count": summary_outcome.get("tool_token_count"),
+                                    "tool_message_count": summary_outcome.get("tool_message_count"),
+                                },
+                                ensure_ascii=False,
+                            )
+                            + "\n"
+                        )
                         if RAG_ENABLED and conv_id:
                             _schedule_rag_conversation_sync(conversation_id=conv_id)
 
@@ -5784,7 +5979,8 @@ def register_chat_routes(app) -> None:
                                 "error": "Background chat stream failed before completion.",
                             },
                             ensure_ascii=False,
-                        ) + "\n"
+                        )
+                        + "\n"
                     )
                     event_queue.put(json.dumps({"type": "done"}, ensure_ascii=False) + "\n")
             finally:
@@ -5800,12 +5996,10 @@ def register_chat_routes(app) -> None:
             headers=response_headers,
         )
 
-
     @app.route("/api/chat-runs/<string:run_id>/cancel", methods=["POST"])
     def cancel_chat_run(run_id):
         cancelled = _cancel_chat_run(run_id, reason=USER_CANCELLED_ERROR_TEXT)
         return jsonify({"cancelled": cancelled, "active": cancelled})
-
 
     @app.route("/api/conversations/<int:conv_id>/generate-title", methods=["POST"])
     def generate_title(conv_id):
@@ -5935,22 +6129,26 @@ def register_chat_routes(app) -> None:
         if outcome.get("applied"):
             if RAG_ENABLED:
                 _schedule_rag_conversation_sync(conversation_id=conv_id)
-            return jsonify({
-                "applied": True,
-                "summary_message_id": outcome.get("summary_message_id"),
-                "covered_message_count": outcome.get("covered_message_count", 0),
+            return jsonify(
+                {
+                    "applied": True,
+                    "summary_message_id": outcome.get("summary_message_id"),
+                    "covered_message_count": outcome.get("covered_message_count", 0),
+                    "requested_message_count": outcome.get("requested_message_count"),
+                    "eligible_message_count": outcome.get("eligible_message_count", 0),
+                    "messages": outcome.get("messages") or get_conversation_messages(conv_id),
+                }
+            )
+
+        return jsonify(
+            {
+                "applied": False,
+                "reason": outcome.get("reason") or "unknown",
+                "failure_detail": outcome.get("failure_detail") or "",
                 "requested_message_count": outcome.get("requested_message_count"),
                 "eligible_message_count": outcome.get("eligible_message_count", 0),
-                "messages": outcome.get("messages") or get_conversation_messages(conv_id),
-            })
-
-        return jsonify({
-            "applied": False,
-            "reason": outcome.get("reason") or "unknown",
-            "failure_detail": outcome.get("failure_detail") or "",
-            "requested_message_count": outcome.get("requested_message_count"),
-            "eligible_message_count": outcome.get("eligible_message_count", 0),
-        })
+            }
+        )
 
     @app.route("/api/conversations/<int:conv_id>/summarize/preview", methods=["POST"])
     def preview_summarize(conv_id):
@@ -6041,12 +6239,16 @@ def register_chat_routes(app) -> None:
                 return jsonify({"error": "Only summary messages can be undone."}), 400
 
             summary_metadata = parse_message_metadata(summary_row["metadata"])
-            covered_message_ids = summary_metadata.get("covered_message_ids") if isinstance(summary_metadata, dict) else None
+            covered_message_ids = (
+                summary_metadata.get("covered_message_ids") if isinstance(summary_metadata, dict) else None
+            )
             if not isinstance(covered_message_ids, list) or not covered_message_ids:
                 return jsonify({"error": "This summary cannot be undone because its source messages are missing."}), 400
 
             summary_position = int(summary_row["position"] or 0)
-            summary_insert_strategy = str(summary_metadata.get("summary_insert_strategy") or "replace_first_covered_message").strip()
+            summary_insert_strategy = str(
+                summary_metadata.get("summary_insert_strategy") or "replace_first_covered_message"
+            ).strip()
             canonical_messages = get_conversation_messages(conv_id, include_deleted=True)
             resolved_covered_message_ids = _resolve_summary_restore_message_ids(
                 canonical_messages,
@@ -6093,7 +6295,12 @@ def register_chat_routes(app) -> None:
 
 def preload_dependencies(app) -> None:
     settings = get_app_settings()
-    if OCR_ENABLED and normalize_image_processing_method(settings.get("image_processing_method")) in {"auto", "llm_helper", "llm_direct", "local_ocr"}:
+    if OCR_ENABLED and normalize_image_processing_method(settings.get("image_processing_method")) in {
+        "auto",
+        "llm_helper",
+        "llm_direct",
+        "local_ocr",
+    }:
         preload_ocr_engine(app)
     if RAG_ENABLED:
         preload_embedder()

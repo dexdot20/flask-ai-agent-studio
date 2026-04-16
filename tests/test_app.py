@@ -181,7 +181,11 @@ from routes.chat import (
     build_summary_prompt_messages,
     preload_dependencies,
 )
-from routes.pages import build_sub_agent_web_tool_sections, build_tool_permission_options, build_tool_permission_sections
+from routes.pages import (
+    build_sub_agent_web_tool_sections,
+    build_tool_permission_options,
+    build_tool_permission_sections,
+)
 from tests.support.app_harness import BaseAppRoutesTestCase
 from tests.support.stream_events import build_stream_chunk, build_stream_chunk_openrouter, build_tool_call_chunk
 from token_utils import estimate_text_tokens
@@ -328,11 +332,15 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(payload["rag_context_size"], "small")
         self.assertEqual(
             payload["rag_source_types"],
-            ["conversation", "tool_result", "tool_memory", "uploaded_document"] if payload["features"]["rag_enabled"] else [],
+            ["conversation", "tool_result", "tool_memory", "uploaded_document"]
+            if payload["features"]["rag_enabled"]
+            else [],
         )
         self.assertEqual(
             payload["rag_auto_inject_source_types"],
-            ["conversation", "tool_result", "tool_memory", "uploaded_document"] if payload["features"]["rag_enabled"] else [],
+            ["conversation", "tool_result", "tool_memory", "uploaded_document"]
+            if payload["features"]["rag_enabled"]
+            else [],
         )
         self.assertFalse(payload["tool_memory_auto_inject"])
 
@@ -595,9 +603,13 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         )
         self.assertEqual(payload["operation_model_preferences"]["fetch_summarize"], "deepseek-chat")
         self.assertEqual(payload["operation_model_preferences"]["sub_agent"], "deepseek-reasoner")
-        self.assertEqual(payload["operation_model_fallback_preferences"]["summarize"], ["deepseek-reasoner", "deepseek-chat"])
+        self.assertEqual(
+            payload["operation_model_fallback_preferences"]["summarize"], ["deepseek-reasoner", "deepseek-chat"]
+        )
         self.assertEqual(payload["operation_model_fallback_preferences"]["fetch_summarize"], ["deepseek-reasoner"])
-        self.assertEqual(payload["operation_model_fallback_preferences"]["sub_agent"], ["deepseek-chat", "deepseek-reasoner"])
+        self.assertEqual(
+            payload["operation_model_fallback_preferences"]["sub_agent"], ["deepseek-chat", "deepseek-reasoner"]
+        )
         self.assertEqual(payload["image_processing_method"], "llm_helper")
         self.assertEqual(payload["image_helper_model"], "openrouter:anthropic/claude-sonnet-4.5")
         self.assertTrue(
@@ -733,10 +745,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
     def test_sub_agent_tool_sections_include_runtime_read_only_tools(self):
         sections = build_sub_agent_web_tool_sections()
         available_tools = {
-            tool["name"]
-            for section in sections
-            for tool in section.get("tools", [])
-            if isinstance(tool, dict)
+            tool["name"] for section in sections for tool in section.get("tools", []) if isinstance(tool, dict)
         }
 
         self.assertIn("search_web", available_tools)
@@ -990,7 +999,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             {
                 "user_preferences": "",
                 "max_steps": "1",
-                "active_tools": json.dumps(["save_to_persona_memory", "delete_persona_memory_entry"], ensure_ascii=False),
+                "active_tools": json.dumps(
+                    ["save_to_persona_memory", "delete_persona_memory_entry"], ensure_ascii=False
+                ),
                 "rag_auto_inject": "false",
             }
         )
@@ -1008,8 +1019,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 ]
             )
 
-        with patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream), patch(
-            "routes.chat.sync_conversations_to_rag_safe"
+        with (
+            patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
         ):
             response = self.client.post(
                 "/chat",
@@ -1023,9 +1035,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         self.assertEqual(response.status_code, 200)
         system_text = "\n\n".join(
-            str(message.get("content") or "")
-            for message in captured["api_messages"]
-            if message.get("role") == "system"
+            str(message.get("content") or "") for message in captured["api_messages"] if message.get("role") == "system"
         )
         self.assertIn("## Persona Memory", system_text)
         self.assertIn("Repo style: Prefer terse progress updates.", system_text)
@@ -1065,10 +1075,15 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             deleted_user_id = insert_message(conn, conversation_id, "user", "Delete this branch")
             later_assistant_id = insert_message(conn, conversation_id, "assistant", "Later branch answer")
 
-        with patch(
-            "conversation_cleanup_service.create_workspace_runtime_state",
-            side_effect=lambda conversation_id=None, root_path=None: create_workspace_runtime_state(root_path=workspace_root),
-        ), patch("routes.conversations.sync_conversations_to_rag_safe") as mocked_sync:
+        with (
+            patch(
+                "conversation_cleanup_service.create_workspace_runtime_state",
+                side_effect=lambda conversation_id=None, root_path=None: create_workspace_runtime_state(
+                    root_path=workspace_root
+                ),
+            ),
+            patch("routes.conversations.sync_conversations_to_rag_safe") as mocked_sync,
+        ):
             with open(workspace_file, "w", encoding="utf-8") as fh:
                 fh.write("baseline workspace")
             capture_workspace_snapshot_for_assistant_message(
@@ -1111,7 +1126,10 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         payload = response.get_json()
         self.assertEqual(payload["deleted_message_ids"], [deleted_user_id, later_assistant_id])
         self.assertEqual([message["id"] for message in payload["messages"]], [first_user_id, first_assistant_id])
-        self.assertEqual([message["id"] for message in get_conversation_messages(conversation_id)], [first_user_id, first_assistant_id])
+        self.assertEqual(
+            [message["id"] for message in get_conversation_messages(conversation_id)],
+            [first_user_id, first_assistant_id],
+        )
 
         scratchpad_sections = get_all_scratchpad_sections(get_app_settings())
         self.assertNotIn("Later branch scratchpad", scratchpad_sections.get("notes", ""))
@@ -1730,8 +1748,10 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             self.assertEqual(response.status_code, 200)
 
     def test_login_pin_locks_out_after_failed_attempts(self):
-        with patch("config.LOGIN_PIN", "2468"), patch("config.LOGIN_MAX_FAILED_ATTEMPTS", 2), patch(
-            "config.LOGIN_LOCKOUT_SECONDS", 60
+        with (
+            patch("config.LOGIN_PIN", "2468"),
+            patch("config.LOGIN_MAX_FAILED_ATTEMPTS", 2),
+            patch("config.LOGIN_LOCKOUT_SECONDS", 60),
         ):
             response = self.client.post("/login", data={"pin": "0000"})
             self.assertEqual(response.status_code, 401)
@@ -1811,9 +1831,10 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             conversation_id = self._create_conversation()
             conversation_sync.reset_mock()
 
-        with patch("routes.chat.run_agent_stream", return_value=fake_events), patch(
-            "routes.chat.sync_conversations_to_rag_safe"
-        ) as chat_sync:
+        with (
+            patch("routes.chat.run_agent_stream", return_value=fake_events),
+            patch("routes.chat.sync_conversations_to_rag_safe") as chat_sync,
+        ):
             response = self.client.post(
                 "/chat",
                 json={
@@ -1868,7 +1889,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         )
         self.assertEqual(records[0]["tool_results"], [])
         self.assertEqual(len(records[0]["archived_messages"]), 1)
-        self.assertIn("[Archived past message from a different conversation", records[0]["archived_messages"][0]["content"])
+        self.assertIn(
+            "[Archived past message from a different conversation", records[0]["archived_messages"][0]["content"]
+        )
         self.assertIn("Outdated answer", records[0]["archived_messages"][0]["content"])
 
     def test_get_conversation_records_for_rag_compacts_clarification_response_messages(self):
@@ -1978,8 +2001,14 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         with patch("rag_service.ingest_rag_chunks", side_effect=fake_ingest):
             sync_conversations_to_rag(conversation_id)
 
-        self.assertIn(rag_service.conversation_rag_source_key(rag_service.RAG_SOURCE_CONVERSATION, conversation_id), ingested_source_keys)
-        self.assertNotIn(rag_service.conversation_rag_source_key(rag_service.RAG_SOURCE_TOOL_RESULT, conversation_id), ingested_source_keys)
+        self.assertIn(
+            rag_service.conversation_rag_source_key(rag_service.RAG_SOURCE_CONVERSATION, conversation_id),
+            ingested_source_keys,
+        )
+        self.assertNotIn(
+            rag_service.conversation_rag_source_key(rag_service.RAG_SOURCE_TOOL_RESULT, conversation_id),
+            ingested_source_keys,
+        )
 
     def test_chat_edit_resyncs_rag_before_retrieval(self):
         fake_events = iter(
@@ -2003,9 +2032,11 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             self.assertEqual(chat_sync.call_args.kwargs, {"conversation_id": conversation_id, "force": True})
             return None
 
-        with patch("routes.chat.run_agent_stream", return_value=fake_events), patch(
-            "routes.chat.sync_conversations_to_rag_safe"
-        ) as chat_sync, patch("routes.chat.build_rag_auto_context", side_effect=check_rag_context):
+        with (
+            patch("routes.chat.run_agent_stream", return_value=fake_events),
+            patch("routes.chat.sync_conversations_to_rag_safe") as chat_sync,
+            patch("routes.chat.build_rag_auto_context", side_effect=check_rag_context),
+        ):
             response = self.client.post(
                 "/chat",
                 json={
@@ -2054,8 +2085,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 ]
             )
 
-        with patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream), patch(
-            "routes.chat.sync_conversations_to_rag_safe"
+        with (
+            patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
         ):
             response = self.client.post(
                 "/chat",
@@ -2127,8 +2159,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             captured["initial_canvas_active_document_id"] = kwargs.get("initial_canvas_active_document_id")
             return iter([{"type": "done"}])
 
-        with patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream), patch(
-            "routes.chat.sync_conversations_to_rag_safe"
+        with (
+            patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
         ):
             response = self.client.post(
                 "/chat",
@@ -2189,8 +2222,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 ]
             )
 
-        with patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream), patch(
-            "routes.chat.sync_conversations_to_rag_safe"
+        with (
+            patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
         ):
             response = self.client.post(
                 "/chat",
@@ -2215,12 +2249,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("api_messages", captured)
         system_text = "\n\n".join(
-            str(message.get("content") or "")
-            for message in captured["api_messages"]
-            if message.get("role") == "system"
+            str(message.get("content") or "") for message in captured["api_messages"] if message.get("role") == "system"
         )
         self.assertNotIn("Stale branch excerpt", system_text)
-        self.assertIn("New message", "\n".join(str(message.get("content") or "") for message in captured["api_messages"]))
+        self.assertIn(
+            "New message", "\n".join(str(message.get("content") or "") for message in captured["api_messages"])
+        )
 
         with get_db() as conn:
             row = conn.execute("SELECT metadata FROM messages WHERE id = ?", (edited_message_id,)).fetchone()
@@ -2282,11 +2316,15 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 ]
             )
 
-        with patch(
-            "conversation_cleanup_service.create_workspace_runtime_state",
-            side_effect=lambda conversation_id=None, root_path=None: create_workspace_runtime_state(root_path=workspace_root),
-        ), patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream), patch(
-            "routes.chat.sync_conversations_to_rag_safe"
+        with (
+            patch(
+                "conversation_cleanup_service.create_workspace_runtime_state",
+                side_effect=lambda conversation_id=None, root_path=None: create_workspace_runtime_state(
+                    root_path=workspace_root
+                ),
+            ),
+            patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
         ):
             response = self.client.post(
                 "/chat",
@@ -2302,9 +2340,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         self.assertEqual(response.status_code, 200)
         system_text = "\n\n".join(
-            str(message.get("content") or "")
-            for message in captured["api_messages"]
-            if message.get("role") == "system"
+            str(message.get("content") or "") for message in captured["api_messages"] if message.get("role") == "system"
         )
         self.assertIn("Baseline scratchpad", system_text)
         self.assertNotIn("Stale scratchpad", system_text)
@@ -2357,11 +2393,15 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             yield {"type": "answer_delta", "text": "Partial output"}
             raise RuntimeError("forced replay failure")
 
-        with patch(
-            "routes.chat.create_workspace_runtime_state",
-            side_effect=lambda _conversation_id=None, _root_path=None: create_workspace_runtime_state(root_path=workspace_root),
-        ), patch("routes.chat.run_agent_stream", return_value=failing_events()), patch(
-            "routes.chat.sync_conversations_to_rag_safe"
+        with (
+            patch(
+                "routes.chat.create_workspace_runtime_state",
+                side_effect=lambda _conversation_id=None, _root_path=None: create_workspace_runtime_state(
+                    root_path=workspace_root
+                ),
+            ),
+            patch("routes.chat.run_agent_stream", return_value=failing_events()),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
         ):
             response = self.client.post(
                 "/chat",
@@ -2474,11 +2514,15 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             yield {"type": "tool_capture", "tool_results": [], "canvas_documents": []}
             yield {"type": "done"}
 
-        with patch(
-            "routes.chat.create_workspace_runtime_state",
-            side_effect=lambda _conversation_id=None, _root_path=None: create_workspace_runtime_state(root_path=workspace_root),
-        ), patch("routes.chat.run_agent_stream", return_value=successful_events()), patch(
-            "routes.chat.sync_conversations_to_rag_safe"
+        with (
+            patch(
+                "routes.chat.create_workspace_runtime_state",
+                side_effect=lambda _conversation_id=None, _root_path=None: create_workspace_runtime_state(
+                    root_path=workspace_root
+                ),
+            ),
+            patch("routes.chat.run_agent_stream", return_value=successful_events()),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
         ):
             response = self.client.post(
                 "/chat",
@@ -2529,7 +2573,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             {
                 "user_preferences": "",
                 "max_steps": "1",
-                "active_tools": json.dumps(["append_scratchpad", "search_web", "rewrite_canvas_document"], ensure_ascii=False),
+                "active_tools": json.dumps(
+                    ["append_scratchpad", "search_web", "rewrite_canvas_document"], ensure_ascii=False
+                ),
                 "rag_auto_inject": "false",
             }
         )
@@ -2548,8 +2594,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 ]
             )
 
-        with patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream), patch(
-            "routes.chat.sync_conversations_to_rag_safe"
+        with (
+            patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
         ):
             response = self.client.post(
                 "/chat",
@@ -2570,9 +2617,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("replace_scratchpad", captured["prompt_tool_names"])
         self.assertNotIn("search_web", captured["prompt_tool_names"])
         system_text = "\n\n".join(
-            str(message.get("content") or "")
-            for message in captured["api_messages"]
-            if message.get("role") == "system"
+            str(message.get("content") or "") for message in captured["api_messages"] if message.get("role") == "system"
         )
         self.assertIn("Callable tools:", system_text)
         self.assertIn("`append_scratchpad`", system_text)
@@ -2593,7 +2638,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             {
                 "user_preferences": "",
                 "max_steps": "1",
-                "active_tools": json.dumps(["save_to_conversation_memory", "delete_conversation_memory_entry"], ensure_ascii=False),
+                "active_tools": json.dumps(
+                    ["save_to_conversation_memory", "delete_conversation_memory_entry"], ensure_ascii=False
+                ),
                 "rag_auto_inject": "false",
             }
         )
@@ -2610,8 +2657,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 ]
             )
 
-        with patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream), patch(
-            "routes.chat.sync_conversations_to_rag_safe"
+        with (
+            patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
         ):
             response = self.client.post(
                 "/chat",
@@ -2627,9 +2675,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(captured["agent_context"]["conversation_id"], conversation_id)
         self.assertIn("source_message_id", captured["agent_context"])
         system_text = "\n\n".join(
-            str(message.get("content") or "")
-            for message in captured["api_messages"]
-            if message.get("role") == "system"
+            str(message.get("content") or "") for message in captured["api_messages"] if message.get("role") == "system"
         )
         self.assertIn("## Conversation Memory", system_text)
         self.assertIn("Preferred name", system_text)
@@ -2654,9 +2700,11 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             csrf_token = self._get_session_csrf_token()
             self.assertTrue(csrf_token)
 
-            with patch("routes.chat.run_agent_stream", return_value=fake_events), patch(
-                "routes.chat.POST_RESPONSE_EXECUTOR.submit"
-            ) as mocked_submit, patch("routes.chat.SUMMARY_EXECUTOR.submit") as mocked_summary_submit:
+            with (
+                patch("routes.chat.run_agent_stream", return_value=fake_events),
+                patch("routes.chat.POST_RESPONSE_EXECUTOR.submit") as mocked_submit,
+                patch("routes.chat.SUMMARY_EXECUTOR.submit") as mocked_summary_submit,
+            ):
                 response = self.client.post(
                     "/chat",
                     json={
@@ -2687,10 +2735,13 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 (conversation_id,),
             )
 
-        with patch(
-            "routes.chat.collect_agent_response",
-            return_value={"content": "Better Title", "errors": []},
-        ), patch("routes.chat.sync_conversations_to_rag_safe"):
+        with (
+            patch(
+                "routes.chat.collect_agent_response",
+                return_value={"content": "Better Title", "errors": []},
+            ),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
+        ):
             response = self.client.post(f"/api/conversations/{conversation_id}/generate-title")
 
         self.assertEqual(response.status_code, 200)
@@ -2710,12 +2761,17 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             }
         }
 
-        with patch("agent.get_app_settings", return_value={}), patch(
-            "agent.get_operation_model",
-            return_value="deepseek-chat",
-        ), patch("agent.get_model_temperature", return_value=0.7), patch(
-            "agent.collect_agent_response",
-            return_value={"content": "Greeting", "errors": []},
+        with (
+            patch("agent.get_app_settings", return_value={}),
+            patch(
+                "agent.get_operation_model",
+                return_value="deepseek-chat",
+            ),
+            patch("agent.get_model_temperature", return_value=0.7),
+            patch(
+                "agent.collect_agent_response",
+                return_value={"content": "Greeting", "errors": []},
+            ),
         ):
             result, _ = _run_set_conversation_title(
                 {"title": "Teknik Gelişim ve Strateji"},
@@ -2733,14 +2789,17 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
     def test_manual_prune_endpoint_updates_message_and_preserves_original(self):
         conversation_id = self._create_conversation()
         with get_db() as conn:
-            message_id = insert_message(conn, conversation_id, "assistant", "Bu mesaj gereksiz ayrıntılar içeriyor ve budanmalı.")
+            message_id = insert_message(
+                conn, conversation_id, "assistant", "Bu mesaj gereksiz ayrıntılar içeriyor ve budanmalı."
+            )
 
         mock_response = SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content="Bu mesaj budanmış halidir."))]
         )
-        with patch("prune_service.client.chat.completions.create", return_value=mock_response), patch(
-            "routes.conversations.sync_conversations_to_rag_safe"
-        ) as mocked_sync:
+        with (
+            patch("prune_service.client.chat.completions.create", return_value=mock_response),
+            patch("routes.conversations.sync_conversations_to_rag_safe") as mocked_sync,
+        ):
             response = self.client.post(
                 f"/api/messages/{message_id}/prune",
                 json={"conversation_id": conversation_id},
@@ -2819,13 +2878,19 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             "min_similarity": prune_service.PRUNE_SCORE_RAG_MIN_SIMILARITY,
         }
 
-        with patch("prune_service.RAG_ENABLED", True), patch("prune_service.get_app_settings", return_value={}), patch(
-            "prune_service.get_rag_source_types",
-            return_value=["tool_memory"],
-        ), patch("prune_service._compute_entropy_score", return_value=0.25), patch(
-            "prune_service.search_knowledge_base_tool",
-            return_value=rag_result,
-        ) as mocked_search:
+        with (
+            patch("prune_service.RAG_ENABLED", True),
+            patch("prune_service.get_app_settings", return_value={}),
+            patch(
+                "prune_service.get_rag_source_types",
+                return_value=["tool_memory"],
+            ),
+            patch("prune_service._compute_entropy_score", return_value=0.25),
+            patch(
+                "prune_service.search_knowledge_base_tool",
+                return_value=rag_result,
+            ) as mocked_search,
+        ):
             scored = prune_service.score_conversation_messages_for_prune(conversation_id)
 
         self.assertEqual(len(scored), 3)
@@ -2845,14 +2910,17 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             pruned_ids.append(message_id)
             return {"id": message_id}
 
-        with patch(
-            "prune_service.score_conversation_messages_for_prune",
-            return_value=[
-                {"id": medium_id, "prune_score": 0.91},
-                {"id": small_id, "prune_score": 0.88},
-                {"id": large_id, "prune_score": 0.33},
-            ],
-        ), patch("prune_service.prune_message", side_effect=fake_prune_message):
+        with (
+            patch(
+                "prune_service.score_conversation_messages_for_prune",
+                return_value=[
+                    {"id": medium_id, "prune_score": 0.91},
+                    {"id": small_id, "prune_score": 0.88},
+                    {"id": large_id, "prune_score": 0.33},
+                ],
+            ),
+            patch("prune_service.prune_message", side_effect=fake_prune_message),
+        ):
             pruned_count = prune_service.prune_conversation_batch(conversation_id, 2)
 
         self.assertEqual(pruned_count, 2)
@@ -2873,13 +2941,16 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 raise RuntimeError("temporary failure")
             return {"id": message_id}
 
-        with patch(
-            "prune_service.score_conversation_messages_for_prune",
-            return_value=[
-                {"id": first_id, "prune_score": 0.95},
-                {"id": second_id, "prune_score": 0.81},
-            ],
-        ), patch("prune_service.prune_message", side_effect=fake_prune_message):
+        with (
+            patch(
+                "prune_service.score_conversation_messages_for_prune",
+                return_value=[
+                    {"id": first_id, "prune_score": 0.95},
+                    {"id": second_id, "prune_score": 0.81},
+                ],
+            ),
+            patch("prune_service.prune_message", side_effect=fake_prune_message),
+        ):
             pruned_count = prune_service.prune_conversation_batch(conversation_id, 2)
 
         self.assertEqual(pruned_count, 1)
@@ -2928,14 +2999,16 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             seen_ids.append(message_id)
             return {"id": message_id, "content": f"pruned-{message_id}"}
 
-        with patch(
-            "routes.conversations.score_conversation_messages_for_prune",
-            return_value=[
-                {"id": third_id, "position": 3, "prune_score": 0.92},
-                {"id": first_id, "position": 1, "prune_score": 0.89},
-            ],
-        ), patch("routes.conversations.prune_message", side_effect=fake_prune_message), patch(
-            "routes.conversations.sync_conversations_to_rag_safe"
+        with (
+            patch(
+                "routes.conversations.score_conversation_messages_for_prune",
+                return_value=[
+                    {"id": third_id, "position": 3, "prune_score": 0.92},
+                    {"id": first_id, "position": 1, "prune_score": 0.89},
+                ],
+            ),
+            patch("routes.conversations.prune_message", side_effect=fake_prune_message),
+            patch("routes.conversations.sync_conversations_to_rag_safe"),
         ):
             response = self.client.post(
                 f"/api/conversations/{conversation_id}/prune-selected",
@@ -2949,7 +3022,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual([result["id"] for result in payload["results"]], [first_id, third_id])
 
     def test_is_prunable_message_allows_plain_assistant_messages(self):
-        self.assertTrue(prune_service.is_prunable_message({"role": "assistant", "content": "Detaylı ama araçsız yanıt"}))
+        self.assertTrue(
+            prune_service.is_prunable_message({"role": "assistant", "content": "Detaylı ama araçsız yanıt"})
+        )
         self.assertFalse(
             prune_service.is_prunable_message(
                 {
@@ -2972,12 +3047,16 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         conversation_id = self._create_conversation()
 
-        with patch("routes.chat.run_agent_stream", return_value=fake_events), patch(
-            "routes.chat.maybe_create_conversation_summary",
-            return_value={"applied": False},
-        ), patch("routes.chat._count_prunable_message_tokens", return_value=90_000), patch(
-            "routes.chat.prune_conversation_batch"
-        ) as mocked_prune, patch("routes.chat.sync_conversations_to_rag_safe"):
+        with (
+            patch("routes.chat.run_agent_stream", return_value=fake_events),
+            patch(
+                "routes.chat.maybe_create_conversation_summary",
+                return_value={"applied": False},
+            ),
+            patch("routes.chat._count_prunable_message_tokens", return_value=90_000),
+            patch("routes.chat.prune_conversation_batch") as mocked_prune,
+            patch("routes.chat.sync_conversations_to_rag_safe"),
+        ):
             response = self.client.patch(
                 "/api/settings",
                 json={
@@ -3099,8 +3178,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             captured["api_messages"] = args[0]
             return iter([{"type": "done"}])
 
-        with patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream), patch(
-            "routes.chat.sync_conversations_to_rag_safe"
+        with (
+            patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
         ):
             response = self.client.post(
                 "/chat",
@@ -3115,7 +3195,8 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         self.assertEqual(response.status_code, 200)
         assistant_messages = [
-            message for message in captured["api_messages"]
+            message
+            for message in captured["api_messages"]
             if isinstance(message, dict) and message.get("role") == "assistant"
         ]
         self.assertTrue(any(message.get("content") == "Güncel yanıt" for message in assistant_messages))
@@ -3150,7 +3231,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(_count_prunable_message_tokens(messages), expected)
 
     def test_active_tools_include_replace_scratchpad_for_existing_scratchpad_mode(self):
-        settings = {"active_tools": json.dumps(["append_scratchpad", "search_web"]) }
+        settings = {"active_tools": json.dumps(["append_scratchpad", "search_web"])}
         active_tools = get_active_tool_names(settings)
         self.assertIn("replace_scratchpad", active_tools)
         self.assertIn("read_scratchpad", active_tools)
@@ -3174,11 +3255,15 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(str(journal_mode).lower(), "wal")
 
     def test_disabled_features_reflect_in_settings_and_routes(self):
-        with patch("config.RAG_ENABLED", False), patch("config.OCR_ENABLED", False), patch(
-            "config.IMAGE_UPLOADS_ENABLED", False
-        ), patch("db.RAG_ENABLED", False), patch("db.IMAGE_UPLOADS_ENABLED", False), patch(
-            "routes.pages.RAG_ENABLED", False
-        ), patch("routes.conversations.RAG_ENABLED", False):
+        with (
+            patch("config.RAG_ENABLED", False),
+            patch("config.OCR_ENABLED", False),
+            patch("config.IMAGE_UPLOADS_ENABLED", False),
+            patch("db.RAG_ENABLED", False),
+            patch("db.IMAGE_UPLOADS_ENABLED", False),
+            patch("routes.pages.RAG_ENABLED", False),
+            patch("routes.conversations.RAG_ENABLED", False),
+        ):
             response = self.client.get("/api/settings")
             self.assertEqual(response.status_code, 200)
             payload = response.get_json()
@@ -3225,15 +3310,20 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ]
         )
 
-        with patch("db.IMAGE_STORAGE_DIR", self.image_storage_dir), patch("routes.chat.IMAGE_UPLOADS_ENABLED", True), patch(
-            "routes.chat.analyze_uploaded_image",
-            return_value={
-                "ocr_text": "invoice total 42",
-                "vision_summary": "Readable text was detected in the image and added to the context.",
-                "assistant_guidance": "Use the extracted OCR text as the primary image context when answering the user.",
-                "key_points": [],
-            },
-        ), patch("routes.chat.run_agent_stream", return_value=fake_events):
+        with (
+            patch("db.IMAGE_STORAGE_DIR", self.image_storage_dir),
+            patch("routes.chat.IMAGE_UPLOADS_ENABLED", True),
+            patch(
+                "routes.chat.analyze_uploaded_image",
+                return_value={
+                    "ocr_text": "invoice total 42",
+                    "vision_summary": "Readable text was detected in the image and added to the context.",
+                    "assistant_guidance": "Use the extracted OCR text as the primary image context when answering the user.",
+                    "key_points": [],
+                },
+            ),
+            patch("routes.chat.run_agent_stream", return_value=fake_events),
+        ):
             response = self.client.post(
                 "/chat",
                 data={
@@ -3386,13 +3476,15 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertNotIn("print(SECRET_VALUE)", content)
 
     def test_build_tool_call_contract_mentions_parallel_and_dependent_tools(self):
-        contract = build_tool_call_contract([
-            "search_web",
-            "fetch_url",
-            "image_explain",
-            "search_canvas_document",
-            "search_tool_memory",
-        ])
+        contract = build_tool_call_contract(
+            [
+                "search_web",
+                "fetch_url",
+                "image_explain",
+                "search_canvas_document",
+                "search_tool_memory",
+            ]
+        )
 
         rules_text = "\n".join(contract["rules"])
         batching_guidance = contract["batching_guidance"]
@@ -3403,11 +3495,14 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("search_knowledge_base and search_tool_memory can be batched", batching_guidance)
 
     def test_build_tool_call_contract_mentions_parallel_limit(self):
-        contract = build_tool_call_contract([
-            "search_web",
-            "fetch_url",
-            "read_file",
-        ], max_parallel_tools=2)
+        contract = build_tool_call_contract(
+            [
+                "search_web",
+                "fetch_url",
+                "read_file",
+            ],
+            max_parallel_tools=2,
+        )
 
         batching_guidance = contract["batching_guidance"]
         self.assertIn("cap is 2 per turn", batching_guidance)
@@ -3742,7 +3837,10 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         )
 
         tool_names = [entry["function"]["name"] for entry in tools]
-        self.assertEqual(tool_names, ["expand_canvas_document", "create_canvas_document", "rewrite_canvas_document", "batch_canvas_edits"])
+        self.assertEqual(
+            tool_names,
+            ["expand_canvas_document", "create_canvas_document", "rewrite_canvas_document", "batch_canvas_edits"],
+        )
 
     def test_openai_tool_specs_hide_canvas_edit_tools_without_canvas_document(self):
         tools = get_openai_tool_specs(
@@ -3778,7 +3876,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("## Assistant Role", stable_content)
         self.assertIn("Persistent note", content)
         self.assertIn("Current Date and Time", content)
-        self.assertLess(content.index("## Scratchpad (AI Persistent Memory)"), content.index("## Current Date and Time"))
+        self.assertLess(
+            content.index("## Scratchpad (AI Persistent Memory)"), content.index("## Current Date and Time")
+        )
         self.assertIn("> **AUTHORITATIVE CURRENT TIME:**", content)
         self.assertNotIn("User Preferences", content)
         self.assertIn("Date: ", content)
@@ -3857,7 +3957,10 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             self.assertTrue(str(prompt.get("guidance") or "").strip())
 
         self.assertIn("current information, external verification", TOOL_SPEC_BY_NAME["search_web"]["description"])
-        self.assertIn("If the answer is already available from the current context", TOOL_SPEC_BY_NAME["search_web"]["prompt"]["guidance"])
+        self.assertIn(
+            "If the answer is already available from the current context",
+            TOOL_SPEC_BY_NAME["search_web"]["prompt"]["guidance"],
+        )
         self.assertFalse(TOOL_SPEC_BY_NAME["search_web"]["parameters"].get("additionalProperties", True))
         self.assertIn("Do not pass max_results", TOOL_SPEC_BY_NAME["search_web"]["prompt"]["guidance"])
         self.assertIn("current news coverage", TOOL_SPEC_BY_NAME["search_news_ddgs"]["description"])
@@ -3953,7 +4056,8 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             (
                 message["content"]
                 for message in first_call_messages[1:]
-                if message.get("role") == "system" and "The user prefers concise answers." in str(message.get("content") or "")
+                if message.get("role") == "system"
+                and "The user prefers concise answers." in str(message.get("content") or "")
             ),
             None,
         )
@@ -3984,8 +4088,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ]
         )
 
-        with patch("routes.chat.build_rag_auto_context", return_value=None) as mocked_rag, patch(
-            "routes.chat.run_agent_stream", return_value=fake_events
+        with (
+            patch("routes.chat.build_rag_auto_context", return_value=None) as mocked_rag,
+            patch("routes.chat.run_agent_stream", return_value=fake_events),
         ):
             response = self.client.post(
                 "/chat",
@@ -4015,8 +4120,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 "rag_auto_inject": "true",
                 "rag_sensitivity": "strict",
                 "rag_context_size": "large",
-                "rag_source_types": json.dumps(["conversation", "tool_memory", "uploaded_document"], ensure_ascii=False),
-                "rag_auto_inject_source_types": json.dumps(["conversation", "tool_memory", "uploaded_document"], ensure_ascii=False),
+                "rag_source_types": json.dumps(
+                    ["conversation", "tool_memory", "uploaded_document"], ensure_ascii=False
+                ),
+                "rag_auto_inject_source_types": json.dumps(
+                    ["conversation", "tool_memory", "uploaded_document"], ensure_ascii=False
+                ),
                 "tool_memory_auto_inject": "true",
             }
         )
@@ -4030,8 +4139,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ]
         )
 
-        with patch("routes.chat.build_rag_auto_context", return_value=None) as mocked_rag, patch(
-            "routes.chat.run_agent_stream", return_value=fake_events
+        with (
+            patch("routes.chat.build_rag_auto_context", return_value=None) as mocked_rag,
+            patch("routes.chat.run_agent_stream", return_value=fake_events),
         ):
             response = self.client.post(
                 "/chat",
@@ -4682,8 +4792,13 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("rewrite the delegated task into concise English instructions", spec["prompt"]["guidance"])
         self.assertNotIn("timeout_seconds", spec["parameters"]["properties"])
         self.assertNotIn("allowed_tools", spec["parameters"]["properties"])
-        self.assertIn("The user controls both the helper's web-tool allowlist and its maximum step budget from Settings", spec["prompt"]["guidance"])
-        self.assertIn("Legacy optional helper-agent tool budget", spec["parameters"]["properties"]["max_steps"]["description"])
+        self.assertIn(
+            "The user controls both the helper's web-tool allowlist and its maximum step budget from Settings",
+            spec["prompt"]["guidance"],
+        )
+        self.assertIn(
+            "Legacy optional helper-agent tool budget", spec["parameters"]["properties"]["max_steps"]["description"]
+        )
 
     def test_clarification_tool_validator_accepts_stringified_question_objects(self):
         from agent import _validate_tool_arguments
@@ -4840,7 +4955,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(summary, "Awaiting user clarification")
         self.assertEqual(result["status"], "needs_user_input")
         self.assertEqual(result["clarification"]["questions"][0]["id"], "software")
-        self.assertEqual(result["clarification"]["questions"][0]["label"], "Hangi sanallaştırma yazılımını kullanacaksın?")
+        self.assertEqual(
+            result["clarification"]["questions"][0]["label"], "Hangi sanallaştırma yazılımını kullanacaksın?"
+        )
         self.assertEqual(result["clarification"]["questions"][0]["input_type"], "single_select")
 
     def test_execute_clarification_tool_normalizes_question_dependencies(self):
@@ -4907,10 +5024,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(len(result["clarification"]["questions"]), 2)
         self.assertEqual(
             result["text"],
-            "Before I answer, I need a few details.\n"
-            "Please answer these questions:\n"
-            "1. Which scope?\n"
-            "2. What style?",
+            "Before I answer, I need a few details.\nPlease answer these questions:\n1. Which scope?\n2. What style?",
         )
         self.assertEqual(result["clarification"]["intro"], "Before I answer, I need a few details.")
         self.assertEqual(result["clarification"]["questions"][0]["label"], "Which scope?")
@@ -4920,14 +5034,14 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             "ask_clarifying_question",
             {
                 "intro": '<|"Önce bunu netleştirelim:"|>',
-                "submit_label": '```Devam```',
+                "submit_label": "```Devam```",
                 "questions": [
                     {
-                        "id": '<|career-focus|>',
+                        "id": "<|career-focus|>",
                         "label": '* Q: <|"Önerdiğim 3 yoldan hangileri sana daha cazip geliyor?"|>',
                         "input_type": "multi_select",
                         "options": [
-                            {'label': '<|"Akademik Nörobilim Araştırmacısı"|>', 'value': '<|academic_track|>'},
+                            {"label": '<|"Akademik Nörobilim Araştırmacısı"|>', "value": "<|academic_track|>"},
                             '* <|"Klinik Araştırma + Akademik Hibrit"|>',
                         ],
                     }
@@ -5051,7 +5165,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                                             "id": "call-1",
                                             "function": {
                                                 "name": "search_web",
-                                                "arguments": json.dumps({"queries": ["clarification context"]}, ensure_ascii=False),
+                                                "arguments": json.dumps(
+                                                    {"queries": ["clarification context"]}, ensure_ascii=False
+                                                ),
                                             },
                                         },
                                         {
@@ -5062,7 +5178,11 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                                                 "arguments": json.dumps(
                                                     {
                                                         "questions": [
-                                                            {"id": "scope", "label": "Which scope?", "input_type": "text"},
+                                                            {
+                                                                "id": "scope",
+                                                                "label": "Which scope?",
+                                                                "input_type": "text",
+                                                            },
                                                         ]
                                                     },
                                                     ensure_ascii=False,
@@ -5079,9 +5199,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ),
         ]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses), patch(
-            "agent.search_web_tool",
-            return_value=[{"title": "Stub", "url": "https://example.com", "snippet": "Snippet"}],
+        with (
+            patch("agent.client.chat.completions.create", side_effect=responses),
+            patch(
+                "agent.search_web_tool",
+                return_value=[{"title": "Stub", "url": "https://example.com", "snippet": "Snippet"}],
+            ),
         ):
             events = list(
                 run_agent_stream(
@@ -5121,8 +5244,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         metadata = {
             "pending_clarification": {
                 "questions": [
-                    {"id": f"q{index}", "label": f"Question {index}?", "input_type": "text"}
-                    for index in range(1, 8)
+                    {"id": f"q{index}", "label": f"Question {index}?", "input_type": "text"} for index in range(1, 8)
                 ]
             }
         }
@@ -5165,19 +5287,23 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("re-upload", result["error"])
 
     def test_get_ocr_engine_falls_back_to_easyocr_when_paddle_dependencies_are_missing(self):
-        with patch.object(ocr_service, "OCR_ENABLED", True), patch.object(
-            ocr_service, "OCR_PROVIDER", "paddleocr"
-        ), patch.object(ocr_service, "_ocr_engine", None), patch.object(
-            ocr_service,
-            "_build_paddleocr_engine",
-            side_effect=RuntimeError(
-                "PaddleOCR dependencies are missing. Ensure paddleocr and a compatible paddlepaddle runtime are installed."
-            ),
-        ) as mocked_paddle, patch.object(
-            ocr_service,
-            "_build_easyocr_engine",
-            return_value={"provider": "easyocr", "reader": object()},
-        ) as mocked_easy:
+        with (
+            patch.object(ocr_service, "OCR_ENABLED", True),
+            patch.object(ocr_service, "OCR_PROVIDER", "paddleocr"),
+            patch.object(ocr_service, "_ocr_engine", None),
+            patch.object(
+                ocr_service,
+                "_build_paddleocr_engine",
+                side_effect=RuntimeError(
+                    "PaddleOCR dependencies are missing. Ensure paddleocr and a compatible paddlepaddle runtime are installed."
+                ),
+            ) as mocked_paddle,
+            patch.object(
+                ocr_service,
+                "_build_easyocr_engine",
+                return_value={"provider": "easyocr", "reader": object()},
+            ) as mocked_easy,
+        ):
             engine = ocr_service.get_ocr_engine()
 
         self.assertEqual(engine["provider"], "easyocr")
@@ -5200,29 +5326,37 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         )
 
     def test_preload_ocr_engine_skips_missing_dependencies_without_raising(self):
-        with patch.object(ocr_service, "OCR_ENABLED", True), patch.object(
-            ocr_service, "OCR_PRELOAD_ON_STARTUP", True
-        ), patch.object(
-            ocr_service,
-            "get_ocr_engine",
-            side_effect=RuntimeError(
-                "PaddleOCR dependencies are missing. Ensure paddleocr and a compatible paddlepaddle runtime are installed."
+        with (
+            patch.object(ocr_service, "OCR_ENABLED", True),
+            patch.object(ocr_service, "OCR_PRELOAD_ON_STARTUP", True),
+            patch.object(
+                ocr_service,
+                "get_ocr_engine",
+                side_effect=RuntimeError(
+                    "PaddleOCR dependencies are missing. Ensure paddleocr and a compatible paddlepaddle runtime are installed."
+                ),
             ),
         ):
             ocr_service.preload_ocr_engine(SimpleNamespace(debug=False))
 
     def test_preload_dependencies_preloads_ocr_for_local_ocr_setting(self):
-        with patch("routes.chat.get_app_settings", return_value={"image_processing_method": "local_ocr"}), patch(
-            "routes.chat.OCR_ENABLED", True
-        ), patch("routes.chat.RAG_ENABLED", False), patch("routes.chat.preload_ocr_engine") as mocked_preload_ocr:
+        with (
+            patch("routes.chat.get_app_settings", return_value={"image_processing_method": "local_ocr"}),
+            patch("routes.chat.OCR_ENABLED", True),
+            patch("routes.chat.RAG_ENABLED", False),
+            patch("routes.chat.preload_ocr_engine") as mocked_preload_ocr,
+        ):
             preload_dependencies(SimpleNamespace(debug=False))
 
         mocked_preload_ocr.assert_called_once()
 
     def test_preload_dependencies_preloads_ocr_for_llm_direct_setting(self):
-        with patch("routes.chat.get_app_settings", return_value={"image_processing_method": "llm_direct"}), patch(
-            "routes.chat.OCR_ENABLED", True
-        ), patch("routes.chat.RAG_ENABLED", False), patch("routes.chat.preload_ocr_engine") as mocked_preload_ocr:
+        with (
+            patch("routes.chat.get_app_settings", return_value={"image_processing_method": "llm_direct"}),
+            patch("routes.chat.OCR_ENABLED", True),
+            patch("routes.chat.RAG_ENABLED", False),
+            patch("routes.chat.preload_ocr_engine") as mocked_preload_ocr,
+        ):
             preload_dependencies(SimpleNamespace(debug=False))
 
         mocked_preload_ocr.assert_called_once()
@@ -5237,8 +5371,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 raise AssertionError("torch should not be imported for cpu device selection")
             return original_import(name, *args, **kwargs)
 
-        with patch.dict(os.environ, {"BGE_M3_DEVICE": "cpu"}, clear=False), patch(
-            "builtins.__import__", side_effect=guarded_import
+        with (
+            patch.dict(os.environ, {"BGE_M3_DEVICE": "cpu"}, clear=False),
+            patch("builtins.__import__", side_effect=guarded_import),
         ):
             self.assertEqual(embedder._resolve_device(), "cpu")
 
@@ -5252,9 +5387,11 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 raise ModuleNotFoundError("No module named 'torch'")
             return original_import(name, *args, **kwargs)
 
-        with patch.dict(os.environ, {"BGE_M3_DEVICE": "cuda"}, clear=False), patch(
-            "builtins.__import__", side_effect=guarded_import
-        ), patch.object(embedder.logging, "warning") as mock_warning:
+        with (
+            patch.dict(os.environ, {"BGE_M3_DEVICE": "cuda"}, clear=False),
+            patch("builtins.__import__", side_effect=guarded_import),
+            patch.object(embedder.logging, "warning") as mock_warning,
+        ):
             self.assertEqual(embedder._resolve_device(), "cpu")
             mock_warning.assert_called_once()
             self.assertIn("falling back to CPU", mock_warning.call_args.args[0])
@@ -5262,13 +5399,16 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
     def test_preload_embedder_skips_missing_dependencies_without_raising(self):
         from rag import embedder
 
-        with patch.object(
-            embedder,
-            "get_embedder",
-            side_effect=RuntimeError(
-                "BGE-M3 dependencies are missing. Install sentence-transformers and torch before using RAG."
+        with (
+            patch.object(
+                embedder,
+                "get_embedder",
+                side_effect=RuntimeError(
+                    "BGE-M3 dependencies are missing. Install sentence-transformers and torch before using RAG."
+                ),
             ),
-        ), patch.object(embedder.logging, "warning") as mock_warning:
+            patch.object(embedder.logging, "warning") as mock_warning,
+        ):
             embedder.preload_embedder()
             mock_warning.assert_called_once()
             self.assertIn("BGE-M3 preload skipped", mock_warning.call_args.args[0])
@@ -5469,7 +5609,10 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("Missing expected file: app.py", validation["warnings"])
         self.assertIn("Missing tests directory or test files.", validation["warnings"])
         self.assertIn("config.py is empty.", validation["warnings"])
-        self.assertIn("No obvious Python entry point found. Add app.py, main.py, __main__.py, or declare scripts in pyproject.toml.", validation["warnings"])
+        self.assertIn(
+            "No obvious Python entry point found. Add app.py, main.py, __main__.py, or declare scripts in pyproject.toml.",
+            validation["warnings"],
+        )
         self.assertIn("Relative import target is missing in src/demo_pkg/main.py: .missing", validation["warnings"])
 
     def test_write_project_tree_requires_confirmation_for_overwrites(self):
@@ -5541,29 +5684,34 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(searched["matches"], [])
 
     def test_expand_canvas_document_tool_returns_line_numbered_context(self):
-        runtime_state = {"canvas": create_canvas_runtime_state([
-            {
-                "id": "canvas-1",
-                "title": "app.py",
-                "path": "src/app.py",
-                "role": "source",
-                "format": "code",
-                "language": "python",
-                "content": "import os\n\nprint('hello')",
-                "imports": ["os"],
-                "symbols": ["main"],
-            },
-            {
-                "id": "canvas-2",
-                "title": "config.py",
-                "path": "src/config.py",
-                "role": "config",
-                "format": "code",
-                "language": "python",
-                "content": "DEBUG = True",
-                "exports": ["DEBUG"],
-            },
-        ], active_document_id="canvas-2")}
+        runtime_state = {
+            "canvas": create_canvas_runtime_state(
+                [
+                    {
+                        "id": "canvas-1",
+                        "title": "app.py",
+                        "path": "src/app.py",
+                        "role": "source",
+                        "format": "code",
+                        "language": "python",
+                        "content": "import os\n\nprint('hello')",
+                        "imports": ["os"],
+                        "symbols": ["main"],
+                    },
+                    {
+                        "id": "canvas-2",
+                        "title": "config.py",
+                        "path": "src/config.py",
+                        "role": "config",
+                        "format": "code",
+                        "language": "python",
+                        "content": "DEBUG = True",
+                        "exports": ["DEBUG"],
+                    },
+                ],
+                active_document_id="canvas-2",
+            )
+        }
 
         expanded, summary = _execute_tool(
             "expand_canvas_document",
@@ -5583,16 +5731,20 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("os", expanded["relationship_map"]["imports"])
 
     def test_expand_canvas_document_accepts_title_as_document_path(self):
-        runtime_state = {"canvas": create_canvas_runtime_state([
-            {
-                "id": "canvas-arduino",
-                "title": "Arduino Kodu - RobotBeyni.ino",
-                "role": "source",
-                "format": "code",
-                "language": "cpp",
-                "content": "int led = 13;\nvoid setup() {}",
-            }
-        ])}
+        runtime_state = {
+            "canvas": create_canvas_runtime_state(
+                [
+                    {
+                        "id": "canvas-arduino",
+                        "title": "Arduino Kodu - RobotBeyni.ino",
+                        "role": "source",
+                        "format": "code",
+                        "language": "cpp",
+                        "content": "int led = 13;\nvoid setup() {}",
+                    }
+                ]
+            )
+        }
 
         expanded, summary = _execute_tool(
             "expand_canvas_document",
@@ -5605,17 +5757,21 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(expanded["visible_lines"], ["1: int led = 13;", "2: void setup() {}"])
 
     def test_expand_canvas_document_accepts_unique_basename_as_document_path(self):
-        runtime_state = {"canvas": create_canvas_runtime_state([
-            {
-                "id": "canvas-arduino",
-                "title": "Arduino Kodu - RobotBeyni.ino",
-                "path": "projects/robot/Arduino Kodu - RobotBeyni.ino",
-                "role": "source",
-                "format": "code",
-                "language": "cpp",
-                "content": "int led = 13;\nvoid loop() {}",
-            }
-        ])}
+        runtime_state = {
+            "canvas": create_canvas_runtime_state(
+                [
+                    {
+                        "id": "canvas-arduino",
+                        "title": "Arduino Kodu - RobotBeyni.ino",
+                        "path": "projects/robot/Arduino Kodu - RobotBeyni.ino",
+                        "role": "source",
+                        "format": "code",
+                        "language": "cpp",
+                        "content": "int led = 13;\nvoid loop() {}",
+                    }
+                ]
+            )
+        }
 
         expanded, summary = _execute_tool(
             "expand_canvas_document",
@@ -5638,16 +5794,21 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ]
         )
 
-        with patch("db.IMAGE_STORAGE_DIR", self.image_storage_dir), patch("routes.chat.IMAGE_UPLOADS_ENABLED", True), patch(
-            "routes.chat.analyze_uploaded_image",
-            return_value={
-                "analysis_method": "llm_helper",
-                "ocr_text": "hello",
-                "vision_summary": "A login screen is shown.",
-                "assistant_guidance": "Use the labels and values when answering.",
-                "key_points": ["Email field", "Password field"],
-            },
-        ), patch("routes.chat.run_agent_stream", return_value=fake_events):
+        with (
+            patch("db.IMAGE_STORAGE_DIR", self.image_storage_dir),
+            patch("routes.chat.IMAGE_UPLOADS_ENABLED", True),
+            patch(
+                "routes.chat.analyze_uploaded_image",
+                return_value={
+                    "analysis_method": "llm_helper",
+                    "ocr_text": "hello",
+                    "vision_summary": "A login screen is shown.",
+                    "assistant_guidance": "Use the labels and values when answering.",
+                    "key_points": ["Email field", "Password field"],
+                },
+            ),
+            patch("routes.chat.run_agent_stream", return_value=fake_events),
+        ):
             response = self.client.post(
                 "/chat",
                 data={
@@ -5689,23 +5850,28 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             captured["initial_canvas_documents"] = kwargs.get("initial_canvas_documents") or []
             return iter([{"type": "done"}])
 
-        with patch("db.IMAGE_STORAGE_DIR", self.image_storage_dir), patch("routes.chat.IMAGE_UPLOADS_ENABLED", True), patch(
-            "routes.chat.analyze_uploaded_image",
-            side_effect=[
-                {
-                    "ocr_text": "alpha",
-                    "vision_summary": "First screen.",
-                    "assistant_guidance": "Use alpha.",
-                    "key_points": ["A"],
-                },
-                {
-                    "ocr_text": "beta",
-                    "vision_summary": "Second screen.",
-                    "assistant_guidance": "Use beta.",
-                    "key_points": ["B"],
-                },
-            ],
-        ), patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream):
+        with (
+            patch("db.IMAGE_STORAGE_DIR", self.image_storage_dir),
+            patch("routes.chat.IMAGE_UPLOADS_ENABLED", True),
+            patch(
+                "routes.chat.analyze_uploaded_image",
+                side_effect=[
+                    {
+                        "ocr_text": "alpha",
+                        "vision_summary": "First screen.",
+                        "assistant_guidance": "Use alpha.",
+                        "key_points": ["A"],
+                    },
+                    {
+                        "ocr_text": "beta",
+                        "vision_summary": "Second screen.",
+                        "assistant_guidance": "Use beta.",
+                        "key_points": ["B"],
+                    },
+                ],
+            ),
+            patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream),
+        ):
             response = self.client.post(
                 "/chat",
                 data=MultiDict(
@@ -5762,21 +5928,26 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             captured["api_messages"] = api_messages
             return iter([{"type": "done"}])
 
-        with patch("routes.chat.YOUTUBE_TRANSCRIPTS_ENABLED", True), patch(
-            "routes.chat.read_youtube_video_reference",
-            return_value=("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "dQw4w9WgXcQ"),
-        ), patch(
-            "routes.chat.transcribe_youtube_video",
-            return_value={
-                "platform": "youtube",
-                "source_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-                "source_video_id": "dQw4w9WgXcQ",
-                "title": "Demo Video",
-                "duration_seconds": 93,
-                "transcript_text": "Hello from the transcript. This is the main point.",
-                "transcript_language": "en",
-            },
-        ), patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream):
+        with (
+            patch("routes.chat.YOUTUBE_TRANSCRIPTS_ENABLED", True),
+            patch(
+                "routes.chat.read_youtube_video_reference",
+                return_value=("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+            ),
+            patch(
+                "routes.chat.transcribe_youtube_video",
+                return_value={
+                    "platform": "youtube",
+                    "source_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                    "source_video_id": "dQw4w9WgXcQ",
+                    "title": "Demo Video",
+                    "duration_seconds": 93,
+                    "transcript_text": "Hello from the transcript. This is the main point.",
+                    "transcript_language": "en",
+                },
+            ),
+            patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream),
+        ):
             response = self.client.post(
                 "/chat",
                 json={
@@ -5812,15 +5983,25 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(asset["message_id"], user_messages[0]["id"])
         self.assertEqual(asset["title"], "Demo Video")
 
-        user_prompt_messages = [message for message in captured.get("api_messages", []) if message.get("role") == "user"]
-        self.assertTrue(any("[YouTube video transcript: Demo Video]" in str(message.get("content") or "") for message in user_prompt_messages))
+        user_prompt_messages = [
+            message for message in captured.get("api_messages", []) if message.get("role") == "user"
+        ]
+        self.assertTrue(
+            any(
+                "[YouTube video transcript: Demo Video]" in str(message.get("content") or "")
+                for message in user_prompt_messages
+            )
+        )
 
     def test_chat_rejects_invalid_youtube_url(self):
         conversation_id = self._create_conversation()
 
-        with patch("routes.chat.YOUTUBE_TRANSCRIPTS_ENABLED", True), patch(
-            "routes.chat.read_youtube_video_reference",
-            side_effect=ValueError("Enter a valid YouTube URL."),
+        with (
+            patch("routes.chat.YOUTUBE_TRANSCRIPTS_ENABLED", True),
+            patch(
+                "routes.chat.read_youtube_video_reference",
+                side_effect=ValueError("Enter a valid YouTube URL."),
+            ),
         ):
             response = self.client.post(
                 "/chat",
@@ -5918,15 +6099,20 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             source_message_id=assistant_message_id,
         )
 
-        with patch(
-            "conversation_cleanup_service.get_workspace_root_for_conversation",
-            return_value=workspace_root,
-        ), patch("routes.conversations.purge_conversation_rag_sources") as mocked_purge:
+        with (
+            patch(
+                "conversation_cleanup_service.get_workspace_root_for_conversation",
+                return_value=workspace_root,
+            ),
+            patch("routes.conversations.purge_conversation_rag_sources") as mocked_purge,
+        ):
             response = self.client.delete(f"/api/conversations/{conversation_id}")
 
         self.assertEqual(response.status_code, 204)
         self.assertFalse(os.path.exists(workspace_root))
-        self.assertNotIn("Conversation scoped scratchpad", get_all_scratchpad_sections(get_app_settings()).get("notes", ""))
+        self.assertNotIn(
+            "Conversation scoped scratchpad", get_all_scratchpad_sections(get_app_settings()).get("notes", "")
+        )
         self.assertNotIn("fact:conversation-delete", {entry["key"] for entry in get_user_profile_entries()})
         self.assertEqual(self.client.get(f"/api/conversations/{conversation_id}").status_code, 404)
         mocked_purge.assert_called_once_with(conversation_id, include_archived=True)
@@ -5934,9 +6120,10 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
     def test_delete_conversation_purges_rag_sources_even_when_rag_is_disabled(self):
         conversation_id = self._create_conversation()
 
-        with patch("routes.conversations.RAG_ENABLED", False), patch(
-            "routes.conversations.purge_conversation_rag_sources"
-        ) as mocked_purge:
+        with (
+            patch("routes.conversations.RAG_ENABLED", False),
+            patch("routes.conversations.purge_conversation_rag_sources") as mocked_purge,
+        ):
             response = self.client.delete(f"/api/conversations/{conversation_id}")
 
         self.assertEqual(response.status_code, 204)
@@ -5976,10 +6163,10 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("INPUT_BREAKDOWN_ORDER", script_text)
         self.assertIn("loadSidebar()", script_text)
         self.assertIn('const editBanner = document.getElementById("edit-banner")', script_text)
-        self.assertIn('const editedMessageId = isEditing ? Number(editingEntry.id) : null;', script_text)
-        self.assertIn('edited_message_id: editedMessageId', script_text)
+        self.assertIn("const editedMessageId = isEditing ? Number(editingEntry.id) : null;", script_text)
+        self.assertIn("edited_message_id: editedMessageId", script_text)
         self.assertIn('formData.append("edited_message_id", String(editedMessageId));', script_text)
-        self.assertIn('document_canvas_action: documentCanvasAction,', script_text)
+        self.assertIn("document_canvas_action: documentCanvasAction,", script_text)
         self.assertIn("clearEditTarget();", script_text)
         self.assertIn("function isEditableHistoryMessage(message)", script_text)
         self.assertIn("function createInlineMessageEditor(message)", script_text)
@@ -5991,8 +6178,8 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("Copy as Markdown", script_text)
         self.assertIn('editable: message.role === "user" || message.role === "assistant"', script_text)
         self.assertIn('method: "PATCH"', script_text)
-        self.assertIn('body: JSON.stringify({', script_text)
-        self.assertIn('`/api/messages/${messageId}`', script_text)
+        self.assertIn("body: JSON.stringify({", script_text)
+        self.assertIn("`/api/messages/${messageId}`", script_text)
         self.assertIn("const fragment = document.createDocumentFragment();", script_text)
         self.assertIn("messagesEl.replaceChildren(fragment);", script_text)
         self.assertIn("function isPersistedMessageId(messageId)", script_text)
@@ -6020,31 +6207,39 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("Custom model API id is required.", script_text)
         self.assertIn("void loadKnowledgeBaseDocuments();", script_text)
         self.assertIn("void refreshSettings();", script_text)
-        self.assertIn("window.addEventListener(\"beforeunload\"", script_text)
+        self.assertIn('window.addEventListener("beforeunload"', script_text)
 
     def test_reasoning_panel_uses_markdown_rendering(self):
         script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
         script_text = script_path.read_text(encoding="utf-8")
-        self.assertIn('body.innerHTML = renderReasoning(text);', script_text)
+        self.assertIn("body.innerHTML = renderReasoning(text);", script_text)
 
     def test_reasoning_panel_stays_open_when_stream_finishes(self):
         script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
         script_text = script_path.read_text(encoding="utf-8")
-        self.assertIn('updateReasoningPanel(asstGroup, getReasoningText(metadata), { forceOpen: true });', script_text)
-        self.assertNotIn('updateReasoningPanel(asstGroup, getReasoningText(metadata), { autoCollapse: true });', script_text)
+        self.assertIn("updateReasoningPanel(asstGroup, getReasoningText(metadata), { forceOpen: true });", script_text)
+        self.assertNotIn(
+            "updateReasoningPanel(asstGroup, getReasoningText(metadata), { autoCollapse: true });", script_text
+        )
 
     def test_reasoning_is_restored_from_session_cache_after_refresh(self):
         script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
         script_text = script_path.read_text(encoding="utf-8")
         self.assertIn("assistant-reasoning:", script_text)
-        self.assertIn("saveAssistantReasoning(currentConvId, persistedMessageIds?.assistant_message_id || assistantEntry.id, rawReasoning);", script_text)
+        self.assertIn(
+            "saveAssistantReasoning(currentConvId, persistedMessageIds?.assistant_message_id || assistantEntry.id, rawReasoning);",
+            script_text,
+        )
         self.assertIn("updateReasoningPanel(group, getReasoningText(metadata, options.messageId));", script_text)
 
     def test_conversation_export_posts_cached_reasoning_from_frontend(self):
         script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
         script_text = script_path.read_text(encoding="utf-8")
-        self.assertIn("function collectConversationReasoningExportMap(entries = history, conversationId = currentConvId)", script_text)
-        self.assertIn('body: JSON.stringify({ reasoning_by_message_id: reasoningByMessageId })', script_text)
+        self.assertIn(
+            "function collectConversationReasoningExportMap(entries = history, conversationId = currentConvId)",
+            script_text,
+        )
+        self.assertIn("body: JSON.stringify({ reasoning_by_message_id: reasoningByMessageId })", script_text)
         self.assertIn('method: "POST"', script_text)
 
     def test_raw_json_conversation_export_button_is_wired_from_frontend(self):
@@ -6055,8 +6250,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
         script_text = script_path.read_text(encoding="utf-8")
-        self.assertIn('const conversationExportJsonBtn = document.getElementById("conversation-export-json-btn");', script_text)
-        self.assertIn('conversationExportJsonBtn.addEventListener("click", () => downloadConversation("json"));', script_text)
+        self.assertIn(
+            'const conversationExportJsonBtn = document.getElementById("conversation-export-json-btn");', script_text
+        )
+        self.assertIn(
+            'conversationExportJsonBtn.addEventListener("click", () => downloadConversation("json"));', script_text
+        )
 
     def test_reasoning_css_includes_markdown_styles(self):
         style_path = Path(__file__).resolve().parent.parent / "static" / "style.css"
@@ -6181,7 +6380,15 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         self.assertEqual(
             runtime_names,
-            ["append_scratchpad", "search_web", "fetch_url", "scroll_fetched_content", "search_news_ddgs", "read_file", "create_canvas_document"],
+            [
+                "append_scratchpad",
+                "search_web",
+                "fetch_url",
+                "scroll_fetched_content",
+                "search_news_ddgs",
+                "read_file",
+                "create_canvas_document",
+            ],
         )
 
     def test_resolve_runtime_tool_names_without_user_message_excludes_workspace_tools_when_no_root(self):
@@ -6271,16 +6478,21 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         def fake_run_agent_stream(*args, **kwargs):
             captured["prompt_tool_names"] = list(kwargs.get("prompt_tool_names") or [])
-            return iter([
-                {"type": "answer_start"},
-                {"type": "answer_delta", "text": "Done."},
-                {"type": "tool_capture", "tool_results": []},
-                {"type": "done"},
-            ])
+            return iter(
+                [
+                    {"type": "answer_start"},
+                    {"type": "answer_delta", "text": "Done."},
+                    {"type": "tool_capture", "tool_results": []},
+                    {"type": "done"},
+                ]
+            )
 
-        with patch("routes.chat.get_active_tool_names", return_value=["search_web", "fetch_url"]), patch(
-            "routes.chat.run_agent_stream",
-            side_effect=fake_run_agent_stream,
+        with (
+            patch("routes.chat.get_active_tool_names", return_value=["search_web", "fetch_url"]),
+            patch(
+                "routes.chat.run_agent_stream",
+                side_effect=fake_run_agent_stream,
+            ),
         ):
             response = self.client.post(
                 "/chat",
@@ -6317,7 +6529,14 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         self.assertEqual(
             runtime_names,
-            ["create_canvas_document", "search_canvas_document", "preview_canvas_changes", "set_canvas_viewport", "rewrite_canvas_document", "replace_canvas_lines"],
+            [
+                "create_canvas_document",
+                "search_canvas_document",
+                "preview_canvas_changes",
+                "set_canvas_viewport",
+                "rewrite_canvas_document",
+                "replace_canvas_lines",
+            ],
         )
 
     def test_resolve_runtime_tool_names_hides_text_canvas_tools_for_visual_only_documents(self):
@@ -6484,9 +6703,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             total_tokens=1050,
             prompt_cache_hit_tokens=None,
             prompt_cache_miss_tokens=None,
-            model_extra={
-                "prompt_tokens_details": {"cached_tokens": 800, "cache_write_tokens": 0}
-            },
+            model_extra={"prompt_tokens_details": {"cached_tokens": 800, "cache_write_tokens": 0}},
         )
         metrics = _extract_usage_metrics(usage)
         self.assertEqual(metrics["prompt_tokens"], 1000)
@@ -6499,9 +6716,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             total_tokens=1050,
             prompt_cache_hit_tokens=None,
             prompt_cache_miss_tokens=None,
-            model_extra={
-                "prompt_tokens_details": {"cached_tokens": 800, "cache_write_tokens": 120}
-            },
+            model_extra={"prompt_tokens_details": {"cached_tokens": 800, "cache_write_tokens": 120}},
         )
 
         metrics = _extract_usage_metrics(usage)
@@ -6516,9 +6731,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             total_tokens=1050,
             prompt_cache_hit_tokens=None,
             prompt_cache_miss_tokens=None,
-            model_extra={
-                "prompt_tokens_details": {"cache_write_tokens": 120}
-            },
+            model_extra={"prompt_tokens_details": {"cache_write_tokens": 120}},
         )
 
         metrics = _extract_usage_metrics(usage)
@@ -6534,9 +6747,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             total_tokens=1050,
             prompt_cache_hit_tokens=600,
             prompt_cache_miss_tokens=400,
-            model_extra={
-                "prompt_tokens_details": {"cached_tokens": 999}
-            },
+            model_extra={"prompt_tokens_details": {"cached_tokens": 999}},
         )
         metrics = _extract_usage_metrics(usage)
         self.assertEqual(metrics["prompt_cache_hit_tokens"], 600)
@@ -6548,9 +6759,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             total_tokens=1050,
             prompt_cache_hit_tokens=None,
             prompt_cache_miss_tokens=None,
-            model_extra={
-                "prompt_tokens_details": {"cached_tokens": 800}
-            },
+            model_extra={"prompt_tokens_details": {"cached_tokens": 800}},
         )
 
         metrics = _extract_usage_metrics(usage)
@@ -6578,13 +6787,13 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("tool_trace: assistantToolTrace", script_text)
         self.assertIn("function updateAssistantSubAgentTrace(group, metadata)", script_text)
         self.assertIn("sub_agent_traces: assistantSubAgentTraces", script_text)
-        self.assertIn('assistant_sub_agent_trace_update', script_text)
-        self.assertIn('fallback_note', script_text)
+        self.assertIn("assistant_sub_agent_trace_update", script_text)
+        self.assertIn("fallback_note", script_text)
         self.assertIn('task_full: String(entry.task_full || "").trim()', script_text)
-        self.assertIn('sub-agent-run__note', script_text)
-        self.assertIn('sub-agent-run__instructions-body', script_text)
-        self.assertIn('Should the research be saved to the Canvas?', script_text)
-        self.assertIn('summaryText !== fallbackNote', script_text)
+        self.assertIn("sub-agent-run__note", script_text)
+        self.assertIn("sub-agent-run__instructions-body", script_text)
+        self.assertIn("Should the research be saved to the Canvas?", script_text)
+        self.assertIn("summaryText !== fallbackNote", script_text)
         self.assertIn("function createAssistantMessageActions(message)", script_text)
         self.assertIn("Edit message", script_text)
         self.assertIn("Regenerate reply", script_text)
@@ -6630,9 +6839,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("function appendClarificationPanel(group, metadata, options = {})", script_text)
         self.assertIn("function updateClarificationFieldVisibility(form, clarification)", script_text)
         self.assertIn("pending_clarification: pendingClarification", script_text)
-        self.assertIn('clarification_response', script_text)
-        self.assertIn('active_document_id: assistantCanvasActiveDocumentId || activeCanvasDocumentId', script_text)
-        self.assertIn('canvas_cleared: assistantCanvasCleared', script_text)
+        self.assertIn("clarification_response", script_text)
+        self.assertIn("active_document_id: assistantCanvasActiveDocumentId || activeCanvasDocumentId", script_text)
+        self.assertIn("canvas_cleared: assistantCanvasCleared", script_text)
         self.assertIn("A: Type your answer", script_text)
         self.assertIn("Your draft answers stay in this browser until you send them.", script_text)
         self.assertIn("clarification-card__intro", script_text)
@@ -6657,9 +6866,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         style_path = Path(__file__).resolve().parent.parent / "static" / "style.css"
         style_text = style_path.read_text(encoding="utf-8")
 
-        self.assertIn("let visibleAnswer = \"\";", script_text)
+        self.assertIn('let visibleAnswer = "";', script_text)
         self.assertIn("visibleAnswer = fullAnswer;", script_text)
-        self.assertIn("if (!String(fullAnswer || \"\").trim()) {", script_text)
+        self.assertIn('if (!String(fullAnswer || "").trim()) {', script_text)
         self.assertIn("renderBubbleWithCursor(asstBubble, visibleAnswer);", script_text)
         self.assertIn("window.requestAnimationFrame(flushStreamingAnswerFrame)", script_text)
         self.assertIn("asstBubble.hidden = true;", script_text)
@@ -6676,10 +6885,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         style_path = Path(__file__).resolve().parent.parent / "static" / "style.css"
         style_text = style_path.read_text(encoding="utf-8")
 
-        self.assertIn("function renderAssistantLoadingBubble(bubbleEl, label = \"Preparing response…\", detail = \"\")", script_text)
+        self.assertIn(
+            'function renderAssistantLoadingBubble(bubbleEl, label = "Preparing response…", detail = "")', script_text
+        )
         self.assertIn("const streamRequestId = createStreamRequestId();", script_text)
         self.assertIn("stream_request_id: streamRequestId", script_text)
-        self.assertIn('fetch(`/api/chat-runs/${encodeURIComponent(runId)}/cancel`', script_text)
+        self.assertIn("fetch(`/api/chat-runs/${encodeURIComponent(runId)}/cancel`", script_text)
         self.assertIn("STREAM_ANSWER_RENDER_INTERVAL_MS = 42", script_text)
         self.assertIn(".assistant-loading", style_text)
         self.assertIn(".bubble.bubble--loading", style_text)
@@ -6695,7 +6906,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("function flushDeferredCanvasRenderWork()", script_text)
         self.assertIn("activeAnswerRenderPending = true;", script_text)
         self.assertIn("flushDeferredCanvasRenderWork();", script_text)
-        self.assertIn('requestCanvasPanelRender({ deferForStreaming: options.deferPanelRender !== false });', script_text)
+        self.assertIn(
+            "requestCanvasPanelRender({ deferForStreaming: options.deferPanelRender !== false });", script_text
+        )
         self.assertIn('messagesEl.style.scrollBehavior = active ? "auto" : "";', script_text)
 
     def test_frontend_canvas_mobile_viewport_controls_are_wired(self):
@@ -6731,7 +6944,10 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn('value="sub_agent"', html)
         self.assertIn('id="scratchpad-list"', html)
         self.assertIn('id="scratchpad-add-btn"', html)
-        self.assertIn('Reserve the scratchpad for durable cross-conversation lessons, profile clues, recurring problems, long-running workstreams, preferences, domain facts, and a few general notes.', html)
+        self.assertIn(
+            "Reserve the scratchpad for durable cross-conversation lessons, profile clues, recurring problems, long-running workstreams, preferences, domain facts, and a few general notes.",
+            html,
+        )
         self.assertIn('id="summary-mode-select"', html)
         self.assertIn('id="summary-trigger-input"', html)
         self.assertIn('id="prompt-max-input-tokens-input"', html)
@@ -6793,7 +7009,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         responses = [
             iter(
                 [
-                    self._tool_call_chunk("append_scratchpad", {"section": "preferences", "notes": ["The user is 22 years old."]}),
+                    self._tool_call_chunk(
+                        "append_scratchpad", {"section": "preferences", "notes": ["The user is 22 years old."]}
+                    ),
                     self._stream_chunk(usage=SimpleNamespace(prompt_tokens=3, completion_tokens=3, total_tokens=6)),
                 ]
             ),
@@ -6805,11 +7023,18 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ),
         ]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses), patch(
-            "agent.append_to_scratchpad",
-            return_value=({"status": "appended", "scratchpad": "The user is 22 years old."}, "Scratchpad updated"),
-        ) as mocked_append:
-            events = list(run_agent_stream([{"role": "user", "content": "Remember this"}], "deepseek-chat", 2, ["append_scratchpad"]))
+        with (
+            patch("agent.client.chat.completions.create", side_effect=responses),
+            patch(
+                "agent.append_to_scratchpad",
+                return_value=({"status": "appended", "scratchpad": "The user is 22 years old."}, "Scratchpad updated"),
+            ) as mocked_append,
+        ):
+            events = list(
+                run_agent_stream(
+                    [{"role": "user", "content": "Remember this"}], "deepseek-chat", 2, ["append_scratchpad"]
+                )
+            )
 
         mocked_append.assert_called_once_with(
             ["The user is 22 years old."],
@@ -6921,7 +7146,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0]["entry_type"], "tool_result")
         self.assertEqual(entries[0]["key"], "Sorting findings")
-        self.assertIn("Knowledge base search for \"python sort\"", entries[0]["value"])
+        self.assertIn('Knowledge base search for "python sort"', entries[0]["value"])
         self.assertIn("doc-1 [uploaded_document] sim 0.82", entries[0]["value"])
 
     def test_execute_tool_search_tool_memory_can_refresh_saved_finding(self):
@@ -6963,7 +7188,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         entries = get_conversation_memory(conversation_id)
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0]["key"], "Policy cache")
-        self.assertIn("Tool memory search for \"example.com policy\"", entries[0]["value"])
+        self.assertIn('Tool memory search for "example.com policy"', entries[0]["value"])
         self.assertIn("Expires within 1 hour", entries[0]["value"])
 
     def test_execute_tool_search_knowledge_base_ignores_falsey_string_save_flag(self):
@@ -7097,12 +7322,17 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             del tool_args, runtime_state
             return {"status": "ok", "tool": tool_name}, f"{tool_name} ok"
 
-        with patch("agent.client.chat.completions.create", side_effect=responses), patch(
-            "agent.ThreadPoolExecutor",
-            side_effect=lambda max_workers: FakeExecutor(max_workers),
-        ), patch("agent._validate_tool_arguments", return_value=None), patch(
-            "agent._execute_tool",
-            side_effect=fake_execute,
+        with (
+            patch("agent.client.chat.completions.create", side_effect=responses),
+            patch(
+                "agent.ThreadPoolExecutor",
+                side_effect=lambda max_workers: FakeExecutor(max_workers),
+            ),
+            patch("agent._validate_tool_arguments", return_value=None),
+            patch(
+                "agent._execute_tool",
+                side_effect=fake_execute,
+            ),
         ):
             events = list(
                 run_agent_stream(
@@ -7181,9 +7411,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             root_path=os.path.join(self.temp_dir.name, "workspace-cache"),
         )
 
-        with patch("agent.client.chat.completions.create", side_effect=responses), patch(
-            "agent._execute_tool",
-            side_effect=fake_execute,
+        with (
+            patch("agent.client.chat.completions.create", side_effect=responses),
+            patch(
+                "agent._execute_tool",
+                side_effect=fake_execute,
+            ),
         ):
             events = list(
                 run_agent_stream(
@@ -7233,10 +7466,20 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                                 }
                             ],
                         },
-                        {"role": "tool", "tool_call_id": "c1", "content": '[{"title":"Setup","url":"https://example.com/setup"}]'},
+                        {
+                            "role": "tool",
+                            "tool_call_id": "c1",
+                            "content": '[{"title":"Setup","url":"https://example.com/setup"}]',
+                        },
                     ],
                 },
-                {"type": "tool_result", "step": 1, "tool": "search_web", "summary": "1 web results found", "call_id": "c1"},
+                {
+                    "type": "tool_result",
+                    "step": 1,
+                    "tool": "search_web",
+                    "summary": "1 web results found",
+                    "call_id": "c1",
+                },
                 {"type": "tool_capture", "tool_results": []},
                 {"type": "answer_delta", "text": "Found the relevant setup guidance."},
                 {"type": "done"},
@@ -7250,7 +7493,10 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             "sub_agent_max_steps": 5,
         }
 
-        with patch("agent.get_app_settings", return_value=settings), patch("agent.run_agent_stream", return_value=fake_child_events) as mocked_run:
+        with (
+            patch("agent.get_app_settings", return_value=settings),
+            patch("agent.run_agent_stream", return_value=fake_child_events) as mocked_run,
+        ):
             result, summary = _execute_tool(
                 "sub_agent",
                 {
@@ -7297,7 +7543,10 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             "sub_agent_max_steps": 4,
         }
 
-        with patch("agent.get_app_settings", return_value=settings), patch("agent.run_agent_stream", return_value=fake_child_events) as mocked_run:
+        with (
+            patch("agent.get_app_settings", return_value=settings),
+            patch("agent.run_agent_stream", return_value=fake_child_events) as mocked_run,
+        ):
             result, _ = _execute_tool(
                 "sub_agent",
                 {
@@ -7344,13 +7593,16 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(summary, "search_web skipped: no queries provided")
 
     def test_execute_tool_batches_search_queries_using_configured_limit(self):
-        with patch("agent.get_app_settings", return_value={"search_tool_query_limit": 2}), patch(
-            "agent.search_web_tool",
-            side_effect=[
-                [{"title": "A", "url": "https://example.com/a", "snippet": "alpha"}],
-                [{"title": "B", "url": "https://example.com/b", "snippet": "beta"}],
-            ],
-        ) as mocked_search:
+        with (
+            patch("agent.get_app_settings", return_value={"search_tool_query_limit": 2}),
+            patch(
+                "agent.search_web_tool",
+                side_effect=[
+                    [{"title": "A", "url": "https://example.com/a", "snippet": "alpha"}],
+                    [{"title": "B", "url": "https://example.com/b", "snippet": "beta"}],
+                ],
+            ) as mocked_search,
+        ):
             result, summary = _execute_tool("search_web", {"queries": ["alpha", "beta", "gamma"]})
 
         self.assertEqual(
@@ -7425,7 +7677,13 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         fake_child_events = iter(
             [
                 {"type": "step_update", "step": 1, "tool": "read_file", "preview": "README.md", "call_id": "c1"},
-                {"type": "tool_result", "step": 1, "tool": "read_file", "summary": "File read: README.md", "call_id": "c1"},
+                {
+                    "type": "tool_result",
+                    "step": 1,
+                    "tool": "read_file",
+                    "summary": "File read: README.md",
+                    "call_id": "c1",
+                },
                 {"type": "answer_delta", "text": "Summary ready."},
                 {"type": "done"},
             ]
@@ -7466,10 +7724,13 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ]
         )
 
-        with patch("agent.get_app_settings", return_value=settings), patch(
-            "agent.run_agent_stream",
-            return_value=fake_child_events,
-        ) as mocked_run:
+        with (
+            patch("agent.get_app_settings", return_value=settings),
+            patch(
+                "agent.run_agent_stream",
+                return_value=fake_child_events,
+            ) as mocked_run,
+        ):
             events = list(_run_sub_agent_stream({"task": "Inspect README.md"}, runtime_state))
 
         self.assertEqual(mocked_run.call_args.kwargs["max_parallel_tools"], 1)
@@ -7500,10 +7761,13 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ]
         )
 
-        with patch("agent.get_app_settings", return_value=settings), patch(
-            "agent.run_agent_stream",
-            return_value=fake_child_events,
-        ) as mocked_run:
+        with (
+            patch("agent.get_app_settings", return_value=settings),
+            patch(
+                "agent.run_agent_stream",
+                return_value=fake_child_events,
+            ) as mocked_run,
+        ):
             list(_run_sub_agent_stream({"task": "Inspect README.md"}, runtime_state))
 
         self.assertEqual(mocked_run.call_args.kwargs["max_parallel_tools"], 4)
@@ -7541,7 +7805,10 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             "sub_agent_allowed_tool_names": ["search_web", "fetch_url", "search_news_google"],
         }
 
-        with patch("agent.get_app_settings", return_value=settings), patch("agent.run_agent_stream", return_value=fake_child_events) as mocked_run:
+        with (
+            patch("agent.get_app_settings", return_value=settings),
+            patch("agent.run_agent_stream", return_value=fake_child_events) as mocked_run,
+        ):
             list(
                 _run_sub_agent_stream(
                     {
@@ -7613,9 +7880,10 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ),
         ]
 
-        with patch("agent.get_app_settings", return_value=settings), patch(
-            "agent.run_agent_stream", side_effect=attempts
-        ) as mocked_run:
+        with (
+            patch("agent.get_app_settings", return_value=settings),
+            patch("agent.run_agent_stream", side_effect=attempts) as mocked_run,
+        ):
             events = list(_run_sub_agent_stream({"task": "Inspect README.md"}, runtime_state))
 
         self.assertEqual(mocked_run.call_args_list[0].args[1], "deepseek-reasoner")
@@ -7627,7 +7895,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertTrue(runtime_state["sub_agent_traces"])
         self.assertEqual(len(runtime_state["sub_agent_traces"]), 1)
         self.assertEqual(runtime_state["sub_agent_traces"][-1]["model"], "deepseek-chat")
-        self.assertEqual(runtime_state["sub_agent_traces"][-1]["fallback_note"], "Continued on deepseek-chat after model error.")
+        self.assertEqual(
+            runtime_state["sub_agent_traces"][-1]["fallback_note"], "Continued on deepseek-chat after model error."
+        )
 
     def test_run_sub_agent_stream_retries_timed_out_attempts_with_fallback_models(self):
         runtime_state = {
@@ -7683,11 +7953,13 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ),
         ]
 
-        with patch("agent.get_app_settings", return_value=settings), patch(
-            "agent.run_agent_stream", side_effect=attempts
-        ) as mocked_run, patch(
-            "agent.time.monotonic",
-            side_effect=[0, 0, 2, 4, 6, 16] + [16] * 20,
+        with (
+            patch("agent.get_app_settings", return_value=settings),
+            patch("agent.run_agent_stream", side_effect=attempts) as mocked_run,
+            patch(
+                "agent.time.monotonic",
+                side_effect=[0, 0, 2, 4, 6, 16] + [16] * 20,
+            ),
         ):
             events = list(_run_sub_agent_stream({"task": "Inspect README.md"}, runtime_state))
 
@@ -7703,8 +7975,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         )
         self.assertTrue(
             any(
-                message.get("role") == "assistant"
-                and "This arrives too late." in str(message.get("content") or "")
+                message.get("role") == "assistant" and "This arrives too late." in str(message.get("content") or "")
                 for message in second_messages
             )
         )
@@ -7720,12 +7991,13 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(len(runtime_state["sub_agent_traces"]), 1)
         self.assertEqual(runtime_state["sub_agent_traces"][0]["status"], "ok")
         self.assertTrue(runtime_state["sub_agent_traces"][0]["timed_out"])
-        self.assertIn("Continued on deepseek-chat after timeout.", runtime_state["sub_agent_traces"][0]["fallback_note"])
+        self.assertIn(
+            "Continued on deepseek-chat after timeout.", runtime_state["sub_agent_traces"][0]["fallback_note"]
+        )
         self.assertEqual(runtime_state["sub_agent_traces"][0]["model"], "deepseek-chat")
         self.assertTrue(
             any(
-                message.get("role") == "assistant"
-                and "This arrives too late." in str(message.get("content") or "")
+                message.get("role") == "assistant" and "This arrives too late." in str(message.get("content") or "")
                 for message in runtime_state["sub_agent_traces"][0].get("messages") or []
             )
         )
@@ -7750,20 +8022,27 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         }
 
         attempts = [
-            iter([
-                {"type": "tool_error", "step": 1, "tool": "api", "error": "Request timeout while generating."},
-            ]),
-            iter([
-                {"type": "answer_delta", "text": "Recovered on the retry."},
-                {"type": "done"},
-            ]),
+            iter(
+                [
+                    {"type": "tool_error", "step": 1, "tool": "api", "error": "Request timeout while generating."},
+                ]
+            ),
+            iter(
+                [
+                    {"type": "answer_delta", "text": "Recovered on the retry."},
+                    {"type": "done"},
+                ]
+            ),
         ]
 
-        with patch("agent.get_app_settings", return_value=settings), patch(
-            "agent.run_agent_stream", side_effect=attempts
-        ) as mocked_run, patch("agent.time.sleep", return_value=None) as mocked_sleep, patch(
-            "agent.time.monotonic",
-            side_effect=iter(range(100)),
+        with (
+            patch("agent.get_app_settings", return_value=settings),
+            patch("agent.run_agent_stream", side_effect=attempts) as mocked_run,
+            patch("agent.time.sleep", return_value=None) as mocked_sleep,
+            patch(
+                "agent.time.monotonic",
+                side_effect=iter(range(100)),
+            ),
         ):
             events = list(_run_sub_agent_stream({"task": "Inspect README.md"}, runtime_state))
 
@@ -7798,8 +8077,20 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         attempts = [
             iter(
                 [
-                    {"type": "step_update", "step": 1, "tool": "search_web", "preview": "undiagnosed syndrome", "call_id": "s1"},
-                    {"type": "tool_result", "step": 1, "tool": "search_web", "summary": "25 web results found", "call_id": "s1"},
+                    {
+                        "type": "step_update",
+                        "step": 1,
+                        "tool": "search_web",
+                        "preview": "undiagnosed syndrome",
+                        "call_id": "s1",
+                    },
+                    {
+                        "type": "tool_result",
+                        "step": 1,
+                        "tool": "search_web",
+                        "summary": "25 web results found",
+                        "call_id": "s1",
+                    },
                     {
                         "type": "tool_error",
                         "step": 1,
@@ -7818,9 +8109,10 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ),
         ]
 
-        with patch("agent.get_app_settings", return_value=settings), patch(
-            "agent.run_agent_stream", side_effect=attempts
-        ) as mocked_run:
+        with (
+            patch("agent.get_app_settings", return_value=settings),
+            patch("agent.run_agent_stream", side_effect=attempts) as mocked_run,
+        ):
             events = list(_run_sub_agent_stream({"task": "Investigate unusual syndromes"}, runtime_state))
 
         self.assertEqual(mocked_run.call_args_list[0].args[1], "deepseek-reasoner")
@@ -7829,7 +8121,10 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(events[-1]["entry"]["summary"], "Recovered on fallback model.")
         self.assertEqual(events[-1]["entry"]["fallback_note"], "Continued on deepseek-chat after missing final answer.")
         self.assertTrue(all(item["tool_name"] != "agent" for item in events[-1]["entry"]["tool_trace"]))
-        self.assertEqual(runtime_state["sub_agent_traces"][-1]["fallback_note"], "Continued on deepseek-chat after missing final answer.")
+        self.assertEqual(
+            runtime_state["sub_agent_traces"][-1]["fallback_note"],
+            "Continued on deepseek-chat after missing final answer.",
+        )
 
     def test_execute_tool_summarizes_partial_sub_agent_evidence_when_final_answer_missing(self):
         runtime_state = {
@@ -7851,8 +8146,20 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         fake_child_events = iter(
             [
-                {"type": "step_update", "step": 1, "tool": "search_web", "preview": "rare disease review", "call_id": "s1"},
-                {"type": "tool_result", "step": 1, "tool": "search_web", "summary": "25 web results found", "call_id": "s1"},
+                {
+                    "type": "step_update",
+                    "step": 1,
+                    "tool": "search_web",
+                    "preview": "rare disease review",
+                    "call_id": "s1",
+                },
+                {
+                    "type": "tool_result",
+                    "step": 1,
+                    "tool": "search_web",
+                    "summary": "25 web results found",
+                    "call_id": "s1",
+                },
                 {
                     "type": "tool_error",
                     "step": 1,
@@ -7864,8 +8171,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ]
         )
 
-        with patch("agent.get_app_settings", return_value=settings), patch(
-            "agent.run_agent_stream", return_value=fake_child_events
+        with (
+            patch("agent.get_app_settings", return_value=settings),
+            patch("agent.run_agent_stream", return_value=fake_child_events),
         ):
             result, summary = _execute_tool(
                 "sub_agent",
@@ -7931,16 +8239,20 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ),
         ]
 
-        with patch("agent.get_app_settings", return_value=settings), patch(
-            "agent.run_agent_stream", side_effect=attempts
-        ) as mocked_run:
+        with (
+            patch("agent.get_app_settings", return_value=settings),
+            patch("agent.run_agent_stream", side_effect=attempts) as mocked_run,
+        ):
             events = list(_run_sub_agent_stream({"task": "Inspect README.md"}, runtime_state))
 
-        self.assertEqual([call.args[1] for call in mocked_run.call_args_list[:3]], [
-            "deepseek-reasoner",
-            "openrouter:anthropic/claude-sonnet-4.5@@v=1;s=1",
-            "deepseek-chat",
-        ])
+        self.assertEqual(
+            [call.args[1] for call in mocked_run.call_args_list[:3]],
+            [
+                "deepseek-reasoner",
+                "openrouter:anthropic/claude-sonnet-4.5@@v=1;s=1",
+                "deepseek-chat",
+            ],
+        )
         self.assertEqual(mocked_run.call_count, 3)
         self.assertEqual(events[-1]["entry"]["model"], "deepseek-chat")
         self.assertEqual(events[-1]["entry"]["summary"], "Recovered on the third model.")
@@ -8015,14 +8327,22 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ]
         )
 
-        with patch("agent.get_app_settings", return_value=settings), patch(
-            "agent.run_agent_stream",
-            return_value=fake_child_events,
-        ) as mocked_run:
+        with (
+            patch("agent.get_app_settings", return_value=settings),
+            patch(
+                "agent.run_agent_stream",
+                return_value=fake_child_events,
+            ) as mocked_run,
+        ):
             list(_run_sub_agent_stream({"task": "Inspect README.md"}, runtime_state))
 
         child_messages = mocked_run.call_args.args[0]
-        self.assertTrue(any(message.get("role") == "user" and "Inspect README.md" in str(message.get("content") or "") for message in child_messages))
+        self.assertTrue(
+            any(
+                message.get("role") == "user" and "Inspect README.md" in str(message.get("content") or "")
+                for message in child_messages
+            )
+        )
         self.assertFalse(
             any(
                 "profile details" in str(message.get("content") or "")
@@ -8101,28 +8421,34 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             "client": SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))),
         }
 
-        with patch(
-            "agent.fetch_url_tool",
-            return_value={
-                "url": "https://example.com/page",
-                "title": "Example Page",
-                "content": "Pricing details and limitations.",
-                "meta_description": "Example metadata",
-                "content_source_element": "main",
-                "outline": ["Pricing", "Limits"],
-            },
-        ), patch(
-            "agent.get_app_settings",
-            return_value={
-                "fetch_url_summarized_max_input_chars": "6000",
-                "fetch_url_summarized_max_output_tokens": "3100",
-            },
-        ), patch(
-            "agent.get_operation_model",
-            return_value="openrouter:summary-model",
-        ), patch("agent.resolve_model_target", return_value=fake_target), patch(
-            "agent.apply_model_target_request_options",
-            side_effect=lambda kwargs, target: kwargs,
+        with (
+            patch(
+                "agent.fetch_url_tool",
+                return_value={
+                    "url": "https://example.com/page",
+                    "title": "Example Page",
+                    "content": "Pricing details and limitations.",
+                    "meta_description": "Example metadata",
+                    "content_source_element": "main",
+                    "outline": ["Pricing", "Limits"],
+                },
+            ),
+            patch(
+                "agent.get_app_settings",
+                return_value={
+                    "fetch_url_summarized_max_input_chars": "6000",
+                    "fetch_url_summarized_max_output_tokens": "3100",
+                },
+            ),
+            patch(
+                "agent.get_operation_model",
+                return_value="openrouter:summary-model",
+            ),
+            patch("agent.resolve_model_target", return_value=fake_target),
+            patch(
+                "agent.apply_model_target_request_options",
+                side_effect=lambda kwargs, target: kwargs,
+            ),
         ):
             result, summary = _run_fetch_url_summarized(
                 {"url": "https://example.com/page", "focus": "pricing limits"},
@@ -8310,7 +8636,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         clarification_event = next(event for event in events if event["type"] == "clarification_request")
         usage_event = next(event for event in events if event["type"] == "usage")
-        tool_errors = [event for event in events if event["type"] == "tool_error" and event["tool"] == "ask_clarifying_question"]
+        tool_errors = [
+            event for event in events if event["type"] == "tool_error" and event["tool"] == "ask_clarifying_question"
+        ]
         self.assertTrue(tool_errors)
         self.assertEqual(clarification_event["clarification"]["questions"][0]["options"][0]["value"], "repo")
         self.assertEqual(usage_event["model_call_count"], 2)
@@ -8331,7 +8659,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                             ],
                         },
                     ),
-                    self._stream_chunk_openrouter(usage=SimpleNamespace(prompt_tokens=5, completion_tokens=3, total_tokens=8)),
+                    self._stream_chunk_openrouter(
+                        usage=SimpleNamespace(prompt_tokens=5, completion_tokens=3, total_tokens=8)
+                    ),
                 ]
             ),
             iter(
@@ -8342,32 +8672,36 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                             "intro": "Before I answer, I need two details.",
                             "questions": [
                                 {"id": "goal", "label": "What is the main goal?", "input_type": "text"},
-                                {"id": "constraints", "label": "Any constraints I should respect?", "input_type": "text", "required": False},
+                                {
+                                    "id": "constraints",
+                                    "label": "Any constraints I should respect?",
+                                    "input_type": "text",
+                                    "required": False,
+                                },
                             ],
                         },
                     ),
-                    self._stream_chunk_openrouter(usage=SimpleNamespace(prompt_tokens=4, completion_tokens=4, total_tokens=8)),
+                    self._stream_chunk_openrouter(
+                        usage=SimpleNamespace(prompt_tokens=4, completion_tokens=4, total_tokens=8)
+                    ),
                 ]
             ),
         ]
 
         mock_create = Mock(side_effect=responses)
-        mock_client = SimpleNamespace(
-            chat=SimpleNamespace(
-                completions=SimpleNamespace(
-                    create=mock_create
-                )
-            )
-        )
+        mock_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=mock_create)))
 
-        with patch("agent.get_app_settings", return_value={}), patch(
-            "agent.resolve_model_target",
-            return_value={
-                "record": {"provider": model_registry.OPENROUTER_PROVIDER},
-                "client": mock_client,
-                "api_model": "anthropic/claude-sonnet-4.5",
-                "extra_body": {"provider": {"only": ["deepinfra/turbo"], "allow_fallbacks": False}},
-            },
+        with (
+            patch("agent.get_app_settings", return_value={}),
+            patch(
+                "agent.resolve_model_target",
+                return_value={
+                    "record": {"provider": model_registry.OPENROUTER_PROVIDER},
+                    "client": mock_client,
+                    "api_model": "anthropic/claude-sonnet-4.5",
+                    "extra_body": {"provider": {"only": ["deepinfra/turbo"], "allow_fallbacks": False}},
+                },
+            ),
         ):
             events = list(
                 run_agent_stream(
@@ -8379,7 +8713,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             )
 
         clarification_event = next(event for event in events if event["type"] == "clarification_request")
-        tool_errors = [event for event in events if event["type"] == "tool_error" and event["tool"] == "ask_clarifying_question"]
+        tool_errors = [
+            event for event in events if event["type"] == "tool_error" and event["tool"] == "ask_clarifying_question"
+        ]
         self.assertTrue(tool_errors)
         self.assertEqual(clarification_event["clarification"]["questions"][0]["id"], "goal")
         self.assertEqual(mock_create.call_count, 2)
@@ -8489,6 +8825,68 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.get_json()["error"], "Title required.")
+
+    def test_conversation_tool_overrides_patch_and_retrieve(self):
+        conversation_id = self._create_conversation()
+
+        response = self.client.patch(
+            f"/api/conversations/{conversation_id}",
+            json={"tool_overrides": ["search_knowledge_base", "search_web"]},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["tool_overrides"], ["search_knowledge_base", "search_web"])
+
+        response = self.client.get(f"/api/conversations/{conversation_id}")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["conversation"]["tool_overrides"], ["search_knowledge_base", "search_web"])
+
+    def test_conversation_tool_overrides_null_resets_to_global(self):
+        conversation_id = self._create_conversation()
+
+        self.client.patch(
+            f"/api/conversations/{conversation_id}",
+            json={"tool_overrides": ["search_knowledge_base"]},
+        )
+
+        response = self.client.patch(
+            f"/api/conversations/{conversation_id}",
+            json={"tool_overrides": None},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.get_json()["tool_overrides"])
+
+        response = self.client.get(f"/api/conversations/{conversation_id}")
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.get_json()["conversation"]["tool_overrides"])
+
+    def test_conversation_tool_overrides_invalid_tool_names_filtered(self):
+        conversation_id = self._create_conversation()
+
+        response = self.client.patch(
+            f"/api/conversations/{conversation_id}",
+            json={"tool_overrides": ["search_knowledge_base", "nonexistent_tool", "another_fake"]},
+        )
+        self.assertEqual(response.status_code, 200)
+        tool_overrides = response.get_json()["tool_overrides"]
+        self.assertNotIn("nonexistent_tool", tool_overrides)
+        self.assertNotIn("another_fake", tool_overrides)
+        self.assertIn("search_knowledge_base", tool_overrides)
+
+    def test_conversation_tool_overrides_non_list_type_rejected(self):
+        conversation_id = self._create_conversation()
+
+        response = self.client.patch(
+            f"/api/conversations/{conversation_id}",
+            json={"tool_overrides": "web_search"},
+        )
+        self.assertEqual(response.status_code, 400)
+
+        response = self.client.patch(
+            f"/api/conversations/{conversation_id}",
+            json={"tool_overrides": {"web_search": True}},
+        )
+        self.assertEqual(response.status_code, 400)
 
     def test_rag_endpoints_support_manual_document_ingest(self):
         response = self.client.get("/api/rag/documents")
@@ -8656,7 +9054,13 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             [
                 {"type": "step_started", "step": 1, "max_steps": 2},
                 {"type": "step_update", "step": 1, "tool": "search_web", "preview": "hello", "call_id": "c1"},
-                {"type": "tool_result", "step": 1, "tool": "search_web", "summary": "1 web result found", "call_id": "c1"},
+                {
+                    "type": "tool_result",
+                    "step": 1,
+                    "tool": "search_web",
+                    "summary": "1 web result found",
+                    "call_id": "c1",
+                },
                 {"type": "reasoning_start"},
                 {"type": "reasoning_delta", "text": "Analyzing request"},
                 {"type": "answer_start"},
@@ -8874,8 +9278,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        streamed_events = [json.loads(line) for line in response.get_data(as_text=True).strip().splitlines() if line.strip()]
-        clarification_event = next((event for event in streamed_events if event["type"] == "clarification_request"), None)
+        streamed_events = [
+            json.loads(line) for line in response.get_data(as_text=True).strip().splitlines() if line.strip()
+        ]
+        clarification_event = next(
+            (event for event in streamed_events if event["type"] == "clarification_request"), None
+        )
         self.assertIsNotNone(clarification_event)
         self.assertEqual(clarification_event["clarification"]["submit_label"], "Continue")
 
@@ -8916,7 +9324,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             {
                 "user_preferences": "",
                 "max_steps": "2",
-                "active_tools": '[]',
+                "active_tools": "[]",
                 "rag_auto_inject": "false",
             }
         )
@@ -8967,7 +9375,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         system_messages = [message for message in request_api_messages if message["role"] == "system"]
 
         # The clarification questions are still visible in the assistant's rendered message
-        self.assertTrue(any("Please answer this question:" in (message.get("content") or "") for message in assistant_messages))
+        self.assertTrue(
+            any("Please answer this question:" in (message.get("content") or "") for message in assistant_messages)
+        )
         self.assertTrue(any("1. Budget?" in (message.get("content") or "") for message in assistant_messages))
         self.assertEqual(user_messages[-1]["content"], "- Budget? \u2192 200-300 TL")
         # The Clarification Response section MUST be injected so the model sees the answers
@@ -9250,9 +9660,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                                 "state": "done",
                             }
                         ],
-                        "artifacts": [
-                            {"kind": "tool_input", "label": "Read File", "value": "README.md"}
-                        ],
+                        "artifacts": [{"kind": "tool_input", "label": "Read File", "value": "README.md"}],
                         "messages": [
                             {
                                 "role": "assistant",
@@ -9303,7 +9711,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                         "title": "Notes",
                         "format": "markdown",
                         "content": "# Notes\n\nExtra",
-                    }
+                    },
                 ]
             }
         )
@@ -9438,7 +9846,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         self.assertEqual(manifest["active_file"], "src/app.py")
         self.assertEqual(manifest["last_validation_status"], "ok")
-        self.assertEqual([entry["path"] for entry in manifest["file_list"]], ["src/app.py", "src/config.py", "README.md"])
+        self.assertEqual(
+            [entry["path"] for entry in manifest["file_list"]], ["src/app.py", "src/config.py", "README.md"]
+        )
         self.assertEqual([entry["priority"] for entry in manifest["file_list"]], [10, 20, 60])
 
     def test_canvas_project_manifest_flags_duplicate_paths(self):
@@ -9628,7 +10038,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         conversation_response = self.client.get(f"/api/conversations/{conversation_id}")
         messages = conversation_response.get_json()["messages"]
         assistant_messages = [message for message in messages if message["role"] == "assistant"]
-        self.assertEqual(assistant_messages[-1]["metadata"]["canvas_documents"][0]["content"], "# Draft\n\nCommitted body")
+        self.assertEqual(
+            assistant_messages[-1]["metadata"]["canvas_documents"][0]["content"], "# Draft\n\nCommitted body"
+        )
 
     def test_chat_does_not_auto_open_canvas_when_state_is_unchanged(self):
         conversation_id = self._create_conversation()
@@ -9866,9 +10278,11 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
     def test_uploaded_document_prompts_before_opening_canvas(self):
         conversation_id = self._create_conversation()
 
-        fake_events = iter([
-            {"type": "done"},
-        ])
+        fake_events = iter(
+            [
+                {"type": "done"},
+            ]
+        )
 
         with patch("routes.chat.run_agent_stream", return_value=fake_events):
             response = self.client.post(
@@ -9877,9 +10291,11 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                     "conversation_id": str(conversation_id),
                     "model": "deepseek-chat",
                     "user_content": "Please review this file",
-                    "messages": json.dumps([
-                        {"role": "user", "content": "Please review this file"},
-                    ]),
+                    "messages": json.dumps(
+                        [
+                            {"role": "user", "content": "Please review this file"},
+                        ]
+                    ),
                     "document": (io.BytesIO(b"Project notes\n\nDetails"), "notes.txt", "text/plain"),
                 },
                 content_type="multipart/form-data",
@@ -9905,9 +10321,11 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                     "conversation_id": str(conversation_id),
                     "model": "deepseek-chat",
                     "user_content": "Please review this file",
-                    "messages": json.dumps([
-                        {"role": "user", "content": "Please review this file"},
-                    ]),
+                    "messages": json.dumps(
+                        [
+                            {"role": "user", "content": "Please review this file"},
+                        ]
+                    ),
                     "document_canvas_action": "skip",
                     "document": (io.BytesIO(b"Project notes\n\nDetails"), "notes.txt", "text/plain"),
                 },
@@ -9939,9 +10357,11 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                     "conversation_id": str(conversation_id),
                     "model": "deepseek-chat",
                     "user_content": "Please review this file",
-                    "messages": json.dumps([
-                        {"role": "user", "content": "Please review this file"},
-                    ]),
+                    "messages": json.dumps(
+                        [
+                            {"role": "user", "content": "Please review this file"},
+                        ]
+                    ),
                     "document_canvas_action": "open",
                     "document": (io.BytesIO(b"Project notes\n\nDetails"), "notes.txt", "text/plain"),
                 },
@@ -10043,10 +10463,13 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             (b"page-4", "image/jpeg"),
         ]
 
-        with patch("doc_service.pdfplumber.open", return_value=_FakePdfContext()), patch(
-            "doc_service._render_pdf_page_image_bytes",
-            side_effect=rendered_payloads,
-        ) as render_page:
+        with (
+            patch("doc_service.pdfplumber.open", return_value=_FakePdfContext()),
+            patch(
+                "doc_service._render_pdf_page_image_bytes",
+                side_effect=rendered_payloads,
+            ) as render_page,
+        ):
             pages = render_pdf_pages_for_vision(b"%PDF-1.4", max_pages=3)
 
         self.assertEqual(len(pages), 3)
@@ -10067,9 +10490,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             def __exit__(self_inner, exc_type, exc, tb):
                 return False
 
-        with patch("doc_service.pdfplumber.open", return_value=_FakePdfContext()), patch(
-            "doc_service._render_pdf_page_image_bytes",
-            side_effect=[(b"page-1", "image/jpeg"), ValueError("bad page bitmap")],
+        with (
+            patch("doc_service.pdfplumber.open", return_value=_FakePdfContext()),
+            patch(
+                "doc_service._render_pdf_page_image_bytes",
+                side_effect=[(b"page-1", "image/jpeg"), ValueError("bad page bitmap")],
+            ),
         ):
             pages = render_pdf_pages_for_vision(b"%PDF-1.4", max_pages=2)
 
@@ -10089,9 +10515,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             def __exit__(self_inner, exc_type, exc, tb):
                 return False
 
-        with patch("doc_service.pdfplumber.open", return_value=_FakePdfContext()), patch(
-            "doc_service._render_pdf_page_image_bytes",
-            side_effect=[ValueError("bad page bitmap"), ValueError("bad page bitmap")],
+        with (
+            patch("doc_service.pdfplumber.open", return_value=_FakePdfContext()),
+            patch(
+                "doc_service._render_pdf_page_image_bytes",
+                side_effect=[ValueError("bad page bitmap"), ValueError("bad page bitmap")],
+            ),
         ):
             with self.assertRaisesRegex(ValueError, "Failed pages: 1, 2"):
                 render_pdf_pages_for_vision(b"%PDF-1.4", max_pages=2)
@@ -10137,7 +10566,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         image_blocks = [block for block in api_messages[0]["content"] if block.get("type") == "image_url"]
         self.assertTrue(any("exam.pdf" in str(block.get("text") or "") for block in text_blocks))
         self.assertEqual(len(image_blocks), 2)
-        self.assertTrue(all(str(block["image_url"]["url"]).startswith("data:image/jpeg;base64,") for block in image_blocks))
+        self.assertTrue(
+            all(str(block["image_url"]["url"]).startswith("data:image/jpeg;base64,") for block in image_blocks)
+        )
 
     def test_build_api_messages_warns_when_visual_pdf_image_asset_is_missing(self):
         normalized = [
@@ -10213,21 +10644,27 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         def fake_run_agent_stream(api_messages, *args, **kwargs):
             captured["api_messages"] = api_messages
-            return iter([
-                {"type": "answer_start"},
-                {"type": "answer_delta", "text": "Analyzed visually."},
-                {"type": "done"},
-            ])
+            return iter(
+                [
+                    {"type": "answer_start"},
+                    {"type": "answer_delta", "text": "Analyzed visually."},
+                    {"type": "done"},
+                ]
+            )
 
         rendered_pages = [
             {"page_number": 1, "mime_type": "image/jpeg", "image_bytes": b"page-one"},
             {"page_number": 2, "mime_type": "image/jpeg", "image_bytes": b"page-two"},
         ]
 
-        with patch("routes.chat.can_model_process_images", return_value=True), patch(
-            "routes.chat.render_pdf_pages_for_vision",
-            return_value=rendered_pages,
-        ), patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream):
+        with (
+            patch("routes.chat.can_model_process_images", return_value=True),
+            patch(
+                "routes.chat.render_pdf_pages_for_vision",
+                return_value=rendered_pages,
+            ),
+            patch("routes.chat.run_agent_stream", side_effect=fake_run_agent_stream),
+        ):
             response = self.client.post(
                 "/chat",
                 data=MultiDict(
@@ -10264,7 +10701,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(document_attachment["canvas_mode"], "preview_only")
         self.assertEqual(document_attachment["visual_page_count"], 2)
         self.assertEqual(len(document_attachment["visual_page_image_ids"]), 2)
-        stored_page_bytes = [read_image_asset_bytes(image_id)[1] for image_id in document_attachment["visual_page_image_ids"]]
+        stored_page_bytes = [
+            read_image_asset_bytes(image_id)[1] for image_id in document_attachment["visual_page_image_ids"]
+        ]
         self.assertEqual(stored_page_bytes, [b"page-one", b"page-two"])
 
         latest_canvas_state = find_latest_canvas_state(messages)
@@ -10293,15 +10732,37 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         conversation_id = self._create_conversation()
 
         rendered_pages = [
-            {"page_number": 1, "mime_type": "image/jpeg", "image_bytes": b"page-one", "total_pages": 6, "truncated": True},
-            {"page_number": 2, "mime_type": "image/jpeg", "image_bytes": b"page-two", "total_pages": 6, "truncated": True},
-            {"page_number": 3, "mime_type": "image/jpeg", "image_bytes": b"page-three", "total_pages": 6, "truncated": True},
+            {
+                "page_number": 1,
+                "mime_type": "image/jpeg",
+                "image_bytes": b"page-one",
+                "total_pages": 6,
+                "truncated": True,
+            },
+            {
+                "page_number": 2,
+                "mime_type": "image/jpeg",
+                "image_bytes": b"page-two",
+                "total_pages": 6,
+                "truncated": True,
+            },
+            {
+                "page_number": 3,
+                "mime_type": "image/jpeg",
+                "image_bytes": b"page-three",
+                "total_pages": 6,
+                "truncated": True,
+            },
         ]
 
-        with patch("routes.chat.can_model_process_images", return_value=True), patch(
-            "routes.chat.render_pdf_pages_for_vision",
-            return_value=rendered_pages,
-        ), patch("routes.chat.run_agent_stream", return_value=iter([{"type": "done"}])):
+        with (
+            patch("routes.chat.can_model_process_images", return_value=True),
+            patch(
+                "routes.chat.render_pdf_pages_for_vision",
+                return_value=rendered_pages,
+            ),
+            patch("routes.chat.run_agent_stream", return_value=iter([{"type": "done"}])),
+        ):
             response = self.client.post(
                 "/chat",
                 data=MultiDict(
@@ -10355,14 +10816,30 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         conversation_id = self._create_conversation()
 
         rendered_pages = [
-            {"page_number": 1, "mime_type": "image/jpeg", "image_bytes": b"page-one", "total_pages": 3, "truncated": False},
-            {"page_number": 3, "mime_type": "image/jpeg", "image_bytes": b"page-three", "total_pages": 3, "truncated": False},
+            {
+                "page_number": 1,
+                "mime_type": "image/jpeg",
+                "image_bytes": b"page-one",
+                "total_pages": 3,
+                "truncated": False,
+            },
+            {
+                "page_number": 3,
+                "mime_type": "image/jpeg",
+                "image_bytes": b"page-three",
+                "total_pages": 3,
+                "truncated": False,
+            },
         ]
 
-        with patch("routes.chat.can_model_process_images", return_value=True), patch(
-            "routes.chat.render_pdf_pages_for_vision",
-            return_value=rendered_pages,
-        ), patch("routes.chat.run_agent_stream", return_value=iter([{"type": "done"}])):
+        with (
+            patch("routes.chat.can_model_process_images", return_value=True),
+            patch(
+                "routes.chat.render_pdf_pages_for_vision",
+                return_value=rendered_pages,
+            ),
+            patch("routes.chat.run_agent_stream", return_value=iter([{"type": "done"}])),
+        ):
             response = self.client.post(
                 "/chat",
                 data=MultiDict(
@@ -10397,9 +10874,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         )
 
         ordered_starts = [
-            block.get("start")
-            for block in blocks
-            if block.get("type") == "list" and block.get("kind") == "ordered"
+            block.get("start") for block in blocks if block.get("type") == "list" and block.get("kind") == "ordered"
         ]
 
         self.assertEqual(ordered_starts, [1, 2, 3])
@@ -10427,7 +10902,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         )
         self.assertEqual(markdown_response.status_code, 200)
         self.assertEqual(markdown_response.mimetype, "text/markdown")
-        self.assertIn("attachment; filename=\"Draft-Export.md\"", markdown_response.headers["Content-Disposition"])
+        self.assertIn('attachment; filename="Draft-Export.md"', markdown_response.headers["Content-Disposition"])
         self.assertEqual(markdown_response.headers.get("Cache-Control"), "no-store, max-age=0")
         self.assertEqual(markdown_response.headers.get("Pragma"), "no-cache")
         self.assertEqual(markdown_response.headers.get("Expires"), "0")
@@ -10466,7 +10941,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         )
         self.assertEqual(html_response.status_code, 200)
         self.assertEqual(html_response.mimetype, "text/html")
-        self.assertIn("attachment; filename=\"Draft-Export.html\"", html_response.headers["Content-Disposition"])
+        self.assertIn('attachment; filename="Draft-Export.html"', html_response.headers["Content-Disposition"])
         self.assertEqual(html_response.headers.get("Cache-Control"), "no-store, max-age=0")
         self.assertEqual(html_response.headers.get("Pragma"), "no-cache")
         self.assertEqual(html_response.headers.get("Expires"), "0")
@@ -10554,8 +11029,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                         "format": "markdown",
                         "content": "# Three",
                     },
-                ]
-                ,
+                ],
                 "active_document_id": "canvas-one",
             }
         )
@@ -10563,9 +11037,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         with get_db() as conn:
             insert_message(conn, conversation_id, "assistant", "Canvas ready.", metadata=metadata)
 
-        delete_response = self.client.delete(
-            f"/api/conversations/{conversation_id}/canvas?document_id=canvas-three"
-        )
+        delete_response = self.client.delete(f"/api/conversations/{conversation_id}/canvas?document_id=canvas-three")
         self.assertEqual(delete_response.status_code, 200)
         delete_payload = delete_response.get_json()
         self.assertFalse(delete_payload["cleared"])
@@ -10575,9 +11047,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(delete_payload["documents"][0]["id"], "canvas-one")
         self.assertEqual(delete_payload["documents"][1]["id"], "canvas-two")
 
-        clear_response = self.client.delete(
-            f"/api/conversations/{conversation_id}/canvas?clear_all=true"
-        )
+        clear_response = self.client.delete(f"/api/conversations/{conversation_id}/canvas?clear_all=true")
         self.assertEqual(clear_response.status_code, 200)
         clear_payload = clear_response.get_json()
         self.assertTrue(clear_payload["cleared"])
@@ -10618,9 +11088,10 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         with get_db() as conn:
             insert_message(conn, conversation_id, "assistant", "Canvas ready.", metadata=metadata)
 
-        with patch("routes.conversations.sync_conversations_to_rag_safe") as mocked_sync_safe, patch(
-            "routes.conversations.sync_conversations_to_rag_background"
-        ) as mocked_sync_background:
+        with (
+            patch("routes.conversations.sync_conversations_to_rag_safe") as mocked_sync_safe,
+            patch("routes.conversations.sync_conversations_to_rag_background") as mocked_sync_background,
+        ):
             delete_response = self.client.delete(
                 f"/api/conversations/{conversation_id}/canvas?document_path=src/config.py"
             )
@@ -10663,9 +11134,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         with get_db() as conn:
             insert_message(conn, conversation_id, "assistant", "Canvas ready.", metadata=metadata)
 
-        delete_response = self.client.delete(
-            f"/api/conversations/{conversation_id}/canvas?document_id=canvas-two"
-        )
+        delete_response = self.client.delete(f"/api/conversations/{conversation_id}/canvas?document_id=canvas-two")
         self.assertEqual(delete_response.status_code, 200)
         delete_payload = delete_response.get_json()
         self.assertFalse(delete_payload["cleared"])
@@ -11443,7 +11912,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         markdown_response = self.client.get(f"/api/conversations/{conversation_id}/export?format=md")
         self.assertEqual(markdown_response.status_code, 200)
         self.assertEqual(markdown_response.mimetype, "text/markdown")
-        self.assertIn("attachment; filename=\"Exportable-Chat.md\"", markdown_response.headers["Content-Disposition"])
+        self.assertIn('attachment; filename="Exportable-Chat.md"', markdown_response.headers["Content-Disposition"])
         self.assertIn("Message count: 2", markdown_response.get_data(as_text=True))
         self.assertIn("## 1. User", markdown_response.get_data(as_text=True))
         self.assertIn("## 2. Assistant", markdown_response.get_data(as_text=True))
@@ -11562,7 +12031,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.mimetype, "application/json")
-        self.assertIn("attachment; filename=\"Raw-Export-Chat.json\"", response.headers["Content-Disposition"])
+        self.assertIn('attachment; filename="Raw-Export-Chat.json"', response.headers["Content-Disposition"])
 
         payload = json.loads(response.get_data(as_text=True))
         self.assertEqual(payload["export_type"], "conversation_raw_model_invocations")
@@ -11644,7 +12113,11 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                                     }
                                 ],
                                 "artifacts": [
-                                    {"kind": "tool_output", "label": "Extracted text", "value": "Monthly report summary"}
+                                    {
+                                        "kind": "tool_output",
+                                        "label": "Extracted text",
+                                        "value": "Monthly report summary",
+                                    }
                                 ],
                                 "messages": [
                                     {"role": "assistant", "content": "Starting review."},
@@ -11998,8 +12471,14 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             [],
             atomic=True,
             targets=[
-                {"document_path": "src/a.py", "operations": [{"action": "replace", "start_line": 2, "end_line": 2, "lines": ["beta updated"]}]},
-                {"document_path": "src/b.py", "operations": [{"action": "insert", "after_line": 2, "lines": ["three"]}]},
+                {
+                    "document_path": "src/a.py",
+                    "operations": [{"action": "replace", "start_line": 2, "end_line": 2, "lines": ["beta updated"]}],
+                },
+                {
+                    "document_path": "src/b.py",
+                    "operations": [{"action": "insert", "after_line": 2, "lines": ["three"]}],
+                },
             ],
         )
 
@@ -12035,8 +12514,16 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 [],
                 atomic=True,
                 targets=[
-                    {"document_path": "src/a.py", "operations": [{"action": "replace", "start_line": 2, "end_line": 2, "lines": ["beta updated"]}]},
-                    {"document_path": "src/b.py", "operations": [{"action": "delete", "start_line": 99, "end_line": 99}]},
+                    {
+                        "document_path": "src/a.py",
+                        "operations": [
+                            {"action": "replace", "start_line": 2, "end_line": 2, "lines": ["beta updated"]}
+                        ],
+                    },
+                    {
+                        "document_path": "src/b.py",
+                        "operations": [{"action": "delete", "start_line": 99, "end_line": 99}],
+                    },
                 ],
             )
 
@@ -12045,18 +12532,27 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(documents["src/b.py"]["content"], "one\ntwo")
 
     def test_batch_canvas_edits_clears_auto_unpin_viewport_for_multi_line_delete(self):
-        runtime_state = {"canvas": create_canvas_runtime_state(
-            [
-                {
-                    "id": "canvas-1",
-                    "title": "app.py",
-                    "path": "src/app.py",
-                    "format": "code",
-                    "content": "line 1\nline 2\nline 3\nline 4\nline 5",
-                }
-            ]
-        )}
-        set_canvas_viewport(runtime_state["canvas"], document_path="src/app.py", start_line=3, end_line=5, ttl_turns=3, auto_unpin_on_edit=True)
+        runtime_state = {
+            "canvas": create_canvas_runtime_state(
+                [
+                    {
+                        "id": "canvas-1",
+                        "title": "app.py",
+                        "path": "src/app.py",
+                        "format": "code",
+                        "content": "line 1\nline 2\nline 3\nline 4\nline 5",
+                    }
+                ]
+            )
+        }
+        set_canvas_viewport(
+            runtime_state["canvas"],
+            document_path="src/app.py",
+            start_line=3,
+            end_line=5,
+            ttl_turns=3,
+            auto_unpin_on_edit=True,
+        )
 
         _execute_tool(
             "batch_canvas_edits",
@@ -12114,7 +12610,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             count_only=True,
         )
         self.assertEqual(count_result["matches_found"], 2)
-        self.assertEqual(get_canvas_runtime_documents(runtime_state)[0]["content"], "DEBUG = False\nDEBUG = False\nprint('done')")
+        self.assertEqual(
+            get_canvas_runtime_documents(runtime_state)[0]["content"], "DEBUG = False\nDEBUG = False\nprint('done')"
+        )
 
         apply_result = transform_canvas_lines(
             runtime_state,
@@ -12123,21 +12621,32 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             document_path="config.py",
         )
         self.assertEqual(apply_result["matches_replaced"], 2)
-        self.assertEqual(get_canvas_runtime_documents(runtime_state)[0]["content"], "DEBUG = True\nDEBUG = True\nprint('done')")
+        self.assertEqual(
+            get_canvas_runtime_documents(runtime_state)[0]["content"], "DEBUG = True\nDEBUG = True\nprint('done')"
+        )
 
     def test_execute_tool_count_only_transform_does_not_mutate_or_clear_viewport(self):
-        runtime_state = {"canvas": create_canvas_runtime_state(
-            [
-                {
-                    "id": "canvas-1",
-                    "title": "config.py",
-                    "path": "config.py",
-                    "format": "code",
-                    "content": "DEBUG = False\nDEBUG = False\nprint('done')",
-                }
-            ]
-        )}
-        set_canvas_viewport(runtime_state["canvas"], document_path="config.py", start_line=1, end_line=2, ttl_turns=3, auto_unpin_on_edit=True)
+        runtime_state = {
+            "canvas": create_canvas_runtime_state(
+                [
+                    {
+                        "id": "canvas-1",
+                        "title": "config.py",
+                        "path": "config.py",
+                        "format": "code",
+                        "content": "DEBUG = False\nDEBUG = False\nprint('done')",
+                    }
+                ]
+            )
+        }
+        set_canvas_viewport(
+            runtime_state["canvas"],
+            document_path="config.py",
+            start_line=1,
+            end_line=2,
+            ttl_turns=3,
+            auto_unpin_on_edit=True,
+        )
 
         result, summary = _execute_tool(
             "transform_canvas_lines",
@@ -12153,21 +12662,26 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(result["action"], "transformed")
         self.assertEqual(result["matches_found"], 2)
         self.assertIn("Canvas transform matched", summary)
-        self.assertEqual(get_canvas_runtime_documents(runtime_state["canvas"])[0]["content"], "DEBUG = False\nDEBUG = False\nprint('done')")
+        self.assertEqual(
+            get_canvas_runtime_documents(runtime_state["canvas"])[0]["content"],
+            "DEBUG = False\nDEBUG = False\nprint('done')",
+        )
         self.assertNotEqual(runtime_state["canvas"]["viewports"], {})
 
     def test_execute_tool_transform_defaults_to_case_sensitive_and_reports_no_match(self):
-        runtime_state = {"canvas": create_canvas_runtime_state(
-            [
-                {
-                    "id": "canvas-1",
-                    "title": "config.py",
-                    "path": "config.py",
-                    "format": "code",
-                    "content": "DEBUG = False\nprint('done')",
-                }
-            ]
-        )}
+        runtime_state = {
+            "canvas": create_canvas_runtime_state(
+                [
+                    {
+                        "id": "canvas-1",
+                        "title": "config.py",
+                        "path": "config.py",
+                        "format": "code",
+                        "content": "DEBUG = False\nprint('done')",
+                    }
+                ]
+            )
+        }
 
         result, summary = _execute_tool(
             "transform_canvas_lines",
@@ -12183,7 +12697,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(result["matches_found"], 0)
         self.assertEqual(result["matches_replaced"], 0)
         self.assertIn("matched 0 line(s)", summary)
-        self.assertEqual(get_canvas_runtime_documents(runtime_state["canvas"])[0]["content"], "DEBUG = False\nprint('done')")
+        self.assertEqual(
+            get_canvas_runtime_documents(runtime_state["canvas"])[0]["content"], "DEBUG = False\nprint('done')"
+        )
 
     def test_transform_canvas_lines_rejects_empty_pattern(self):
         runtime_state = create_canvas_runtime_state(
@@ -12326,18 +12842,27 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(restored_search["matches"][0]["document_id"], "canvas-1")
 
     def test_overlapping_edit_clears_auto_unpin_canvas_viewport(self):
-        runtime_state = {"canvas": create_canvas_runtime_state(
-            [
-                {
-                    "id": "canvas-1",
-                    "title": "app.py",
-                    "path": "src/app.py",
-                    "format": "code",
-                    "content": "line 1\nline 2\nline 3",
-                }
-            ]
-        )}
-        set_canvas_viewport(runtime_state["canvas"], document_path="src/app.py", start_line=2, end_line=3, ttl_turns=3, auto_unpin_on_edit=True)
+        runtime_state = {
+            "canvas": create_canvas_runtime_state(
+                [
+                    {
+                        "id": "canvas-1",
+                        "title": "app.py",
+                        "path": "src/app.py",
+                        "format": "code",
+                        "content": "line 1\nline 2\nline 3",
+                    }
+                ]
+            )
+        }
+        set_canvas_viewport(
+            runtime_state["canvas"],
+            document_path="src/app.py",
+            start_line=2,
+            end_line=3,
+            ttl_turns=3,
+            auto_unpin_on_edit=True,
+        )
 
         _execute_tool(
             "replace_canvas_lines",
@@ -12353,17 +12878,19 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(runtime_state["canvas"]["viewports"], {})
 
     def test_execute_tool_set_canvas_viewport_defaults_auto_unpin_on_edit(self):
-        runtime_state = {"canvas": create_canvas_runtime_state(
-            [
-                {
-                    "id": "canvas-1",
-                    "title": "app.py",
-                    "path": "src/app.py",
-                    "format": "code",
-                    "content": "line 1\nline 2\nline 3",
-                }
-            ]
-        )}
+        runtime_state = {
+            "canvas": create_canvas_runtime_state(
+                [
+                    {
+                        "id": "canvas-1",
+                        "title": "app.py",
+                        "path": "src/app.py",
+                        "format": "code",
+                        "content": "line 1\nline 2\nline 3",
+                    }
+                ]
+            )
+        }
 
         _execute_tool(
             "set_canvas_viewport",
@@ -12415,17 +12942,19 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         )
 
     def test_execute_tool_runs_transform_metadata_and_viewport_tools(self):
-        runtime_state = {"canvas": create_canvas_runtime_state(
-            [
-                {
-                    "id": "canvas-1",
-                    "title": "app.py",
-                    "path": "src/app.py",
-                    "format": "code",
-                    "content": "alpha\nbeta",
-                }
-            ]
-        )}
+        runtime_state = {
+            "canvas": create_canvas_runtime_state(
+                [
+                    {
+                        "id": "canvas-1",
+                        "title": "app.py",
+                        "path": "src/app.py",
+                        "format": "code",
+                        "content": "alpha\nbeta",
+                    }
+                ]
+            )
+        }
 
         preview_result, _ = _execute_tool(
             "preview_canvas_changes",
@@ -12528,7 +13057,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         read_result, read_summary = _execute_tool(
             "batch_read_canvas_documents",
-            {"documents": [{"document_path": "README.md"}, {"document_path": "src/app.py", "start_line": 1, "end_line": 2}]},
+            {
+                "documents": [
+                    {"document_path": "README.md"},
+                    {"document_path": "src/app.py", "start_line": 1, "end_line": 2},
+                ]
+            },
             runtime_state,
         )
         validate_result, validate_summary = _execute_tool(
@@ -12664,7 +13198,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             "batch_canvas_edits",
             {
                 "document_path": "src/app.py",
-                "operations": "Please apply these edits: [{\"start_line\": 2, \"end_line\": 2, \"lines\": [\"beta updated\"]}]",
+                "operations": 'Please apply these edits: [{"start_line": 2, "end_line": 2, "lines": ["beta updated"]}]',
             },
             runtime_state,
         )
@@ -12902,9 +13436,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ),
         ]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create, patch(
-            "agent.search_web_tool",
-            return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+        with (
+            patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create,
+            patch(
+                "agent.search_web_tool",
+                return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+            ),
         ):
             events = list(run_agent_stream([{"role": "user", "content": "Test"}], "deepseek-chat", 3, ["search_web"]))
 
@@ -13021,11 +13558,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             )
         ]
         mock_client = SimpleNamespace(
-            chat=SimpleNamespace(
-                completions=SimpleNamespace(
-                    create=Mock(side_effect=responses)
-                )
-            )
+            chat=SimpleNamespace(completions=SimpleNamespace(create=Mock(side_effect=responses)))
         )
         custom_settings = {
             "custom_models": [
@@ -13039,13 +13572,16 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ]
         }
 
-        with patch("agent.get_app_settings", return_value=custom_settings), patch(
-            "agent.resolve_model_target",
-            return_value={
-                "record": {"provider": "openrouter"},
-                "client": mock_client,
-                "api_model": "anthropic/claude-sonnet-4.5",
-            },
+        with (
+            patch("agent.get_app_settings", return_value=custom_settings),
+            patch(
+                "agent.resolve_model_target",
+                return_value={
+                    "record": {"provider": "openrouter"},
+                    "client": mock_client,
+                    "api_model": "anthropic/claude-sonnet-4.5",
+                },
+            ),
         ):
             events = list(
                 run_agent_stream(
@@ -13070,9 +13606,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                             prompt_tokens=1000,
                             completion_tokens=50,
                             total_tokens=1050,
-                            model_extra={
-                                "prompt_tokens_details": {"cached_tokens": 800}
-                            },
+                            model_extra={"prompt_tokens_details": {"cached_tokens": 800}},
                         )
                     ),
                 ]
@@ -13112,9 +13646,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                             prompt_tokens=1000,
                             completion_tokens=50,
                             total_tokens=1050,
-                            model_extra={
-                                "prompt_tokens_details": {"cached_tokens": 800, "cache_write_tokens": 120}
-                            },
+                            model_extra={"prompt_tokens_details": {"cached_tokens": 800, "cache_write_tokens": 120}},
                         )
                     ),
                 ]
@@ -13183,10 +13715,14 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 ]
             )
 
-        with patch("routes.chat._build_budgeted_prompt_messages", side_effect=fake_build_budgeted_prompt_messages), patch(
-            "routes.chat.run_agent_stream",
-            side_effect=fake_run_agent_stream,
-        ), patch("routes.chat.sync_conversations_to_rag_safe"):
+        with (
+            patch("routes.chat._build_budgeted_prompt_messages", side_effect=fake_build_budgeted_prompt_messages),
+            patch(
+                "routes.chat.run_agent_stream",
+                side_effect=fake_run_agent_stream,
+            ),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
+        ):
             response = self.client.post(
                 "/chat",
                 json={
@@ -13255,9 +13791,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             "extra_body": {},
         }
 
-        with patch("agent.resolve_model_target", return_value=fake_target), patch(
-            "agent.search_web_tool",
-            return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+        with (
+            patch("agent.resolve_model_target", return_value=fake_target),
+            patch(
+                "agent.search_web_tool",
+                return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+            ),
         ):
             events = list(
                 run_agent_stream(
@@ -13308,9 +13847,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ),
         ]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses), patch(
-            "agent.search_web_tool",
-            return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+        with (
+            patch("agent.client.chat.completions.create", side_effect=responses),
+            patch(
+                "agent.search_web_tool",
+                return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+            ),
         ):
             events = list(run_agent_stream([{"role": "user", "content": "Test"}], "deepseek-chat", 3, ["search_web"]))
 
@@ -13357,25 +13899,22 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             )
         ]
         mock_create = Mock(side_effect=responses)
-        mock_client = SimpleNamespace(
-            chat=SimpleNamespace(
-                completions=SimpleNamespace(
-                    create=mock_create
-                )
-            )
-        )
+        mock_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=mock_create)))
 
-        with patch("agent.get_app_settings", return_value={}), patch(
-            "agent.resolve_model_target",
-            return_value={
-                "record": {"provider": "openrouter"},
-                "client": mock_client,
-                "api_model": "anthropic/claude-sonnet-4.5",
-                "extra_body": {
-                    "provider": {"only": ["deepinfra/turbo"], "allow_fallbacks": False},
-                    "reasoning": {"effort": "high"},
+        with (
+            patch("agent.get_app_settings", return_value={}),
+            patch(
+                "agent.resolve_model_target",
+                return_value={
+                    "record": {"provider": "openrouter"},
+                    "client": mock_client,
+                    "api_model": "anthropic/claude-sonnet-4.5",
+                    "extra_body": {
+                        "provider": {"only": ["deepinfra/turbo"], "allow_fallbacks": False},
+                        "reasoning": {"effort": "high"},
+                    },
                 },
-            },
+            ),
         ):
             list(
                 run_agent_stream(
@@ -13410,25 +13949,22 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             )
         ]
         mock_create = Mock(side_effect=responses)
-        mock_client = SimpleNamespace(
-            chat=SimpleNamespace(
-                completions=SimpleNamespace(
-                    create=mock_create
-                )
-            )
-        )
+        mock_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=mock_create)))
 
-        with patch("agent.get_app_settings", return_value={}), patch(
-            "agent.resolve_model_target",
-            return_value={
-                "record": {
-                    "provider": model_registry.OPENROUTER_PROVIDER,
+        with (
+            patch("agent.get_app_settings", return_value={}),
+            patch(
+                "agent.resolve_model_target",
+                return_value={
+                    "record": {
+                        "provider": model_registry.OPENROUTER_PROVIDER,
+                        "api_model": "google/gemini-2.5-pro",
+                    },
+                    "client": mock_client,
                     "api_model": "google/gemini-2.5-pro",
+                    "extra_body": {"provider": {"sort": "throughput"}},
                 },
-                "client": mock_client,
-                "api_model": "google/gemini-2.5-pro",
-                "extra_body": {"provider": {"sort": "throughput"}},
-            },
+            ),
         ):
             list(
                 run_agent_stream(
@@ -13463,25 +13999,22 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             )
         ]
         mock_create = Mock(side_effect=responses)
-        mock_client = SimpleNamespace(
-            chat=SimpleNamespace(
-                completions=SimpleNamespace(
-                    create=mock_create
-                )
-            )
-        )
+        mock_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=mock_create)))
 
-        with patch("agent.get_app_settings", return_value={}), patch(
-            "agent.resolve_model_target",
-            return_value={
-                "record": {
-                    "provider": model_registry.OPENROUTER_PROVIDER,
+        with (
+            patch("agent.get_app_settings", return_value={}),
+            patch(
+                "agent.resolve_model_target",
+                return_value={
+                    "record": {
+                        "provider": model_registry.OPENROUTER_PROVIDER,
+                        "api_model": "google/gemini-2.5-pro",
+                    },
+                    "client": mock_client,
                     "api_model": "google/gemini-2.5-pro",
+                    "extra_body": {"provider": {"sort": "throughput"}},
                 },
-                "client": mock_client,
-                "api_model": "google/gemini-2.5-pro",
-                "extra_body": {"provider": {"sort": "throughput"}},
-            },
+            ),
         ):
             list(
                 run_agent_stream(
@@ -13556,7 +14089,14 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         ]
 
         with patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create:
-            list(run_agent_stream([{"role": "user", "content": "Bir canvas taslağı oluştur."}], "deepseek-chat", 2, ["create_canvas_document"]))
+            list(
+                run_agent_stream(
+                    [{"role": "user", "content": "Bir canvas taslağı oluştur."}],
+                    "deepseek-chat",
+                    2,
+                    ["create_canvas_document"],
+                )
+            )
 
         second_call_messages = mocked_create.call_args_list[1].kwargs["messages"]
         assistant_tool_call = second_call_messages[1]["tool_calls"][0]
@@ -13832,12 +14372,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             "- src/app.py lines 20-24\n"
         )
         latest_context = (
-            "## Current Date and Time\n"
-            "- Time: 21:40\n\n"
-            "## Active Canvas Document\n"
-            "```text\n"
-            "1: latest line\n"
-            "```"
+            "## Current Date and Time\n- Time: 21:40\n\n## Active Canvas Document\n```text\n1: latest line\n```"
         )
         normalized = normalize_chat_messages(
             [
@@ -13966,7 +14501,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                             "type": "function",
                             "function": {
                                 "name": "ask_clarifying_question",
-                                "arguments": '{"questions":[{"id":"budget","label":"Budget?","input_type":"text"}]}'
+                                "arguments": '{"questions":[{"id":"budget","label":"Budget?","input_type":"text"}]}',
                             },
                         }
                     ],
@@ -14130,7 +14665,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                             "type": "function",
                             "function": {
                                 "name": "ask_clarifying_question",
-                                "arguments": '{"questions":[{"id":"budget","label":"Budget?","input_type":"text"}]}'
+                                "arguments": '{"questions":[{"id":"budget","label":"Budget?","input_type":"text"}]}',
                             },
                         }
                     ],
@@ -14172,7 +14707,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                             "type": "function",
                             "function": {
                                 "name": "ask_clarifying_question",
-                                "arguments": '{"questions":[{"id":"price","label":"Price?","input_type":"text"}]}'
+                                "arguments": '{"questions":[{"id":"price","label":"Price?","input_type":"text"}]}',
                             },
                         }
                     ],
@@ -14357,9 +14892,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ]
         )
 
-        message_text = "Q: Kaç kişisiniz?\nA: 2 kişi\nQ: Yaş grubunuz nedir?\nA: 15-18\nQ: Nerede yaşıyorsunuz?\nA: İstanbul"
-        with patch("routes.chat.build_rag_auto_context", return_value=None) as mocked_rag, patch(
-            "routes.chat.run_agent_stream", return_value=fake_events
+        message_text = (
+            "Q: Kaç kişisiniz?\nA: 2 kişi\nQ: Yaş grubunuz nedir?\nA: 15-18\nQ: Nerede yaşıyorsunuz?\nA: İstanbul"
+        )
+        with (
+            patch("routes.chat.build_rag_auto_context", return_value=None) as mocked_rag,
+            patch("routes.chat.run_agent_stream", return_value=fake_events),
         ):
             response = self.client.post(
                 "/chat",
@@ -14413,8 +14951,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         )
 
         message_text = "Q: Bu bir başlık mı?\nA: Evet\nEk açıklama: A: burada normal bir metin"
-        with patch("routes.chat.build_rag_auto_context", return_value=None) as mocked_rag, patch(
-            "routes.chat.run_agent_stream", return_value=fake_events
+        with (
+            patch("routes.chat.build_rag_auto_context", return_value=None) as mocked_rag,
+            patch("routes.chat.run_agent_stream", return_value=fake_events),
         ):
             response = self.client.post(
                 "/chat",
@@ -14505,7 +15044,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             events,
         )
         self.assertIn({"type": "answer_delta", "text": "Final answer."}, events)
-        leaked_reasoning = [event for event in events if event["type"] == "answer_delta" and "Thinking" in event["text"]]
+        leaked_reasoning = [
+            event for event in events if event["type"] == "answer_delta" and "Thinking" in event["text"]
+        ]
         self.assertEqual(leaked_reasoning, [])
 
         usage_event = next(event for event in events if event["type"] == "usage")
@@ -14522,7 +15063,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         responses = [
             iter(
                 [
-                    self._stream_chunk(content="Tamam, şimdilik Canvas'a dokunmuyorum. Shoulder press için 12.5-15 kg ile başla."),
+                    self._stream_chunk(
+                        content="Tamam, şimdilik Canvas'a dokunmuyorum. Shoulder press için 12.5-15 kg ile başla."
+                    ),
                     self._stream_chunk(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=4, total_tokens=6)),
                 ]
             ),
@@ -14558,7 +15101,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             )
 
         answer_deltas = [event["text"] for event in events if event["type"] == "answer_delta"]
-        self.assertEqual(answer_deltas, ["Tamam, şimdilik Canvas'a dokunmuyorum. Shoulder press için 12.5-15 kg ile başla."])
+        self.assertEqual(
+            answer_deltas, ["Tamam, şimdilik Canvas'a dokunmuyorum. Shoulder press için 12.5-15 kg ile başla."]
+        )
         self.assertFalse(any(event["type"] == "tool_result" for event in events))
 
         usage_event = next(event for event in events if event["type"] == "usage")
@@ -14675,7 +15220,11 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         ]
 
         with patch("agent.client.chat.completions.create", side_effect=responses):
-            events = list(run_agent_stream([{"role": "user", "content": "Canvas oluştur"}], "deepseek-chat", 2, ["create_canvas_document"]))
+            events = list(
+                run_agent_stream(
+                    [{"role": "user", "content": "Canvas oluştur"}], "deepseek-chat", 2, ["create_canvas_document"]
+                )
+            )
 
         self.assertIn({"type": "answer_delta", "text": "Tamam."}, events)
         parser_errors = [event for event in events if event["type"] == "tool_error" and event["tool"] == "parser"]
@@ -14687,9 +15236,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
     def test_run_agent_stream_extracts_dsml_tool_calls_from_content(self):
         dsml_content = (
             "<｜DSML｜function_calls>\n"
-            "<｜DSML｜invoke name=\"create_canvas_document\">\n"
-            "<｜DSML｜parameter name=\"title\" string=\"true\">Arduino Kodu - RobotBeyni.ino</｜DSML｜parameter>\n"
-            "<｜DSML｜parameter name=\"content\" string=\"true\">// test\nint led = 13;</｜DSML｜parameter>\n"
+            '<｜DSML｜invoke name="create_canvas_document">\n'
+            '<｜DSML｜parameter name="title" string="true">Arduino Kodu - RobotBeyni.ino</｜DSML｜parameter>\n'
+            '<｜DSML｜parameter name="content" string="true">// test\nint led = 13;</｜DSML｜parameter>\n'
             "</｜DSML｜invoke>\n"
             "</｜DSML｜function_calls>"
         )
@@ -14715,23 +15264,31 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         ]
 
         with patch("agent.client.chat.completions.create", side_effect=responses):
-            events = list(run_agent_stream([{"role": "user", "content": "Canvas oluştur"}], "deepseek-reasoner", 2, ["create_canvas_document"]))
+            events = list(
+                run_agent_stream(
+                    [{"role": "user", "content": "Canvas oluştur"}], "deepseek-reasoner", 2, ["create_canvas_document"]
+                )
+            )
 
         self.assertIn({"type": "answer_delta", "text": "Bitti."}, events)
-        leaked_dsml = [event for event in events if event["type"] == "answer_delta" and "function_calls" in event["text"]]
+        leaked_dsml = [
+            event for event in events if event["type"] == "answer_delta" and "function_calls" in event["text"]
+        ]
         self.assertEqual(leaked_dsml, [])
         parser_errors = [event for event in events if event["type"] == "tool_error" and event["tool"] == "parser"]
         self.assertEqual(parser_errors, [])
         tool_capture_event = next(event for event in events if event["type"] == "tool_capture")
-        self.assertEqual([doc["title"] for doc in tool_capture_event["canvas_documents"]], ["Arduino Kodu - RobotBeyni.ino"])
+        self.assertEqual(
+            [doc["title"] for doc in tool_capture_event["canvas_documents"]], ["Arduino Kodu - RobotBeyni.ino"]
+        )
         self.assertEqual(tool_capture_event["canvas_documents"][0]["content"], "// test\nint led = 13;")
 
     def test_run_agent_stream_prefers_content_dsml_when_native_tool_args_are_invalid(self):
         dsml_content = (
             "<｜DSML｜function_calls>\n"
-            "<｜DSML｜invoke name=\"create_canvas_document\">\n"
-            "<｜DSML｜parameter name=\"title\" string=\"true\">Robot Plan</｜DSML｜parameter>\n"
-            "<｜DSML｜parameter name=\"content\" string=\"true\"># Notes</｜DSML｜parameter>\n"
+            '<｜DSML｜invoke name="create_canvas_document">\n'
+            '<｜DSML｜parameter name="title" string="true">Robot Plan</｜DSML｜parameter>\n'
+            '<｜DSML｜parameter name="content" string="true"># Notes</｜DSML｜parameter>\n'
             "</｜DSML｜invoke>\n"
             "</｜DSML｜function_calls>"
         )
@@ -14829,19 +15386,25 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             {
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "search_web", "arguments": "{}"}}],
+                "tool_calls": [
+                    {"id": "call-1", "type": "function", "function": {"name": "search_web", "arguments": "{}"}}
+                ],
             },
             {"role": "tool", "tool_call_id": "call-1", "content": "A" * 1200},
             {
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [{"id": "call-2", "type": "function", "function": {"name": "fetch_url", "arguments": "{}"}}],
+                "tool_calls": [
+                    {"id": "call-2", "type": "function", "function": {"name": "fetch_url", "arguments": "{}"}}
+                ],
             },
             {"role": "tool", "tool_call_id": "call-2", "content": "B" * 1200},
             {
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [{"id": "call-3", "type": "function", "function": {"name": "search_news_ddgs", "arguments": "{}"}}],
+                "tool_calls": [
+                    {"id": "call-3", "type": "function", "function": {"name": "search_news_ddgs", "arguments": "{}"}}
+                ],
             },
             {"role": "tool", "tool_call_id": "call-3", "content": "C" * 1200},
         ]
@@ -14877,7 +15440,13 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             {
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [{"id": "call-2", "type": "function", "function": {"name": "fetch_url", "arguments": '{"url": "https://example.com"}'}}],
+                "tool_calls": [
+                    {
+                        "id": "call-2",
+                        "type": "function",
+                        "function": {"name": "fetch_url", "arguments": '{"url": "https://example.com"}'},
+                    }
+                ],
             },
             {"role": "tool", "tool_call_id": "call-2", "content": "Title: Python 3.13\n\nKey highlights and changes."},
         ]
@@ -14920,7 +15489,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
     def test_prepare_tool_result_for_transcript_clips_large_non_fetch_payloads(self):
         result = _prepare_tool_result_for_transcript("search_web", {"items": ["x" * 30000]})
-        rendered = _build_compact_tool_message_content("search_web", {}, {"ignored": True}, "summary", transcript_result=result)
+        rendered = _build_compact_tool_message_content(
+            "search_web", {}, {"ignored": True}, "summary", transcript_result=result
+        )
 
         self.assertIsInstance(result, str)
         self.assertIn("[CLIPPED: original", result)
@@ -15132,10 +15703,22 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             canvas_documents=[{"id": "doc-1", "title": "draft.py", "content": "print('x')\n"}],
         )
         preview_spec_map = {spec["function"]["name"]: spec for spec in preview_specs}
-        operations_items = preview_spec_map["preview_canvas_changes"]["function"]["parameters"]["properties"]["operations"]["items"]
+        operations_items = preview_spec_map["preview_canvas_changes"]["function"]["parameters"]["properties"][
+            "operations"
+        ]["items"]
         enabled_specs = {
             spec["name"]: spec
-            for spec in get_enabled_tool_specs(["search_files", "set_canvas_viewport", "clear_canvas", "batch_canvas_edits", "search_canvas_document", "validate_canvas_document", "batch_read_canvas_documents"])
+            for spec in get_enabled_tool_specs(
+                [
+                    "search_files",
+                    "set_canvas_viewport",
+                    "clear_canvas",
+                    "batch_canvas_edits",
+                    "search_canvas_document",
+                    "validate_canvas_document",
+                    "batch_read_canvas_documents",
+                ]
+            )
         }
 
         self.assertIn("oneOf", operations_items)
@@ -15144,18 +15727,25 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             {"replace", "insert", "delete"},
         )
         self.assertIn("Prefer path-only search first", enabled_specs["search_files"]["prompt"]["guidance"])
-        self.assertIn("Use 0 to keep it pinned", enabled_specs["set_canvas_viewport"]["parameters"]["properties"]["ttl_turns"]["description"])
+        self.assertIn(
+            "Use 0 to keep it pinned",
+            enabled_specs["set_canvas_viewport"]["parameters"]["properties"]["ttl_turns"]["description"],
+        )
         self.assertIn("permanent", enabled_specs["set_canvas_viewport"]["parameters"]["properties"])
         self.assertIn("targets", enabled_specs["batch_canvas_edits"]["parameters"]["properties"])
         self.assertIn("context_lines", enabled_specs["search_canvas_document"]["parameters"]["properties"])
         self.assertIn("offset", enabled_specs["search_canvas_document"]["parameters"]["properties"])
         self.assertIn("validator", enabled_specs["validate_canvas_document"]["parameters"]["properties"])
         self.assertIn("documents", enabled_specs["batch_read_canvas_documents"]["parameters"]["properties"])
-        self.assertIn("explicitly requests deleting all canvas documents", enabled_specs["clear_canvas"]["prompt"]["guidance"])
+        self.assertIn(
+            "explicitly requests deleting all canvas documents", enabled_specs["clear_canvas"]["prompt"]["guidance"]
+        )
 
     def test_format_tool_execution_error_hides_internal_exception_class_names(self):
         error_text = _format_tool_execution_error(ValueError("Canvas document not found for path: src/app.py"))
-        custom_error = type("CanvasDocumentLookupError", (Exception,), {})("Canvas document not found for path: src/app.py")
+        custom_error = type("CanvasDocumentLookupError", (Exception,), {})(
+            "Canvas document not found for path: src/app.py"
+        )
 
         self.assertEqual(error_text, "Canvas document not found for path: src/app.py")
         self.assertEqual(_format_tool_execution_error(custom_error), "Canvas document not found for path: src/app.py")
@@ -15207,15 +15797,26 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ),
         ]
         fetch_results = [
-            ({"url": "https://example.com/1", "title": "One", "content": "content", "content_mode": "full_text"}, "Fetched first"),
-            ({"url": "https://example.com/2", "title": "Two", "content": "content", "content_mode": "full_text"}, "Fetched second"),
+            (
+                {"url": "https://example.com/1", "title": "One", "content": "content", "content_mode": "full_text"},
+                "Fetched first",
+            ),
+            (
+                {"url": "https://example.com/2", "title": "Two", "content": "content", "content_mode": "full_text"},
+                "Fetched second",
+            ),
         ]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create, patch(
-            "agent._execute_tool",
-            side_effect=fetch_results,
+        with (
+            patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create,
+            patch(
+                "agent._execute_tool",
+                side_effect=fetch_results,
+            ),
         ):
-            events = list(run_agent_stream([{"role": "user", "content": "Check two pages"}], "deepseek-chat", 4, ["fetch_url"]))
+            events = list(
+                run_agent_stream([{"role": "user", "content": "Check two pages"}], "deepseek-chat", 4, ["fetch_url"])
+            )
 
         self.assertIn({"type": "answer_delta", "text": "Done."}, events)
         third_call_messages = mocked_create.call_args_list[2].kwargs["messages"]
@@ -15229,9 +15830,24 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
     def test_run_agent_stream_deduplicates_missing_final_answer_instruction(self):
         responses = [
-            iter([self._stream_chunk(reasoning="One."), self._stream_chunk(usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2))]),
-            iter([self._stream_chunk(reasoning="Two."), self._stream_chunk(usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2))]),
-            iter([self._stream_chunk(content="Final."), self._stream_chunk(usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2))]),
+            iter(
+                [
+                    self._stream_chunk(reasoning="One."),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2)),
+                ]
+            ),
+            iter(
+                [
+                    self._stream_chunk(reasoning="Two."),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2)),
+                ]
+            ),
+            iter(
+                [
+                    self._stream_chunk(content="Final."),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2)),
+                ]
+            ),
         ]
 
         with patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create:
@@ -15239,7 +15855,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         self.assertIn({"type": "answer_delta", "text": "Final."}, events)
         third_call_messages = mocked_create.call_args_list[2].kwargs["messages"]
-        retry_markers = [message for message in third_call_messages if "MISSING FINAL ANSWER" in str(message.get("content") or "")]
+        retry_markers = [
+            message for message in third_call_messages if "MISSING FINAL ANSWER" in str(message.get("content") or "")
+        ]
         self.assertEqual(len(retry_markers), 1)
 
     def test_run_agent_stream_recovers_from_context_overflow_before_model_turn(self):
@@ -15249,37 +15867,56 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             {
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "search_web", "arguments": "{}"}}],
+                "tool_calls": [
+                    {"id": "call-1", "type": "function", "function": {"name": "search_web", "arguments": "{}"}}
+                ],
             },
             {"role": "tool", "tool_call_id": "call-1", "content": "A" * 2500},
             {
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [{"id": "call-2", "type": "function", "function": {"name": "fetch_url", "arguments": "{}"}}],
+                "tool_calls": [
+                    {"id": "call-2", "type": "function", "function": {"name": "fetch_url", "arguments": "{}"}}
+                ],
             },
             {"role": "tool", "tool_call_id": "call-2", "content": "B" * 2500},
             {
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [{"id": "call-3", "type": "function", "function": {"name": "search_news_ddgs", "arguments": "{}"}}],
+                "tool_calls": [
+                    {"id": "call-3", "type": "function", "function": {"name": "search_news_ddgs", "arguments": "{}"}}
+                ],
             },
             {"role": "tool", "tool_call_id": "call-3", "content": "C" * 2500},
         ]
         responses = [
             Exception("context_length_exceeded"),
-            iter([self._stream_chunk(content="Recovered."), self._stream_chunk(usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2))]),
+            iter(
+                [
+                    self._stream_chunk(content="Recovered."),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2)),
+                ]
+            ),
         ]
 
-        with patch("agent.PROMPT_MAX_INPUT_TOKENS", 300), patch(
-            "agent.client.chat.completions.create",
-            side_effect=responses,
-        ) as mocked_create:
+        with (
+            patch("agent.PROMPT_MAX_INPUT_TOKENS", 300),
+            patch(
+                "agent.client.chat.completions.create",
+                side_effect=responses,
+            ) as mocked_create,
+        ):
             events = list(run_agent_stream(api_messages, "deepseek-chat", 2, []))
 
         self.assertIn({"type": "answer_delta", "text": "Recovered."}, events)
         self.assertEqual(mocked_create.call_count, 2)
         retried_messages = mocked_create.call_args_list[1].kwargs["messages"]
-        self.assertTrue(any(message["role"] == "user" and "compacted tool step" in message["content"] for message in retried_messages))
+        self.assertTrue(
+            any(
+                message["role"] == "user" and "compacted tool step" in message["content"]
+                for message in retried_messages
+            )
+        )
 
     def test_run_agent_stream_traces_overflow_recovery_telemetry(self):
         api_messages = [
@@ -15288,33 +15925,50 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             {
                 "role": "assistant",
                 "content": "I should inspect older search results.",
-                "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "search_web", "arguments": "{}"}}],
+                "tool_calls": [
+                    {"id": "call-1", "type": "function", "function": {"name": "search_web", "arguments": "{}"}}
+                ],
             },
             {"role": "tool", "tool_call_id": "call-1", "content": "A" * 2500},
             {
                 "role": "assistant",
                 "content": "Now inspect fetched details.",
-                "tool_calls": [{"id": "call-2", "type": "function", "function": {"name": "fetch_url", "arguments": "{}"}}],
+                "tool_calls": [
+                    {"id": "call-2", "type": "function", "function": {"name": "fetch_url", "arguments": "{}"}}
+                ],
             },
             {"role": "tool", "tool_call_id": "call-2", "content": "B" * 2500},
         ]
         responses = [
             Exception("context_length_exceeded"),
-            iter([self._stream_chunk(content="Recovered."), self._stream_chunk(usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2))]),
+            iter(
+                [
+                    self._stream_chunk(content="Recovered."),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2)),
+                ]
+            ),
         ]
 
-        with patch("agent.PROMPT_MAX_INPUT_TOKENS", 250), patch(
-            "agent.client.chat.completions.create",
-            side_effect=responses,
-        ), patch("agent._trace_agent_event") as mocked_trace:
+        with (
+            patch("agent.PROMPT_MAX_INPUT_TOKENS", 250),
+            patch(
+                "agent.client.chat.completions.create",
+                side_effect=responses,
+            ),
+            patch("agent._trace_agent_event") as mocked_trace,
+        ):
             events = list(run_agent_stream(api_messages, "deepseek-chat", 2, []))
 
         self.assertIn({"type": "answer_delta", "text": "Recovered."}, events)
-        compacted_calls = [call for call in mocked_trace.call_args_list if call.args and call.args[0] == "context_compacted"]
+        compacted_calls = [
+            call for call in mocked_trace.call_args_list if call.args and call.args[0] == "context_compacted"
+        ]
         self.assertTrue(compacted_calls)
         self.assertTrue(any(call.kwargs.get("force") is True for call in compacted_calls))
         self.assertTrue(any((call.kwargs.get("compacted_exchange_count") or 0) >= 1 for call in compacted_calls))
-        recovered_calls = [call for call in mocked_trace.call_args_list if call.args and call.args[0] == "context_overflow_recovered"]
+        recovered_calls = [
+            call for call in mocked_trace.call_args_list if call.args and call.args[0] == "context_overflow_recovered"
+        ]
         self.assertTrue(recovered_calls)
         self.assertEqual(recovered_calls[-1].kwargs.get("phase"), "main_loop")
 
@@ -15342,15 +15996,25 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 ]
             ),
             Exception("context_length_exceeded"),
-            iter([self._stream_chunk(content="Final after compaction."), self._stream_chunk(usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2))]),
+            iter(
+                [
+                    self._stream_chunk(content="Final after compaction."),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2)),
+                ]
+            ),
         ]
 
-        with patch("agent.PROMPT_MAX_INPUT_TOKENS", 200), patch(
-            "agent.AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS",
-            0,
-        ), patch("agent.client.chat.completions.create", side_effect=responses), patch(
-            "agent.search_web_tool",
-            return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet" * 200}],
+        with (
+            patch("agent.PROMPT_MAX_INPUT_TOKENS", 200),
+            patch(
+                "agent.AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS",
+                0,
+            ),
+            patch("agent.client.chat.completions.create", side_effect=responses),
+            patch(
+                "agent.search_web_tool",
+                return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet" * 200}],
+            ),
         ):
             events = list(run_agent_stream([{"role": "user", "content": "Test"}], "deepseek-chat", 1, ["search_web"]))
 
@@ -15373,9 +16037,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ),
         ]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses), patch(
-            "agent.search_web_tool",
-            return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+        with (
+            patch("agent.client.chat.completions.create", side_effect=responses),
+            patch(
+                "agent.search_web_tool",
+                return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+            ),
         ):
             events = list(run_agent_stream([{"role": "user", "content": "Test"}], "deepseek-chat", 2, ["search_web"]))
 
@@ -15424,9 +16091,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             "extra_body": {},
         }
 
-        with patch("agent.resolve_model_target", return_value=fake_target), patch(
-            "agent.search_web_tool",
-            return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+        with (
+            patch("agent.resolve_model_target", return_value=fake_target),
+            patch(
+                "agent.search_web_tool",
+                return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+            ),
         ):
             events = list(
                 run_agent_stream(
@@ -15456,7 +16126,10 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ),
         ]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses), patch("agent.search_web_tool") as mocked_search:
+        with (
+            patch("agent.client.chat.completions.create", side_effect=responses),
+            patch("agent.search_web_tool") as mocked_search,
+        ):
             events = list(run_agent_stream([{"role": "user", "content": "Test"}], "deepseek-chat", 2, ["search_web"]))
 
         mocked_search.assert_not_called()
@@ -15484,9 +16157,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ),
         ]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create, patch(
-            "agent.search_web_tool",
-            return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+        with (
+            patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create,
+            patch(
+                "agent.search_web_tool",
+                return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+            ),
         ):
             events = list(
                 run_agent_stream(
@@ -15500,7 +16176,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         first_call_kwargs = mocked_create.call_args_list[0].kwargs
         self.assertNotIn("tools", first_call_kwargs)
-        self.assertFalse(any(event["type"] == "tool_error" and event.get("error") == "Tool disabled: search_web" for event in events))
+        self.assertFalse(
+            any(event["type"] == "tool_error" and event.get("error") == "Tool disabled: search_web" for event in events)
+        )
         self.assertTrue(any(event["type"] == "tool_result" and event.get("tool") == "search_web" for event in events))
 
     def test_run_agent_stream_separates_reasoning_turns_with_blank_line(self):
@@ -15529,11 +16207,16 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             "extra_body": {},
         }
 
-        with patch("agent.resolve_model_target", return_value=fake_target), patch(
-            "agent.search_web_tool",
-            return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+        with (
+            patch("agent.resolve_model_target", return_value=fake_target),
+            patch(
+                "agent.search_web_tool",
+                return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+            ),
         ):
-            events = list(run_agent_stream([{"role": "user", "content": "Test"}], "deepseek-reasoner", 2, ["search_web"]))
+            events = list(
+                run_agent_stream([{"role": "user", "content": "Test"}], "deepseek-reasoner", 2, ["search_web"])
+            )
 
         reasoning_deltas = [event["text"] for event in events if event["type"] == "reasoning_delta"]
         self.assertEqual(reasoning_deltas, ["First reasoning block.", "\n\n", "Second reasoning block."])
@@ -15545,7 +16228,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
             def __iter__(self):
                 yield AppRoutesTestCase._stream_chunk(content="Partial answer.")
-                yield AppRoutesTestCase._stream_chunk(usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2))
+                yield AppRoutesTestCase._stream_chunk(
+                    usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+                )
 
             def close(self):
                 self.closed = True
@@ -15592,11 +16277,16 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             "extra_body": {},
         }
 
-        with patch("agent.resolve_model_target", return_value=fake_target), patch(
-            "agent.search_web_tool",
-            return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+        with (
+            patch("agent.resolve_model_target", return_value=fake_target),
+            patch(
+                "agent.search_web_tool",
+                return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+            ),
         ):
-            events = list(run_agent_stream([{"role": "user", "content": "Test"}], "deepseek-reasoner", 2, ["search_web"]))
+            events = list(
+                run_agent_stream([{"role": "user", "content": "Test"}], "deepseek-reasoner", 2, ["search_web"])
+            )
 
         self.assertIn({"type": "answer_delta", "text": "Final answer."}, events)
         second_call_messages = fake_create.call_args_list[1].kwargs["messages"]
@@ -15666,9 +16356,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             "extra_body": {},
         }
 
-        with patch("agent.resolve_model_target", return_value=fake_target), patch(
-            "agent.search_web_tool",
-            return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+        with (
+            patch("agent.resolve_model_target", return_value=fake_target),
+            patch(
+                "agent.search_web_tool",
+                return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+            ),
         ):
             events = list(
                 run_agent_stream(
@@ -15737,9 +16430,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             "extra_body": {},
         }
 
-        with patch("agent.resolve_model_target", return_value=fake_target), patch(
-            "agent.search_web_tool",
-            return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+        with (
+            patch("agent.resolve_model_target", return_value=fake_target),
+            patch(
+                "agent.search_web_tool",
+                return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+            ),
         ):
             events = list(run_agent_stream([{"role": "user", "content": "Test"}], "deepseek-chat", 2, ["search_web"]))
 
@@ -15777,11 +16473,18 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             "extra_body": {},
         }
 
-        with patch("agent.resolve_model_target", return_value=fake_target), patch(
-            "agent.search_web_tool",
-            side_effect=RuntimeError("search backend unavailable"),
+        with (
+            patch("agent.resolve_model_target", return_value=fake_target),
+            patch(
+                "agent.search_web_tool",
+                side_effect=RuntimeError("search backend unavailable"),
+            ),
         ):
-            events = list(run_agent_stream([{"role": "user", "content": "Find current info"}], "deepseek-reasoner", 2, ["search_web"]))
+            events = list(
+                run_agent_stream(
+                    [{"role": "user", "content": "Find current info"}], "deepseek-reasoner", 2, ["search_web"]
+                )
+            )
 
         self.assertIn({"type": "answer_delta", "text": "Fallback answer."}, events)
         second_call_messages = fake_create.call_args_list[1].kwargs["messages"]
@@ -15810,21 +16513,27 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         responses = [
             iter(
                 [
-                    self._stream_chunk(reasoning="Plan: first search broad context, then verify details, then draft the answer."),
+                    self._stream_chunk(
+                        reasoning="Plan: first search broad context, then verify details, then draft the answer."
+                    ),
                     self._tool_call_chunk("search_web", {"queries": ["broad context"]}, call_id="tool-call-1"),
                     self._stream_chunk(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=3, total_tokens=5)),
                 ]
             ),
             iter(
                 [
-                    self._stream_chunk(reasoning="The broad search is done. I should verify one detail before drafting."),
+                    self._stream_chunk(
+                        reasoning="The broad search is done. I should verify one detail before drafting."
+                    ),
                     self._tool_call_chunk("search_web", {"queries": ["verify detail"]}, call_id="tool-call-2"),
                     self._stream_chunk(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=3, total_tokens=5)),
                 ]
             ),
             iter(
                 [
-                    self._stream_chunk(reasoning="I have enough evidence. I will do one final targeted search, then answer."),
+                    self._stream_chunk(
+                        reasoning="I have enough evidence. I will do one final targeted search, then answer."
+                    ),
                     self._tool_call_chunk("search_web", {"queries": ["final confirmation"]}, call_id="tool-call-3"),
                     self._stream_chunk(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=3, total_tokens=5)),
                 ]
@@ -15845,11 +16554,18 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             "extra_body": {},
         }
 
-        with patch("agent.resolve_model_target", return_value=fake_target), patch(
-            "agent.search_web_tool",
-            return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+        with (
+            patch("agent.resolve_model_target", return_value=fake_target),
+            patch(
+                "agent.search_web_tool",
+                return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+            ),
         ):
-            events = list(run_agent_stream([{"role": "user", "content": "Find current info"}], "deepseek-reasoner", 4, ["search_web"]))
+            events = list(
+                run_agent_stream(
+                    [{"role": "user", "content": "Find current info"}], "deepseek-reasoner", 4, ["search_web"]
+                )
+            )
 
         self.assertIn({"type": "answer_delta", "text": "Final answer."}, events)
         fourth_call_messages = fake_create.call_args_list[3].kwargs["messages"]
@@ -15862,7 +16578,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             None,
         )
         self.assertIsNotNone(replay_message)
-        self.assertIn("Plan: first search broad context, then verify details, then draft the answer.", replay_message["content"])
+        self.assertIn(
+            "Plan: first search broad context, then verify details, then draft the answer.", replay_message["content"]
+        )
         self.assertIn("I should verify one detail before drafting.", replay_message["content"])
         self.assertIn("I will do one final targeted search, then answer.", replay_message["content"])
 
@@ -15903,7 +16621,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             events,
         )
         self.assertIn({"type": "answer_delta", "text": FINAL_ANSWER_MISSING_TEXT}, events)
-        leaked_reasoning = [event for event in events if event["type"] == "answer_delta" and "reasoning pass" in event["text"]]
+        leaked_reasoning = [
+            event for event in events if event["type"] == "answer_delta" and "reasoning pass" in event["text"]
+        ]
         self.assertEqual(leaked_reasoning, [])
 
     def test_run_agent_stream_injects_blocker_memory_after_tool_failure(self):
@@ -15922,15 +16642,27 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ),
         ]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create, patch(
-            "agent.search_web_tool",
-            side_effect=RuntimeError("search backend unavailable"),
+        with (
+            patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create,
+            patch(
+                "agent.search_web_tool",
+                side_effect=RuntimeError("search backend unavailable"),
+            ),
         ):
-            events = list(run_agent_stream([{"role": "user", "content": "Find current info"}], "deepseek-chat", 2, ["search_web"]))
+            events = list(
+                run_agent_stream([{"role": "user", "content": "Find current info"}], "deepseek-chat", 2, ["search_web"])
+            )
 
         self.assertIn({"type": "answer_delta", "text": "Fallback answer."}, events)
         second_call_messages = mocked_create.call_args_list[1].kwargs["messages"]
-        blocker_message = next((message for message in second_call_messages if message["role"] == "system" and "AGENT WORKING MEMORY" in message["content"]), None)
+        blocker_message = next(
+            (
+                message
+                for message in second_call_messages
+                if message["role"] == "system" and "AGENT WORKING MEMORY" in message["content"]
+            ),
+            None,
+        )
         self.assertIsNotNone(blocker_message)
         self.assertIn("search backend unavailable", blocker_message["content"])
         self.assertIn("Failed paths to avoid repeating", blocker_message["content"])
@@ -15939,9 +16671,15 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         responses = [
             iter(
                 [
-                    self._tool_call_chunk("fetch_url", {"url": "https://example.com/1"}, call_id="tool-call-1", index=0),
-                    self._tool_call_chunk("fetch_url", {"url": "https://example.com/2"}, call_id="tool-call-2", index=1),
-                    self._tool_call_chunk("fetch_url", {"url": "https://example.com/3"}, call_id="tool-call-3", index=2),
+                    self._tool_call_chunk(
+                        "fetch_url", {"url": "https://example.com/1"}, call_id="tool-call-1", index=0
+                    ),
+                    self._tool_call_chunk(
+                        "fetch_url", {"url": "https://example.com/2"}, call_id="tool-call-2", index=1
+                    ),
+                    self._tool_call_chunk(
+                        "fetch_url", {"url": "https://example.com/3"}, call_id="tool-call-3", index=2
+                    ),
                     self._stream_chunk(usage=SimpleNamespace(prompt_tokens=2, completion_tokens=3, total_tokens=5)),
                 ]
             ),
@@ -15953,16 +16691,26 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ),
         ]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses), patch(
-            "agent.fetch_url_tool",
-            return_value={"url": "https://example.com", "title": "Example", "content": "Body"},
-        ) as mocked_fetch:
-            events = list(run_agent_stream([{"role": "user", "content": "Fetch several pages"}], "deepseek-chat", 2, ["fetch_url"]))
+        with (
+            patch("agent.client.chat.completions.create", side_effect=responses),
+            patch(
+                "agent.fetch_url_tool",
+                return_value={"url": "https://example.com", "title": "Example", "content": "Body"},
+            ) as mocked_fetch,
+        ):
+            events = list(
+                run_agent_stream(
+                    [{"role": "user", "content": "Fetch several pages"}], "deepseek-chat", 2, ["fetch_url"]
+                )
+            )
 
         self.assertEqual(mocked_fetch.call_count, 2)
         per_tool_errors = [
-            event for event in events
-            if event["type"] == "tool_error" and event["tool"] == "fetch_url" and "Per-tool step limit reached" in event["error"]
+            event
+            for event in events
+            if event["type"] == "tool_error"
+            and event["tool"] == "fetch_url"
+            and "Per-tool step limit reached" in event["error"]
         ]
         self.assertEqual(len(per_tool_errors), 1)
         self.assertIn({"type": "answer_delta", "text": "Final answer."}, events)
@@ -16013,17 +16761,26 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ),
         ]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses), patch(
-            "agent.append_to_scratchpad",
-            side_effect=[
-                ({"status": "appended", "scratchpad": "note 1"}, "Scratchpad updated"),
-                ({"status": "appended", "scratchpad": "note 1\nnote 2"}, "Scratchpad updated"),
-                ({"status": "appended", "scratchpad": "note 1\nnote 2\nnote 3"}, "Scratchpad updated"),
-                ({"status": "appended", "scratchpad": "note 1\nnote 2\nnote 3\nnote 4"}, "Scratchpad updated"),
-                ({"status": "appended", "scratchpad": "note 1\nnote 2\nnote 3\nnote 4\nnote 5"}, "Scratchpad updated"),
-                ({"status": "appended", "scratchpad": "note 1\nnote 2\nnote 3\nnote 4\nnote 5\nnote 6"}, "Scratchpad updated"),
-            ],
-        ) as mocked_append:
+        with (
+            patch("agent.client.chat.completions.create", side_effect=responses),
+            patch(
+                "agent.append_to_scratchpad",
+                side_effect=[
+                    ({"status": "appended", "scratchpad": "note 1"}, "Scratchpad updated"),
+                    ({"status": "appended", "scratchpad": "note 1\nnote 2"}, "Scratchpad updated"),
+                    ({"status": "appended", "scratchpad": "note 1\nnote 2\nnote 3"}, "Scratchpad updated"),
+                    ({"status": "appended", "scratchpad": "note 1\nnote 2\nnote 3\nnote 4"}, "Scratchpad updated"),
+                    (
+                        {"status": "appended", "scratchpad": "note 1\nnote 2\nnote 3\nnote 4\nnote 5"},
+                        "Scratchpad updated",
+                    ),
+                    (
+                        {"status": "appended", "scratchpad": "note 1\nnote 2\nnote 3\nnote 4\nnote 5\nnote 6"},
+                        "Scratchpad updated",
+                    ),
+                ],
+            ) as mocked_append,
+        ):
             events = list(
                 run_agent_stream(
                     [{"role": "user", "content": "Remember these notes"}],
@@ -16037,13 +16794,19 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         per_tool_errors = [
             event
             for event in events
-            if event["type"] == "tool_error" and event["tool"] == "append_scratchpad" and "Per-tool step limit reached" in event["error"]
+            if event["type"] == "tool_error"
+            and event["tool"] == "append_scratchpad"
+            and "Per-tool step limit reached" in event["error"]
         ]
         self.assertEqual(per_tool_errors, [])
         self.assertIn({"type": "answer_delta", "text": "Final answer."}, events)
 
     def test_run_agent_stream_stops_after_api_error_without_duplicate_retry(self):
-        responses = [RuntimeError("Error code: 400 - {'error': {'message': 'Invalid consecutive assistant message at message index 2', 'type': 'invalid_request_error'}}")]
+        responses = [
+            RuntimeError(
+                "Error code: 400 - {'error': {'message': 'Invalid consecutive assistant message at message index 2', 'type': 'invalid_request_error'}}"
+            )
+        ]
 
         with patch("agent.client.chat.completions.create", side_effect=responses):
             events = list(run_agent_stream([{"role": "user", "content": "Test"}], "deepseek-reasoner", 2, []))
@@ -16142,7 +16905,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         </html>
         """
 
-        with patch("web_tools.html_to_markdown_convert", return_value={"content": "# External Title\n\nRendered externally."}):
+        with patch(
+            "web_tools.html_to_markdown_convert", return_value={"content": "# External Title\n\nRendered externally."}
+        ):
             result = _extract_html(
                 html,
                 "https://example.com/docs",
@@ -16275,7 +17040,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         )
 
         self.assertIn("Extra rollout details are also included.", combined)
-        self.assertEqual(combined.count("This API requires authentication and explicit version headers for every request."), 1)
+        self.assertEqual(
+            combined.count("This API requires authentication and explicit version headers for every request."), 1
+        )
 
     def test_infer_fetch_summary_profile_detects_technical_docs(self):
         from agent import _infer_fetch_summary_profile
@@ -16294,7 +17061,8 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("Key APIs or configuration", profile["section_labels"])
 
     def test_extract_html_surfaces_structured_metadata_even_when_body_is_long(self):
-        html = """
+        html = (
+            """
         <html>
             <head>
                 <title>Reference Docs</title>
@@ -16309,11 +17077,14 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             <body>
                 <main>
                     <h1>Reference Docs</h1>
-                    <p>""" + ("Detailed implementation text. " * 30) + """</p>
+                    <p>"""
+            + ("Detailed implementation text. " * 30)
+            + """</p>
                 </main>
             </body>
         </html>
         """
+        )
 
         result = _extract_html(html, "https://example.com/reference")
 
@@ -16322,16 +17093,16 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("High-level explanation of the API surface.", result["content"])
 
     def test_grep_fetched_content_tool_handles_invalid_window_args_and_skips_tool_memory_headers(self):
-        with patch("web_tools.cache_get", return_value=None), patch(
-            "rag_service.get_exact_tool_memory_match",
-            return_value={
-                "content": (
-                    "tool:fetch_url\n"
-                    "Input: https://example.com/page\n"
-                    "Summary: Example page\n"
-                    "needle in page body"
-                )
-            },
+        with (
+            patch("web_tools.cache_get", return_value=None),
+            patch(
+                "rag_service.get_exact_tool_memory_match",
+                return_value={
+                    "content": (
+                        "tool:fetch_url\nInput: https://example.com/page\nSummary: Example page\nneedle in page body"
+                    )
+                },
+            ),
         ):
             result = web_tools.grep_fetched_content_tool(
                 "https://example.com/page",
@@ -16345,23 +17116,27 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(result["matches"][0]["line"], "needle in page body")
 
     def test_grep_fetched_content_tool_uses_summarized_fetch_tool_memory_when_available(self):
-        with patch("web_tools.cache_get", return_value=None), patch(
-            "rag_service.get_exact_tool_memory_match",
-            side_effect=lambda tool_name, args_preview: {
-                "content": "Summary: distilled page notes\nneedle in summary"
-            }
-            if tool_name == "fetch_url_summarized"
-            else None,
-        ), patch(
-            "rag_service.search_tool_memory",
-            return_value={
-                "matches": [
-                    {
-                        "source_name": "fetch_url_summarized: https://example.com/page | pricing",
-                        "text": "Summary: distilled page notes\nneedle in summary",
-                    }
-                ]
-            },
+        with (
+            patch("web_tools.cache_get", return_value=None),
+            patch(
+                "rag_service.get_exact_tool_memory_match",
+                side_effect=lambda tool_name, args_preview: {
+                    "content": "Summary: distilled page notes\nneedle in summary"
+                }
+                if tool_name == "fetch_url_summarized"
+                else None,
+            ),
+            patch(
+                "rag_service.search_tool_memory",
+                return_value={
+                    "matches": [
+                        {
+                            "source_name": "fetch_url_summarized: https://example.com/page | pricing",
+                            "text": "Summary: distilled page notes\nneedle in summary",
+                        }
+                    ]
+                },
+            ),
         ):
             result = web_tools.grep_fetched_content_tool(
                 "https://example.com/page",
@@ -16373,16 +17148,20 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(result["searched_source"], "tool_memory_summary")
 
     def test_grep_fetched_content_tool_refetches_when_cache_is_missing(self):
-        with patch("web_tools.cache_get", return_value=None), patch(
-            "rag_service.get_exact_tool_memory_match",
-            return_value=None,
-        ), patch(
-            "web_tools.fetch_url_tool",
-            return_value={
-                "url": "https://example.com/page",
-                "content": "alpha\nneedle\nomega",
-                "status": 200,
-            },
+        with (
+            patch("web_tools.cache_get", return_value=None),
+            patch(
+                "rag_service.get_exact_tool_memory_match",
+                return_value=None,
+            ),
+            patch(
+                "web_tools.fetch_url_tool",
+                return_value={
+                    "url": "https://example.com/page",
+                    "content": "alpha\nneedle\nomega",
+                    "status": 200,
+                },
+            ),
         ):
             result = web_tools.grep_fetched_content_tool(
                 "https://example.com/page",
@@ -16394,14 +17173,17 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertTrue(result["refetched"])
 
     def test_grep_fetched_content_tool_prefers_raw_content_from_fetch_cache(self):
-        with patch(
-            "web_tools.cache_get",
-            return_value={
-                "url": "https://example.com/page",
-                "content": "# Example\n\n- needle hidden inside markdown noise",
-                "raw_content": "Example\nalpha\nneedle\nomega",
-            },
-        ), patch("rag_service.get_exact_tool_memory_match", return_value=None):
+        with (
+            patch(
+                "web_tools.cache_get",
+                return_value={
+                    "url": "https://example.com/page",
+                    "content": "# Example\n\n- needle hidden inside markdown noise",
+                    "raw_content": "Example\nalpha\nneedle\nomega",
+                },
+            ),
+            patch("rag_service.get_exact_tool_memory_match", return_value=None),
+        ):
             result = web_tools.grep_fetched_content_tool(
                 "https://example.com/page",
                 "needle",
@@ -16436,13 +17218,19 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             def close(self):
                 return None
 
-        with patch("web_tools._is_safe_url", return_value=(True, "")), patch(
-            "web_tools.cache_get",
-            return_value=None,
-        ), patch("web_tools.cache_set") as mocked_cache_set, patch(
-            "web_tools.get_proxy_candidates",
-            return_value=[None],
-        ), patch("web_tools.http_requests.Session", return_value=FakeSession()):
+        with (
+            patch("web_tools._is_safe_url", return_value=(True, "")),
+            patch(
+                "web_tools.cache_get",
+                return_value=None,
+            ),
+            patch("web_tools.cache_set") as mocked_cache_set,
+            patch(
+                "web_tools.get_proxy_candidates",
+                return_value=[None],
+            ),
+            patch("web_tools.http_requests.Session", return_value=FakeSession()),
+        ):
             result = fetch_url_tool("https://example.com/page")
 
         self.assertEqual(result["title"], "Example")
@@ -16462,9 +17250,14 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             def __exit__(self, exc_type, exc, tb):
                 return False
 
-        with patch("doc_service._extract_text_from_pdf", return_value="## Page 1\n\n| A | B |\n| --- | --- |\n| 1 | 2 |"), patch(
-            "pdfplumber.open",
-            return_value=FakePDF(),
+        with (
+            patch(
+                "doc_service._extract_text_from_pdf", return_value="## Page 1\n\n| A | B |\n| --- | --- |\n| 1 | 2 |"
+            ),
+            patch(
+                "pdfplumber.open",
+                return_value=FakePDF(),
+            ),
         ):
             result = web_tools._extract_pdf(b"%PDF-FAKE", "https://example.com/report.pdf")
 
@@ -16502,13 +17295,19 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             def close(self):
                 return None
 
-        with patch("web_tools._is_safe_url", return_value=(True, "")), patch(
-            "web_tools.cache_get",
-            return_value=None,
-        ), patch("web_tools.cache_set"), patch(
-            "web_tools.get_proxy_candidates",
-            return_value=["http://proxy.example:8080", None],
-        ) as mocked_candidates, patch("web_tools.http_requests.Session", side_effect=FakeSession):
+        with (
+            patch("web_tools._is_safe_url", return_value=(True, "")),
+            patch(
+                "web_tools.cache_get",
+                return_value=None,
+            ),
+            patch("web_tools.cache_set"),
+            patch(
+                "web_tools.get_proxy_candidates",
+                return_value=["http://proxy.example:8080", None],
+            ) as mocked_candidates,
+            patch("web_tools.http_requests.Session", side_effect=FakeSession),
+        ):
             result = fetch_url_tool("https://example.com/page")
 
         mocked_candidates.assert_called_once_with(include_direct_fallback=True)
@@ -16550,13 +17349,19 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             def close(self):
                 return None
 
-        with patch("web_tools._is_safe_url", return_value=(True, "")), patch(
-            "web_tools.cache_get",
-            return_value=None,
-        ), patch("web_tools.cache_set") as mocked_cache_set, patch(
-            "web_tools.get_proxy_candidates",
-            return_value=[None],
-        ), patch("web_tools.http_requests.Session", side_effect=FakeSession):
+        with (
+            patch("web_tools._is_safe_url", return_value=(True, "")),
+            patch(
+                "web_tools.cache_get",
+                return_value=None,
+            ),
+            patch("web_tools.cache_set") as mocked_cache_set,
+            patch(
+                "web_tools.get_proxy_candidates",
+                return_value=[None],
+            ),
+            patch("web_tools.http_requests.Session", side_effect=FakeSession),
+        ):
             result = fetch_url_tool("https://example.com/page")
 
         self.assertEqual(header_attempts[:2], ["max-age=0", "no-cache"])
@@ -16593,13 +17398,19 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             def close(self):
                 return None
 
-        with patch("web_tools._is_safe_url", return_value=(True, "")), patch(
-            "web_tools.cache_get",
-            return_value=None,
-        ), patch("web_tools.cache_set") as mocked_cache_set, patch(
-            "web_tools.get_proxy_candidates",
-            return_value=[None],
-        ), patch("web_tools.http_requests.Session", side_effect=FakeSession):
+        with (
+            patch("web_tools._is_safe_url", return_value=(True, "")),
+            patch(
+                "web_tools.cache_get",
+                return_value=None,
+            ),
+            patch("web_tools.cache_set") as mocked_cache_set,
+            patch(
+                "web_tools.get_proxy_candidates",
+                return_value=[None],
+            ),
+            patch("web_tools.http_requests.Session", side_effect=FakeSession),
+        ):
             result = fetch_url_tool("https://example.com/page")
 
         self.assertGreaterEqual(len(verify_values), 2)
@@ -16634,13 +17445,19 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             def close(self):
                 return None
 
-        with patch("web_tools._is_safe_url", return_value=(True, "")), patch(
-            "web_tools.cache_get",
-            return_value=None,
-        ), patch("web_tools.cache_set") as mocked_cache_set, patch(
-            "web_tools.get_proxy_candidates",
-            return_value=[None],
-        ), patch("web_tools.http_requests.Session", side_effect=FakeSession):
+        with (
+            patch("web_tools._is_safe_url", return_value=(True, "")),
+            patch(
+                "web_tools.cache_get",
+                return_value=None,
+            ),
+            patch("web_tools.cache_set") as mocked_cache_set,
+            patch(
+                "web_tools.get_proxy_candidates",
+                return_value=[None],
+            ),
+            patch("web_tools.http_requests.Session", side_effect=FakeSession),
+        ):
             result = fetch_url_tool("https://example.com/blocked")
 
         self.assertFalse(mocked_cache_set.called)
@@ -16666,10 +17483,15 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             def text(self, query, max_results=5):
                 return [{"title": "Result", "href": "https://example.com", "body": "Snippet"}]
 
-        with patch("web_tools.cache_get", return_value=None), patch("web_tools.cache_set"), patch(
-            "web_tools.get_proxy_candidates",
-            return_value=["http://proxy.example:8080", None],
-        ) as mocked_candidates, patch("web_tools.DDGS", FakeDDGS):
+        with (
+            patch("web_tools.cache_get", return_value=None),
+            patch("web_tools.cache_set"),
+            patch(
+                "web_tools.get_proxy_candidates",
+                return_value=["http://proxy.example:8080", None],
+            ) as mocked_candidates,
+            patch("web_tools.DDGS", FakeDDGS),
+        ):
             result = search_web_tool(["example"])
 
         mocked_candidates.assert_called_once_with(include_direct_fallback=True)
@@ -16695,10 +17517,15 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             def news(self, query, region=None, safesearch=None, timelimit=None, max_results=5):
                 return [{"title": "News", "url": "https://example.com/news", "date": "today", "source": "Example"}]
 
-        with patch("web_tools.cache_get", return_value=None), patch("web_tools.cache_set"), patch(
-            "web_tools.get_proxy_candidates",
-            return_value=["http://proxy.example:8080", None],
-        ) as mocked_candidates, patch("web_tools.DDGS", FakeDDGS):
+        with (
+            patch("web_tools.cache_get", return_value=None),
+            patch("web_tools.cache_set"),
+            patch(
+                "web_tools.get_proxy_candidates",
+                return_value=["http://proxy.example:8080", None],
+            ) as mocked_candidates,
+            patch("web_tools.DDGS", FakeDDGS),
+        ):
             result = search_news_ddgs_tool(["example"])
 
         mocked_candidates.assert_called_once_with(include_direct_fallback=True)
@@ -16721,10 +17548,15 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 raise RuntimeError("proxy failed")
             return FakeResponse()
 
-        with patch("web_tools.cache_get", return_value=None), patch("web_tools.cache_set"), patch(
-            "web_tools.get_proxy_candidates",
-            return_value=["http://proxy.example:8080", None],
-        ) as mocked_candidates, patch("web_tools.http_requests.get", side_effect=fake_get):
+        with (
+            patch("web_tools.cache_get", return_value=None),
+            patch("web_tools.cache_set"),
+            patch(
+                "web_tools.get_proxy_candidates",
+                return_value=["http://proxy.example:8080", None],
+            ) as mocked_candidates,
+            patch("web_tools.http_requests.get", side_effect=fake_get),
+        ):
             result = search_news_google_tool(["example"])
 
         mocked_candidates.assert_called_once_with(include_direct_fallback=True)
@@ -16755,17 +17587,21 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ]
         )
 
-        with patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create, patch(
-            "agent.fetch_url_tool",
-            return_value={
-                "url": "https://example.com/long",
-                "title": "Long Example",
-                "content": long_content,
-                "status": 200,
-                "content_format": "html",
-                "cleanup_applied": True,
-            },
-        ), patch("agent.FETCH_SUMMARY_MAX_CHARS", 5000):
+        with (
+            patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create,
+            patch(
+                "agent.fetch_url_tool",
+                return_value={
+                    "url": "https://example.com/long",
+                    "title": "Long Example",
+                    "content": long_content,
+                    "status": 200,
+                    "content_format": "html",
+                    "cleanup_applied": True,
+                },
+            ),
+            patch("agent.FETCH_SUMMARY_MAX_CHARS", 5000),
+        ):
             events = list(
                 run_agent_stream(
                     [{"role": "user", "content": "Focus on cleanup and token handling"}],
@@ -16797,9 +17633,24 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
     def test_select_summary_source_messages_prioritizes_continuation_focus(self):
         canonical_messages = [
             {"id": 1, "position": 1, "role": "user", "content": "Gardening soil tips and irrigation details. " * 8},
-            {"id": 2, "position": 2, "role": "assistant", "content": "More gardening notes and fertilizer reminders. " * 8},
-            {"id": 3, "position": 3, "role": "user", "content": "Gemini cache breakpoints and prompt caching constraints. " * 8},
-            {"id": 4, "position": 4, "role": "assistant", "content": "Use explicit cache breakpoints for Gemini requests. " * 8},
+            {
+                "id": 2,
+                "position": 2,
+                "role": "assistant",
+                "content": "More gardening notes and fertilizer reminders. " * 8,
+            },
+            {
+                "id": 3,
+                "position": 3,
+                "role": "user",
+                "content": "Gemini cache breakpoints and prompt caching constraints. " * 8,
+            },
+            {
+                "id": 4,
+                "position": 4,
+                "role": "assistant",
+                "content": "Use explicit cache breakpoints for Gemini requests. " * 8,
+            },
         ]
 
         selected = _select_summary_source_messages_by_token_budget(
@@ -16857,16 +17708,21 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ),
         ]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create, patch(
-            "agent.fetch_url_tool",
-            return_value={
-                "url": "https://example.com/blocked",
-                "content": "",
-                "error": "HTTP 403",
-                "status": 403,
-            },
+        with (
+            patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create,
+            patch(
+                "agent.fetch_url_tool",
+                return_value={
+                    "url": "https://example.com/blocked",
+                    "content": "",
+                    "error": "HTTP 403",
+                    "status": 403,
+                },
+            ),
         ):
-            events = list(run_agent_stream([{"role": "user", "content": "Fetch it"}], "deepseek-chat", 2, ["fetch_url"]))
+            events = list(
+                run_agent_stream([{"role": "user", "content": "Fetch it"}], "deepseek-chat", 2, ["fetch_url"])
+            )
 
         tool_result_event = next(event for event in events if event["type"] == "tool_result")
         self.assertIn("Fetch failed", tool_result_event["summary"])
@@ -16899,19 +17755,24 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ),
         ]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create, patch(
-            "agent.fetch_url_tool",
-            return_value={
-                "url": "https://example.com/page",
-                "title": "Example",
-                "content": "Recovered partial content from the page body for analysis.",
-                "status": 200,
-                "partial_content": True,
-                "fetch_warning": "Connection ended early; partial page content was recovered",
-                "content_format": "html",
-            },
+        with (
+            patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create,
+            patch(
+                "agent.fetch_url_tool",
+                return_value={
+                    "url": "https://example.com/page",
+                    "title": "Example",
+                    "content": "Recovered partial content from the page body for analysis.",
+                    "status": 200,
+                    "partial_content": True,
+                    "fetch_warning": "Connection ended early; partial page content was recovered",
+                    "content_format": "html",
+                },
+            ),
         ):
-            events = list(run_agent_stream([{"role": "user", "content": "Fetch it"}], "deepseek-chat", 2, ["fetch_url"]))
+            events = list(
+                run_agent_stream([{"role": "user", "content": "Fetch it"}], "deepseek-chat", 2, ["fetch_url"])
+            )
 
         tool_result_event = next(event for event in events if event["type"] == "tool_result")
         self.assertIn("Partial page content extracted", tool_result_event["summary"])
@@ -16950,17 +17811,23 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ),
         ]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create, patch(
-            "agent.fetch_url_tool",
-            return_value={
-                "url": "https://example.com/page",
-                "title": "Example",
-                "content": "Fetched page body with enough detail to reuse without fetching again.",
-                "status": 200,
-                "content_format": "html",
-            },
-        ) as mocked_fetch, patch("agent._trace_agent_event") as mocked_trace:
-            events = list(run_agent_stream([{"role": "user", "content": "Fetch it"}], "deepseek-chat", 3, ["fetch_url"]))
+        with (
+            patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create,
+            patch(
+                "agent.fetch_url_tool",
+                return_value={
+                    "url": "https://example.com/page",
+                    "title": "Example",
+                    "content": "Fetched page body with enough detail to reuse without fetching again.",
+                    "status": 200,
+                    "content_format": "html",
+                },
+            ) as mocked_fetch,
+            patch("agent._trace_agent_event") as mocked_trace,
+        ):
+            events = list(
+                run_agent_stream([{"role": "user", "content": "Fetch it"}], "deepseek-chat", 3, ["fetch_url"])
+            )
 
         mocked_fetch.assert_called_with("https://example.com/page")
         self.assertEqual(mocked_fetch.call_count, 1)
@@ -16972,7 +17839,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         transcript_content = third_call_messages[-1]["content"]
         self.assertIn("TOOL EXECUTION RESULTS", transcript_content)
         self.assertIn("fetch_url", transcript_content)
-        duplicate_logs = [call for call in mocked_trace.call_args_list if call.args and call.args[0] == "duplicate_fetch_attempt"]
+        duplicate_logs = [
+            call for call in mocked_trace.call_args_list if call.args and call.args[0] == "duplicate_fetch_attempt"
+        ]
         self.assertEqual(len(duplicate_logs), 1)
         self.assertEqual(duplicate_logs[0].kwargs["url"], "https://example.com/page")
 
@@ -17069,9 +17938,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ),
         ]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses), patch(
-            "agent.search_web_tool",
-            return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+        with (
+            patch("agent.client.chat.completions.create", side_effect=responses),
+            patch(
+                "agent.search_web_tool",
+                return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+            ),
         ):
             events = list(run_agent_stream([{"role": "user", "content": "Test"}], "deepseek-chat", 2, ["search_web"]))
 
@@ -17105,9 +17977,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                     ]
                 )
 
-        with patch("agent.client.chat.completions.create", side_effect=fake_create), patch(
-            "agent.search_web_tool",
-            return_value=[{"title": "R", "url": "https://example.com", "snippet": "S"}],
+        with (
+            patch("agent.client.chat.completions.create", side_effect=fake_create),
+            patch(
+                "agent.search_web_tool",
+                return_value=[{"title": "R", "url": "https://example.com", "snippet": "S"}],
+            ),
         ):
             events = list(run_agent_stream([{"role": "user", "content": "Test"}], "deepseek-chat", 2, ["search_web"]))
 
@@ -17119,7 +17994,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertGreaterEqual(len(captured_calls), 2, "Expected at least 2 model calls")
         second_call_messages = captured_calls[1]
         assistant_messages = [m for m in second_call_messages if m.get("role") == "assistant"]
-        pre_tool_contents = [m["content"] for m in assistant_messages if "Okay, I will check now" in (m.get("content") or "")]
+        pre_tool_contents = [
+            m["content"] for m in assistant_messages if "Okay, I will check now" in (m.get("content") or "")
+        ]
         self.assertEqual(
             pre_tool_contents,
             [],
@@ -17132,24 +18009,23 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 [
                     self._stream_chunk(content="Hi"),
                     self._tool_call_chunk("search_web", {"queries": ["test"]}),
-                    self._stream_chunk(
-                        usage=SimpleNamespace(prompt_tokens=5, completion_tokens=20, total_tokens=25)
-                    ),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=5, completion_tokens=20, total_tokens=25)),
                 ]
             ),
             iter(
                 [
                     self._stream_chunk(content="Final answer."),
-                    self._stream_chunk(
-                        usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5, total_tokens=15)
-                    ),
+                    self._stream_chunk(usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5, total_tokens=15)),
                 ]
             ),
         ]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses), patch(
-            "agent.search_web_tool",
-            return_value=[{"title": "R", "url": "https://example.com", "snippet": "S"}],
+        with (
+            patch("agent.client.chat.completions.create", side_effect=responses),
+            patch(
+                "agent.search_web_tool",
+                return_value=[{"title": "R", "url": "https://example.com", "snippet": "S"}],
+            ),
         ):
             events = list(run_agent_stream([{"role": "user", "content": "Test"}], "deepseek-chat", 2, ["search_web"]))
 
@@ -17198,9 +18074,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             )
         ]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses), patch(
-            "agent.get_app_settings",
-            return_value={},
+        with (
+            patch("agent.client.chat.completions.create", side_effect=responses),
+            patch(
+                "agent.get_app_settings",
+                return_value={},
+            ),
         ):
             events = list(
                 run_agent_stream(
@@ -17410,9 +18289,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ]
         )
 
-        with patch("routes.chat.get_prompt_preflight_summary_token_count", return_value=1000), patch(
-            "routes.chat.collect_agent_response", return_value=fake_summary
-        ), patch("routes.chat.run_agent_stream", return_value=fake_events), patch("routes.chat.sync_conversations_to_rag_safe"):
+        with (
+            patch("routes.chat.get_prompt_preflight_summary_token_count", return_value=1000),
+            patch("routes.chat.collect_agent_response", return_value=fake_summary),
+            patch("routes.chat.run_agent_stream", return_value=fake_events),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
+        ):
             response = self.client.post(
                 "/chat",
                 json={
@@ -17440,7 +18322,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(len(conversation_messages), 3)
         self.assertEqual(conversation_messages[-1]["role"], "assistant")
 
-        summary_event = next((event for event in streamed_events if event["type"] == "conversation_summary_applied"), None)
+        summary_event = next(
+            (event for event in streamed_events if event["type"] == "conversation_summary_applied"), None
+        )
         self.assertIsNotNone(summary_event)
         self.assertEqual(summary_event["covered_message_count"], 39)
         self.assertEqual(summary_event["mode"], "auto")
@@ -17470,7 +18354,11 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         with get_db() as conn:
             conn.execute(
                 "INSERT INTO messages (conversation_id, role, content, metadata) VALUES (?, 'summary', ?, ?)",
-                (conversation_id, "Conversation summary (generated from deleted messages):\n\nSummary", summary_metadata),
+                (
+                    conversation_id,
+                    "Conversation summary (generated from deleted messages):\n\nSummary",
+                    summary_metadata,
+                ),
             )
 
         response = self.client.post(
@@ -17485,7 +18373,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         )
 
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.get_json()["error"], "This message can no longer be edited because it was summarized.")
+        self.assertEqual(
+            response.get_json()["error"], "This message can no longer be edited because it was summarized."
+        )
 
     def test_chat_summary_covers_interleaved_tool_messages(self):
         conversation_id = self._create_conversation()
@@ -17538,9 +18428,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ]
         )
 
-        with patch("routes.chat.get_prompt_preflight_summary_token_count", return_value=1000), patch(
-            "routes.chat.collect_agent_response", return_value=fake_summary
-        ), patch("routes.chat.run_agent_stream", return_value=fake_events), patch("routes.chat.sync_conversations_to_rag_safe"):
+        with (
+            patch("routes.chat.get_prompt_preflight_summary_token_count", return_value=1000),
+            patch("routes.chat.collect_agent_response", return_value=fake_summary),
+            patch("routes.chat.run_agent_stream", return_value=fake_events),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
+        ):
             response = self.client.post(
                 "/chat",
                 json={
@@ -17627,9 +18520,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ]
         )
 
-        with patch("routes.chat.get_prompt_preflight_summary_token_count", return_value=1000), patch(
-            "routes.chat.collect_agent_response", return_value=fake_summary
-        ), patch("routes.chat.run_agent_stream", return_value=fake_events), patch("routes.chat.sync_conversations_to_rag_safe"):
+        with (
+            patch("routes.chat.get_prompt_preflight_summary_token_count", return_value=1000),
+            patch("routes.chat.collect_agent_response", return_value=fake_summary),
+            patch("routes.chat.run_agent_stream", return_value=fake_events),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
+        ):
             response = self.client.post(
                 "/chat",
                 json={
@@ -17642,7 +18538,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             streamed_events = [json.loads(line) for line in response.get_data(as_text=True).strip().splitlines()]
 
         self.assertEqual(response.status_code, 200)
-        summary_event = next((event for event in streamed_events if event["type"] == "conversation_summary_applied"), None)
+        summary_event = next(
+            (event for event in streamed_events if event["type"] == "conversation_summary_applied"), None
+        )
         self.assertIsNotNone(summary_event)
         self.assertEqual(summary_event["covered_message_count"], 2)
         self.assertEqual(summary_event["covered_tool_message_count"], 1)
@@ -17723,7 +18621,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         )
 
         transcript = prompt_messages[1]["content"]
-        self.assertIn("TOOL RESULT:\ncall call-9: {\"ok\": true, \"headline\": \"Market expands\"}", transcript)
+        self.assertIn('TOOL RESULT:\ncall call-9: {"ok": true, "headline": "Market expands"}', transcript)
 
     def test_estimate_prompt_tokens_counts_tool_call_payload(self):
         plain_messages = [
@@ -17930,15 +18828,17 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         )
         settings = {"user_preferences": "", "scratchpad": ""}
 
-        with patch("routes.chat._select_prefix_prompt_window", return_value=[]), patch(
-            "routes.chat.get_prompt_max_input_tokens", return_value=6000
-        ), patch("routes.chat.get_prompt_response_token_reserve", return_value=1000), patch(
-            "routes.chat.get_prompt_recent_history_max_tokens", return_value=15
-        ), patch("routes.chat.get_prompt_summary_max_tokens", return_value=0), patch(
-            "routes.chat.get_prompt_rag_max_tokens", return_value=0
-        ), patch("routes.chat.get_prompt_tool_trace_max_tokens", return_value=0), patch(
-            "routes.chat.get_prompt_tool_memory_max_tokens", return_value=0
-        ), patch("routes.chat.get_clarification_max_questions", return_value=5):
+        with (
+            patch("routes.chat._select_prefix_prompt_window", return_value=[]),
+            patch("routes.chat.get_prompt_max_input_tokens", return_value=6000),
+            patch("routes.chat.get_prompt_response_token_reserve", return_value=1000),
+            patch("routes.chat.get_prompt_recent_history_max_tokens", return_value=15),
+            patch("routes.chat.get_prompt_summary_max_tokens", return_value=0),
+            patch("routes.chat.get_prompt_rag_max_tokens", return_value=0),
+            patch("routes.chat.get_prompt_tool_trace_max_tokens", return_value=0),
+            patch("routes.chat.get_prompt_tool_memory_max_tokens", return_value=0),
+            patch("routes.chat.get_clarification_max_questions", return_value=5),
+        ):
             api_messages, _, stats, _ = _build_budgeted_prompt_messages(
                 canonical_messages,
                 settings,
@@ -17976,15 +18876,17 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         )
         settings = {"user_preferences": "", "scratchpad": ""}
 
-        with patch("routes.chat._select_prefix_prompt_window", return_value=[]), patch(
-            "routes.chat.get_prompt_max_input_tokens", return_value=6000
-        ), patch("routes.chat.get_prompt_response_token_reserve", return_value=1000), patch(
-            "routes.chat.get_prompt_recent_history_max_tokens", return_value=10
-        ), patch("routes.chat.get_prompt_summary_max_tokens", return_value=0), patch(
-            "routes.chat.get_prompt_rag_max_tokens", return_value=0
-        ), patch("routes.chat.get_prompt_tool_trace_max_tokens", return_value=0), patch(
-            "routes.chat.get_prompt_tool_memory_max_tokens", return_value=0
-        ), patch("routes.chat.get_clarification_max_questions", return_value=5):
+        with (
+            patch("routes.chat._select_prefix_prompt_window", return_value=[]),
+            patch("routes.chat.get_prompt_max_input_tokens", return_value=6000),
+            patch("routes.chat.get_prompt_response_token_reserve", return_value=1000),
+            patch("routes.chat.get_prompt_recent_history_max_tokens", return_value=10),
+            patch("routes.chat.get_prompt_summary_max_tokens", return_value=0),
+            patch("routes.chat.get_prompt_rag_max_tokens", return_value=0),
+            patch("routes.chat.get_prompt_tool_trace_max_tokens", return_value=0),
+            patch("routes.chat.get_prompt_tool_memory_max_tokens", return_value=0),
+            patch("routes.chat.get_clarification_max_questions", return_value=5),
+        ):
             api_messages, _, stats, _ = _build_budgeted_prompt_messages(
                 canonical_messages,
                 settings,
@@ -18010,21 +18912,28 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         canonical_messages = normalize_chat_messages(
             [
                 {"id": 1, "position": 1, "role": "user", "content": "Docker kurulumu nasıl yapılır?"},
-                {"id": 2, "position": 2, "role": "assistant", "content": "Docker için apt üzerinden kurulum yapabilirsiniz."},
+                {
+                    "id": 2,
+                    "position": 2,
+                    "role": "assistant",
+                    "content": "Docker için apt üzerinden kurulum yapabilirsiniz.",
+                },
                 {"id": 3, "position": 3, "role": "user", "content": "Python"},
             ]
         )
         settings = {"user_preferences": "", "scratchpad": ""}
 
-        with patch("routes.chat._select_prefix_prompt_window", return_value=[]), patch(
-            "routes.chat.get_prompt_max_input_tokens", return_value=6000
-        ), patch("routes.chat.get_prompt_response_token_reserve", return_value=1000), patch(
-            "routes.chat.get_prompt_recent_history_max_tokens", return_value=8
-        ), patch("routes.chat.get_prompt_summary_max_tokens", return_value=0), patch(
-            "routes.chat.get_prompt_rag_max_tokens", return_value=0
-        ), patch("routes.chat.get_prompt_tool_trace_max_tokens", return_value=0), patch(
-            "routes.chat.get_prompt_tool_memory_max_tokens", return_value=0
-        ), patch("routes.chat.get_clarification_max_questions", return_value=5):
+        with (
+            patch("routes.chat._select_prefix_prompt_window", return_value=[]),
+            patch("routes.chat.get_prompt_max_input_tokens", return_value=6000),
+            patch("routes.chat.get_prompt_response_token_reserve", return_value=1000),
+            patch("routes.chat.get_prompt_recent_history_max_tokens", return_value=8),
+            patch("routes.chat.get_prompt_summary_max_tokens", return_value=0),
+            patch("routes.chat.get_prompt_rag_max_tokens", return_value=0),
+            patch("routes.chat.get_prompt_tool_trace_max_tokens", return_value=0),
+            patch("routes.chat.get_prompt_tool_memory_max_tokens", return_value=0),
+            patch("routes.chat.get_clarification_max_questions", return_value=5),
+        ):
             api_messages, _, stats, _ = _build_budgeted_prompt_messages(
                 canonical_messages,
                 settings,
@@ -18064,17 +18973,20 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         retrieved_context = {
             "query": "api endpoint",
             "count": 1,
-            "matches": [{"source_name": "docs", "text": "POST /api/settings updates configuration.", "similarity": 0.92}],
+            "matches": [
+                {"source_name": "docs", "text": "POST /api/settings updates configuration.", "similarity": 0.92}
+            ],
         }
 
-        with patch("routes.chat.get_prompt_max_input_tokens", return_value=6000), patch(
-            "routes.chat.get_prompt_response_token_reserve", return_value=1000
-        ), patch("routes.chat.get_prompt_recent_history_max_tokens", return_value=1200), patch(
-            "routes.chat.get_prompt_summary_max_tokens", return_value=0
-        ), patch("routes.chat.get_prompt_rag_max_tokens", return_value=800), patch(
-            "routes.chat.get_prompt_tool_trace_max_tokens", return_value=0
-        ), patch("routes.chat.get_prompt_tool_memory_max_tokens", return_value=0), patch(
-            "routes.chat.get_clarification_max_questions", return_value=5
+        with (
+            patch("routes.chat.get_prompt_max_input_tokens", return_value=6000),
+            patch("routes.chat.get_prompt_response_token_reserve", return_value=1000),
+            patch("routes.chat.get_prompt_recent_history_max_tokens", return_value=1200),
+            patch("routes.chat.get_prompt_summary_max_tokens", return_value=0),
+            patch("routes.chat.get_prompt_rag_max_tokens", return_value=800),
+            patch("routes.chat.get_prompt_tool_trace_max_tokens", return_value=0),
+            patch("routes.chat.get_prompt_tool_memory_max_tokens", return_value=0),
+            patch("routes.chat.get_clarification_max_questions", return_value=5),
         ):
             _, _, stats, _ = _build_budgeted_prompt_messages(
                 canonical_messages,
@@ -18161,9 +19073,11 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ]
         )
 
-        with patch("routes.chat.collect_agent_response", return_value=failing_summary), patch(
-            "routes.chat.run_agent_stream", return_value=fake_events
-        ), patch("routes.chat.sync_conversations_to_rag_safe"):
+        with (
+            patch("routes.chat.collect_agent_response", return_value=failing_summary),
+            patch("routes.chat.run_agent_stream", return_value=fake_events),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
+        ):
             response = self.client.post(
                 "/chat",
                 json={
@@ -18224,9 +19138,11 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ]
         )
 
-        with patch("routes.chat.collect_agent_response", return_value=failing_summary), patch(
-            "routes.chat.run_agent_stream", return_value=fake_events
-        ), patch("routes.chat.sync_conversations_to_rag_safe"):
+        with (
+            patch("routes.chat.collect_agent_response", return_value=failing_summary),
+            patch("routes.chat.run_agent_stream", return_value=fake_events),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
+        ):
             response = self.client.post(
                 "/chat",
                 json={
@@ -18304,9 +19220,11 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                     {"type": "done"},
                 ]
             )
-            with patch("routes.chat.collect_agent_response", return_value=summary_payload), patch(
-                "routes.chat.run_agent_stream", return_value=fake_events
-            ), patch("routes.chat.sync_conversations_to_rag_safe"):
+            with (
+                patch("routes.chat.collect_agent_response", return_value=summary_payload),
+                patch("routes.chat.run_agent_stream", return_value=fake_events),
+                patch("routes.chat.sync_conversations_to_rag_safe"),
+            ):
                 response = self.client.post(
                     "/chat",
                     json={
@@ -18394,9 +19312,11 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             "errors": [],
         }
 
-        with patch("routes.chat.collect_agent_response", return_value=fake_summary), patch(
-            "routes.chat.sync_conversations_to_rag_safe"
-        ), patch("routes.chat.get_prompt_summary_max_tokens", return_value=300):
+        with (
+            patch("routes.chat.collect_agent_response", return_value=fake_summary),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
+            patch("routes.chat.get_prompt_summary_max_tokens", return_value=300),
+        ):
             response = self.client.post(
                 f"/api/conversations/{conversation_id}/summarize",
                 json={"force": True},
@@ -18444,7 +19364,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 (
                     conversation_id,
                     f"Conversation summary (generated from deleted messages):\n\n{long_summary}",
-                    serialize_message_metadata({"is_summary": True, "summary_source": "conversation_history", "summary_level": 1}),
+                    serialize_message_metadata(
+                        {"is_summary": True, "summary_source": "conversation_history", "summary_level": 1}
+                    ),
                     1,
                 ),
             )
@@ -18453,7 +19375,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 (
                     conversation_id,
                     f"Conversation summary (generated from deleted messages):\n\n{long_summary}",
-                    serialize_message_metadata({"is_summary": True, "summary_source": "conversation_history", "summary_level": 1}),
+                    serialize_message_metadata(
+                        {"is_summary": True, "summary_source": "conversation_history", "summary_level": 1}
+                    ),
                     2,
                 ),
             )
@@ -18462,7 +19386,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 (
                     conversation_id,
                     "Conversation summary (generated from deleted messages):\n\nRecent compact summary.",
-                    serialize_message_metadata({"is_summary": True, "summary_source": "conversation_history", "summary_level": 1}),
+                    serialize_message_metadata(
+                        {"is_summary": True, "summary_source": "conversation_history", "summary_level": 1}
+                    ),
                     3,
                 ),
             )
@@ -18484,9 +19410,11 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             "errors": [],
         }
 
-        with patch("routes.chat.collect_agent_response", return_value=fake_summary), patch(
-            "routes.chat.sync_conversations_to_rag_safe"
-        ), patch("routes.chat.get_prompt_summary_max_tokens", return_value=300):
+        with (
+            patch("routes.chat.collect_agent_response", return_value=fake_summary),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
+            patch("routes.chat.get_prompt_summary_max_tokens", return_value=300),
+        ):
             response = self.client.post(
                 f"/api/conversations/{conversation_id}/summarize",
                 json={"force": True},
@@ -18497,7 +19425,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertTrue(payload["applied"])
         summary_messages = [message for message in payload["messages"] if message["role"] == "summary"]
         self.assertEqual(len(summary_messages), 2)
-        hierarchical_summary = next(message for message in summary_messages if message["metadata"]["summary_level"] == 2)
+        hierarchical_summary = next(
+            message for message in summary_messages if message["metadata"]["summary_level"] == 2
+        )
         self.assertEqual(hierarchical_summary["metadata"]["summary_source"], "summary_history")
 
     def test_run_agent_stream_reuses_cross_turn_fetch_url_memory(self):
@@ -18516,14 +19446,20 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ),
         ]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses), patch(
-            "agent.get_exact_tool_memory_match",
-            return_value={
-                "content": "URL: https://example.com/page\n\nTitle: Example\n\nReused page content.",
-                "summary": "Page content extracted: Example",
-            },
-        ), patch("agent.fetch_url_tool") as mocked_fetch:
-            events = list(run_agent_stream([{"role": "user", "content": "Fetch it again"}], "deepseek-chat", 2, ["fetch_url"]))
+        with (
+            patch("agent.client.chat.completions.create", side_effect=responses),
+            patch(
+                "agent.get_exact_tool_memory_match",
+                return_value={
+                    "content": "URL: https://example.com/page\n\nTitle: Example\n\nReused page content.",
+                    "summary": "Page content extracted: Example",
+                },
+            ),
+            patch("agent.fetch_url_tool") as mocked_fetch,
+        ):
+            events = list(
+                run_agent_stream([{"role": "user", "content": "Fetch it again"}], "deepseek-chat", 2, ["fetch_url"])
+            )
 
         mocked_fetch.assert_not_called()
         tool_result_event = next(event for event in events if event["type"] == "tool_result")
@@ -18562,9 +19498,11 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ]
         )
 
-        with patch("routes.chat.collect_agent_response") as mocked_summary, patch(
-            "routes.chat.run_agent_stream", return_value=fake_events
-        ), patch("routes.chat.sync_conversations_to_rag_safe"):
+        with (
+            patch("routes.chat.collect_agent_response") as mocked_summary,
+            patch("routes.chat.run_agent_stream", return_value=fake_events),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
+        ):
             response = self.client.post(
                 "/chat",
                 json={
@@ -18603,9 +19541,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ),
         ]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses), patch(
-            "agent.search_web_tool",
-            return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+        with (
+            patch("agent.client.chat.completions.create", side_effect=responses),
+            patch(
+                "agent.search_web_tool",
+                return_value=[{"title": "Test", "url": "https://example.com", "snippet": "Snippet"}],
+            ),
         ):
             events = list(run_agent_stream([{"role": "user", "content": "Test"}], "deepseek-chat", 1, ["search_web"]))
 
@@ -18626,8 +19567,8 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         dsml_in_final = (
             "Tamam.\n"
             "<｜DSML｜function_calls>\n"
-            "<｜DSML｜invoke name=\"append_scratchpad\">\n"
-            "<｜DSML｜parameter name=\"note\" string=\"true\">some note</｜DSML｜parameter>\n"
+            '<｜DSML｜invoke name="append_scratchpad">\n'
+            '<｜DSML｜parameter name="note" string="true">some note</｜DSML｜parameter>\n'
             "</｜DSML｜invoke>\n"
             "</｜DSML｜function_calls>"
         )
@@ -18646,11 +19587,18 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ),
         ]
 
-        with patch("agent.client.chat.completions.create", side_effect=responses), patch(
-            "agent.search_web_tool",
-            return_value=[{"title": "T", "url": "https://example.com", "snippet": "S"}],
+        with (
+            patch("agent.client.chat.completions.create", side_effect=responses),
+            patch(
+                "agent.search_web_tool",
+                return_value=[{"title": "T", "url": "https://example.com", "snippet": "S"}],
+            ),
         ):
-            events = list(run_agent_stream([{"role": "user", "content": "Test"}], "deepseek-chat", 1, ["search_web", "append_scratchpad"]))
+            events = list(
+                run_agent_stream(
+                    [{"role": "user", "content": "Test"}], "deepseek-chat", 1, ["search_web", "append_scratchpad"]
+                )
+            )
 
         answer_deltas = [event["text"] for event in events if event["type"] == "answer_delta"]
         full_answer = "".join(answer_deltas)
@@ -18659,8 +19607,10 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertNotIn("append_scratchpad", full_answer)
         self.assertIn("Tamam.", full_answer)
         tool_limit_errors = [
-            event for event in events
-            if event["type"] == "tool_error" and event["error"] == "Tool limit reached before the model produced a final answer."
+            event
+            for event in events
+            if event["type"] == "tool_error"
+            and event["error"] == "Tool limit reached before the model produced a final answer."
         ]
         self.assertEqual(tool_limit_errors, [])
 
@@ -18873,9 +19823,11 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ]
         )
 
-        with patch("routes.chat.collect_agent_response") as mocked_collect, patch(
-            "routes.chat.run_agent_stream", return_value=fake_events
-        ), patch("routes.chat.sync_conversations_to_rag_safe"):
+        with (
+            patch("routes.chat.collect_agent_response") as mocked_collect,
+            patch("routes.chat.run_agent_stream", return_value=fake_events),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
+        ):
             response = self.client.post(
                 "/chat",
                 json={
@@ -18889,10 +19841,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(response.status_code, 200)
         events = [json.loads(line) for line in response.get_data(as_text=True).strip().splitlines()]
         compacting_status = next(
-            (
-                event for event in events
-                if event.get("type") == "status" and event.get("status") == "compacting"
-            ),
+            (event for event in events if event.get("type") == "status" and event.get("status") == "compacting"),
             None,
         )
         summary_status = next((event for event in events if event["type"] == "conversation_summary_status"), None)
@@ -18962,8 +19911,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             "tool_results": [],
             "errors": [],
         }
-        with patch("routes.chat.collect_agent_response", return_value=fake_summary), patch(
-            "routes.chat.sync_conversations_to_rag_safe"
+        with (
+            patch("routes.chat.collect_agent_response", return_value=fake_summary),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
         ):
             response = self.client.post(
                 f"/api/conversations/{conversation_id}/summarize",
@@ -19005,8 +19955,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             "errors": [],
         }
 
-        with patch("routes.chat.collect_agent_response", return_value=fake_summary), patch(
-            "routes.chat.sync_conversations_to_rag_safe"
+        with (
+            patch("routes.chat.collect_agent_response", return_value=fake_summary),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
         ):
             response = self.client.post(
                 f"/api/conversations/{conversation_id}/summarize",
@@ -19053,11 +20004,13 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             "errors": [],
         }
 
-        with patch(
-            "routes.chat._select_summary_source_messages_by_token_budget",
-            side_effect=AssertionError("all-messages mode should not use token-budgeted source selection"),
-        ), patch("routes.chat.collect_agent_response", return_value=fake_summary), patch(
-            "routes.chat.sync_conversations_to_rag_safe"
+        with (
+            patch(
+                "routes.chat._select_summary_source_messages_by_token_budget",
+                side_effect=AssertionError("all-messages mode should not use token-budgeted source selection"),
+            ),
+            patch("routes.chat.collect_agent_response", return_value=fake_summary),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
         ):
             response = self.client.post(
                 f"/api/conversations/{conversation_id}/summarize",
@@ -19149,8 +20102,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             "errors": [],
         }
 
-        with patch("routes.chat.collect_agent_response", return_value=fake_summary), patch(
-            "routes.chat.sync_conversations_to_rag_safe"
+        with (
+            patch("routes.chat.collect_agent_response", return_value=fake_summary),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
         ):
             response = self.client.post(
                 f"/api/conversations/{conversation_id}/summarize",
@@ -19196,8 +20150,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             "tool_results": [],
             "errors": [],
         }
-        with patch("routes.chat.collect_agent_response", return_value=fake_summary) as mocked_collect, patch(
-            "routes.chat.sync_conversations_to_rag_safe"
+        with (
+            patch("routes.chat.collect_agent_response", return_value=fake_summary) as mocked_collect,
+            patch("routes.chat.sync_conversations_to_rag_safe"),
         ):
             response = self.client.post(
                 f"/api/conversations/{conversation_id}/summarize",
@@ -19234,7 +20189,6 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         with get_db() as conn:
             conn.execute(
-
                 "INSERT INTO messages (conversation_id, role, content, metadata) VALUES (?, 'user', ?, ?)",
                 (conversation_id, "Seed message", None),
             )
@@ -19281,8 +20235,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             "errors": [],
         }
 
-        with patch("routes.chat.collect_agent_response", return_value=fake_summary), patch(
-            "routes.chat.sync_conversations_to_rag_safe"
+        with (
+            patch("routes.chat.collect_agent_response", return_value=fake_summary),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
         ):
             response = self.client.post(
                 f"/api/conversations/{conversation_id}/summarize",
@@ -19295,12 +20250,17 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(data["covered_message_count"], 4)
 
         messages = data["messages"]
-        self.assertEqual([message["content"] for message in messages if message["role"] == "user"], ["Message 1", "Message 2", "Message 7", "Message 8"])
+        self.assertEqual(
+            [message["content"] for message in messages if message["role"] == "user"],
+            ["Message 1", "Message 2", "Message 7", "Message 8"],
+        )
         self.assertEqual([message["role"] for message in messages], ["user", "user", "summary", "user", "user"])
 
         summary_message = next(message for message in messages if message["role"] == "summary")
         self.assertEqual(summary_message["metadata"]["covered_message_ids"], [3, 4, 5, 6])
-        self.assertEqual(summary_message["metadata"]["summary_insert_strategy"], "replace_first_covered_message_preserve_positions")
+        self.assertEqual(
+            summary_message["metadata"]["summary_insert_strategy"], "replace_first_covered_message_preserve_positions"
+        )
         self.assertEqual(summary_message["position"], 3)
 
     def test_visible_token_count_ignores_hidden_tool_messages_and_tool_call_assistants(self):
@@ -19393,15 +20353,17 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         )
         settings = {"user_preferences": "", "scratchpad": ""}
 
-        with patch("messages.read_image_asset_bytes", return_value=({"mime_type": "image/jpeg"}, b"x" * 4096)), patch(
-            "routes.chat.get_prompt_max_input_tokens", return_value=6000
-        ), patch("routes.chat.get_prompt_response_token_reserve", return_value=1000), patch(
-            "routes.chat.get_prompt_recent_history_max_tokens", return_value=1200
-        ), patch("routes.chat.get_prompt_summary_max_tokens", return_value=0), patch(
-            "routes.chat.get_prompt_rag_max_tokens", return_value=0
-        ), patch("routes.chat.get_prompt_tool_trace_max_tokens", return_value=0), patch(
-            "routes.chat.get_prompt_tool_memory_max_tokens", return_value=0
-        ), patch("routes.chat.get_clarification_max_questions", return_value=5):
+        with (
+            patch("messages.read_image_asset_bytes", return_value=({"mime_type": "image/jpeg"}, b"x" * 4096)),
+            patch("routes.chat.get_prompt_max_input_tokens", return_value=6000),
+            patch("routes.chat.get_prompt_response_token_reserve", return_value=1000),
+            patch("routes.chat.get_prompt_recent_history_max_tokens", return_value=1200),
+            patch("routes.chat.get_prompt_summary_max_tokens", return_value=0),
+            patch("routes.chat.get_prompt_rag_max_tokens", return_value=0),
+            patch("routes.chat.get_prompt_tool_trace_max_tokens", return_value=0),
+            patch("routes.chat.get_prompt_tool_memory_max_tokens", return_value=0),
+            patch("routes.chat.get_clarification_max_questions", return_value=5),
+        ):
             _api_messages, _request_api_messages, stats, _current_context_injection = _build_budgeted_prompt_messages(
                 canonical_messages,
                 settings,
@@ -19440,14 +20402,15 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         settings = {"user_preferences": "", "scratchpad": ""}
         tool_memory_context = "## Tool Memory\n" + ("memory detail " * 160)
 
-        with patch("routes.chat.get_prompt_max_input_tokens", return_value=6000), patch(
-            "routes.chat.get_prompt_response_token_reserve", return_value=1000
-        ), patch("routes.chat.get_prompt_recent_history_max_tokens", return_value=1000), patch(
-            "routes.chat.get_prompt_summary_max_tokens", return_value=0
-        ), patch("routes.chat.get_prompt_rag_max_tokens", return_value=0), patch(
-            "routes.chat.get_prompt_tool_trace_max_tokens", return_value=80
-        ), patch("routes.chat.get_prompt_tool_memory_max_tokens", return_value=240), patch(
-            "routes.chat.get_clarification_max_questions", return_value=5
+        with (
+            patch("routes.chat.get_prompt_max_input_tokens", return_value=6000),
+            patch("routes.chat.get_prompt_response_token_reserve", return_value=1000),
+            patch("routes.chat.get_prompt_recent_history_max_tokens", return_value=1000),
+            patch("routes.chat.get_prompt_summary_max_tokens", return_value=0),
+            patch("routes.chat.get_prompt_rag_max_tokens", return_value=0),
+            patch("routes.chat.get_prompt_tool_trace_max_tokens", return_value=80),
+            patch("routes.chat.get_prompt_tool_memory_max_tokens", return_value=240),
+            patch("routes.chat.get_clarification_max_questions", return_value=5),
         ):
             _, _, stats, _ = _build_budgeted_prompt_messages(
                 canonical_messages,
@@ -19491,14 +20454,15 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         ]
         settings = {"user_preferences": "", "scratchpad": ""}
 
-        with patch("routes.chat.get_prompt_max_input_tokens", return_value=6000), patch(
-            "routes.chat.get_prompt_response_token_reserve", return_value=1000
-        ), patch("routes.chat.get_prompt_recent_history_max_tokens", return_value=1000), patch(
-            "routes.chat.get_prompt_summary_max_tokens", return_value=0
-        ), patch("routes.chat.get_prompt_rag_max_tokens", return_value=0), patch(
-            "routes.chat.get_prompt_tool_trace_max_tokens", return_value=120
-        ), patch("routes.chat.get_prompt_tool_memory_max_tokens", return_value=0), patch(
-            "routes.chat.get_clarification_max_questions", return_value=5
+        with (
+            patch("routes.chat.get_prompt_max_input_tokens", return_value=6000),
+            patch("routes.chat.get_prompt_response_token_reserve", return_value=1000),
+            patch("routes.chat.get_prompt_recent_history_max_tokens", return_value=1000),
+            patch("routes.chat.get_prompt_summary_max_tokens", return_value=0),
+            patch("routes.chat.get_prompt_rag_max_tokens", return_value=0),
+            patch("routes.chat.get_prompt_tool_trace_max_tokens", return_value=120),
+            patch("routes.chat.get_prompt_tool_memory_max_tokens", return_value=0),
+            patch("routes.chat.get_clarification_max_questions", return_value=5),
         ):
             traced_result = _build_budgeted_prompt_messages(
                 traced_messages,
@@ -19541,16 +20505,17 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             }
         ]
 
-        with patch("routes.chat.build_user_profile_system_context", return_value="The user prefers concise answers."), patch(
-            "routes.chat.get_all_scratchpad_sections", return_value={"notes": "Persistent note"}
-        ), patch("routes.chat.get_prompt_max_input_tokens", return_value=6000), patch(
-            "routes.chat.get_prompt_response_token_reserve", return_value=1000
-        ), patch("routes.chat.get_prompt_recent_history_max_tokens", return_value=1000), patch(
-            "routes.chat.get_prompt_summary_max_tokens", return_value=0
-        ), patch("routes.chat.get_prompt_rag_max_tokens", return_value=0), patch(
-            "routes.chat.get_prompt_tool_trace_max_tokens", return_value=0
-        ), patch("routes.chat.get_prompt_tool_memory_max_tokens", return_value=0), patch(
-            "routes.chat.get_clarification_max_questions", return_value=5
+        with (
+            patch("routes.chat.build_user_profile_system_context", return_value="The user prefers concise answers."),
+            patch("routes.chat.get_all_scratchpad_sections", return_value={"notes": "Persistent note"}),
+            patch("routes.chat.get_prompt_max_input_tokens", return_value=6000),
+            patch("routes.chat.get_prompt_response_token_reserve", return_value=1000),
+            patch("routes.chat.get_prompt_recent_history_max_tokens", return_value=1000),
+            patch("routes.chat.get_prompt_summary_max_tokens", return_value=0),
+            patch("routes.chat.get_prompt_rag_max_tokens", return_value=0),
+            patch("routes.chat.get_prompt_tool_trace_max_tokens", return_value=0),
+            patch("routes.chat.get_prompt_tool_memory_max_tokens", return_value=0),
+            patch("routes.chat.get_clarification_max_questions", return_value=5),
         ):
             api_messages, _, _, _ = _build_budgeted_prompt_messages(
                 canonical_messages,
@@ -19580,8 +20545,13 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("Goal: Keep stable rules cached.", dynamic_content)
         self.assertIn("## Current Date and Time", dynamic_content)
         self.assertLess(dynamic_content.index("## User Profile"), dynamic_content.index("## Current Date and Time"))
-        self.assertLess(dynamic_content.index("## Scratchpad (AI Persistent Memory)"), dynamic_content.index("## Current Date and Time"))
-        self.assertLess(dynamic_content.index("## Conversation Memory"), dynamic_content.index("## Current Date and Time"))
+        self.assertLess(
+            dynamic_content.index("## Scratchpad (AI Persistent Memory)"),
+            dynamic_content.index("## Current Date and Time"),
+        )
+        self.assertLess(
+            dynamic_content.index("## Conversation Memory"), dynamic_content.index("## Current Date and Time")
+        )
 
     def test_budgeted_prompt_messages_keep_prefix_anchor_before_summaries(self):
         canonical_messages = normalize_chat_messages(
@@ -19602,14 +20572,15 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         )
         settings = {"user_preferences": "", "scratchpad": ""}
 
-        with patch("routes.chat.get_prompt_max_input_tokens", return_value=6000), patch(
-            "routes.chat.get_prompt_response_token_reserve", return_value=1000
-        ), patch("routes.chat.get_prompt_recent_history_max_tokens", return_value=1000), patch(
-            "routes.chat.get_prompt_summary_max_tokens", return_value=400
-        ), patch("routes.chat.get_prompt_rag_max_tokens", return_value=0), patch(
-            "routes.chat.get_prompt_tool_trace_max_tokens", return_value=0
-        ), patch("routes.chat.get_prompt_tool_memory_max_tokens", return_value=0), patch(
-            "routes.chat.get_clarification_max_questions", return_value=5
+        with (
+            patch("routes.chat.get_prompt_max_input_tokens", return_value=6000),
+            patch("routes.chat.get_prompt_response_token_reserve", return_value=1000),
+            patch("routes.chat.get_prompt_recent_history_max_tokens", return_value=1000),
+            patch("routes.chat.get_prompt_summary_max_tokens", return_value=400),
+            patch("routes.chat.get_prompt_rag_max_tokens", return_value=0),
+            patch("routes.chat.get_prompt_tool_trace_max_tokens", return_value=0),
+            patch("routes.chat.get_prompt_tool_memory_max_tokens", return_value=0),
+            patch("routes.chat.get_clarification_max_questions", return_value=5),
         ):
             api_messages, _, stats, _ = _build_budgeted_prompt_messages(
                 canonical_messages,
@@ -19642,14 +20613,15 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         )
         settings = {"user_preferences": "", "scratchpad": ""}
 
-        with patch("routes.chat.get_prompt_max_input_tokens", return_value=8000), patch(
-            "routes.chat.get_prompt_response_token_reserve", return_value=1000
-        ), patch("routes.chat.get_prompt_recent_history_max_tokens", return_value=900), patch(
-            "routes.chat.get_prompt_summary_max_tokens", return_value=0
-        ), patch("routes.chat.get_prompt_rag_max_tokens", return_value=0), patch(
-            "routes.chat.get_prompt_tool_trace_max_tokens", return_value=0
-        ), patch("routes.chat.get_prompt_tool_memory_max_tokens", return_value=0), patch(
-            "routes.chat.get_clarification_max_questions", return_value=5
+        with (
+            patch("routes.chat.get_prompt_max_input_tokens", return_value=8000),
+            patch("routes.chat.get_prompt_response_token_reserve", return_value=1000),
+            patch("routes.chat.get_prompt_recent_history_max_tokens", return_value=900),
+            patch("routes.chat.get_prompt_summary_max_tokens", return_value=0),
+            patch("routes.chat.get_prompt_rag_max_tokens", return_value=0),
+            patch("routes.chat.get_prompt_tool_trace_max_tokens", return_value=0),
+            patch("routes.chat.get_prompt_tool_memory_max_tokens", return_value=0),
+            patch("routes.chat.get_clarification_max_questions", return_value=5),
         ):
             _, _, uncached_stats, _ = _build_budgeted_prompt_messages(
                 canonical_messages,
@@ -19705,8 +20677,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             "errors": [],
         }
 
-        with patch("routes.chat.collect_agent_response", return_value=fake_summary), patch(
-            "routes.chat.sync_conversations_to_rag_safe"
+        with (
+            patch("routes.chat.collect_agent_response", return_value=fake_summary),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
         ):
             summarize_response = self.client.post(
                 f"/api/conversations/{conversation_id}/summarize",
@@ -19724,7 +20697,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertTrue(data["reverted"])
         self.assertEqual(data["restored_message_count"], 4)
         self.assertEqual([message["role"] for message in data["messages"]], ["user"] * 8)
-        self.assertEqual([message["content"] for message in data["messages"]], [f"Message {index}" for index in range(1, 9)])
+        self.assertEqual(
+            [message["content"] for message in data["messages"]], [f"Message {index}" for index in range(1, 9)]
+        )
         self.assertEqual([message["position"] for message in data["messages"]], list(range(1, 9)))
 
     def test_undo_summary_restores_legacy_summary_layout(self):
@@ -19773,14 +20748,14 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ).lastrowid
 
         with patch("routes.chat.sync_conversations_to_rag_safe"):
-            response = self.client.post(
-                f"/api/conversations/{conversation_id}/summaries/{summary_id}/undo"
-            )
+            response = self.client.post(f"/api/conversations/{conversation_id}/summaries/{summary_id}/undo")
 
         self.assertEqual(response.status_code, 200)
         data = response.get_json()
         self.assertTrue(data["reverted"])
-        self.assertEqual([message["content"] for message in data["messages"]], [f"Message {index}" for index in range(1, 9)])
+        self.assertEqual(
+            [message["content"] for message in data["messages"]], [f"Message {index}" for index in range(1, 9)]
+        )
         self.assertEqual([message["position"] for message in data["messages"]], list(range(1, 9)))
 
     def test_undo_summary_restores_tool_chain_missing_from_metadata(self):
@@ -19848,9 +20823,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ).lastrowid
 
         with patch("routes.chat.sync_conversations_to_rag_safe"):
-            response = self.client.post(
-                f"/api/conversations/{conversation_id}/summaries/{summary_id}/undo"
-            )
+            response = self.client.post(f"/api/conversations/{conversation_id}/summaries/{summary_id}/undo")
 
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
@@ -19912,9 +20885,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ).lastrowid
 
         with patch("routes.chat.sync_conversations_to_rag_safe"):
-            response = self.client.post(
-                f"/api/conversations/{conversation_id}/summaries/{summary_id}/undo"
-            )
+            response = self.client.post(f"/api/conversations/{conversation_id}/summaries/{summary_id}/undo")
 
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
@@ -20026,9 +20997,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ]
         )
 
-        with patch("routes.chat.get_prompt_preflight_summary_token_count", return_value=1000), patch(
-            "routes.chat.collect_agent_response", return_value=fake_summary
-        ), patch("routes.chat.run_agent_stream", return_value=fake_events), patch("routes.chat.sync_conversations_to_rag_safe"):
+        with (
+            patch("routes.chat.get_prompt_preflight_summary_token_count", return_value=1000),
+            patch("routes.chat.collect_agent_response", return_value=fake_summary),
+            patch("routes.chat.run_agent_stream", return_value=fake_events),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
+        ):
             response = self.client.post(
                 "/chat",
                 json={
@@ -20089,11 +21063,13 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ]
         )
 
-        with patch("routes.chat.get_prompt_preflight_summary_token_count", return_value=1000), patch(
-            "routes.chat.collect_agent_response", return_value=fake_summary
-        ), patch("routes.chat.run_agent_stream", return_value=fake_events), patch(
-            "routes.chat.SUMMARY_EXECUTOR.submit"
-        ) as mocked_summary_submit, patch("routes.chat.sync_conversations_to_rag_safe"):
+        with (
+            patch("routes.chat.get_prompt_preflight_summary_token_count", return_value=1000),
+            patch("routes.chat.collect_agent_response", return_value=fake_summary),
+            patch("routes.chat.run_agent_stream", return_value=fake_events),
+            patch("routes.chat.SUMMARY_EXECUTOR.submit") as mocked_summary_submit,
+            patch("routes.chat.sync_conversations_to_rag_safe"),
+        ):
             response = self.client.post(
                 "/chat",
                 json={
@@ -20132,16 +21108,19 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ]
         )
 
-        with patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create, patch(
-            "agent.fetch_url_tool",
-            return_value={
-                "url": "https://example.com/compact",
-                "title": "Compact Example",
-                "content": long_content,
-                "status": 200,
-                "content_format": "html",
-                "cleanup_applied": True,
-            },
+        with (
+            patch("agent.client.chat.completions.create", side_effect=responses) as mocked_create,
+            patch(
+                "agent.fetch_url_tool",
+                return_value={
+                    "url": "https://example.com/compact",
+                    "title": "Compact Example",
+                    "content": long_content,
+                    "status": 200,
+                    "content_format": "html",
+                    "cleanup_applied": True,
+                },
+            ),
         ):
             list(
                 run_agent_stream(
@@ -20358,6 +21337,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(persona_memory[0]["key"], "Repo style")
         self.assertEqual(persona_memory[0]["value"], "Prefer concise progress updates.")
 
+
 class TestConversationHasClarificationToolCall(unittest.TestCase):
     """Tests for the fixed _conversation_has_clarification_tool_call.
 
@@ -20537,4 +21517,3 @@ class TestClarificationResponseInjection(unittest.TestCase):
         self.assertIn("Clarification Response", injection)
         self.assertIn("Backend modülü", injection)
         self.assertIn("Diğer / Bilmiyorum", injection)
-

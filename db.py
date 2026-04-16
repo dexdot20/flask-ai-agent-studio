@@ -247,6 +247,7 @@ def init_db() -> None:
                 title      TEXT    NOT NULL DEFAULT 'New Chat',
                 title_source TEXT  NOT NULL DEFAULT 'system',
                 title_overridden INTEGER NOT NULL DEFAULT 0,
+                tool_overrides TEXT DEFAULT NULL,
                 model      TEXT    NOT NULL DEFAULT 'deepseek-chat',
                 persona_id INTEGER REFERENCES personas(id) ON DELETE SET NULL,
                 created_at TEXT    NOT NULL DEFAULT (datetime('now')),
@@ -468,6 +469,13 @@ def ensure_conversation_title_columns() -> None:
         )
 
 
+def ensure_conversation_tool_overrides_column() -> None:
+    with get_db() as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(conversations)").fetchall()}
+        if "tool_overrides" not in columns:
+            conn.execute("ALTER TABLE conversations ADD COLUMN tool_overrides TEXT DEFAULT NULL")
+
+
 def ensure_messages_tool_history_columns() -> None:
     with get_db() as conn:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
@@ -550,6 +558,7 @@ def datetime_utc_now_iso() -> str:
 def initialize_database() -> None:
     init_db()
     ensure_conversation_title_columns()
+    ensure_conversation_tool_overrides_column()
     ensure_persona_schema()
     ensure_messages_metadata_column()
     ensure_messages_tool_history_columns()
@@ -783,7 +792,9 @@ def insert_conversation_memory_entry(
     if before_snapshot != after_snapshot:
         record_conversation_state_mutation(
             normalized_conversation_id,
-            source_message_id=_normalize_state_mutation_source_message_id((mutation_context or {}).get("source_message_id")),
+            source_message_id=_normalize_state_mutation_source_message_id(
+                (mutation_context or {}).get("source_message_id")
+            ),
             target_kind=STATE_MUTATION_TARGET_CONVERSATION_MEMORY,
             target_key=normalized_key,
             operation=STATE_MUTATION_OPERATION_UPSERT,
@@ -837,9 +848,7 @@ def update_conversation_memory_entry(
     normalized_key = _normalize_conversation_memory_key(key)
     normalized_value = _normalize_conversation_memory_value(value)
     normalized_message_id = (
-        int(message_id)
-        if message_id not in (None, "") and int(message_id) > 0
-        else current_entry.get("message_id")
+        int(message_id) if message_id not in (None, "") and int(message_id) > 0 else current_entry.get("message_id")
     )
 
     with get_db() as conn:
@@ -863,7 +872,9 @@ def update_conversation_memory_entry(
     if before_snapshot != after_snapshot:
         record_conversation_state_mutation(
             normalized_conversation_id,
-            source_message_id=_normalize_state_mutation_source_message_id((mutation_context or {}).get("source_message_id")),
+            source_message_id=_normalize_state_mutation_source_message_id(
+                (mutation_context or {}).get("source_message_id")
+            ),
             target_kind=STATE_MUTATION_TARGET_CONVERSATION_MEMORY,
             target_key=normalized_key,
             operation=STATE_MUTATION_OPERATION_UPSERT,
@@ -919,7 +930,9 @@ def delete_conversation_memory_entry(
     if deleted:
         record_conversation_state_mutation(
             normalized_conversation_id,
-            source_message_id=_normalize_state_mutation_source_message_id((mutation_context or {}).get("source_message_id")),
+            source_message_id=_normalize_state_mutation_source_message_id(
+                (mutation_context or {}).get("source_message_id")
+            ),
             target_kind=STATE_MUTATION_TARGET_CONVERSATION_MEMORY,
             target_key=str(current_entry.get("key") or "").strip(),
             operation=STATE_MUTATION_OPERATION_DELETE,
@@ -1253,9 +1266,7 @@ def update_persona_memory_entry(
     normalized_key = _normalize_persona_memory_key(key)
     normalized_value = _normalize_persona_memory_value(value)
     normalized_message_id = (
-        int(message_id)
-        if message_id not in (None, "") and int(message_id) > 0
-        else current_entry.get("message_id")
+        int(message_id) if message_id not in (None, "") and int(message_id) > 0 else current_entry.get("message_id")
     )
 
     with get_db() as conn:
@@ -1611,9 +1622,7 @@ def revert_conversation_state_mutations(
     normalized_source_message_ids = None
     if source_message_ids is not None:
         normalized_source_message_ids = [
-            int(message_id)
-            for message_id in source_message_ids
-            if int(message_id or 0) > 0
+            int(message_id) for message_id in source_message_ids if int(message_id or 0) > 0
         ]
         if not normalized_source_message_ids:
             return {"reverted_count": 0, "targets": []}
@@ -1935,7 +1944,9 @@ def create_image_asset(conversation_id: int, filename: str, mime_type: str, imag
     return image_asset_row_to_dict(row)
 
 
-def update_image_asset(image_id: str, *, message_id: int | None = None, initial_analysis: dict | None = None) -> dict | None:
+def update_image_asset(
+    image_id: str, *, message_id: int | None = None, initial_analysis: dict | None = None
+) -> dict | None:
     normalized_image_id = str(image_id or "").strip()
     if not normalized_image_id:
         return None
@@ -2071,6 +2082,7 @@ def delete_image_asset(image_id: str, conversation_id: int | None = None) -> boo
 
 # --- File asset CRUD ---------------------------------------------------
 
+
 def _guess_extension_for_document_mime(mime_type: str) -> str:
     normalized = str(mime_type or "").strip().lower()
     return {
@@ -2082,7 +2094,9 @@ def _guess_extension_for_document_mime(mime_type: str) -> str:
     }.get(normalized, "")
 
 
-def create_file_asset(conversation_id: int, filename: str, mime_type: str, doc_bytes: bytes, extracted_text: str | None = None) -> dict:
+def create_file_asset(
+    conversation_id: int, filename: str, mime_type: str, doc_bytes: bytes, extracted_text: str | None = None
+) -> dict:
     normalized_filename = os.path.basename(str(filename or "").strip())[:255]
     normalized_mime_type = str(mime_type or "").strip().lower()[:120]
     if not conversation_id:
@@ -2447,7 +2461,9 @@ def _normalize_message_attachment(entry) -> dict | None:
     file_context_block = str(entry.get("file_context_block") or "").strip()[:CONTENT_MAX_CHARS]
     submission_mode = str(entry.get("submission_mode") or "").strip().lower()[:20]
     canvas_mode = str(entry.get("canvas_mode") or "").strip().lower()[:40]
-    visual_page_image_ids = entry.get("visual_page_image_ids") if isinstance(entry.get("visual_page_image_ids"), list) else []
+    visual_page_image_ids = (
+        entry.get("visual_page_image_ids") if isinstance(entry.get("visual_page_image_ids"), list) else []
+    )
     visual_page_numbers = entry.get("visual_page_numbers") if isinstance(entry.get("visual_page_numbers"), list) else []
     visual_failed_pages = entry.get("visual_failed_pages") if isinstance(entry.get("visual_failed_pages"), list) else []
     visual_page_count = entry.get("visual_page_count")
@@ -2791,7 +2807,7 @@ def _normalize_usage_breakdown(breakdown: dict | None, target_total: int | None 
         else:
             raw_value = breakdown.get(key)
             if raw_value is None:
-                for legacy_key in LEGACY_MESSAGE_USAGE_BREAKDOWN_KEYS.get(key, ()): 
+                for legacy_key in LEGACY_MESSAGE_USAGE_BREAKDOWN_KEYS.get(key, ()):
                     if legacy_key in breakdown:
                         raw_value = breakdown.get(legacy_key)
                         break
@@ -2808,7 +2824,9 @@ def _normalize_usage_breakdown(breakdown: dict | None, target_total: int | None 
     adjusted = {key: max(0, int(value)) for key, value in normalized_breakdown.items() if value and value > 0}
     current_total = sum(adjusted.values())
     if current_total < target_total:
-        adjusted["unknown_provider_overhead"] = adjusted.get("unknown_provider_overhead", 0) + (target_total - current_total)
+        adjusted["unknown_provider_overhead"] = adjusted.get("unknown_provider_overhead", 0) + (
+            target_total - current_total
+        )
         return adjusted
 
     overflow = current_total - target_total
@@ -3237,7 +3255,27 @@ def _normalize_sub_agent_trace_entry(value) -> dict | None:
     if normalized_messages:
         cleaned["messages"] = normalized_messages
 
-    return cleaned if any(key in cleaned for key in {"task", "task_full", "summary", "error", "tool_trace", "artifacts", "messages", "reasoning", "fallback_note", "canvas_saved", "canvas_document_id", "canvas_document_title"}) else None
+    return (
+        cleaned
+        if any(
+            key in cleaned
+            for key in {
+                "task",
+                "task_full",
+                "summary",
+                "error",
+                "tool_trace",
+                "artifacts",
+                "messages",
+                "reasoning",
+                "fallback_note",
+                "canvas_saved",
+                "canvas_document_id",
+                "canvas_document_title",
+            }
+        )
+        else None
+    )
 
 
 def extract_sub_agent_traces(metadata: dict | None) -> list[dict]:
@@ -3435,7 +3473,11 @@ def serialize_message_metadata(metadata: dict | None, *, include_private_fields:
     image_name = (metadata.get("image_name") or (primary_image or {}).get("image_name") or "").strip()
     image_mime_type = (metadata.get("image_mime_type") or (primary_image or {}).get("image_mime_type") or "").strip()
     image_id = (metadata.get("image_id") or (primary_image or {}).get("image_id") or "").strip()
-    key_points = metadata.get("key_points") if isinstance(metadata.get("key_points"), list) else (primary_image or {}).get("key_points")
+    key_points = (
+        metadata.get("key_points")
+        if isinstance(metadata.get("key_points"), list)
+        else (primary_image or {}).get("key_points")
+    )
     summary_source = (metadata.get("summary_source") or "").strip()
     generated_at = (metadata.get("generated_at") or "").strip()
     reasoning_content = str(metadata.get("reasoning_content") or "").strip()
@@ -3637,7 +3679,9 @@ def serialize_message_metadata(metadata: dict | None, *, include_private_fields:
                     normalized_values.append(item[:200])
             if normalized_values:
                 cleaned_workflow[list_key] = normalized_values
-        validation = project_workflow.get("validation") if isinstance(project_workflow.get("validation"), dict) else None
+        validation = (
+            project_workflow.get("validation") if isinstance(project_workflow.get("validation"), dict) else None
+        )
         if validation:
             cleaned_validation = {}
             status = str(validation.get("status") or "").strip()[:40]
@@ -4332,12 +4376,18 @@ def save_app_settings(settings: dict) -> None:
     normalized_settings = dict(settings or {})
     has_section_keys = any(key in normalized_settings for key in SCRATCHPAD_SECTION_SETTING_KEYS.values())
     if "user_preferences" in normalized_settings and "general_instructions" not in normalized_settings:
-        normalized_settings["general_instructions"] = normalize_assistant_behavior_text(normalized_settings.get("user_preferences"))
+        normalized_settings["general_instructions"] = normalize_assistant_behavior_text(
+            normalized_settings.get("user_preferences")
+        )
     if "general_instructions" in normalized_settings:
-        normalized_settings["general_instructions"] = normalize_assistant_behavior_text(normalized_settings.get("general_instructions"))
+        normalized_settings["general_instructions"] = normalize_assistant_behavior_text(
+            normalized_settings.get("general_instructions")
+        )
         normalized_settings["user_preferences"] = normalized_settings["general_instructions"]
     if "ai_personality" in normalized_settings:
-        normalized_settings["ai_personality"] = normalize_assistant_behavior_text(normalized_settings.get("ai_personality"))
+        normalized_settings["ai_personality"] = normalize_assistant_behavior_text(
+            normalized_settings.get("ai_personality")
+        )
     if "scratchpad" in normalized_settings:
         legacy_value = normalize_scratchpad_text(normalized_settings.pop("scratchpad"))
         if not has_section_keys:
@@ -4401,8 +4451,7 @@ def normalize_sub_agent_allowed_tool_names(raw_value) -> list[str]:
     allowed = {
         tool_name
         for tool_name in TOOL_SPEC_BY_NAME
-        if tool_name != "sub_agent"
-        and get_tool_runtime_metadata(tool_name).get("read_only") is True
+        if tool_name != "sub_agent" and get_tool_runtime_metadata(tool_name).get("read_only") is True
     }
 
     if raw_value in (None, ""):
@@ -4550,7 +4599,10 @@ def get_youtube_transcript_language(settings: dict | None = None) -> str:
 
 def get_youtube_transcript_model_size(settings: dict | None = None) -> str:
     source = settings if settings is not None else get_app_settings()
-    return str(source.get("youtube_transcript_model_size", YOUTUBE_TRANSCRIPT_MODEL_SIZE) or "").strip() or YOUTUBE_TRANSCRIPT_MODEL_SIZE
+    return (
+        str(source.get("youtube_transcript_model_size", YOUTUBE_TRANSCRIPT_MODEL_SIZE) or "").strip()
+        or YOUTUBE_TRANSCRIPT_MODEL_SIZE
+    )
 
 
 def get_chat_summary_model(settings: dict | None = None) -> str:
@@ -4565,7 +4617,9 @@ def get_rag_chunk_size(settings: dict | None = None) -> int:
 
 def get_rag_chunk_overlap(settings: dict | None = None) -> int:
     source = settings if settings is not None else get_app_settings()
-    return _get_int_setting_value(source, "rag_chunk_overlap", RAG_CHUNK_OVERLAP, 0, max(0, get_rag_chunk_size(source) // 2))
+    return _get_int_setting_value(
+        source, "rag_chunk_overlap", RAG_CHUNK_OVERLAP, 0, max(0, get_rag_chunk_size(source) // 2)
+    )
 
 
 def get_rag_max_chunks_per_source(settings: dict | None = None) -> int:
@@ -4595,7 +4649,9 @@ def get_rag_query_expansion_max_variants(settings: dict | None = None) -> int:
 
 def get_tool_memory_ttl_default_seconds(settings: dict | None = None) -> int:
     source = settings if settings is not None else get_app_settings()
-    return _get_int_setting_value(source, "tool_memory_ttl_default_seconds", TOOL_MEMORY_TTL_DEFAULT_SECONDS, 60, 31_536_000)
+    return _get_int_setting_value(
+        source, "tool_memory_ttl_default_seconds", TOOL_MEMORY_TTL_DEFAULT_SECONDS, 60, 31_536_000
+    )
 
 
 def get_tool_memory_ttl_web_seconds(settings: dict | None = None) -> int:
@@ -4610,7 +4666,9 @@ def get_tool_memory_ttl_news_seconds(settings: dict | None = None) -> int:
 
 def get_fetch_raw_max_text_chars(settings: dict | None = None) -> int:
     source = settings if settings is not None else get_app_settings()
-    return _get_int_setting_value(source, "fetch_raw_max_text_chars", FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS, 1_000, CONTENT_MAX_CHARS)
+    return _get_int_setting_value(
+        source, "fetch_raw_max_text_chars", FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS, 1_000, CONTENT_MAX_CHARS
+    )
 
 
 def get_fetch_summary_max_chars(settings: dict | None = None) -> int:
@@ -4627,9 +4685,7 @@ def get_active_tool_names(settings: dict | None = None) -> list[str]:
         names = [name for name in names if name != "image_explain"]
     if not get_conversation_memory_enabled(source):
         names = [
-            name
-            for name in names
-            if name not in {"save_to_conversation_memory", "delete_conversation_memory_entry"}
+            name for name in names if name not in {"save_to_conversation_memory", "delete_conversation_memory_entry"}
         ]
     if names:
         if any(name in names for name in {"append_scratchpad", "replace_scratchpad"}):
@@ -4653,6 +4709,45 @@ def get_active_tool_names(settings: dict | None = None) -> list[str]:
             names = _ensure_tool("read_scratchpad", names)
         names = _ensure_canvas_inspection_tools(names)
         return names
+    return []
+
+
+def get_conversation_active_tool_names(conversation_id: int, settings: dict | None = None) -> list[str] | None:
+    """Get active tool names for a conversation, respecting per-conversation overrides.
+
+    If conversation has tool_overrides set, use that (normalized with feature flags).
+    Returns None when no override is set, signaling caller to use global settings.
+    """
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT tool_overrides FROM conversations WHERE id = ?",
+            (conversation_id,),
+        ).fetchone()
+
+    if not row:
+        return None
+
+    tool_overrides = row["tool_overrides"]
+    if tool_overrides is None:
+        return None
+
+    source = settings if settings is not None else get_app_settings()
+    names = normalize_active_tool_names(tool_overrides)
+
+    if not get_rag_enabled(source):
+        names = [name for name in names if name != "search_knowledge_base"]
+    if not get_image_uploads_enabled(source):
+        names = [name for name in names if name != "image_explain"]
+    if not get_conversation_memory_enabled(source):
+        names = [
+            name for name in names if name not in {"save_to_conversation_memory", "delete_conversation_memory_entry"}
+        ]
+    if names:
+        if any(name in names for name in {"append_scratchpad", "replace_scratchpad"}):
+            names = _ensure_tool("replace_scratchpad", names)
+            names = _ensure_tool("read_scratchpad", names)
+        return names
+
     return []
 
 
@@ -4710,7 +4805,11 @@ def get_rag_auto_inject_top_k(settings: dict | None = None) -> int:
 
 def get_context_selection_strategy(settings: dict | None = None) -> str:
     source = settings if settings is not None else get_app_settings()
-    raw_value = str(source.get("context_selection_strategy", DEFAULT_SETTINGS["context_selection_strategy"]) or "").strip().lower()
+    raw_value = (
+        str(source.get("context_selection_strategy", DEFAULT_SETTINGS["context_selection_strategy"]) or "")
+        .strip()
+        .lower()
+    )
     if raw_value in CONTEXT_SELECTION_ALLOWED_STRATEGIES:
         return raw_value
     return DEFAULT_SETTINGS["context_selection_strategy"]
@@ -4786,7 +4885,11 @@ def get_chat_summary_trigger_token_count(settings: dict | None = None) -> int:
 
 def get_chat_summary_detail_level(settings: dict | None = None) -> str:
     source = settings if settings is not None else get_app_settings()
-    raw_value = str(source.get("chat_summary_detail_level", DEFAULT_SETTINGS["chat_summary_detail_level"]) or "").strip().lower()
+    raw_value = (
+        str(source.get("chat_summary_detail_level", DEFAULT_SETTINGS["chat_summary_detail_level"]) or "")
+        .strip()
+        .lower()
+    )
     if raw_value in CHAT_SUMMARY_DETAIL_LEVELS:
         return raw_value
     return DEFAULT_SETTINGS["chat_summary_detail_level"]
@@ -5202,7 +5305,11 @@ def get_fetch_url_clip_aggressiveness(settings: dict | None = None) -> int:
 
 def get_fetch_html_converter_mode(settings: dict | None = None) -> str:
     source = settings if settings is not None else get_app_settings()
-    raw_value = str(source.get("fetch_html_converter_mode", DEFAULT_SETTINGS["fetch_html_converter_mode"]) or "").strip().lower()
+    raw_value = (
+        str(source.get("fetch_html_converter_mode", DEFAULT_SETTINGS["fetch_html_converter_mode"]) or "")
+        .strip()
+        .lower()
+    )
     if raw_value in FETCH_HTML_CONVERTER_MODES:
         return raw_value
     return DEFAULT_SETTINGS["fetch_html_converter_mode"]
@@ -5358,12 +5465,10 @@ def get_conversation_message_rows(
     conversation_id: int,
     include_deleted: bool = False,
 ) -> list[sqlite3.Row]:
-    query = (
-        """SELECT id, position, role, content, metadata, tool_calls, tool_call_id,
+    query = """SELECT id, position, role, content, metadata, tool_calls, tool_call_id,
                   prompt_tokens, completion_tokens, total_tokens, created_at, deleted_at
            FROM messages
            WHERE conversation_id = ?"""
-    )
     params: list[object] = [conversation_id]
     if not include_deleted:
         query += " AND deleted_at IS NULL"
@@ -5513,7 +5618,7 @@ def get_unsummarized_visible_messages(
     skip_last = max(0, skip_last)
     if skip_first + skip_last >= len(candidates):
         return []
-    eligible = candidates[skip_first:len(candidates) - skip_last] if skip_last > 0 else candidates[skip_first:]
+    eligible = candidates[skip_first : len(candidates) - skip_last] if skip_last > 0 else candidates[skip_first:]
 
     if limit is not None:
         eligible = eligible[:limit]
@@ -5526,7 +5631,9 @@ def find_summary_covering_message_id(conversation_id: int, message_id: int) -> d
         return None
     for message in get_conversation_messages(conversation_id):
         metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
-        covered_ids = metadata.get("covered_message_ids") if isinstance(metadata.get("covered_message_ids"), list) else []
+        covered_ids = (
+            metadata.get("covered_message_ids") if isinstance(metadata.get("covered_message_ids"), list) else []
+        )
         if target_id in covered_ids:
             return message
     return None

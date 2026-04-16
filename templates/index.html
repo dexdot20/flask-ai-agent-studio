@@ -80,6 +80,7 @@
     <button class="mobile-tools-action" id="mobile-memory-btn" type="button">Conversation memory</button>
     <button class="mobile-tools-action" id="mobile-export-btn" type="button">Export chat</button>
     <button class="mobile-tools-action" id="mobile-prune-btn" type="button">Prune history</button>
+    <button class="mobile-tools-action" id="mobile-conv-tools-btn" type="button">Tool permissions</button>
     <a class="mobile-tools-action" id="mobile-settings-btn" href="/settings">Settings</a>
     {% if auth_enabled %}
     <form action="/logout" method="post">
@@ -330,6 +331,33 @@
   </div>
 </div>
 <div id="memory-overlay" class="summary-overlay"></div>
+
+<div id="conv-tools-panel" class="summary-panel conv-tools-panel" aria-hidden="true" aria-labelledby="conv-tools-panel-title">
+  <div class="summary-panel__header">
+    <div>
+      <span id="conv-tools-panel-title">Tool Permissions</span>
+      <p class="summary-panel__subtitle">Choose which tools are available for this conversation. Leave global to use app settings.</p>
+    </div>
+    <button id="conv-tools-close" title="Close" type="button">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>
+  </div>
+  <div class="summary-panel__body">
+    <section class="summary-card">
+      <label class="conv-tools-toggle-row">
+        <input type="checkbox" id="conv-tools-use-global" />
+        <span>Use global settings for this conversation</span>
+      </label>
+    </section>
+    <section class="summary-card" id="conv-tools-checkboxes" style="display:none;">
+      <p class="summary-support-copy">Select tools to enable for this chat. Changes apply immediately.</p>
+      <div id="conv-tools-list" class="conv-tools-list"></div>
+    </section>
+  </div>
+</div>
+<div id="conv-tools-overlay" class="summary-overlay"></div>
 
 <div id="export-panel" class="export-panel" aria-hidden="true" aria-labelledby="export-panel-title">
   <div class="export-panel-header">

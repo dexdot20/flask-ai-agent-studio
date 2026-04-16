@@ -68,6 +68,7 @@ from db import (
     list_conversation_model_invocations,
     message_row_to_dict,
     normalize_rag_source_types,
+    normalize_active_tool_names,
     parse_message_metadata,
     parse_message_tool_calls,
     read_image_asset_bytes,
@@ -498,7 +499,7 @@ def register_conversation_routes(app) -> None:
         with get_db() as conn:
             rows = conn.execute(
                 """
-                                SELECT c.id, c.title, c.title_source, c.title_overridden, c.model, c.persona_id,
+                SELECT c.id, c.title, c.title_source, c.title_overridden, c.tool_overrides, c.model, c.persona_id,
                                              p.name AS persona_name, c.updated_at,
                        COUNT(m.id) AS message_count
                 FROM conversations c
@@ -508,7 +509,19 @@ def register_conversation_routes(app) -> None:
                 ORDER BY c.updated_at DESC
                 """
             ).fetchall()
-        return jsonify([dict(row) for row in rows])
+        result = []
+        for row in rows:
+            item = dict(row)
+            tool_overrides_raw = item.get("tool_overrides")
+            if tool_overrides_raw:
+                try:
+                    item["tool_overrides"] = json.loads(tool_overrides_raw)
+                except Exception:
+                    item["tool_overrides"] = None
+            else:
+                item["tool_overrides"] = None
+            result.append(item)
+        return jsonify(result)
 
     @app.route("/api/personas", methods=["GET"])
     def list_personas_route():
@@ -722,6 +735,14 @@ def register_conversation_routes(app) -> None:
         conversation_payload = dict(conversation)
         conversation_payload["model_label"] = get_model_label(conversation_payload.get("model") or "", settings)
         conversation_payload["persona"] = get_conversation_persona(conv_id)
+        tool_overrides_raw = conversation_payload.get("tool_overrides")
+        if tool_overrides_raw:
+            try:
+                conversation_payload["tool_overrides"] = json.loads(tool_overrides_raw)
+            except Exception:
+                conversation_payload["tool_overrides"] = None
+        else:
+            conversation_payload["tool_overrides"] = None
         return jsonify(
             {
                 "conversation": conversation_payload,
@@ -1509,8 +1530,9 @@ def register_conversation_routes(app) -> None:
         data = request.get_json(silent=True) or {}
         title_provided = "title" in data
         persona_provided = "persona_id" in data
-        if not title_provided and not persona_provided:
-            return jsonify({"error": "Provide title and/or persona_id."}), 400
+        tool_overrides_provided = "tool_overrides" in data
+        if not title_provided and not persona_provided and not tool_overrides_provided:
+            return jsonify({"error": "Provide title, persona_id, and/or tool_overrides."}), 400
 
         title = None
         if title_provided:
@@ -1525,9 +1547,20 @@ def register_conversation_routes(app) -> None:
         if persona_provided and persona_id is not None and get_persona(persona_id) is None:
             return jsonify({"error": "Persona not found."}), 400
 
+        next_tool_overrides = None
+        if tool_overrides_provided:
+            raw_tool_overrides = data.get("tool_overrides")
+            if raw_tool_overrides is None:
+                next_tool_overrides = None
+            elif isinstance(raw_tool_overrides, list):
+                normalized = normalize_active_tool_names(raw_tool_overrides)
+                next_tool_overrides = json.dumps(normalized) if normalized else None
+            else:
+                return jsonify({"error": "tool_overrides must be a list or null."}), 400
+
         with get_db() as conn:
             conversation = conn.execute(
-                "SELECT id, title, title_source, title_overridden, persona_id FROM conversations WHERE id = ?",
+                "SELECT id, title, title_source, title_overridden, persona_id, tool_overrides FROM conversations WHERE id = ?",
                 (conv_id,),
             ).fetchone()
             if not conversation:
@@ -1567,14 +1600,28 @@ def register_conversation_routes(app) -> None:
                 """,
                 (next_title, next_title_source, next_title_overridden, next_persona_id, conv_id),
             )
+            if tool_overrides_provided:
+                conn.execute(
+                    "UPDATE conversations SET tool_overrides = ? WHERE id = ?",
+                    (next_tool_overrides, conv_id),
+                )
         if RAG_ENABLED:
             sync_conversations_to_rag_safe(conversation_id=conv_id)
+        response_tool_overrides = None
+        if tool_overrides_provided:
+            response_tool_overrides = next_tool_overrides
+            if response_tool_overrides:
+                try:
+                    response_tool_overrides = json.loads(response_tool_overrides)
+                except Exception:
+                    response_tool_overrides = None
         return jsonify({
             "id": conv_id,
             "title": next_title,
             "title_source": next_title_source,
             "title_overridden": bool(next_title_overridden),
             "persona_id": int(next_persona_id) if next_persona_id is not None else None,
+            "tool_overrides": response_tool_overrides,
         })
 
     @app.route("/api/rag/documents", methods=["GET"])
