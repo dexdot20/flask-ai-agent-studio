@@ -1309,17 +1309,11 @@ def build_api_messages(
         role = message["role"]
         metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
         tool_calls = None
+        context_injection = ""
         if role == "user":
             context_injection = str(metadata.get("context_injection") or "").strip()
             if context_injection and index != latest_user_message_index:
                 context_injection = _strip_volatile_sections_from_context_injection(context_injection)
-            if context_injection:
-                api_messages.append(
-                    {
-                        "role": "system",
-                        "content": context_injection,
-                    }
-                )
             clarification_response = extract_clarification_response(metadata)
             assistant_message_id = str((clarification_response or {}).get("assistant_message_id") or "").strip()
             clarification_questions = clarification_questions_by_assistant_id.get(assistant_message_id)
@@ -1383,6 +1377,13 @@ def build_api_messages(
             api_message["tool_call_id"] = tool_call_id
 
         api_messages.append(api_message)
+        if role == "user" and context_injection:
+            api_messages.append(
+                {
+                    "role": "system",
+                    "content": context_injection,
+                }
+            )
     return _sanitize_tool_call_chain(api_messages)
 
 
@@ -3030,7 +3031,7 @@ def prepend_runtime_context(
     insertion_index = len(messages)
     for index in range(len(messages) - 1, -1, -1):
         if str(messages[index].get("role") or "").strip() == "user":
-            insertion_index = index
+            insertion_index = index + 1
             break
 
     return [

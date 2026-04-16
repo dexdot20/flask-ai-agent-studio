@@ -3866,11 +3866,11 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         self.assertEqual(messages[0]["role"], "system")
         self.assertNotIn("id", messages[0])
-        self.assertEqual(messages[1]["role"], "system")
-        self.assertNotIn("id", messages[1])
+        self.assertEqual(messages[2]["role"], "system")
+        self.assertNotIn("id", messages[2])
 
         stable_content = messages[0]["content"]
-        content = messages[1]["content"]
+        content = messages[2]["content"]
         self.assertNotIn("Current Date and Time", stable_content)
         self.assertNotIn("Persistent note", stable_content)
         self.assertIn("## Assistant Role", stable_content)
@@ -3883,7 +3883,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertNotIn("User Preferences", content)
         self.assertIn("Date: ", content)
         self.assertIn("Time: ", content)
-        self.assertEqual(messages[2]["role"], "user")
+        self.assertEqual(messages[1]["role"], "user")
 
     def test_prepend_runtime_context_places_datetime_before_conversation_summaries(self):
         messages = prepend_runtime_context(
@@ -3896,14 +3896,14 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         )
 
         self.assertEqual(messages[0]["role"], "system")
-        self.assertEqual(messages[2]["role"], "system")
-        content = messages[2]["content"]
+        self.assertEqual(messages[3]["role"], "system")
+        content = messages[3]["content"]
         self.assertIn("## Conversation Summaries", content)
         self.assertIn("authoritative compressed history for earlier deleted turns", content)
         self.assertIn("## Current Date and Time", content)
         self.assertTrue(content.startswith("## Current Date and Time"))
         self.assertLess(content.index("## Current Date and Time"), content.index("## Conversation Summaries"))
-        self.assertNotIn("id", messages[2])
+        self.assertNotIn("id", messages[3])
 
     def test_runtime_system_message_places_datetime_before_tool_history(self):
         message = build_runtime_system_message(
@@ -14333,12 +14333,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         api_messages = build_api_messages(normalized)
 
-        self.assertEqual(api_messages[0]["role"], "system")
+        self.assertEqual(api_messages[0]["role"], "user")
         self.assertNotIn("id", api_messages[0])
-        self.assertIn("## Current Date and Time", api_messages[0]["content"])
-        self.assertEqual(api_messages[1]["role"], "user")
+        self.assertEqual(api_messages[0]["content"], "Hello")
+        self.assertEqual(api_messages[1]["role"], "system")
         self.assertNotIn("id", api_messages[1])
-        self.assertEqual(api_messages[1]["content"], "Hello")
+        self.assertIn("## Current Date and Time", api_messages[1]["content"])
 
     def test_build_api_messages_keeps_only_latest_runtime_context_injection(self):
         normalized = normalize_chat_messages(
@@ -14380,11 +14380,11 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertNotIn("id", api_messages[0])
         self.assertEqual(api_messages[1]["role"], "assistant")
         self.assertNotIn("id", api_messages[1])
-        self.assertEqual(api_messages[2]["role"], "system")
+        self.assertEqual(api_messages[2]["role"], "user")
         self.assertNotIn("id", api_messages[2])
-        self.assertIn("21:40", api_messages[2]["content"])
-        self.assertEqual(api_messages[3]["role"], "user")
+        self.assertEqual(api_messages[3]["role"], "system")
         self.assertNotIn("id", api_messages[3])
+        self.assertIn("21:40", api_messages[3]["content"])
 
     def test_build_api_messages_strips_historical_runtime_context_injections(self):
         historical_context = (
@@ -20564,9 +20564,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 conversation_memory=conversation_memory,
             )
 
-        self.assertEqual([message["role"] for message in api_messages], ["system", "system", "user"])
+        self.assertEqual([message["role"] for message in api_messages], ["system", "user", "system"])
         static_content = api_messages[0]["content"]
-        dynamic_content = api_messages[1]["content"]
+        dynamic_content = api_messages[2]["content"]
         self.assertIn("## Assistant Role", static_content)
         self.assertIn("## Conversation Memory Write Policy", static_content)
         self.assertNotIn("## User Profile", static_content)

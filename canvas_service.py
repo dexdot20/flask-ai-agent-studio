@@ -28,6 +28,7 @@ from markdown_rendering import append_markdown_pdf_story
 
 CANVAS_MAX_DOCUMENTS = 50
 CANVAS_MAX_TITLE_LENGTH = 160
+KATEX_VERSION = "0.16.11"
 CANVAS_MAX_CONTENT_LENGTH = 120_000
 CANVAS_MAX_LANGUAGE_LENGTH = 48
 CANVAS_MAX_PATH_LENGTH = 240
@@ -647,7 +648,7 @@ def _find_canvas_document_by_path_locator(documents: list[dict], document_path: 
 
 def _describe_canvas_path_matches(documents: list[dict], document_path: str | None) -> str:
     matches = _collect_canvas_document_path_matches(documents, document_path)
-    candidate_matches = matches["exact_title"] or matches["suffix"] or matches["basename"]
+    candidate_matches = matches["exact_path"] or matches["exact_title"] or matches["suffix"] or matches["basename"]
     if len(candidate_matches) <= 1:
         return ""
 
@@ -1712,7 +1713,9 @@ def _batch_canvas_operations_overlap(left: dict, right: dict) -> bool:
     right_action = right["action"]
 
     if left_action == "insert" and right_action == "insert":
-        return left["after_line"] == right["after_line"]
+        # Two inserts at the same after_line are applied sequentially and produce
+        # deterministic output in order — not an overlap.
+        return False
     if left_action == "insert":
         return right["start_line"] <= left["after_line"] <= right["end_line"]
     if right_action == "insert":
@@ -3263,13 +3266,14 @@ def build_html_download(document: dict) -> bytes:
         rendered = f"<pre>{escape(content)}</pre>"
 
     title = escape(normalized["title"])
+    katex_cdn = f"https://cdn.jsdelivr.net/npm/katex@{KATEX_VERSION}/dist"
     html = f"""<!DOCTYPE html>
 <html lang=\"en\">
 <head>
     <meta charset=\"utf-8\" />
     <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
     <title>{title}</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+    <link rel="stylesheet" href="{katex_cdn}/katex.min.css" />
     <style>
         :root {{
             color-scheme: light;
@@ -3309,8 +3313,8 @@ def build_html_download(document: dict) -> bytes:
         th {{ background: #f3f6fd; }}
         a {{ color: var(--accent); }}
     </style>
-        <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
-        <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+        <script defer src="{katex_cdn}/katex.min.js"></script>
+        <script defer src="{katex_cdn}/contrib/auto-render.min.js"></script>
 </head>
 <body>
     <main>
@@ -3474,7 +3478,7 @@ def build_pdf_download(document: dict) -> bytes:
         preview_doc.build(_build_story(None), onFirstPage=page_chrome, onLaterPages=page_chrome)
         page_count = _count_pdf_pages(preview_output.getvalue()) or 1
 
-    for _ in range(2):
+    for _ in range(5):
         output.seek(0)
         output.truncate(0)
         doc.build(_build_story(page_count), onFirstPage=page_chrome, onLaterPages=page_chrome)

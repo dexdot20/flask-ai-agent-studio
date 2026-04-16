@@ -927,20 +927,24 @@ def register_conversation_routes(app) -> None:
             return jsonify({"error": "Canvas document not found."}), 404
 
         base_name = _sanitize_download_filename(document.get("title") or conversation["title"] or "canvas")
-        if format_name == "md":
-            payload = build_markdown_download(document)
-            mime_type = "text/markdown; charset=utf-8"
-            filename = f"{base_name}.md"
-        elif format_name == "html":
-            payload = build_html_download(document)
-            mime_type = "text/html; charset=utf-8"
-            filename = f"{base_name}.html"
-        elif format_name == "pdf":
-            payload = build_pdf_download(document)
-            mime_type = "application/pdf"
-            filename = f"{base_name}.pdf"
-        else:
-            return jsonify({"error": "format must be md, html, or pdf."}), 400
+        try:
+            if format_name == "md":
+                payload = build_markdown_download(document)
+                mime_type = "text/markdown; charset=utf-8"
+                filename = f"{base_name}.md"
+            elif format_name == "html":
+                payload = build_html_download(document)
+                mime_type = "text/html; charset=utf-8"
+                filename = f"{base_name}.html"
+            elif format_name == "pdf":
+                payload = build_pdf_download(document)
+                mime_type = "application/pdf"
+                filename = f"{base_name}.pdf"
+            else:
+                return jsonify({"error": "format must be md, html, or pdf."}), 400
+        except Exception:
+            app.logger.exception("Failed to export canvas document %s as %s for conversation %s", document_id, format_name, conv_id)
+            return jsonify({"error": "Export failed due to an internal error."}), 500
 
         return Response(
             payload,
