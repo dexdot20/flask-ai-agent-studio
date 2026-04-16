@@ -480,6 +480,8 @@ DEFAULT_SETTINGS = {
     "sub_agent_retry_delay_seconds": str(SUB_AGENT_DEFAULT_RETRY_DELAY_SECONDS),
     "sub_agent_max_parallel_tools": "",
     "sub_agent_allowed_tool_names": json.dumps(SUB_AGENT_ALLOWED_TOOL_NAMES, ensure_ascii=False),
+    "sub_agent_canvas_auto_save": "true",
+    "sub_agent_canvas_auto_open": "false",
     "web_cache_ttl_hours": str(DEFAULT_WEB_CACHE_TTL_HOURS),
     "openrouter_prompt_cache_enabled": "true" if OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED else "false",
     "openrouter_anthropic_cache_ttl": OPENROUTER_ANTHROPIC_CACHE_TTL_DEFAULT,

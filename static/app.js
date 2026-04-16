@@ -12592,6 +12592,14 @@ function buildSubAgentResearchCanvasContent(entry) {
   return lines.join("\n").trim();
 }
 
+function isSubAgentCanvasAutoSaveEnabled() {
+  return Boolean(appSettings.sub_agent_canvas_auto_save ?? true);
+}
+
+function isSubAgentCanvasAutoOpenEnabled() {
+  return Boolean(appSettings.sub_agent_canvas_auto_open);
+}
+
 async function saveSubAgentResearchToCanvas(assistantMessageId, traceIndex, traceEntry, options = {}) {
   const openCanvasOnSave = options?.openCanvasOnSave !== false;
   const statusMessage = String(options?.statusMessage || "Research saved to Canvas.").trim() || "Research saved to Canvas.";
@@ -12637,6 +12645,10 @@ async function saveSubAgentResearchToCanvas(assistantMessageId, traceIndex, trac
 }
 
 function maybePromptToSaveSubAgentResearch(assistantEntry) {
+  if (!isSubAgentCanvasAutoSaveEnabled()) {
+    return;
+  }
+
   const resolvedEntry = isPersistedMessageId(assistantEntry?.id)
     ? assistantEntry
     : findPersistedAssistantEntryForSubAgentPrompt(assistantEntry?.id);
@@ -12665,7 +12677,7 @@ function maybePromptToSaveSubAgentResearch(assistantEntry) {
     pendingTrace.index,
     pendingTrace.entry,
     {
-      openCanvasOnSave: false,
+      openCanvasOnSave: isSubAgentCanvasAutoOpenEnabled(),
       statusMessage: `${taskHeading} auto-saved to Canvas.`,
       toastMessage: "Research auto-saved to Canvas.",
     },

@@ -116,6 +116,8 @@ from db import (
     get_rag_source_types,
     get_rag_sensitivity,
     get_sub_agent_allowed_tool_names,
+    get_sub_agent_canvas_auto_open_enabled,
+    get_sub_agent_canvas_auto_save_enabled,
     get_sub_agent_max_steps,
     get_sub_agent_max_parallel_tools,
     get_sub_agent_retry_attempts,
@@ -509,6 +511,8 @@ def build_settings_payload() -> dict:
         "sub_agent_retry_delay_seconds": get_sub_agent_retry_delay_seconds(raw),
         "sub_agent_max_parallel_tools": get_sub_agent_max_parallel_tools(raw),
         "sub_agent_allowed_tool_names": get_sub_agent_allowed_tool_names(raw),
+        "sub_agent_canvas_auto_save": get_sub_agent_canvas_auto_save_enabled(raw),
+        "sub_agent_canvas_auto_open": get_sub_agent_canvas_auto_open_enabled(raw),
         "web_cache_ttl_hours": get_web_cache_ttl_hours(raw),
         "openrouter_prompt_cache_enabled": get_openrouter_prompt_cache_enabled(raw),
         "openrouter_anthropic_cache_ttl": get_openrouter_anthropic_cache_ttl(raw),
@@ -709,6 +713,8 @@ def register_page_routes(app) -> None:
         sub_agent_retry_delay_seconds_raw = data.get("sub_agent_retry_delay_seconds")
         sub_agent_max_parallel_tools_raw = data.get("sub_agent_max_parallel_tools")
         sub_agent_allowed_tool_names_raw = data.get("sub_agent_allowed_tool_names")
+        sub_agent_canvas_auto_save_raw = data.get("sub_agent_canvas_auto_save")
+        sub_agent_canvas_auto_open_raw = data.get("sub_agent_canvas_auto_open")
         web_cache_ttl_hours_raw = data.get("web_cache_ttl_hours")
         openrouter_prompt_cache_enabled_raw = data.get("openrouter_prompt_cache_enabled")
         openrouter_anthropic_cache_ttl_raw = data.get("openrouter_anthropic_cache_ttl")
@@ -813,6 +819,8 @@ def register_page_routes(app) -> None:
             and sub_agent_retry_delay_seconds_raw is None
             and sub_agent_max_parallel_tools_raw is None
             and sub_agent_allowed_tool_names_raw is None
+            and sub_agent_canvas_auto_save_raw is None
+            and sub_agent_canvas_auto_open_raw is None
             and web_cache_ttl_hours_raw is None
             and openrouter_prompt_cache_enabled_raw is None
             and openrouter_anthropic_cache_ttl_raw is None
@@ -1828,6 +1836,12 @@ def register_page_routes(app) -> None:
                 return jsonify({"error": "sub_agent_allowed_tool_names must be an array."}), 400
             normalized_sub_agent_tools = normalize_sub_agent_allowed_tool_names(sub_agent_allowed_tool_names_raw)
             settings["sub_agent_allowed_tool_names"] = json.dumps(normalized_sub_agent_tools, ensure_ascii=False)
+
+        if sub_agent_canvas_auto_save_raw is not None:
+            settings["sub_agent_canvas_auto_save"] = _normalize_bool_setting_value(sub_agent_canvas_auto_save_raw)
+
+        if sub_agent_canvas_auto_open_raw is not None:
+            settings["sub_agent_canvas_auto_open"] = _normalize_bool_setting_value(sub_agent_canvas_auto_open_raw)
 
         if web_cache_ttl_hours_raw is not None:
             try:

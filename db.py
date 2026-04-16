@@ -4923,6 +4923,16 @@ def get_sub_agent_allowed_tool_names(settings: dict | None = None) -> list[str]:
     return normalize_sub_agent_allowed_tool_names(source.get("sub_agent_allowed_tool_names"))
 
 
+def get_sub_agent_canvas_auto_save_enabled(settings: dict | None = None) -> bool:
+    source = settings if settings is not None else get_app_settings()
+    return _get_bool_setting_value(source, "sub_agent_canvas_auto_save", True)
+
+
+def get_sub_agent_canvas_auto_open_enabled(settings: dict | None = None) -> bool:
+    source = settings if settings is not None else get_app_settings()
+    return _get_bool_setting_value(source, "sub_agent_canvas_auto_open", False)
+
+
 def get_web_cache_ttl_hours(settings: dict | None = None) -> int:
     source = settings if settings is not None else get_app_settings()
     raw_value = source.get("web_cache_ttl_hours", DEFAULT_WEB_CACHE_TTL_HOURS)

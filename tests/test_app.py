@@ -233,6 +233,8 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(payload["sub_agent_retry_delay_seconds"], 5)
         self.assertEqual(payload["sub_agent_max_parallel_tools"], 4)
         self.assertEqual(payload["sub_agent_allowed_tool_names"], SUB_AGENT_ALLOWED_TOOL_NAMES)
+        self.assertTrue(payload["sub_agent_canvas_auto_save"])
+        self.assertFalse(payload["sub_agent_canvas_auto_open"])
         self.assertEqual(payload["web_cache_ttl_hours"], 24)
         self.assertTrue(payload["openrouter_prompt_cache_enabled"])
         self.assertIn("openrouter_http_referer", payload)
@@ -458,6 +460,8 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 "sub_agent_retry_delay_seconds": 7,
                 "sub_agent_max_parallel_tools": 5,
                 "sub_agent_allowed_tool_names": ["search_web", "fetch_url_summarized"],
+                "sub_agent_canvas_auto_save": False,
+                "sub_agent_canvas_auto_open": True,
                 "web_cache_ttl_hours": 12,
                 "openrouter_prompt_cache_enabled": False,
                 "custom_models": [
@@ -566,6 +570,8 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(payload["sub_agent_retry_delay_seconds"], 7)
         self.assertEqual(payload["sub_agent_max_parallel_tools"], 5)
         self.assertEqual(payload["sub_agent_allowed_tool_names"], ["search_web", "fetch_url_summarized"])
+        self.assertFalse(payload["sub_agent_canvas_auto_save"])
+        self.assertTrue(payload["sub_agent_canvas_auto_open"])
         self.assertEqual(payload["web_cache_ttl_hours"], 12)
         self.assertFalse(payload["openrouter_prompt_cache_enabled"])
         self.assertEqual(

@@ -104,6 +104,8 @@ const subAgentTimeoutSecondsEl = document.getElementById("sub-agent-timeout-seco
 const subAgentRetryAttemptsEl = document.getElementById("sub-agent-retry-attempts-input");
 const subAgentRetryDelaySecondsEl = document.getElementById("sub-agent-retry-delay-seconds-input");
 const subAgentMaxParallelToolsEl = document.getElementById("sub-agent-max-parallel-tools-input");
+const subAgentCanvasAutoSaveEl = document.getElementById("sub-agent-canvas-auto-save-toggle");
+const subAgentCanvasAutoOpenEl = document.getElementById("sub-agent-canvas-auto-open-toggle");
 const webCacheTtlHoursEl = document.getElementById("web-cache-ttl-hours-input");
 const openrouterPromptCacheEnabledEl = document.getElementById("openrouter-prompt-cache-enabled-toggle");
 const openrouterAnthropicCacheTtlEls = document.querySelectorAll("input[name='openrouter-anthropic-cache-ttl']");
@@ -2837,6 +2839,8 @@ function applySettingsToForm() {
   if (canvasTextLineCharsEl) canvasTextLineCharsEl.value = String(appSettings.canvas_prompt_text_line_max_chars || 100);
   if (canvasExpandLinesEl) canvasExpandLinesEl.value = String(appSettings.canvas_expand_max_lines || 1600);
   if (canvasScrollLinesEl) canvasScrollLinesEl.value = String(appSettings.canvas_scroll_window_lines || 200);
+  if (subAgentCanvasAutoSaveEl) subAgentCanvasAutoSaveEl.checked = Boolean(appSettings.sub_agent_canvas_auto_save ?? true);
+  if (subAgentCanvasAutoOpenEl) subAgentCanvasAutoOpenEl.checked = Boolean(appSettings.sub_agent_canvas_auto_open);
   if (conversationMemoryEnabledEl) conversationMemoryEnabledEl.checked = Boolean(appSettings.conversation_memory_enabled);
   if (ocrEnabledEl) ocrEnabledEl.checked = Boolean(appSettings.ocr_enabled);
   if (ocrProviderEl) ocrProviderEl.value = String(appSettings.ocr_provider || "paddleocr");
@@ -2965,6 +2969,8 @@ function applyServerSettingsData(data) {
   appSettings.sub_agent_retry_attempts = data.sub_agent_retry_attempts ?? 2;
   appSettings.sub_agent_retry_delay_seconds = data.sub_agent_retry_delay_seconds ?? 5;
   appSettings.sub_agent_max_parallel_tools = data.sub_agent_max_parallel_tools ?? data.max_parallel_tools ?? 2;
+  appSettings.sub_agent_canvas_auto_save = Boolean(data.sub_agent_canvas_auto_save ?? true);
+  appSettings.sub_agent_canvas_auto_open = Boolean(data.sub_agent_canvas_auto_open);
   appSettings.web_cache_ttl_hours = data.web_cache_ttl_hours ?? 24;
   appSettings.openrouter_prompt_cache_enabled = Boolean(data.openrouter_prompt_cache_enabled ?? true);
   appSettings.openrouter_anthropic_cache_ttl = data.openrouter_anthropic_cache_ttl || "5m";
@@ -3106,6 +3112,8 @@ async function saveSettings() {
     sub_agent_retry_attempts: readNumericSetting(subAgentRetryAttemptsEl, 2),
     sub_agent_retry_delay_seconds: readNumericSetting(subAgentRetryDelaySecondsEl, 5),
     sub_agent_max_parallel_tools: readNumericSetting(subAgentMaxParallelToolsEl, 2, { allowZero: false }),
+    sub_agent_canvas_auto_save: Boolean(subAgentCanvasAutoSaveEl?.checked ?? true),
+    sub_agent_canvas_auto_open: Boolean(subAgentCanvasAutoOpenEl?.checked),
     web_cache_ttl_hours: readNumericSetting(webCacheTtlHoursEl, 24),
     openrouter_prompt_cache_enabled: Boolean(openrouterPromptCacheEnabledEl?.checked),
     openrouter_anthropic_cache_ttl: (() => { const r = [...openrouterAnthropicCacheTtlEls].find(el => el.checked); return r ? r.value : "5m"; })(),
