@@ -1423,6 +1423,19 @@ function renderConvToolsPanel() {
   }
 }
 
+function getConversationToolOverridesFromResponse(data) {
+  if (!data || typeof data !== "object") {
+    return undefined;
+  }
+  if (data.conversation && typeof data.conversation === "object" && Object.prototype.hasOwnProperty.call(data.conversation, "tool_overrides")) {
+    return data.conversation.tool_overrides;
+  }
+  if (Object.prototype.hasOwnProperty.call(data, "tool_overrides")) {
+    return data.tool_overrides;
+  }
+  return undefined;
+}
+
 async function persistConversationToolOverrides() {
   if (!currentConvId) return;
 
@@ -1443,11 +1456,13 @@ async function persistConversationToolOverrides() {
       body: JSON.stringify({ tool_overrides: toolOverrides }),
     });
     const data = await response.json().catch(() => null);
-    if (response.ok && data?.conversation?.tool_overrides !== undefined) {
-      currentConversationToolOverrides = Array.isArray(data.conversation.tool_overrides) ? data.conversation.tool_overrides : null;
+    const responseToolOverrides = getConversationToolOverridesFromResponse(data);
+    if (response.ok && responseToolOverrides !== undefined) {
+      currentConversationToolOverrides = Array.isArray(responseToolOverrides) ? responseToolOverrides : null;
       renderConvToolsPanel();
     }
   } catch (error) {
+    renderConvToolsPanel();
     showToast("Could not save tool permissions.", "error");
   }
 }
@@ -7620,7 +7635,7 @@ function setTextContentById(id, value) {
 function renderTokenStats() {
   const totalUser = tokenTurns.reduce((sum, turn) => sum + turn.prompt_tokens, 0);
   const totalCacheHit = tokenTurns.reduce((sum, turn) => sum + toFiniteNumber(turn.prompt_cache_hit_tokens, 0), 0);
-  const totalCacheMiss = tokenTurns.reduce((sum, turn) => sum + toFiniteNumber(turn.prompt_cache_miss_tokens, 0), 0);
+  const totalCacheWrite = tokenTurns.reduce((sum, turn) => sum + toFiniteNumber(turn.prompt_cache_write_tokens, 0), 0);
   const totalAsst = tokenTurns.reduce((sum, turn) => sum + turn.completion_tokens, 0);
   const grandTotal = tokenTurns.reduce((sum, turn) => sum + turn.total_tokens, 0);
   const turnsWithKnownCost = tokenTurns.filter((turn) => turn?.cost_available === true && Number.isFinite(turn.cost));
@@ -7649,7 +7664,7 @@ function renderTokenStats() {
     "stat-user": formatPartialSummaryValue(totalUser, sessionHasPartialProviderUsage),
     "stat-cache-read": sessionHasCacheMetrics
       ? formatPartialSummaryText(
-        formatCacheMetricValue(totalCacheRead, sessionHasEstimatedCacheMetrics),
+        formatCacheMetricValue(totalCacheHit, sessionHasEstimatedCacheMetrics),
         sessionHasPartialProviderUsage,
       )
       : formatPartialSummaryText("—", sessionHasPartialProviderUsage),
@@ -10528,6 +10543,10 @@ if (convToolsOverlay) {
 const convToolsUseGlobalToggle = document.getElementById("conv-tools-use-global");
 if (convToolsUseGlobalToggle) {
   convToolsUseGlobalToggle.addEventListener("change", () => {
+    const toolsSection = document.getElementById("conv-tools-checkboxes");
+    if (toolsSection) {
+      toolsSection.style.display = convToolsUseGlobalToggle.checked ? "none" : "";
+    }
     persistConversationToolOverrides();
   });
 }

@@ -6838,6 +6838,8 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn('id="stat-last-cost"', html_text)
         self.assertIn('id="stat-last-model-provider"', html_text)
         self.assertIn("function setTextContentById(id, value)", script_text)
+        self.assertIn("const totalCacheHit = tokenTurns.reduce", script_text)
+        self.assertIn("const totalCacheWrite = tokenTurns.reduce", script_text)
         self.assertIn("prompt_cache_hit_tokens", script_text)
         self.assertIn("prompt_cache_write_tokens", script_text)
         self.assertIn("cache_metrics_estimated", script_text)
@@ -8912,6 +8914,15 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             json={"tool_overrides": {"web_search": True}},
         )
         self.assertEqual(response.status_code, 400)
+
+    def test_frontend_conversation_tool_permissions_handle_patch_response_and_toggle_visibility(self):
+        script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
+        script_text = script_path.read_text(encoding="utf-8")
+
+        self.assertIn("function getConversationToolOverridesFromResponse(data)", script_text)
+        self.assertIn('Object.prototype.hasOwnProperty.call(data, "tool_overrides")', script_text)
+        self.assertIn('toolsSection.style.display = convToolsUseGlobalToggle.checked ? "none" : "";', script_text)
+        self.assertIn("const responseToolOverrides = getConversationToolOverridesFromResponse(data);", script_text)
 
     def test_rag_endpoints_support_manual_document_ingest(self):
         response = self.client.get("/api/rag/documents")
