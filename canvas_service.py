@@ -40,6 +40,9 @@ CANVAS_MAX_RELATION_COUNT = 24
 CANVAS_MAX_RELATION_ITEM_LENGTH = 120
 CANVAS_CONTEXT_MAX_CHARS = 20_000
 CANVAS_CONTEXT_MAX_LINES = 800
+CANVAS_MAX_RELATIONSHIP_ITEMS_PER_CATEGORY = 8
+CANVAS_MAX_RELATIONSHIP_AGGREGATE = 24
+CANVAS_MAX_DEPENDENCY_SUMMARIES = 16
 CANVAS_ALLOWED_FORMATS = {"markdown", "code"}
 CANVAS_ALLOWED_ROLES = {"source", "config", "dependency", "docs", "test", "script", "note"}
 CANVAS_MODE_DOCUMENT = "document"
@@ -134,12 +137,22 @@ def _normalize_canvas_language(value) -> str | None:
 
 
 _EXTENSION_LANGUAGE_MAP: dict[str, str] = {
-    ".py": "python", ".pyw": "python",
-    ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript",
-    ".ts": "typescript", ".mts": "typescript",
-    ".jsx": "jsx", ".tsx": "tsx",
-    ".c": "c", ".h": "c",
-    ".cpp": "cpp", ".cc": "cpp", ".cxx": "cpp", ".hpp": "cpp", ".hh": "cpp",
+    ".py": "python",
+    ".pyw": "python",
+    ".js": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".ts": "typescript",
+    ".mts": "typescript",
+    ".jsx": "jsx",
+    ".tsx": "tsx",
+    ".c": "c",
+    ".h": "c",
+    ".cpp": "cpp",
+    ".cc": "cpp",
+    ".cxx": "cpp",
+    ".hpp": "cpp",
+    ".hh": "cpp",
     ".ino": "cpp",  # Arduino
     ".cs": "csharp",
     ".java": "java",
@@ -148,25 +161,39 @@ _EXTENSION_LANGUAGE_MAP: dict[str, str] = {
     ".rs": "rust",
     ".php": "php",
     ".swift": "swift",
-    ".kt": "kotlin", ".kts": "kotlin",
+    ".kt": "kotlin",
+    ".kts": "kotlin",
     ".scala": "scala",
-    ".sh": "bash", ".bash": "bash", ".zsh": "bash",
-    ".ps1": "powershell", ".psm1": "powershell",
-    ".html": "html", ".htm": "html",
-    ".css": "css", ".scss": "scss", ".sass": "sass", ".less": "less",
+    ".sh": "bash",
+    ".bash": "bash",
+    ".zsh": "bash",
+    ".ps1": "powershell",
+    ".psm1": "powershell",
+    ".html": "html",
+    ".htm": "html",
+    ".css": "css",
+    ".scss": "scss",
+    ".sass": "sass",
+    ".less": "less",
     ".sql": "sql",
-    ".json": "json", ".jsonc": "json",
-    ".yaml": "yaml", ".yml": "yaml",
+    ".json": "json",
+    ".jsonc": "json",
+    ".yaml": "yaml",
+    ".yml": "yaml",
     ".toml": "toml",
-    ".ini": "ini", ".cfg": "ini",
+    ".ini": "ini",
+    ".cfg": "ini",
     ".xml": "xml",
-    ".md": "markdown", ".mdx": "markdown",
+    ".md": "markdown",
+    ".mdx": "markdown",
     ".r": "r",
     ".lua": "lua",
     ".dart": "dart",
-    ".ex": "elixir", ".exs": "elixir",
+    ".ex": "elixir",
+    ".exs": "elixir",
     ".hs": "haskell",
-    ".tf": "terraform", ".tfvars": "terraform",
+    ".tf": "terraform",
+    ".tfvars": "terraform",
     ".proto": "protobuf",
     ".vue": "vue",
     ".svelte": "svelte",
@@ -181,17 +208,26 @@ _NAME_LANGUAGE_MAP: dict[str, str] = {
 }
 
 _SHEBANG_LANGUAGE_MAP: dict[str, str] = {
-    "python": "python", "python3": "python", "python2": "python",
-    "node": "javascript", "nodejs": "javascript",
+    "python": "python",
+    "python3": "python",
+    "python2": "python",
+    "node": "javascript",
+    "nodejs": "javascript",
     "ruby": "ruby",
-    "perl": "perl", "perl5": "perl",
-    "bash": "bash", "sh": "bash", "zsh": "bash", "dash": "bash",
+    "perl": "perl",
+    "perl5": "perl",
+    "bash": "bash",
+    "sh": "bash",
+    "zsh": "bash",
+    "dash": "bash",
     "php": "php",
     "lua": "lua",
     "rscript": "r",
     "groovy": "groovy",
-    "tclsh": "tcl", "expect": "tcl",
-    "awk": "awk", "gawk": "awk",
+    "tclsh": "tcl",
+    "expect": "tcl",
+    "awk": "awk",
+    "gawk": "awk",
 }
 
 
@@ -423,7 +459,14 @@ def _infer_canvas_role(path: str | None, title: str, format_name: str) -> str | 
         return "test"
     if filename in {"readme", "readme.md", "readme.txt"} or candidate.startswith("docs/"):
         return "docs"
-    if filename in {"requirements.txt", "requirements-dev.txt", "package.json", "pyproject.toml", ".env", ".env.example"}:
+    if filename in {
+        "requirements.txt",
+        "requirements-dev.txt",
+        "package.json",
+        "pyproject.toml",
+        ".env",
+        ".env.example",
+    }:
         return "dependency" if "requirements" in filename or filename == "package.json" else "config"
     if filename.endswith((".ini", ".cfg", ".toml", ".yaml", ".yml", ".json", ".env")):
         return "config"
@@ -517,7 +560,7 @@ def build_canvas_relationship_map(documents: list[dict] | None) -> dict | None:
         for key in ("imports", "exports", "symbols", "dependencies"):
             values = document.get(key) if isinstance(document.get(key), list) else []
             if values:
-                entry[key] = values[:8]
+                entry[key] = values[:CANVAS_MAX_RELATIONSHIP_ITEMS_PER_CATEGORY]
             for value in values:
                 normalized_value = str(value).strip()
                 dedupe_key = normalized_value.lower()
@@ -536,10 +579,10 @@ def build_canvas_relationship_map(documents: list[dict] | None) -> dict | None:
 
     return {
         "files": files,
-        "imports": aggregate_imports[:24],
-        "exports": aggregate_exports[:24],
-        "symbols": aggregate_symbols[:24],
-        "dependencies": aggregate_dependencies[:24],
+        "imports": aggregate_imports[:CANVAS_MAX_RELATIONSHIP_AGGREGATE],
+        "exports": aggregate_exports[:CANVAS_MAX_RELATIONSHIP_AGGREGATE],
+        "symbols": aggregate_symbols[:CANVAS_MAX_RELATIONSHIP_AGGREGATE],
+        "dependencies": aggregate_dependencies[:CANVAS_MAX_RELATIONSHIP_AGGREGATE],
     }
 
 
@@ -580,7 +623,9 @@ def _normalize_canvas_lookup_basename(value) -> str | None:
     return lookup_key.rsplit("/", 1)[-1]
 
 
-def _collect_canvas_document_path_matches(documents: list[dict], document_path: str | None) -> dict[str, list[tuple[int, dict]]]:
+def _collect_canvas_document_path_matches(
+    documents: list[dict], document_path: str | None
+) -> dict[str, list[tuple[int, dict]]]:
     lookup_key = _normalize_canvas_lookup_key(document_path)
     match_groups: dict[str, list[tuple[int, dict]]] = {
         "exact_path": [],
@@ -678,7 +723,9 @@ def extract_canvas_active_document_id(metadata: dict | None, documents: list[dic
     source = metadata if isinstance(metadata, dict) else {}
     normalized_documents = documents if isinstance(documents, list) else extract_canvas_documents(source)
     active_document_id = str(source.get("active_document_id") or "").strip()[:80]
-    if active_document_id and any(str(document.get("id") or "") == active_document_id for document in normalized_documents):
+    if active_document_id and any(
+        str(document.get("id") or "") == active_document_id for document in normalized_documents
+    ):
         return active_document_id
     active_document = _resolve_active_canvas_document(normalized_documents)
     if not active_document:
@@ -693,7 +740,11 @@ def determine_canvas_mode(documents: list[dict] | None) -> str:
         for document in normalized_documents
         if str(document.get("project_id") or document.get("workspace_id") or "").strip()
     }
-    paths = {str(document.get("path") or "").strip() for document in normalized_documents if str(document.get("path") or "").strip()}
+    paths = {
+        str(document.get("path") or "").strip()
+        for document in normalized_documents
+        if str(document.get("path") or "").strip()
+    }
     if len(normalized_documents) > 1 or scope_ids or len(paths) > 1:
         return CANVAS_MODE_PROJECT
     return CANVAS_MODE_DOCUMENT
@@ -791,7 +842,7 @@ def build_canvas_project_manifest(documents: list[dict] | None, active_document_
         for key in ("imports", "exports", "symbols", "dependencies"):
             values = document.get(key) if isinstance(document.get(key), list) else []
             if values:
-                entry[key] = values[:8]
+                entry[key] = values[:CANVAS_MAX_RELATIONSHIP_ITEMS_PER_CATEGORY]
         if int(document.get("page_count") or 0) > 0:
             entry["page_count"] = int(document["page_count"])
         if document.get("ignored") is True:
@@ -847,7 +898,7 @@ def build_canvas_project_manifest(documents: list[dict] | None, active_document_
         "file_list": file_list,
         "open_issues": [*open_issues, *validation_issues],
         "last_validation_status": "ok" if not validation_issues else "needs_attention",
-        "dependency_summaries": dependency_summaries[:16],
+        "dependency_summaries": dependency_summaries[:CANVAS_MAX_DEPENDENCY_SUMMARIES],
         "relationship_map": build_canvas_relationship_map(normalized_documents),
     }
     if active_document and active_document.get("project_id"):
@@ -1053,10 +1104,7 @@ def _validate_canvas_expected_lines(
             "Canvas context drift detected: the expected lines no longer fit at the current location. Reinspect the document before editing."
         )
 
-    current_slice = [
-        _normalize_canvas_expected_line(line)
-        for line in existing_lines[compare_start - 1:compare_end]
-    ]
+    current_slice = [_normalize_canvas_expected_line(line) for line in existing_lines[compare_start - 1 : compare_end]]
     if current_slice != normalized_expected:
         raise ValueError(
             f"Canvas context drift detected around lines {compare_start}-{compare_end}. Reinspect the document before editing."
@@ -1109,7 +1157,9 @@ def create_canvas_runtime_state(
     viewports: dict[str, dict] | None = None,
 ) -> dict:
     documents = extract_canvas_documents({"canvas_documents": initial_documents or []})
-    resolved_active_document_id = extract_canvas_active_document_id({"active_document_id": active_document_id}, documents)
+    resolved_active_document_id = extract_canvas_active_document_id(
+        {"active_document_id": active_document_id}, documents
+    )
     runtime_state = {
         "documents": documents,
         "active_document_id": resolved_active_document_id,
@@ -1154,7 +1204,9 @@ def _refresh_canvas_runtime_state(runtime_state: dict) -> None:
         documents,
     )
     runtime_state["mode"] = determine_canvas_mode(documents)
-    runtime_state["viewports"] = extract_canvas_viewports({"canvas_viewports": runtime_state.get("viewports")}, documents)
+    runtime_state["viewports"] = extract_canvas_viewports(
+        {"canvas_viewports": runtime_state.get("viewports")}, documents
+    )
 
 
 def _find_canvas_document(
@@ -1389,6 +1441,11 @@ def insert_canvas_lines(
         raise ValueError("after_line must be between 0 and the current line count.")
 
     expected_count = len(expected_lines or [])
+    # When expected_lines are provided, anchor validation near the insertion point.
+    # For N expected lines, we validate the N lines immediately before the insertion,
+    # so validation_start = after_line - (N - 1). E.g., after_line=5, expected_count=3
+    # → validate lines 3-5 (the 2 lines before + the line at after_line).
+    # Edge cases: if after_line <= 0 or expected_count=0, fall back to line 1.
     default_start_line = 1 if after_line <= 0 else max(1, after_line - max(0, expected_count - 1))
     _validate_canvas_expected_lines(
         existing_lines,
@@ -1443,7 +1500,9 @@ def _coerce_batch_canvas_json_value(value):
     if not raw_value:
         return value
 
-    fenced_match = re.match(r"^```(?:json|javascript|js|python)?\s*(.*?)\s*```$", raw_value, flags=re.DOTALL | re.IGNORECASE)
+    fenced_match = re.match(
+        r"^```(?:json|javascript|js|python)?\s*(.*?)\s*```$", raw_value, flags=re.DOTALL | re.IGNORECASE
+    )
     if fenced_match:
         raw_value = fenced_match.group(1).strip()
 
@@ -1526,33 +1585,23 @@ def _extract_batch_canvas_json_fragment(text: str) -> str | None:
             else:
                 return None
             if not stack:
-                return text[start_index:index + 1]
+                return text[start_index : index + 1]
 
     return None
 
 
 def _normalize_batch_canvas_operations_input(operations):
-    normalized = _coerce_batch_canvas_json_value(operations)
-    if isinstance(normalized, dict):
-        for key in ("operations", "edits", "items", "batch"):
-            candidate = _coerce_batch_canvas_json_value(normalized.get(key))
-            if isinstance(candidate, list):
-                normalized = candidate
-                break
-            if isinstance(candidate, dict):
-                normalized = [candidate]
-                break
-    while isinstance(normalized, list) and len(normalized) == 1 and isinstance(normalized[0], list):
-        normalized = normalized[0]
-    if isinstance(normalized, dict):
-        normalized = [normalized]
-    return normalized
+    return _normalize_batch_canvas_list_input(operations, keys=("operations", "edits", "items", "batch"))
 
 
 def _normalize_batch_canvas_targets_input(targets):
-    normalized = _coerce_batch_canvas_json_value(targets)
+    return _normalize_batch_canvas_list_input(targets, keys=("targets", "items", "documents", "batch"))
+
+
+def _normalize_batch_canvas_list_input(value, *, keys: tuple[str, ...]):
+    normalized = _coerce_batch_canvas_json_value(value)
     if isinstance(normalized, dict):
-        for key in ("targets", "items", "documents", "batch"):
+        for key in keys:
             candidate = _coerce_batch_canvas_json_value(normalized.get(key))
             if isinstance(candidate, list):
                 normalized = candidate
@@ -1724,9 +1773,11 @@ def _batch_canvas_operations_overlap(left: dict, right: dict) -> bool:
 
 
 def _validate_batch_canvas_operations(operations: list[dict]) -> list[dict]:
-    normalized_operations = [_normalize_batch_canvas_operation(operation, index) for index, operation in enumerate(operations)]
+    normalized_operations = [
+        _normalize_batch_canvas_operation(operation, index) for index, operation in enumerate(operations)
+    ]
     for index, left in enumerate(normalized_operations):
-        for right in normalized_operations[index + 1:]:
+        for right in normalized_operations[index + 1 :]:
             if _batch_canvas_operations_overlap(left, right):
                 raise ValueError(
                     f"Batch canvas operations #{left['index'] + 1} and #{right['index'] + 1} overlap. Split them into separate non-overlapping edits."
@@ -1758,7 +1809,9 @@ def _apply_validated_batch_canvas_edits(
 
         if operation["action"] == "insert":
             original_after_line = operation["after_line"]
-            adjusted_after_line = original_after_line + _calculate_batch_canvas_offset(original_after_line, applied_operations)
+            adjusted_after_line = original_after_line + _calculate_batch_canvas_offset(
+                original_after_line, applied_operations
+            )
             current_document = insert_canvas_lines(
                 runtime_state,
                 after_line=adjusted_after_line,
@@ -1782,8 +1835,12 @@ def _apply_validated_batch_canvas_edits(
         else:
             original_start_line = operation["start_line"]
             original_end_line = operation["end_line"]
-            adjusted_start_line = original_start_line + _calculate_batch_canvas_offset(original_start_line, applied_operations)
-            adjusted_end_line = original_end_line + _calculate_batch_canvas_offset(original_end_line, applied_operations)
+            adjusted_start_line = original_start_line + _calculate_batch_canvas_offset(
+                original_start_line, applied_operations
+            )
+            adjusted_end_line = original_end_line + _calculate_batch_canvas_offset(
+                original_end_line, applied_operations
+            )
             if operation["action"] == "replace":
                 current_document = replace_canvas_lines(
                     runtime_state,
@@ -1833,8 +1890,12 @@ def _apply_validated_batch_canvas_edits(
     edit_start_line = None
     edit_end_line = None
     if changed_ranges:
-        edit_start_line = min(int(entry.get("edit_start_line") or 0) for entry in changed_ranges if entry.get("edit_start_line"))
-        edit_end_line = max(int(entry.get("edit_end_line") or 0) for entry in changed_ranges if entry.get("edit_end_line"))
+        edit_start_line = min(
+            int(entry.get("edit_start_line") or 0) for entry in changed_ranges if entry.get("edit_start_line")
+        )
+        edit_end_line = max(
+            int(entry.get("edit_end_line") or 0) for entry in changed_ranges if entry.get("edit_end_line")
+        )
 
     return {
         "status": "ok",
@@ -1885,7 +1946,9 @@ def batch_canvas_edits(
                     document_id=target_document_id,
                     document_path=target_document_path,
                 )
-                preview_state = create_canvas_runtime_state([dict(target_document)], active_document_id=target_document.get("id"))
+                preview_state = create_canvas_runtime_state(
+                    [dict(target_document)], active_document_id=target_document.get("id")
+                )
                 target_result = _apply_validated_batch_canvas_edits(
                     preview_state,
                     normalized_operations,
@@ -2030,12 +2093,15 @@ def transform_canvas_lines(
     document_id = str(document.get("id") or "")
     all_lines = list_canvas_lines(document.get("content") or "")
     scope_start, scope_end = _parse_canvas_transform_scope(scope, len(all_lines))
-    scoped_lines = [] if scope_end <= 0 else all_lines[scope_start - 1:scope_end]
+    scoped_lines = [] if scope_end <= 0 else all_lines[scope_start - 1 : scope_end]
     scoped_text = join_canvas_lines(scoped_lines)
 
     compiled_pattern = _compile_canvas_transform_pattern(str(pattern), is_regex=is_regex, case_sensitive=case_sensitive)
     matches = list(compiled_pattern.finditer(scoped_text))
-    affected_line_numbers = [scope_start + line_number - 1 for line_number in _iter_canvas_transform_affected_lines(scoped_text, compiled_pattern)]
+    affected_line_numbers = [
+        scope_start + line_number - 1
+        for line_number in _iter_canvas_transform_affected_lines(scoped_text, compiled_pattern)
+    ]
     result = {
         "status": "ok",
         "action": "transformed",
@@ -2055,7 +2121,7 @@ def transform_canvas_lines(
     transformed_text = compiled_pattern.sub(replacement_text, scoped_text)
     next_lines = list(all_lines)
     replacement_lines = list_canvas_lines(transformed_text)
-    next_lines[scope_start - 1:scope_end] = replacement_lines
+    next_lines[scope_start - 1 : scope_end] = replacement_lines
     updated_document = _update_canvas_document_in_place(runtime_state, document_id, join_canvas_lines(next_lines))
     result["document"] = updated_document
     return result
@@ -2111,7 +2177,9 @@ def update_canvas_metadata(
         next_document["title"] = str(title or "Canvas").strip()[:CANVAS_MAX_TITLE_LENGTH] or "Canvas"
         add_updated_field("title")
     if summary is not None:
-        next_document["summary"] = _normalize_canvas_short_text(summary, CANVAS_MAX_SUMMARY_LENGTH) or next_document.get("summary")
+        next_document["summary"] = _normalize_canvas_short_text(
+            summary, CANVAS_MAX_SUMMARY_LENGTH
+        ) or next_document.get("summary")
         add_updated_field("summary")
     if role is not None:
         normalized_role = _normalize_canvas_role(role)
@@ -2215,7 +2283,9 @@ def preview_canvas_changes(
         preview_lines = list_canvas_lines(preview_document.get("content") or "")
         if operation["action"] == "insert":
             original_after_line = operation["after_line"]
-            adjusted_after_line = original_after_line + _calculate_batch_canvas_offset(original_after_line, applied_operations)
+            adjusted_after_line = original_after_line + _calculate_batch_canvas_offset(
+                original_after_line, applied_operations
+            )
             after_index = max(0, adjusted_after_line)
             before_text = ""
             after_text = join_canvas_lines(operation.get("lines") or [])
@@ -2233,9 +2303,13 @@ def preview_canvas_changes(
         else:
             original_start_line = operation["start_line"]
             original_end_line = operation["end_line"]
-            adjusted_start_line = original_start_line + _calculate_batch_canvas_offset(original_start_line, applied_operations)
-            adjusted_end_line = original_end_line + _calculate_batch_canvas_offset(original_end_line, applied_operations)
-            before_text = join_canvas_lines(preview_lines[adjusted_start_line - 1:adjusted_end_line])
+            adjusted_start_line = original_start_line + _calculate_batch_canvas_offset(
+                original_start_line, applied_operations
+            )
+            adjusted_end_line = original_end_line + _calculate_batch_canvas_offset(
+                original_end_line, applied_operations
+            )
+            before_text = join_canvas_lines(preview_lines[adjusted_start_line - 1 : adjusted_end_line])
             after_text = "" if operation["action"] == "delete" else join_canvas_lines(operation.get("lines") or [])
             preview_entries.append(
                 {
@@ -2250,9 +2324,13 @@ def preview_canvas_changes(
         expected_start_line = operation.get("expected_start_line")
         adjusted_expected_start_line = None
         if expected_start_line is not None:
-            adjusted_expected_start_line = expected_start_line + _calculate_batch_canvas_offset(expected_start_line, applied_operations)
+            adjusted_expected_start_line = expected_start_line + _calculate_batch_canvas_offset(
+                expected_start_line, applied_operations
+            )
         if operation["action"] == "insert":
-            adjusted_after_line = operation["after_line"] + _calculate_batch_canvas_offset(operation["after_line"], applied_operations)
+            adjusted_after_line = operation["after_line"] + _calculate_batch_canvas_offset(
+                operation["after_line"], applied_operations
+            )
             insert_canvas_lines(
                 preview_state,
                 after_line=adjusted_after_line,
@@ -2262,8 +2340,12 @@ def preview_canvas_changes(
                 expected_start_line=adjusted_expected_start_line,
             )
         elif operation["action"] == "replace":
-            adjusted_start_line = operation["start_line"] + _calculate_batch_canvas_offset(operation["start_line"], applied_operations)
-            adjusted_end_line = operation["end_line"] + _calculate_batch_canvas_offset(operation["end_line"], applied_operations)
+            adjusted_start_line = operation["start_line"] + _calculate_batch_canvas_offset(
+                operation["start_line"], applied_operations
+            )
+            adjusted_end_line = operation["end_line"] + _calculate_batch_canvas_offset(
+                operation["end_line"], applied_operations
+            )
             replace_canvas_lines(
                 preview_state,
                 start_line=adjusted_start_line,
@@ -2274,8 +2356,12 @@ def preview_canvas_changes(
                 expected_start_line=adjusted_expected_start_line,
             )
         else:
-            adjusted_start_line = operation["start_line"] + _calculate_batch_canvas_offset(operation["start_line"], applied_operations)
-            adjusted_end_line = operation["end_line"] + _calculate_batch_canvas_offset(operation["end_line"], applied_operations)
+            adjusted_start_line = operation["start_line"] + _calculate_batch_canvas_offset(
+                operation["start_line"], applied_operations
+            )
+            adjusted_end_line = operation["end_line"] + _calculate_batch_canvas_offset(
+                operation["end_line"], applied_operations
+            )
             delete_canvas_lines(
                 preview_state,
                 start_line=adjusted_start_line,
@@ -2412,7 +2498,9 @@ def focus_canvas_page(
     }
 
 
-def clear_canvas_viewport(runtime_state: dict, *, document_path: str | None = None, document_id: str | None = None) -> dict:
+def clear_canvas_viewport(
+    runtime_state: dict, *, document_path: str | None = None, document_id: str | None = None
+) -> dict:
     viewports = _normalize_canvas_viewports(runtime_state)
     if document_path is None and document_id is None:
         cleared_count = len(viewports)
@@ -2465,8 +2553,7 @@ def get_canvas_viewport_payloads(runtime_state: dict) -> list[dict]:
         if start_line < 1 or end_line < start_line or end_line > len(all_lines):
             continue
         visible_lines = [
-            f"{line_number}: {all_lines[line_number - 1]}"
-            for line_number in range(start_line, end_line + 1)
+            f"{line_number}: {all_lines[line_number - 1]}" for line_number in range(start_line, end_line + 1)
         ]
         payload_chars = len("\n".join(visible_lines))
         if payloads and total_chars + payload_chars > char_budget:
@@ -2634,9 +2721,7 @@ def search_canvas_document(
         target_documents = [target_document]
     else:
         target_documents = [
-            document
-            for document in target_documents
-            if get_canvas_document_capabilities(document)["line_addressable"]
+            document for document in target_documents if get_canvas_document_capabilities(document)["line_addressable"]
         ]
 
     matches: list[dict] = []
@@ -2659,8 +2744,7 @@ def search_canvas_document(
                 before_start = max(1, index - normalized_context_lines)
                 after_end = min(len(document_lines), index + normalized_context_lines)
                 context_before = [
-                    f"{line_number}: {document_lines[line_number - 1]}"
-                    for line_number in range(before_start, index)
+                    f"{line_number}: {document_lines[line_number - 1]}" for line_number in range(before_start, index)
                 ]
                 context_after = [
                     f"{line_number}: {document_lines[line_number - 1]}"
@@ -2964,7 +3048,9 @@ def delete_canvas_document(
 
     previous_active_document_id = get_canvas_runtime_active_document_id(runtime_state)
     removed = documents.pop(index)
-    clear_canvas_viewport(runtime_state, document_id=str(removed.get("id") or "") or None, document_path=removed.get("path"))
+    clear_canvas_viewport(
+        runtime_state, document_id=str(removed.get("id") or "") or None, document_path=removed.get("path")
+    )
     if documents:
         runtime_state["active_document_id"] = (
             documents[-1]["id"]
@@ -3036,7 +3122,9 @@ def build_canvas_document_result_snapshot(document: dict | None) -> dict | None:
         values = normalized.get(key) if isinstance(normalized.get(key), list) else []
         if values:
             snapshot[key] = values
-    visual_page_image_ids = normalized.get("visual_page_image_ids") if isinstance(normalized.get("visual_page_image_ids"), list) else []
+    visual_page_image_ids = (
+        normalized.get("visual_page_image_ids") if isinstance(normalized.get("visual_page_image_ids"), list) else []
+    )
     if visual_page_image_ids:
         snapshot["visual_page_image_ids"] = visual_page_image_ids
     if normalized.get("ignored") is True:
@@ -3149,11 +3237,16 @@ def build_canvas_document_context_result(
     if is_truncated:
         total = normalized.get("line_count") or 0
         shown = len(numbered_lines)
-        numbered_lines = [f"[Excerpt: lines 1\u2013{shown} of {total}. Use scroll_canvas_document to view hidden lines.]", *numbered_lines]
+        numbered_lines = [
+            f"[Excerpt: lines 1\u2013{shown} of {total}. Use scroll_canvas_document to view hidden lines.]",
+            *numbered_lines,
+        ]
     else:
         shown = len(numbered_lines)
     documents = get_canvas_runtime_documents(runtime_state)
-    manifest = build_canvas_project_manifest(documents, active_document_id=get_canvas_runtime_active_document_id(runtime_state))
+    manifest = build_canvas_project_manifest(
+        documents, active_document_id=get_canvas_runtime_active_document_id(runtime_state)
+    )
     relationship_map = build_canvas_relationship_map(documents)
     return {
         "status": "ok",
@@ -3366,7 +3459,9 @@ def _build_canvas_pdf_meta_text(document: dict, *, page_count: int | None = None
     return " • ".join(parts)
 
 
-def _build_canvas_pdf_title_card(document: dict, width: float, title_style, meta_style, *, page_count: int | None = None):
+def _build_canvas_pdf_title_card(
+    document: dict, width: float, title_style, meta_style, *, page_count: int | None = None
+):
     rows = [[Paragraph(escape(document["title"]), title_style)]]
     meta_text = _build_canvas_pdf_meta_text(document, page_count=page_count)
     if meta_text:
@@ -3462,17 +3557,23 @@ def build_pdf_download(document: dict) -> bytes:
     page_count = int(normalized.get("page_count") or 0) or None
     output = BytesIO()
     doc = SimpleDocTemplate(
-        output, pagesize=A4,
-        topMargin=20 * mm, bottomMargin=20 * mm,
-        leftMargin=_left_margin, rightMargin=_right_margin,
+        output,
+        pagesize=A4,
+        topMargin=20 * mm,
+        bottomMargin=20 * mm,
+        leftMargin=_left_margin,
+        rightMargin=_right_margin,
     )
 
     if page_count is None:
         preview_output = BytesIO()
         preview_doc = SimpleDocTemplate(
-            preview_output, pagesize=A4,
-            topMargin=20 * mm, bottomMargin=20 * mm,
-            leftMargin=_left_margin, rightMargin=_right_margin,
+            preview_output,
+            pagesize=A4,
+            topMargin=20 * mm,
+            bottomMargin=20 * mm,
+            leftMargin=_left_margin,
+            rightMargin=_right_margin,
         )
         preview_doc.build(_build_story(None), onFirstPage=page_chrome, onLaterPages=page_chrome)
         page_count = _count_pdf_pages(preview_output.getvalue()) or 1
