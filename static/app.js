@@ -7609,6 +7609,14 @@ function renderModelCallDrawer(turn) {
   );
 }
 
+function setTextContentById(id, value) {
+  const element = document.getElementById(id);
+  if (element) {
+    element.textContent = value;
+  }
+  return element;
+}
+
 function renderTokenStats() {
   const totalUser = tokenTurns.reduce((sum, turn) => sum + turn.prompt_tokens, 0);
   const totalCacheHit = tokenTurns.reduce((sum, turn) => sum + toFiniteNumber(turn.prompt_cache_hit_tokens, 0), 0);
@@ -7637,66 +7645,80 @@ function renderTokenStats() {
     ? [String(lastTurn.provider || "").trim(), String(lastTurn.model || "").trim()].filter(Boolean).join(" · ") || "—"
     : "—";
 
-  document.getElementById("stat-user").textContent = formatPartialSummaryValue(totalUser, sessionHasPartialProviderUsage);
-  document.getElementById("stat-cache-read").textContent = sessionHasCacheMetrics
-    ? formatPartialSummaryText(
-      formatCacheMetricValue(totalCacheRead, sessionHasEstimatedCacheMetrics),
-      sessionHasPartialProviderUsage,
-    )
-    : formatPartialSummaryText("—", sessionHasPartialProviderUsage);
-  document.getElementById("stat-cache-write").textContent = sessionHasCacheMetrics
-    ? formatPartialSummaryText(
-      formatCacheMetricValue(totalCacheWrite, sessionHasEstimatedCacheMetrics),
-      sessionHasPartialProviderUsage,
-    )
-    : formatPartialSummaryText("—", sessionHasPartialProviderUsage);
-  document.getElementById("stat-asst").textContent = formatPartialSummaryValue(totalAsst, sessionHasPartialProviderUsage);
-  document.getElementById("stat-total").textContent = formatPartialSummaryValue(grandTotal, sessionHasPartialProviderUsage);
-  document.getElementById("stat-cost").textContent = formatPartialSummaryText(sessionCostLabel, sessionHasPartialProviderUsage);
-  document.getElementById("stat-last-input").textContent = lastTurn
-    ? formatPartialSummaryValue(lastTurn.prompt_tokens, lastTurnHasPartialProviderUsage)
-    : "—";
-  document.getElementById("stat-last-cache-read").textContent = lastTurnHasCacheMetrics
-    ? formatPartialSummaryText(
-      formatCacheMetricValue(toFiniteNumber(lastTurn.prompt_cache_hit_tokens, 0), lastTurn?.cache_metrics_estimated === true),
-      lastTurnHasPartialProviderUsage,
-    )
-    : formatPartialSummaryText("—", lastTurnHasPartialProviderUsage);
-  document.getElementById("stat-last-cache-write").textContent = lastTurnHasCacheMetrics
-    ? formatPartialSummaryText(
-      formatCacheMetricValue(toFiniteNumber(lastTurn.prompt_cache_write_tokens, 0), lastTurn?.cache_metrics_estimated === true),
-      lastTurnHasPartialProviderUsage,
-    )
-    : formatPartialSummaryText("—", lastTurnHasPartialProviderUsage);
-  document.getElementById("stat-last-peak-input").textContent = lastTurn
-    ? fmt(lastTurn.max_input_tokens_per_call)
-    : "—";
-  document.getElementById("stat-last-call-count").textContent = lastTurn
-    ? fmt(lastTurn.model_call_count)
-    : "—";
-  document.getElementById("stat-last-prompt-cap").textContent = lastTurn && lastTurn.configured_prompt_max_input_tokens !== null
-    ? fmt(lastTurn.configured_prompt_max_input_tokens)
-    : "—";
-  document.getElementById("stat-last-output").textContent = lastTurn
-    ? formatPartialSummaryValue(lastTurn.completion_tokens, lastTurnHasPartialProviderUsage)
-    : "—";
-  document.getElementById("stat-last-total").textContent = lastTurn
-    ? formatPartialSummaryValue(lastTurn.total_tokens, lastTurnHasPartialProviderUsage)
-    : "—";
-  document.getElementById("stat-last-cost").textContent = lastTurn?.cost_available === true && Number.isFinite(lastTurn.cost)
-    ? formatPartialSummaryText(formatUsageCost(lastTurn.cost, lastTurn.currency || "USD"), lastTurnHasPartialProviderUsage)
-    : formatPartialSummaryText("—", lastTurnHasPartialProviderUsage);
-  document.getElementById("stat-last-model-provider").textContent = formatPartialSummaryText(lastModelProvider, lastTurnHasPartialProviderUsage);
-  document.getElementById("stat-breakdown-latest-total").textContent = lastTurn
-    ? formatPartialSummaryValue(lastTurn.estimated_input_tokens, lastTurnHasPartialProviderUsage)
-    : "—";
-  tokensBadge.textContent = fmt(grandTotal);
+  const statsTextById = {
+    "stat-user": formatPartialSummaryValue(totalUser, sessionHasPartialProviderUsage),
+    "stat-cache-read": sessionHasCacheMetrics
+      ? formatPartialSummaryText(
+        formatCacheMetricValue(totalCacheRead, sessionHasEstimatedCacheMetrics),
+        sessionHasPartialProviderUsage,
+      )
+      : formatPartialSummaryText("—", sessionHasPartialProviderUsage),
+    "stat-cache-write": sessionHasCacheMetrics
+      ? formatPartialSummaryText(
+        formatCacheMetricValue(totalCacheWrite, sessionHasEstimatedCacheMetrics),
+        sessionHasPartialProviderUsage,
+      )
+      : formatPartialSummaryText("—", sessionHasPartialProviderUsage),
+    "stat-asst": formatPartialSummaryValue(totalAsst, sessionHasPartialProviderUsage),
+    "stat-total": formatPartialSummaryValue(grandTotal, sessionHasPartialProviderUsage),
+    "stat-cost": formatPartialSummaryText(sessionCostLabel, sessionHasPartialProviderUsage),
+    "stat-last-input": lastTurn
+      ? formatPartialSummaryValue(lastTurn.prompt_tokens, lastTurnHasPartialProviderUsage)
+      : "—",
+    "stat-last-cache-read": lastTurnHasCacheMetrics
+      ? formatPartialSummaryText(
+        formatCacheMetricValue(toFiniteNumber(lastTurn.prompt_cache_hit_tokens, 0), lastTurn?.cache_metrics_estimated === true),
+        lastTurnHasPartialProviderUsage,
+      )
+      : formatPartialSummaryText("—", lastTurnHasPartialProviderUsage),
+    "stat-last-cache-write": lastTurnHasCacheMetrics
+      ? formatPartialSummaryText(
+        formatCacheMetricValue(toFiniteNumber(lastTurn.prompt_cache_write_tokens, 0), lastTurn?.cache_metrics_estimated === true),
+        lastTurnHasPartialProviderUsage,
+      )
+      : formatPartialSummaryText("—", lastTurnHasPartialProviderUsage),
+    "stat-last-peak-input": lastTurn
+      ? fmt(lastTurn.max_input_tokens_per_call)
+      : "—",
+    "stat-last-call-count": lastTurn
+      ? fmt(lastTurn.model_call_count)
+      : "—",
+    "stat-last-prompt-cap": lastTurn && lastTurn.configured_prompt_max_input_tokens !== null
+      ? fmt(lastTurn.configured_prompt_max_input_tokens)
+      : "—",
+    "stat-last-output": lastTurn
+      ? formatPartialSummaryValue(lastTurn.completion_tokens, lastTurnHasPartialProviderUsage)
+      : "—",
+    "stat-last-total": lastTurn
+      ? formatPartialSummaryValue(lastTurn.total_tokens, lastTurnHasPartialProviderUsage)
+      : "—",
+    "stat-last-cost": lastTurn?.cost_available === true && Number.isFinite(lastTurn.cost)
+      ? formatPartialSummaryText(formatUsageCost(lastTurn.cost, lastTurn.currency || "USD"), lastTurnHasPartialProviderUsage)
+      : formatPartialSummaryText("—", lastTurnHasPartialProviderUsage),
+    "stat-last-model-provider": formatPartialSummaryText(lastModelProvider, lastTurnHasPartialProviderUsage),
+    "stat-breakdown-latest-total": lastTurn
+      ? formatPartialSummaryValue(lastTurn.estimated_input_tokens, lastTurnHasPartialProviderUsage)
+      : "—",
+  };
 
-  renderBreakdownList("latest-breakdown-list", lastTurn ? lastTurn.input_breakdown : createEmptyBreakdown(), {
-    totalTokens: lastTurn ? lastTurn.prompt_tokens : 0,
+  Object.entries(statsTextById).forEach(([id, text]) => {
+    setTextContentById(id, text);
   });
 
+  if (tokensBadge) {
+    tokensBadge.textContent = fmt(grandTotal);
+  }
+
+  if (document.getElementById("latest-breakdown-list")) {
+    renderBreakdownList("latest-breakdown-list", lastTurn ? lastTurn.input_breakdown : createEmptyBreakdown(), {
+      totalTokens: lastTurn ? lastTurn.prompt_tokens : 0,
+    });
+  }
+
   const list = document.getElementById("turns-list");
+  if (!list) {
+    return;
+  }
   if (!tokenTurns.length) {
     list.innerHTML = '<div class="breakdown-empty">No completed assistant turns yet.</div>';
     return;
