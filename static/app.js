@@ -2948,7 +2948,32 @@ function normalizeStreamingCanvasPreviewDocument(document) {
   if (shouldRenderCanvasAsCode(normalized)) {
     normalized.format = "code";
   }
+  if (document?.isStreamingPreview && isGenericStreamingCanvasPreviewTitle(normalized.title)) {
+    const inferredTitle = inferStreamingCanvasPreviewTitleFromContent(normalized.content);
+    if (inferredTitle) {
+      normalized.title = inferredTitle;
+    }
+  }
   return normalized;
+}
+
+function isGenericStreamingCanvasPreviewTitle(title) {
+  const normalizedTitle = String(title || "").trim().toLowerCase();
+  return normalizedTitle === "canvas draft" || normalizedTitle === "canvas" || normalizedTitle === "untitled";
+}
+
+function inferStreamingCanvasPreviewTitleFromContent(content) {
+  const normalizedContent = String(content || "").replace(/\r\n?/g, "\n");
+  if (!normalizedContent) {
+    return "";
+  }
+
+  const headingMatch = normalizedContent.match(/^#\s+(.+?)\s*$/m);
+  if (!headingMatch) {
+    return "";
+  }
+
+  return String(headingMatch[1] || "").trim().slice(0, 160);
 }
 
 function getCanvasPathFilterValue() {

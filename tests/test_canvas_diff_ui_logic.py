@@ -10,6 +10,7 @@ import pytest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 APP_JS_PATH = REPO_ROOT / "static" / "app.js"
+AGENT_PY_PATH = REPO_ROOT / "agent.py"
 CANVAS_DIFF_START_MARKER = "const CANVAS_DIFF_CONTEXT_LINE_COUNT"
 CANVAS_DIFF_END_MARKER = "function renderCanvasDiffPreview"
 STREAMING_CANVAS_PREVIEW_START_MARKER = "const STREAMING_CANVAS_MARKDOWN_PLAIN_TEXT_CHAR_LIMIT"
@@ -208,6 +209,37 @@ def test_streaming_canvas_preview_uses_plaintext_fallback_for_large_markdown() -
         assert(getStreamingCanvasPreviewRenderMode(shortDoc) === "markdown", "Typical-length markdown drafts (120 lines) must keep full markdown rendering");
         """
     )
+
+
+def test_streaming_canvas_preview_infers_heading_title_for_generic_drafts() -> None:
+    source = _load_app_js_source()
+    infer_match = re.search(
+        r"function inferStreamingCanvasPreviewTitleFromContent\(content\) \{(?P<body>.*?)\n\}",
+        source,
+        re.S,
+    )
+    assert infer_match, "inferStreamingCanvasPreviewTitleFromContent was not found in static/app.js"
+    infer_body = infer_match.group("body")
+    assert 'match(/^#\\s+(.+?)\\s*$/m)' in infer_body
+
+    normalize_match = re.search(
+        r"function normalizeStreamingCanvasPreviewDocument\(document\) \{(?P<body>.*?)\n\}",
+        source,
+        re.S,
+    )
+    assert normalize_match, "normalizeStreamingCanvasPreviewDocument was not found in static/app.js"
+    normalize_body = normalize_match.group("body")
+    assert "document?.isStreamingPreview" in normalize_body
+    assert "isGenericStreamingCanvasPreviewTitle(normalized.title)" in normalize_body
+    assert "inferStreamingCanvasPreviewTitleFromContent(normalized.content)" in normalize_body
+
+
+def test_expand_canvas_document_is_not_treated_as_streaming_canvas_preview() -> None:
+    source = AGENT_PY_PATH.read_text(encoding="utf-8")
+    match = re.search(r"CANVAS_STREAM_OPEN_TOOL_NAMES = \{(?P<body>.*?)\n\}", source, re.S)
+    assert match, "CANVAS_STREAM_OPEN_TOOL_NAMES was not found in agent.py"
+    body = match.group("body")
+    assert '"expand_canvas_document"' not in body
 
 
 def test_update_streaming_canvas_preview_element_uses_text_content_fast_paths() -> None:

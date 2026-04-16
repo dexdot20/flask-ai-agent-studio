@@ -235,7 +235,6 @@ CANVAS_ALL_READ_TOOL_NAMES = set(CANVAS_READ_BARRIER_TOOL_NAMES)
 CANVAS_STREAM_OPEN_TOOL_NAMES = {
     "create_canvas_document",
     "rewrite_canvas_document",
-    "expand_canvas_document",
     "batch_canvas_edits",
     "transform_canvas_lines",
     "replace_canvas_lines",

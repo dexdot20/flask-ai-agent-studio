@@ -43,6 +43,7 @@ proxies.txt
 Thumbs.db
 
 # Other
-AGENTS.MD
+AGENTS.md
 sample/
 backup/
+memory/

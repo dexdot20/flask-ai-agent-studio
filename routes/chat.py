@@ -6011,7 +6011,7 @@ def register_chat_routes(app) -> None:
     def generate_title(conv_id):
         with get_db() as conn:
             conversation = conn.execute(
-                "SELECT title FROM conversations WHERE id = ?",
+                "SELECT title, model FROM conversations WHERE id = ?",
                 (conv_id,),
             ).fetchone()
             if not conversation:
@@ -6061,11 +6061,11 @@ def register_chat_routes(app) -> None:
         source_text = " ".join(str(message["content"] or "") for message in title_source_messages)
         try:
             settings = get_app_settings()
-            title_model = get_operation_model(
-                "generate_title",
-                settings,
-                fallback_model_id=get_default_chat_model_id(settings),
+            conversation_model = normalize_model_id(
+                conversation["model"] if conversation else "",
+                default=get_default_chat_model_id(settings),
             )
+            title_model = conversation_model if is_valid_model_id(conversation_model) else get_default_chat_model_id(settings)
             result = collect_agent_response(
                 prompt,
                 title_model,

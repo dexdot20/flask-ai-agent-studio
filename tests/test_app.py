@@ -6997,6 +6997,11 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn('id="summary-detail-level-select"', html)
         self.assertIn('id="sub-agent-model-preference-select"', html)
         self.assertIn('id="sub-agent-model-fallback-list"', html)
+        self.assertNotIn('id="prune-model-preference-select"', html)
+        self.assertNotIn('id="title-model-preference-select"', html)
+        self.assertNotIn('id="prune-model-fallback-list"', html)
+        self.assertNotIn('id="title-model-fallback-list"', html)
+        self.assertIn("entropy/RAG-aware scoring instead of task-specific model routing", html)
         self.assertNotIn('id="sub-agent-include-conversation-context-toggle"', html)
         self.assertNotIn('id="sub-agent-include-canvas-context-toggle"', html)
         self.assertIn('id="sub-agent-max-steps-input"', html)
@@ -19784,6 +19789,49 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         # Must use exactly 1 step and zero tools — prevents multi-turn tool calls
         self.assertEqual(max_steps, 1)
         self.assertEqual(enabled_tool_names, [])
+
+    def test_generate_title_uses_conversation_model_instead_of_title_preference(self):
+        conversation_id = self._create_conversation(title="Untitled")
+        save_app_settings(
+            {
+                "operation_model_preferences": json.dumps(
+                    {
+                        "summarize": "",
+                        "fetch_summarize": "",
+                        "prune": "deepseek-reasoner",
+                        "fix_text": "",
+                        "generate_title": "deepseek-reasoner",
+                        "upload_metadata": "",
+                        "sub_agent": "",
+                    }
+                )
+            }
+        )
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE conversations SET model = ? WHERE id = ?",
+                ("deepseek-chat", conversation_id),
+            )
+            conn.execute(
+                "INSERT INTO messages (conversation_id, role, content, metadata) VALUES (?, 'user', ?, ?)",
+                (conversation_id, "Need a short title", None),
+            )
+
+        fake_result = {
+            "content": "Short Title",
+            "reasoning_content": "",
+            "usage": None,
+            "tool_results": [],
+            "errors": [],
+        }
+        with patch("routes.chat.collect_agent_response", return_value=fake_result) as mocked_collect:
+            response = self.client.post(f"/api/conversations/{conversation_id}/generate-title")
+
+        self.assertEqual(response.status_code, 200)
+        mocked_collect.assert_called_once()
+        args, _kwargs = mocked_collect.call_args
+        _prompt_messages, model_id, _max_steps, _enabled_tool_names = args
+        self.assertEqual(model_id, "deepseek-chat")
 
     def test_get_unsummarized_visible_messages_skip_first_and_last(self):
         from db import get_unsummarized_visible_messages

@@ -450,23 +450,9 @@
                 <section class="settings-subsection settings-subsection--compact">
                   <div class="settings-subsection__header">
                     <span class="settings-subsection__eyebrow">Preferred model</span>
-                    <h4 class="settings-subsection__title">Pruning</h4>
-                  </div>
-                  <select id="prune-model-preference-select"></select>
-                </section>
-                <section class="settings-subsection settings-subsection--compact">
-                  <div class="settings-subsection__header">
-                    <span class="settings-subsection__eyebrow">Preferred model</span>
                     <h4 class="settings-subsection__title">Fix text</h4>
                   </div>
                   <select id="fix-text-model-preference-select"></select>
-                </section>
-                <section class="settings-subsection settings-subsection--compact">
-                  <div class="settings-subsection__header">
-                    <span class="settings-subsection__eyebrow">Preferred model</span>
-                    <h4 class="settings-subsection__title">Conversation titles</h4>
-                  </div>
-                  <select id="title-model-preference-select"></select>
                 </section>
                 <section class="settings-subsection settings-subsection--compact">
                   <div class="settings-subsection__header">
@@ -525,31 +511,11 @@
                     <section class="settings-subsection settings-subsection--compact">
                       <div class="settings-subsection__header">
                         <span class="settings-subsection__eyebrow">Fallback order</span>
-                        <h4 class="settings-subsection__title">Pruning</h4>
-                      </div>
-                      <div id="prune-model-fallback-list" class="model-management-list"></div>
-                      <div class="settings-inline-actions">
-                        <button class="btn-ghost" id="prune-model-fallback-add-btn" type="button">Add fallback model</button>
-                      </div>
-                    </section>
-                    <section class="settings-subsection settings-subsection--compact">
-                      <div class="settings-subsection__header">
-                        <span class="settings-subsection__eyebrow">Fallback order</span>
                         <h4 class="settings-subsection__title">Fix text</h4>
                       </div>
                       <div id="fix-text-model-fallback-list" class="model-management-list"></div>
                       <div class="settings-inline-actions">
                         <button class="btn-ghost" id="fix-text-model-fallback-add-btn" type="button">Add fallback model</button>
-                      </div>
-                    </section>
-                    <section class="settings-subsection settings-subsection--compact">
-                      <div class="settings-subsection__header">
-                        <span class="settings-subsection__eyebrow">Fallback order</span>
-                        <h4 class="settings-subsection__title">Conversation titles</h4>
-                      </div>
-                      <div id="title-model-fallback-list" class="model-management-list"></div>
-                      <div class="settings-inline-actions">
-                        <button class="btn-ghost" id="title-model-fallback-add-btn" type="button">Add fallback model</button>
                       </div>
                     </section>
                     <section class="settings-subsection settings-subsection--compact">
@@ -1013,11 +979,11 @@
                     <span class="settings-section-kicker">Message refinement</span>
                     <h3>Pruning mode</h3>
                   </div>
-                  <p>Shorten older visible history when the conversation gets noisy, while keeping the underlying meaning intact.</p>
+                  <p>Shorten older visible history when the conversation gets noisy, using heuristic scoring instead of a separate helper model.</p>
                 </div>
                 <div class="settings-toggle-panel">
                   <label class="tool-toggle"><input type="checkbox" id="pruning-enabled-toggle" /> <span>Enable automatic pruning after the visible token threshold is exceeded</span></label>
-                  <p class="settings-copy">Manual pruning stays available from message actions even if automatic pruning is turned off.</p>
+                  <p class="settings-copy">Manual pruning stays available from message actions even if automatic pruning is turned off. Automatic pruning now follows token budgets plus entropy/RAG-aware scoring instead of task-specific model routing.</p>
                 </div>
                 <fieldset id="pruning-controls-fieldset" class="settings-conditional-group settings-subsection-grid settings-subsection-grid--two">
                   <section class="settings-subsection">

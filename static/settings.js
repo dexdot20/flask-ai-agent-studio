@@ -174,25 +174,19 @@ const customModelListEl = document.getElementById("custom-model-list");
 const chatModelVisibilityListEl = document.getElementById("chat-model-visibility-list");
 const summaryModelPreferenceEl = document.getElementById("summary-model-preference-select");
 const fetchSummarizeModelPreferenceEl = document.getElementById("fetch-summarize-model-preference-select");
-const pruneModelPreferenceEl = document.getElementById("prune-model-preference-select");
 const fixTextModelPreferenceEl = document.getElementById("fix-text-model-preference-select");
-const titleModelPreferenceEl = document.getElementById("title-model-preference-select");
 const uploadMetadataModelPreferenceEl = document.getElementById("upload-metadata-model-preference-select");
 const subAgentModelPreferenceEl = document.getElementById("sub-agent-model-preference-select");
 const chatSummaryModelEl = document.getElementById("chat-summary-model-select");
 const imageHelperModelEl = document.getElementById("image-helper-model-select");
 const summaryModelFallbackListEl = document.getElementById("summary-model-fallback-list");
 const fetchSummarizeModelFallbackListEl = document.getElementById("fetch-summarize-model-fallback-list");
-const pruneModelFallbackListEl = document.getElementById("prune-model-fallback-list");
 const fixTextModelFallbackListEl = document.getElementById("fix-text-model-fallback-list");
-const titleModelFallbackListEl = document.getElementById("title-model-fallback-list");
 const uploadMetadataModelFallbackListEl = document.getElementById("upload-metadata-model-fallback-list");
 const subAgentModelFallbackListEl = document.getElementById("sub-agent-model-fallback-list");
 const summaryModelFallbackAddBtn = document.getElementById("summary-model-fallback-add-btn");
 const fetchSummarizeModelFallbackAddBtn = document.getElementById("fetch-summarize-model-fallback-add-btn");
-const pruneModelFallbackAddBtn = document.getElementById("prune-model-fallback-add-btn");
 const fixTextModelFallbackAddBtn = document.getElementById("fix-text-model-fallback-add-btn");
-const titleModelFallbackAddBtn = document.getElementById("title-model-fallback-add-btn");
 const uploadMetadataModelFallbackAddBtn = document.getElementById("upload-metadata-model-fallback-add-btn");
 const subAgentModelFallbackAddBtn = document.getElementById("sub-agent-model-fallback-add-btn");
 const imageProcessingMethodEl = document.getElementById("image-processing-method-select");
@@ -405,7 +399,7 @@ let fallbackRowSequence = 0;
 let customModelClientUidSequence = 0;
 let editingCustomModelClientUid = null;
 
-const OPERATION_MODEL_KEYS = ["summarize", "fetch_summarize", "prune", "fix_text", "generate_title", "upload_metadata", "sub_agent"];
+const OPERATION_MODEL_KEYS = ["summarize", "fetch_summarize", "fix_text", "upload_metadata", "sub_agent"];
 const OPERATION_FALLBACK_CONTROL_MAP = {
   summarize: {
     listEl: summaryModelFallbackListEl,
@@ -415,17 +409,9 @@ const OPERATION_FALLBACK_CONTROL_MAP = {
     listEl: fetchSummarizeModelFallbackListEl,
     addBtn: fetchSummarizeModelFallbackAddBtn,
   },
-  prune: {
-    listEl: pruneModelFallbackListEl,
-    addBtn: pruneModelFallbackAddBtn,
-  },
   fix_text: {
     listEl: fixTextModelFallbackListEl,
     addBtn: fixTextModelFallbackAddBtn,
-  },
-  generate_title: {
-    listEl: titleModelFallbackListEl,
-    addBtn: titleModelFallbackAddBtn,
   },
   upload_metadata: {
     listEl: uploadMetadataModelFallbackListEl,
@@ -1723,9 +1709,7 @@ function getOperationPreferenceValue(key) {
   const elementMap = {
     summarize: summaryModelPreferenceEl,
     fetch_summarize: fetchSummarizeModelPreferenceEl,
-    prune: pruneModelPreferenceEl,
     fix_text: fixTextModelPreferenceEl,
-    generate_title: titleModelPreferenceEl,
     upload_metadata: uploadMetadataModelPreferenceEl,
     sub_agent: subAgentModelPreferenceEl,
   };
@@ -1737,9 +1721,7 @@ function getOperationModelPreferencesDraft() {
   return {
     summarize: getOperationPreferenceValue("summarize"),
     fetch_summarize: getOperationPreferenceValue("fetch_summarize"),
-    prune: getOperationPreferenceValue("prune"),
     fix_text: getOperationPreferenceValue("fix_text"),
-    generate_title: getOperationPreferenceValue("generate_title"),
     upload_metadata: getOperationPreferenceValue("upload_metadata"),
     sub_agent: getOperationPreferenceValue("sub_agent"),
   };
@@ -2236,18 +2218,14 @@ function renderOperationModelSelects(preferences = null) {
     ? {
         summarize: String(preferences.summarize || ""),
         fetch_summarize: String(preferences.fetch_summarize || ""),
-        prune: String(preferences.prune || ""),
         fix_text: String(preferences.fix_text || ""),
-        generate_title: String(preferences.generate_title || ""),
         upload_metadata: String(preferences.upload_metadata || ""),
         sub_agent: String(preferences.sub_agent || ""),
       }
     : getOperationModelPreferencesDraft();
   populateOperationModelSelect(summaryModelPreferenceEl, currentSelections.summarize);
   populateOperationModelSelect(fetchSummarizeModelPreferenceEl, currentSelections.fetch_summarize);
-  populateOperationModelSelect(pruneModelPreferenceEl, currentSelections.prune);
   populateOperationModelSelect(fixTextModelPreferenceEl, currentSelections.fix_text);
-  populateOperationModelSelect(titleModelPreferenceEl, currentSelections.generate_title);
   populateOperationModelSelect(uploadMetadataModelPreferenceEl, currentSelections.upload_metadata);
   populateOperationModelSelect(subAgentModelPreferenceEl, currentSelections.sub_agent);
   populateOperationModelSelect(chatSummaryModelEl, currentChatSummaryModel, "Use default chat model");
@@ -3737,9 +3715,7 @@ customModelReasoningModeEl?.addEventListener("change", syncCustomModelReasoningC
 customModelRoutingModeEl?.addEventListener("change", syncCustomModelProviderControls);
 summaryModelFallbackAddBtn?.addEventListener("click", () => addOperationFallbackRow("summarize"));
 fetchSummarizeModelFallbackAddBtn?.addEventListener("click", () => addOperationFallbackRow("fetch_summarize"));
-pruneModelFallbackAddBtn?.addEventListener("click", () => addOperationFallbackRow("prune"));
 fixTextModelFallbackAddBtn?.addEventListener("click", () => addOperationFallbackRow("fix_text"));
-titleModelFallbackAddBtn?.addEventListener("click", () => addOperationFallbackRow("generate_title"));
 uploadMetadataModelFallbackAddBtn?.addEventListener("click", () => addOperationFallbackRow("upload_metadata"));
 subAgentModelFallbackAddBtn?.addEventListener("click", () => addOperationFallbackRow("sub_agent"));
   openrouterHttpRefererEl?.addEventListener("input", markDirty);
