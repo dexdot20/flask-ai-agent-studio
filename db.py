@@ -128,7 +128,7 @@ from config import (
 )
 from proxy_settings import normalize_proxy_enabled_operations
 from tool_registry import TOOL_SPEC_BY_NAME, get_tool_runtime_metadata
-from model_registry import get_all_models
+from model_registry import get_all_models, normalize_chat_parameter_overrides
 from token_utils import estimate_text_tokens
 
 _db_path = DB_PATH
@@ -249,6 +249,7 @@ def init_db() -> None:
                 title_source TEXT  NOT NULL DEFAULT 'system',
                 title_overridden INTEGER NOT NULL DEFAULT 0,
                 tool_overrides TEXT DEFAULT NULL,
+                parameter_overrides TEXT DEFAULT NULL,
                 model      TEXT    NOT NULL DEFAULT 'deepseek-chat',
                 persona_id INTEGER REFERENCES personas(id) ON DELETE SET NULL,
                 created_at TEXT    NOT NULL DEFAULT (datetime('now')),
@@ -477,6 +478,13 @@ def ensure_conversation_tool_overrides_column() -> None:
             conn.execute("ALTER TABLE conversations ADD COLUMN tool_overrides TEXT DEFAULT NULL")
 
 
+def ensure_conversation_parameter_overrides_column() -> None:
+    with get_db() as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(conversations)").fetchall()}
+        if "parameter_overrides" not in columns:
+            conn.execute("ALTER TABLE conversations ADD COLUMN parameter_overrides TEXT DEFAULT NULL")
+
+
 def ensure_messages_tool_history_columns() -> None:
     with get_db() as conn:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
@@ -560,6 +568,7 @@ def initialize_database() -> None:
     init_db()
     ensure_conversation_title_columns()
     ensure_conversation_tool_overrides_column()
+    ensure_conversation_parameter_overrides_column()
     ensure_persona_schema()
     ensure_messages_metadata_column()
     ensure_messages_tool_history_columns()
@@ -5090,6 +5099,25 @@ def get_conversation_active_tool_names(conversation_id: int, settings: dict | No
         return names
 
     return []
+
+
+def get_conversation_parameter_overrides(conversation_id: int) -> dict[str, int | float] | None:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT parameter_overrides FROM conversations WHERE id = ?",
+            (conversation_id,),
+        ).fetchone()
+
+    if not row:
+        return None
+
+    raw_value = row["parameter_overrides"]
+    if raw_value in (None, ""):
+        return None
+    try:
+        return normalize_chat_parameter_overrides(raw_value)
+    except ValueError:
+        return None
 
 
 def get_model_temperature(settings: dict | None = None) -> float:

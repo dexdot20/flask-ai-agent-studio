@@ -138,6 +138,7 @@ from messages import (
 from image_service import answer_image_question
 from model_registry import (
     DEEPSEEK_PROVIDER,
+    apply_chat_parameter_overrides,
     apply_model_target_request_options,
     build_model_target_tool_choice_fallback_request,
     build_openrouter_cache_estimate_context,
@@ -7421,6 +7422,7 @@ def run_agent_stream(
     *,
     buffer_clarification_answers: bool = True,
     temperature: float = 0.7,
+    request_parameter_overrides: dict[str, int | float] | None = None,
     fetch_url_token_threshold: int | None = None,
     fetch_url_clip_aggressiveness: int | None = None,
     initial_canvas_documents: list[dict] | None = None,
@@ -7885,6 +7887,7 @@ def run_agent_stream(
             if turn_tools:
                 request_kwargs["tools"] = turn_tools
                 request_kwargs["tool_choice"] = "auto"
+        request_kwargs = apply_chat_parameter_overrides(request_kwargs, request_parameter_overrides)
         request_kwargs = apply_model_target_request_options(request_kwargs, model_target)
         cache_estimate_context = build_openrouter_cache_estimate_context(
             request_kwargs.get("messages"),

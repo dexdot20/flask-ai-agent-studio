@@ -41,6 +41,9 @@
         <option value="">Default persona</option>
       </select>
     </div>
+    <button class="btn-ghost btn-parameters" id="params-toggle-btn" type="button" aria-controls="params-panel" aria-expanded="false" title="Set parameters for this conversation">
+      Set Parameters
+    </button>
     <button class="btn-ghost mobile-tools-toggle" id="mobile-tools-btn" type="button" aria-controls="mobile-tools-panel" aria-expanded="false" aria-haspopup="menu" aria-label="Open panels and tools" title="Open panels and tools">
       <span aria-hidden="true">⋯</span>
     </button>
@@ -81,6 +84,7 @@
     <button class="mobile-tools-action" id="mobile-export-btn" type="button">Export chat</button>
     <button class="mobile-tools-action" id="mobile-prune-btn" type="button">Prune history</button>
     <button class="mobile-tools-action" id="mobile-conv-tools-btn" type="button">Tool permissions</button>
+    <button class="mobile-tools-action" id="mobile-params-btn" type="button">Set Parameters</button>
     <a class="mobile-tools-action" id="mobile-settings-btn" href="/settings">Settings</a>
     {% if auth_enabled %}
     <form action="/logout" method="post">
@@ -358,6 +362,56 @@
   </div>
 </div>
 <div id="conv-tools-overlay" class="summary-overlay"></div>
+
+<div id="params-panel" class="summary-panel params-panel" aria-hidden="true" aria-labelledby="params-panel-title">
+  <div class="summary-panel__header">
+    <div>
+      <span id="params-panel-title">Set Parameters</span>
+      <p class="summary-panel__subtitle">Adjust safe chat-generation parameters for only this conversation.</p>
+    </div>
+    <button id="params-close" title="Close" type="button">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>
+  </div>
+  <div class="summary-panel__body">
+    <section class="summary-card">
+      <div id="params-status" class="params-status">Open a conversation to configure reply parameters.</div>
+      <p class="summary-support-copy">These settings affect chat replies in this conversation only. Helper operations like pruning, export formatting, and image analysis keep their own fixed settings.</p>
+      <label class="conv-tools-toggle-row">
+        <input type="checkbox" id="params-use-global" />
+        <span>Use global defaults for this conversation</span>
+      </label>
+    </section>
+
+    <section class="summary-card" id="params-form-section" hidden>
+      <div class="params-grid">
+        <label class="summary-field">
+          <span>Temperature</span>
+          <input id="params-temperature-input" class="summary-input" type="number" min="0" max="2" step="0.1" placeholder="Global default" />
+          <small class="params-field-note">Lower is steadier for coding/math; higher is more varied and creative.</small>
+        </label>
+        <label class="summary-field">
+          <span>Top P</span>
+          <input id="params-top-p-input" class="summary-input" type="number" min="0" max="1" step="0.05" placeholder="Provider default" />
+          <small class="params-field-note">Limits sampling to the most likely probability mass. Lower values make outputs more predictable.</small>
+        </label>
+        <label class="summary-field">
+          <span>Max Tokens</span>
+          <input id="params-max-tokens-input" class="summary-input" type="number" min="1" max="131072" step="1" placeholder="Provider default" />
+          <small class="params-field-note">Caps how long the next replies may be. Leave blank to let the provider decide.</small>
+        </label>
+      </div>
+      <p class="summary-support-copy">OpenRouter may ignore unsupported parameters per model/provider. DeepSeek supports temperature well; the shared fields here stay on the safest common path.</p>
+    </section>
+  </div>
+  <div class="summary-panel__actions">
+    <button class="btn-ghost" id="params-reset-btn" type="button">Reset fields</button>
+    <button class="btn-primary" id="params-save-btn" type="button">Save Parameters</button>
+  </div>
+</div>
+<div id="params-overlay" class="summary-overlay"></div>
 
 <div id="export-panel" class="export-panel" aria-hidden="true" aria-labelledby="export-panel-title">
   <div class="export-panel-header">

@@ -90,6 +90,7 @@ const modelSel = document.getElementById("model-select");
 const mobileModelSel = document.getElementById("mobile-model-select");
 const personaSel = document.getElementById("persona-select");
 const mobilePersonaSel = document.getElementById("mobile-persona-select");
+const paramsToggleBtn = document.getElementById("params-toggle-btn");
 const emptyState = document.getElementById("empty-state");
 const errorArea = document.getElementById("error-area");
 const editBanner = document.getElementById("edit-banner");
@@ -180,6 +181,7 @@ const mobileMemoryBtn = document.getElementById("mobile-memory-btn");
 const mobileExportBtn = document.getElementById("mobile-export-btn");
 const mobilePruneBtn = document.getElementById("mobile-prune-btn");
 const mobileConvToolsBtn = document.getElementById("mobile-conv-tools-btn");
+const mobileParamsBtn = document.getElementById("mobile-params-btn");
 const mobileSettingsBtn = document.getElementById("mobile-settings-btn");
 const mobileLogoutBtn = document.getElementById("mobile-logout-btn");
 const mobileTokensBtn = document.getElementById("mobile-tokens-btn");
@@ -208,6 +210,17 @@ const memoryNewValueEl = document.getElementById("memory-new-value");
 const convToolsPanel = document.getElementById("conv-tools-panel");
 const convToolsOverlay = document.getElementById("conv-tools-overlay");
 const convToolsClose = document.getElementById("conv-tools-close");
+const paramsPanel = document.getElementById("params-panel");
+const paramsOverlay = document.getElementById("params-overlay");
+const paramsClose = document.getElementById("params-close");
+const paramsStatusEl = document.getElementById("params-status");
+const paramsUseGlobalToggle = document.getElementById("params-use-global");
+const paramsFormSection = document.getElementById("params-form-section");
+const paramsTemperatureInput = document.getElementById("params-temperature-input");
+const paramsTopPInput = document.getElementById("params-top-p-input");
+const paramsMaxTokensInput = document.getElementById("params-max-tokens-input");
+const paramsResetBtn = document.getElementById("params-reset-btn");
+const paramsSaveBtn = document.getElementById("params-save-btn");
 const summaryFocusPresetGrid = document.getElementById("summary-focus-presets");
 const summaryFocusInput = document.getElementById("summary-focus-input");
 const summaryDetailSelect = document.getElementById("summary-detail-select");
@@ -696,6 +709,7 @@ function openPrunePanel(triggerEl = null) {
   closeStats();
   closeCanvas();
   closeExportPanel();
+  closeParamsPanel({ restoreFocus: false });
   closeSummaryPanel({ restoreFocus: false });
   closeMemoryPanel();
   prunePanel?.classList.add("open");
@@ -985,6 +999,7 @@ let currentConversationTitleOverridden = false;
 let conversationMemoryEntries = [];
 let conversationMemoryEnabled = false;
 let currentConversationToolOverrides = null;
+let currentConversationParameterOverrides = null;
 let activeAbortController = null;
 let activeChatRunId = null;
 let activeUserCancelRequested = false;
@@ -1018,6 +1033,7 @@ let lastExportTriggerEl = null;
 let lastSummaryTriggerEl = null;
 let lastPruneTriggerEl = null;
 let lastMemoryTriggerEl = null;
+let lastParamsTriggerEl = null;
 let streamingCanvasPreviews = new Map();
 let pendingCanvasPreviewTimer = 0;
 let pendingCanvasEditorPreviewTimer = 0;
@@ -1353,6 +1369,240 @@ function applyConversationToolOverridesState(data) {
   currentConversationToolOverrides = Array.isArray(data?.conversation?.tool_overrides) ? data.conversation.tool_overrides : null;
 }
 
+function normalizeConversationParameterOverrides(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const normalized = {};
+  if (value.temperature !== undefined && value.temperature !== null && value.temperature !== "") {
+    const parsed = Number(value.temperature);
+    if (Number.isFinite(parsed)) {
+      normalized.temperature = parsed;
+    }
+  }
+  if (value.top_p !== undefined && value.top_p !== null && value.top_p !== "") {
+    const parsed = Number(value.top_p);
+    if (Number.isFinite(parsed)) {
+      normalized.top_p = parsed;
+    }
+  }
+  if (value.max_tokens !== undefined && value.max_tokens !== null && value.max_tokens !== "") {
+    const parsed = Number(value.max_tokens);
+    if (Number.isInteger(parsed) && parsed > 0) {
+      normalized.max_tokens = parsed;
+    }
+  }
+  return Object.keys(normalized).length ? normalized : null;
+}
+
+function applyConversationParameterOverridesState(data) {
+  currentConversationParameterOverrides = normalizeConversationParameterOverrides(data?.conversation?.parameter_overrides);
+}
+
+function getConversationParameterOverridesFromResponse(data) {
+  if (!data || typeof data !== "object") {
+    return undefined;
+  }
+  if (data.conversation && typeof data.conversation === "object" && Object.prototype.hasOwnProperty.call(data.conversation, "parameter_overrides")) {
+    return data.conversation.parameter_overrides;
+  }
+  if (Object.prototype.hasOwnProperty.call(data, "parameter_overrides")) {
+    return data.parameter_overrides;
+  }
+  return undefined;
+}
+
+function getDefaultConversationParameterDraft() {
+  return {
+    temperature: appSettings?.temperature ?? "",
+    top_p: "",
+    max_tokens: "",
+  };
+}
+
+function setParameterPanelStatus(message, tone = "muted") {
+  if (!paramsStatusEl) {
+    return;
+  }
+  paramsStatusEl.textContent = String(message || "").trim() || "Open a conversation to configure reply parameters.";
+  paramsStatusEl.dataset.tone = tone;
+}
+
+function setConversationParameterFormValues(overrides = null) {
+  const source = overrides && typeof overrides === "object"
+    ? overrides
+    : getDefaultConversationParameterDraft();
+  if (paramsTemperatureInput) {
+    paramsTemperatureInput.value = source.temperature ?? "";
+  }
+  if (paramsTopPInput) {
+    paramsTopPInput.value = source.top_p ?? "";
+  }
+  if (paramsMaxTokensInput) {
+    paramsMaxTokensInput.value = source.max_tokens ?? "";
+  }
+}
+
+function setConversationParameterControlsDisabled(disabled) {
+  [
+    paramsUseGlobalToggle,
+    paramsTemperatureInput,
+    paramsTopPInput,
+    paramsMaxTokensInput,
+    paramsResetBtn,
+    paramsSaveBtn,
+  ].forEach((element) => {
+    if (element) {
+      element.disabled = Boolean(disabled);
+    }
+  });
+}
+
+function isParamsPanelOpen() {
+  return Boolean(paramsPanel?.classList.contains("open"));
+}
+
+function syncParamsToggleButton() {
+  paramsToggleBtn?.setAttribute("aria-expanded", String(isParamsPanelOpen()));
+  mobileParamsBtn?.classList.toggle("active", isParamsPanelOpen());
+}
+
+function renderParamsPanel() {
+  if (!paramsPanel || !paramsUseGlobalToggle || !paramsFormSection) {
+    return;
+  }
+
+  const hasConversation = Boolean(currentConvId);
+  const usingGlobalDefaults = currentConversationParameterOverrides === null;
+  paramsUseGlobalToggle.checked = usingGlobalDefaults;
+
+  if (!hasConversation) {
+    setParameterPanelStatus("Open a conversation to configure reply parameters.", "muted");
+    paramsFormSection.hidden = true;
+    setConversationParameterFormValues(null);
+    setConversationParameterControlsDisabled(true);
+    return;
+  }
+
+  setConversationParameterControlsDisabled(false);
+  if (usingGlobalDefaults) {
+    setParameterPanelStatus("This conversation currently uses global defaults.", "muted");
+    paramsFormSection.hidden = true;
+    setConversationParameterFormValues(currentConversationParameterOverrides);
+  } else {
+    const overrideLabels = [];
+    if (currentConversationParameterOverrides?.temperature !== undefined) {
+      overrideLabels.push(`temperature ${currentConversationParameterOverrides.temperature}`);
+    }
+    if (currentConversationParameterOverrides?.top_p !== undefined) {
+      overrideLabels.push(`top_p ${currentConversationParameterOverrides.top_p}`);
+    }
+    if (currentConversationParameterOverrides?.max_tokens !== undefined) {
+      overrideLabels.push(`max_tokens ${currentConversationParameterOverrides.max_tokens}`);
+    }
+    setParameterPanelStatus(
+      overrideLabels.length
+        ? `Saved overrides: ${overrideLabels.join(" • ")}`
+        : "Custom parameters are enabled for this conversation.",
+      "success"
+    );
+    paramsFormSection.hidden = false;
+    setConversationParameterFormValues(currentConversationParameterOverrides);
+  }
+}
+
+function openParamsPanel(triggerEl = null) {
+  closeMobileTools();
+  closeStats();
+  closeCanvas();
+  closeExportPanel();
+  closeSummaryPanel({ restoreFocus: false });
+  closePrunePanel({ restoreFocus: false });
+  closeMemoryPanel({ restoreFocus: false });
+  closeConvToolsPanel({ restoreFocus: false });
+  paramsPanel?.classList.add("open");
+  paramsOverlay?.classList.add("open");
+  paramsPanel?.setAttribute("aria-hidden", "false");
+  lastParamsTriggerEl = triggerEl instanceof HTMLElement
+    ? triggerEl
+    : (document.activeElement instanceof HTMLElement ? document.activeElement : paramsToggleBtn);
+  syncParamsToggleButton();
+  renderParamsPanel();
+  window.setTimeout(() => {
+    if (!paramsUseGlobalToggle?.checked && paramsTemperatureInput && !paramsTemperatureInput.disabled) {
+      paramsTemperatureInput.focus({ preventScroll: true });
+      paramsTemperatureInput.select();
+    } else {
+      paramsClose?.focus();
+    }
+  }, 0);
+}
+
+function closeParamsPanel({ restoreFocus = true } = {}) {
+  paramsPanel?.classList.remove("open");
+  paramsOverlay?.classList.remove("open");
+  paramsPanel?.setAttribute("aria-hidden", "true");
+  syncParamsToggleButton();
+  if (restoreFocus && lastParamsTriggerEl && typeof lastParamsTriggerEl.focus === "function") {
+    lastParamsTriggerEl.focus();
+  }
+}
+
+function resetConversationParameterDraft() {
+  if (paramsUseGlobalToggle?.checked) {
+    setConversationParameterFormValues(null);
+    return;
+  }
+  setConversationParameterFormValues(currentConversationParameterOverrides);
+}
+
+function collectConversationParameterOverridesFromForm() {
+  const draft = {};
+  if (paramsTemperatureInput && String(paramsTemperatureInput.value || "").trim()) {
+    draft.temperature = Number(paramsTemperatureInput.value);
+  }
+  if (paramsTopPInput && String(paramsTopPInput.value || "").trim()) {
+    draft.top_p = Number(paramsTopPInput.value);
+  }
+  if (paramsMaxTokensInput && String(paramsMaxTokensInput.value || "").trim()) {
+    draft.max_tokens = Number(paramsMaxTokensInput.value);
+  }
+  return normalizeConversationParameterOverrides(draft);
+}
+
+async function persistConversationParameterOverrides() {
+  if (!currentConvId) {
+    showToast("Open a conversation first to set parameters.", "warning");
+    return;
+  }
+
+  const parameterOverrides = paramsUseGlobalToggle?.checked ? null : collectConversationParameterOverridesFromForm();
+  setConversationParameterControlsDisabled(true);
+  try {
+    const response = await fetch(`/api/conversations/${currentConvId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ parameter_overrides: parameterOverrides }),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(data?.error || "Could not save conversation parameters.");
+    }
+    const responseParameterOverrides = getConversationParameterOverridesFromResponse(data);
+    currentConversationParameterOverrides = normalizeConversationParameterOverrides(responseParameterOverrides);
+    renderParamsPanel();
+    showToast(
+      currentConversationParameterOverrides
+        ? "Conversation parameters saved."
+        : "Conversation parameters reset to global defaults.",
+      "success"
+    );
+  } catch (error) {
+    renderParamsPanel();
+    showError(error.message || "Could not save conversation parameters.");
+  }
+}
+
 function isConvToolsPanelOpen() {
   return Boolean(convToolsPanel?.classList.contains("open"));
 }
@@ -1362,6 +1612,7 @@ function openConvToolsPanel(triggerEl = null) {
   closeStats();
   closeCanvas();
   closeExportPanel();
+  closeParamsPanel({ restoreFocus: false });
   closeSummaryPanel();
   closePrunePanel({ restoreFocus: false });
   closeMemoryPanel();
@@ -1477,6 +1728,7 @@ function openMemoryPanel(triggerEl = null) {
   closeStats();
   closeCanvas();
   closeExportPanel();
+  closeParamsPanel({ restoreFocus: false });
   closeSummaryPanel();
   closePrunePanel({ restoreFocus: false });
   memoryPanel?.classList.add("open");
@@ -1641,6 +1893,7 @@ async function createConversationMemoryEntry() {
 }
 
 renderConversationMemoryTypeOptions();
+renderParamsPanel();
 const DEFAULT_CANVAS_CONFIRM_LABEL = "Open Canvas";
 const DEFAULT_CANVAS_CONFIRM_CANCEL_LABEL = "Later";
 let activeSidebarRename = null;
@@ -6292,6 +6545,7 @@ function renderCanvasPanel() {
 
 function openCanvas(triggerEl = null, options = {}) {
   const shouldFocusPanel = options.focusPanel !== false;
+  closeParamsPanel({ restoreFocus: false });
   closeMemoryPanel();
   closeSummaryPanel();
   closePrunePanel({ restoreFocus: false });
@@ -6454,6 +6708,7 @@ function openExportPanel(triggerEl = null) {
   closeMobileTools();
   closeStats();
   closeCanvas();
+  closeParamsPanel({ restoreFocus: false });
   closeSummaryPanel();
   closePrunePanel({ restoreFocus: false });
   closeMemoryPanel();
@@ -6732,6 +6987,7 @@ function openSummaryPanel(triggerEl = null) {
   closeStats();
   closeCanvas();
   closeExportPanel();
+  closeParamsPanel({ restoreFocus: false });
   closePrunePanel({ restoreFocus: false });
   closeMemoryPanel();
   summaryPanel?.classList.add("open");
@@ -10249,6 +10505,7 @@ function openStats() {
   closeMobileTools();
   closeCanvas();
   closeExportPanel();
+  closeParamsPanel({ restoreFocus: false });
   closeSummaryPanel();
   closePrunePanel({ restoreFocus: false });
   closeMemoryPanel();
@@ -10265,6 +10522,7 @@ function openMobileTools() {
   closeStats();
   closeCanvas();
   closeExportPanel();
+  closeParamsPanel({ restoreFocus: false });
   closeSummaryPanel();
   closePrunePanel({ restoreFocus: false });
   closeMemoryPanel();
@@ -10689,6 +10947,38 @@ if (mobileConvToolsBtn) {
     }
   });
 }
+if (paramsToggleBtn) {
+  paramsToggleBtn.addEventListener("click", () => {
+    if (!currentConvId) {
+      showToast("Open a conversation first to set parameters.", "warning");
+      return;
+    }
+    if (isParamsPanelOpen()) {
+      closeParamsPanel();
+    } else {
+      openParamsPanel(paramsToggleBtn);
+    }
+  });
+}
+if (mobileParamsBtn) {
+  mobileParamsBtn.addEventListener("click", () => {
+    if (!currentConvId) {
+      showToast("Open a conversation first to set parameters.", "warning");
+      return;
+    }
+    if (isParamsPanelOpen()) {
+      closeParamsPanel();
+    } else {
+      openParamsPanel(mobileToolsBtn || mobileParamsBtn);
+    }
+  });
+}
+if (paramsClose) {
+  paramsClose.addEventListener("click", () => closeParamsPanel());
+}
+if (paramsOverlay) {
+  paramsOverlay.addEventListener("click", () => closeParamsPanel());
+}
 if (convToolsClose) {
   convToolsClose.addEventListener("click", () => closeConvToolsPanel());
 }
@@ -10703,6 +10993,30 @@ if (convToolsUseGlobalToggle) {
       toolsSection.style.display = convToolsUseGlobalToggle.checked ? "none" : "";
     }
     persistConversationToolOverrides();
+  });
+}
+if (paramsUseGlobalToggle) {
+  paramsUseGlobalToggle.addEventListener("change", () => {
+    if (paramsFormSection) {
+      paramsFormSection.hidden = paramsUseGlobalToggle.checked;
+    }
+    if (paramsUseGlobalToggle.checked) {
+      setConversationParameterFormValues(null);
+      setParameterPanelStatus("This conversation currently uses global defaults.", "muted");
+    } else {
+      setConversationParameterFormValues(currentConversationParameterOverrides);
+      setParameterPanelStatus("Edit the fields below, then save to apply to this conversation.", "muted");
+    }
+  });
+}
+if (paramsResetBtn) {
+  paramsResetBtn.addEventListener("click", () => {
+    resetConversationParameterDraft();
+  });
+}
+if (paramsSaveBtn) {
+  paramsSaveBtn.addEventListener("click", () => {
+    void persistConversationParameterOverrides();
   });
 }
 if (exportClose) {
@@ -11425,12 +11739,14 @@ async function openConversation(id) {
   history = Array.isArray(data.messages) ? data.messages.map(normalizeHistoryEntry) : [];
   applyConversationMemoryState(data);
   applyConversationToolOverridesState(data);
+  applyConversationParameterOverridesState(data);
   streamingCanvasDocuments = [];
   resetStreamingCanvasPreview();
   activeCanvasDocumentId = getActiveCanvasDocument(history)?.id || null;
   lastConversationSignature = getConversationSignature(history);
   renderConversationHistory();
   renderCanvasPanel();
+  renderParamsPanel();
   updateExportPanel();
   rebuildTokenStatsFromHistory();
   if (isPrunePanelOpen()) {
@@ -11473,6 +11789,7 @@ function startNewChat() {
   conversationMemoryEntries = [];
   conversationMemoryEnabled = featureFlags.conversation_memory_enabled !== false;
   currentConversationToolOverrides = null;
+  currentConversationParameterOverrides = null;
   latestSummaryStatus = null;
   selectedSummaryMessageIds = new Set();
   selectedPruneMessageIds = new Set();
@@ -11494,6 +11811,7 @@ function startNewChat() {
   renderConversationHistory();
   renderCanvasPanel();
   renderConversationMemoryPanel();
+  renderParamsPanel();
   updateExportPanel();
   const preferredModelId = resolvePreferredModelSelection(modelSel ? modelSel.value : "");
   if (preferredModelId) {

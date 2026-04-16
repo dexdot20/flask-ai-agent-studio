@@ -45,6 +45,33 @@ MODEL_OPERATION_KEYS = (
 DEFAULT_OPERATION_MODEL_PREFERENCES = {key: "" for key in MODEL_OPERATION_KEYS}
 DEFAULT_OPERATION_MODEL_FALLBACK_PREFERENCES = {key: [] for key in MODEL_OPERATION_KEYS}
 _EMPTY_PRICING = {"input": 0.0, "input_cache_hit": 0.0, "input_cache_write": 0.0, "output": 0.0}
+CHAT_PARAMETER_OVERRIDE_SPECS = {
+    "temperature": {
+        "type": "float",
+        "min": 0.0,
+        "max": 2.0,
+        "label": "Temperature",
+        "description": "Controls creativity. Lower values are steadier, higher values are more varied.",
+        "default": 1.0,
+    },
+    "top_p": {
+        "type": "float",
+        "min": 0.0,
+        "max": 1.0,
+        "label": "Top P",
+        "description": "Limits sampling to the most likely probability mass.",
+        "default": 1.0,
+    },
+    "max_tokens": {
+        "type": "int",
+        "min": 1,
+        "max": 131_072,
+        "label": "Max Tokens",
+        "description": "Upper bound for how many tokens the next reply may generate.",
+        "default": None,
+    },
+}
+CHAT_PARAMETER_OVERRIDE_KEYS = tuple(CHAT_PARAMETER_OVERRIDE_SPECS.keys())
 _OPENROUTER_PROVIDER_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9._/-]{0,199}$")
 _OPENROUTER_GEMINI_CACHE_BREAKPOINT_MIN_TOKENS_DEFAULT = 1028
 _OPENROUTER_GEMINI_CACHE_BREAKPOINT_MIN_TOKENS_PRO = 2048
@@ -265,6 +292,70 @@ def _copy_model_record(record: dict[str, Any]) -> dict[str, Any]:
     if isinstance(pricing, dict):
         copied["pricing"] = dict(pricing)
     return copied
+
+
+def normalize_chat_parameter_overrides(raw_value: Any) -> dict[str, Any] | None:
+    if raw_value in (None, ""):
+        return None
+    if isinstance(raw_value, str):
+        try:
+            parsed = json.loads(raw_value)
+        except Exception as exc:
+            raise ValueError("parameter_overrides must be a JSON object.") from exc
+    else:
+        parsed = raw_value
+    if parsed in (None, {}):
+        return None
+    if not isinstance(parsed, dict):
+        raise ValueError("parameter_overrides must be an object or null.")
+
+    normalized: dict[str, Any] = {}
+    unknown_keys = [key for key in parsed.keys() if key not in CHAT_PARAMETER_OVERRIDE_SPECS]
+    if unknown_keys:
+        unknown_key_list = ", ".join(sorted(str(key) for key in unknown_keys)[:8])
+        raise ValueError(f"Unsupported parameter override keys: {unknown_key_list}.")
+
+    for key, spec in CHAT_PARAMETER_OVERRIDE_SPECS.items():
+        if key not in parsed:
+            continue
+        raw_entry = parsed.get(key)
+        if raw_entry in (None, ""):
+            continue
+        if spec.get("type") == "int":
+            try:
+                value = int(raw_entry)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{key} must be an integer.") from exc
+        else:
+            try:
+                value = float(raw_entry)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{key} must be a number.") from exc
+        minimum = spec.get("min")
+        maximum = spec.get("max")
+        if minimum is not None and value < minimum:
+            raise ValueError(f"{key} must be >= {minimum}.")
+        if maximum is not None and value > maximum:
+            raise ValueError(f"{key} must be <= {maximum}.")
+        normalized[key] = value
+
+    return normalized or None
+
+
+def apply_chat_parameter_overrides(
+    request_kwargs: dict[str, Any],
+    overrides: dict[str, Any] | None,
+) -> dict[str, Any]:
+    merged_request_kwargs = dict(request_kwargs)
+    normalized_overrides = normalize_chat_parameter_overrides(overrides)
+    if not normalized_overrides:
+        return merged_request_kwargs
+
+    for key in CHAT_PARAMETER_OVERRIDE_KEYS:
+        if key not in normalized_overrides:
+            continue
+        merged_request_kwargs[key] = normalized_overrides[key]
+    return merged_request_kwargs
 
 
 def _coerce_bool(value: Any) -> bool:

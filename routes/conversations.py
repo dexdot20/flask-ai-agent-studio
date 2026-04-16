@@ -87,6 +87,7 @@ from model_registry import (
     apply_model_target_request_options,
     can_model_use_structured_outputs,
     get_default_chat_model_id,
+    normalize_chat_parameter_overrides,
     get_model_label,
     get_operation_model,
     get_provider_client,
@@ -109,6 +110,15 @@ from routes.request_utils import is_valid_model_id, normalize_model_id
 from image_utils import extract_json_object, extract_text_from_response_content
 
 client = get_provider_client(DEEPSEEK_PROVIDER)
+
+
+def _deserialize_parameter_overrides(raw_value) -> dict | None:
+    if raw_value in (None, ""):
+        return None
+    try:
+        return normalize_chat_parameter_overrides(raw_value)
+    except ValueError:
+        return None
 
 
 def _sanitize_download_filename(value: str, fallback: str = "canvas") -> str:
@@ -500,7 +510,7 @@ def register_conversation_routes(app) -> None:
         with get_db() as conn:
             rows = conn.execute(
                 """
-                SELECT c.id, c.title, c.title_source, c.title_overridden, c.tool_overrides, c.model, c.persona_id,
+                SELECT c.id, c.title, c.title_source, c.title_overridden, c.tool_overrides, c.parameter_overrides, c.model, c.persona_id,
                                              p.name AS persona_name, c.updated_at,
                        COUNT(m.id) AS message_count
                 FROM conversations c
@@ -521,6 +531,7 @@ def register_conversation_routes(app) -> None:
                     item["tool_overrides"] = None
             else:
                 item["tool_overrides"] = None
+            item["parameter_overrides"] = _deserialize_parameter_overrides(item.get("parameter_overrides"))
             result.append(item)
         return jsonify(result)
 
@@ -744,6 +755,9 @@ def register_conversation_routes(app) -> None:
                 conversation_payload["tool_overrides"] = None
         else:
             conversation_payload["tool_overrides"] = None
+        conversation_payload["parameter_overrides"] = _deserialize_parameter_overrides(
+            conversation_payload.get("parameter_overrides")
+        )
         return jsonify(
             {
                 "conversation": conversation_payload,
@@ -1609,8 +1623,9 @@ def register_conversation_routes(app) -> None:
         title_provided = "title" in data
         persona_provided = "persona_id" in data
         tool_overrides_provided = "tool_overrides" in data
-        if not title_provided and not persona_provided and not tool_overrides_provided:
-            return jsonify({"error": "Provide title, persona_id, and/or tool_overrides."}), 400
+        parameter_overrides_provided = "parameter_overrides" in data
+        if not title_provided and not persona_provided and not tool_overrides_provided and not parameter_overrides_provided:
+            return jsonify({"error": "Provide title, persona_id, tool_overrides, and/or parameter_overrides."}), 400
 
         title = None
         if title_provided:
@@ -1636,9 +1651,21 @@ def register_conversation_routes(app) -> None:
             else:
                 return jsonify({"error": "tool_overrides must be a list or null."}), 400
 
+        next_parameter_overrides = None
+        if parameter_overrides_provided:
+            try:
+                normalized_parameter_overrides = normalize_chat_parameter_overrides(data.get("parameter_overrides"))
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 400
+            next_parameter_overrides = (
+                json.dumps(normalized_parameter_overrides, ensure_ascii=False)
+                if normalized_parameter_overrides
+                else None
+            )
+
         with get_db() as conn:
             conversation = conn.execute(
-                "SELECT id, title, title_source, title_overridden, persona_id, tool_overrides FROM conversations WHERE id = ?",
+                "SELECT id, title, title_source, title_overridden, persona_id, tool_overrides, parameter_overrides FROM conversations WHERE id = ?",
                 (conv_id,),
             ).fetchone()
             if not conversation:
@@ -1683,6 +1710,11 @@ def register_conversation_routes(app) -> None:
                     "UPDATE conversations SET tool_overrides = ? WHERE id = ?",
                     (next_tool_overrides, conv_id),
                 )
+            if parameter_overrides_provided:
+                conn.execute(
+                    "UPDATE conversations SET parameter_overrides = ? WHERE id = ?",
+                    (next_parameter_overrides, conv_id),
+                )
         if RAG_ENABLED:
             sync_conversations_to_rag_safe(conversation_id=conv_id)
         response_tool_overrides = None
@@ -1693,6 +1725,9 @@ def register_conversation_routes(app) -> None:
                     response_tool_overrides = json.loads(response_tool_overrides)
                 except Exception:
                     response_tool_overrides = None
+        response_parameter_overrides = None
+        if parameter_overrides_provided:
+            response_parameter_overrides = _deserialize_parameter_overrides(next_parameter_overrides)
         return jsonify({
             "id": conv_id,
             "title": next_title,
@@ -1700,6 +1735,7 @@ def register_conversation_routes(app) -> None:
             "title_overridden": bool(next_title_overridden),
             "persona_id": int(next_persona_id) if next_persona_id is not None else None,
             "tool_overrides": response_tool_overrides,
+            "parameter_overrides": response_parameter_overrides,
         })
 
     @app.route("/api/rag/documents", methods=["GET"])

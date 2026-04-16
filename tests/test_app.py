@@ -8985,6 +8985,66 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         )
         self.assertEqual(response.status_code, 400)
 
+    def test_conversation_parameter_overrides_patch_and_retrieve(self):
+        conversation_id = self._create_conversation()
+
+        response = self.client.patch(
+            f"/api/conversations/{conversation_id}",
+            json={"parameter_overrides": {"temperature": 0.4, "top_p": 0.85, "max_tokens": 512}},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(
+            payload["parameter_overrides"],
+            {"temperature": 0.4, "top_p": 0.85, "max_tokens": 512},
+        )
+
+        response = self.client.get(f"/api/conversations/{conversation_id}")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.get_json()["conversation"]["parameter_overrides"],
+            {"temperature": 0.4, "top_p": 0.85, "max_tokens": 512},
+        )
+
+    def test_conversation_parameter_overrides_null_resets_to_global(self):
+        conversation_id = self._create_conversation()
+
+        self.client.patch(
+            f"/api/conversations/{conversation_id}",
+            json={"parameter_overrides": {"temperature": 0.6}},
+        )
+
+        response = self.client.patch(
+            f"/api/conversations/{conversation_id}",
+            json={"parameter_overrides": None},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.get_json()["parameter_overrides"])
+
+        response = self.client.get(f"/api/conversations/{conversation_id}")
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.get_json()["conversation"]["parameter_overrides"])
+
+    def test_conversation_parameter_overrides_reject_unknown_keys(self):
+        conversation_id = self._create_conversation()
+
+        response = self.client.patch(
+            f"/api/conversations/{conversation_id}",
+            json={"parameter_overrides": {"temperature": 0.6, "foo": 1}},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Unsupported parameter override keys", response.get_json()["error"])
+
+    def test_conversation_parameter_overrides_reject_out_of_range_values(self):
+        conversation_id = self._create_conversation()
+
+        response = self.client.patch(
+            f"/api/conversations/{conversation_id}",
+            json={"parameter_overrides": {"temperature": 3.0}},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("temperature", response.get_json()["error"])
+
     def test_frontend_conversation_tool_permissions_handle_patch_response_and_toggle_visibility(self):
         script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
         script_text = script_path.read_text(encoding="utf-8")
@@ -8993,6 +9053,19 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn('Object.prototype.hasOwnProperty.call(data, "tool_overrides")', script_text)
         self.assertIn('toolsSection.style.display = convToolsUseGlobalToggle.checked ? "none" : "";', script_text)
         self.assertIn("const responseToolOverrides = getConversationToolOverridesFromResponse(data);", script_text)
+
+    def test_frontend_conversation_parameters_panel_hooks_exist(self):
+        script_path = Path(__file__).resolve().parent.parent / "static" / "app.js"
+        script_text = script_path.read_text(encoding="utf-8")
+        template_path = Path(__file__).resolve().parent.parent / "templates" / "index.html"
+        template_text = template_path.read_text(encoding="utf-8")
+
+        self.assertIn("function renderParamsPanel()", script_text)
+        self.assertIn("function persistConversationParameterOverrides()", script_text)
+        self.assertIn('JSON.stringify({ parameter_overrides: parameterOverrides })', script_text)
+        self.assertIn('id="params-panel"', template_text)
+        self.assertIn('id="params-toggle-btn"', template_text)
+        self.assertIn('id="mobile-params-btn"', template_text)
 
     def test_rag_endpoints_support_manual_document_ingest(self):
         response = self.client.get("/api/rag/documents")

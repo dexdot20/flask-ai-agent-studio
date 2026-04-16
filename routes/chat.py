@@ -83,6 +83,7 @@ from db import (
     find_summary_covering_message_id,
     get_active_tool_names,
     get_conversation_active_tool_names,
+    get_conversation_parameter_overrides,
     get_all_scratchpad_sections,
     get_app_settings,
     get_clarification_max_questions,
@@ -4879,6 +4880,7 @@ def register_chat_routes(app) -> None:
 
         max_steps = max(1, min(50, int(settings.get("max_steps", 5))))
         temperature = get_model_temperature(settings)
+        conversation_parameter_overrides = get_conversation_parameter_overrides(conv_id) if conv_id is not None else None
         if conv_id is not None:
             override_names = get_conversation_active_tool_names(conv_id, settings)
             active_tool_names = override_names if override_names is not None else get_active_tool_names(settings)
@@ -5261,6 +5263,7 @@ def register_chat_routes(app) -> None:
                 max_parallel_tools=get_max_parallel_tools(settings),
                 buffer_clarification_answers=False,
                 temperature=temperature,
+                request_parameter_overrides=conversation_parameter_overrides,
                 fetch_url_token_threshold=fetch_url_token_threshold,
                 fetch_url_clip_aggressiveness=fetch_url_clip_aggressiveness,
                 initial_canvas_documents=initial_canvas_documents,

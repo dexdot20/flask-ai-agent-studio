@@ -13,6 +13,37 @@ from tests.support.app_harness import BaseAppRoutesTestCase
 
 
 class TestOpenRouterModelRegistry(BaseAppRoutesTestCase):
+    def test_normalize_chat_parameter_overrides_accepts_known_fields(self):
+        overrides = model_registry.normalize_chat_parameter_overrides(
+            {"temperature": 0.6, "top_p": 0.9, "max_tokens": 300}
+        )
+
+        self.assertEqual(
+            overrides,
+            {"temperature": 0.6, "top_p": 0.9, "max_tokens": 300},
+        )
+
+    def test_normalize_chat_parameter_overrides_rejects_unknown_fields(self):
+        with self.assertRaises(ValueError):
+            model_registry.normalize_chat_parameter_overrides({"temperature": 0.6, "foo": 1})
+
+    def test_apply_chat_parameter_overrides_merges_whitelisted_values(self):
+        request_kwargs = {
+            "model": "deepseek-chat",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "temperature": 0.7,
+        }
+
+        merged = model_registry.apply_chat_parameter_overrides(
+            request_kwargs,
+            {"temperature": 0.4, "top_p": 0.8, "max_tokens": 512},
+        )
+
+        self.assertEqual(merged["temperature"], 0.4)
+        self.assertEqual(merged["top_p"], 0.8)
+        self.assertEqual(merged["max_tokens"], 512)
+        self.assertEqual(merged["messages"], request_kwargs["messages"])
+
     def test_build_model_provider_policy_marks_deepseek_as_cache_friendly(self):
         policy = model_registry.build_model_provider_policy(
             {

@@ -215,6 +215,10 @@ select:focus  { border-color: var(--border-focus); }
   text-decoration: none;
 }
 
+.btn-parameters {
+  min-height: 34px;
+}
+
 .btn-ghost:hover {
   border-color: rgba(79, 110, 247, 0.35);
   color: var(--text-primary);
@@ -2996,6 +3000,38 @@ kbd {
   z-index: 98;
 }
 
+.params-panel {
+  z-index: 98;
+}
+
+.params-status {
+  margin: 0 0 10px;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.params-status[data-tone="warning"] {
+  color: #ffbf7a;
+}
+
+.params-status[data-tone="success"] {
+  color: #99d9b3;
+}
+
+.params-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.params-field-note {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.74rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
 .conv-tools-toggle-row {
   display: flex;
   align-items: center;
@@ -3357,6 +3393,10 @@ kbd {
   .header-controls > .btn-memory,
   .header-controls > .mobile-tools-toggle {
     display: inline-flex;
+  }
+
+  .header-controls > .btn-parameters {
+    display: none;
   }
 
   .btn-canvas,
