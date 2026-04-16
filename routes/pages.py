@@ -223,6 +223,7 @@ TOOL_PERMISSION_LABELS = {
     "search_files": "Search files",
     "write_project_tree": "Write project tree",
     "validate_project_workspace": "Lightweight workspace validation",
+    "import_github_repository_to_canvas": "Import GitHub repo to Canvas",
     "validate_canvas_document": "Validate canvas document",
 }
 
@@ -273,6 +274,7 @@ TOOL_PERMISSION_DESCRIPTIONS = {
     "search_files": "Search file paths or file contents within the workspace sandbox.",
     "write_project_tree": "Create or overwrite many files and directories in one batch.",
     "validate_project_workspace": "Run lightweight validation checks against the workspace sandbox.",
+    "import_github_repository_to_canvas": "Download a GitHub repository archive and add supported text files into Canvas as path-aware project documents.",
     "validate_canvas_document": "Run a syntax or structure check on a canvas document without editing it.",
 }
 
@@ -353,6 +355,7 @@ def _get_tool_permission_section_key(name: str) -> str:
         "delete_canvas_lines",
         "delete_canvas_document",
         "clear_canvas",
+        "import_github_repository_to_canvas",
         "validate_canvas_document",
     }:
         return "canvas"

@@ -56,6 +56,7 @@ from canvas_service import (
     update_canvas_metadata,
     validate_canvas_document,
 )
+from github_import_service import import_github_repository_into_canvas
 from project_workspace_service import (
     create_directory as workspace_create_directory,
     create_file as workspace_create_file,
@@ -113,7 +114,6 @@ from db import (
     get_prompt_max_input_tokens,
     get_rag_source_types,
     get_search_tool_query_limit,
-    get_sub_agent_allowed_tool_names,
     get_sub_agent_max_steps,
     get_sub_agent_max_parallel_tools,
     get_sub_agent_retry_attempts,
@@ -1248,8 +1248,9 @@ def _is_session_cacheable_tool(tool_name: str) -> bool:
     return is_tool_session_cacheable(_normalize_tool_name(tool_name))
 
 
-def _resolve_sub_agent_tool_names(settings: dict) -> list[str]:
-    configured_tool_names = get_sub_agent_allowed_tool_names(settings)
+def _resolve_sub_agent_tool_names(settings: dict, parent_tool_names: list[str] | None = None) -> list[str]:
+    del settings
+    configured_tool_names = parent_tool_names if isinstance(parent_tool_names, list) and parent_tool_names else SUB_AGENT_ALLOWED_TOOL_NAMES
     normalized_tool_names: list[str] = []
     for tool_name in configured_tool_names:
         normalized_tool_name = _normalize_tool_name(tool_name)
@@ -4877,7 +4878,14 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
     timeout_seconds = get_sub_agent_timeout_seconds(settings)
     retry_attempts = get_sub_agent_retry_attempts(settings)
     retry_delay_seconds = get_sub_agent_retry_delay_seconds(settings)
-    child_tool_names = _resolve_sub_agent_tool_names(settings)
+    child_tool_names = _resolve_sub_agent_tool_names(
+        settings,
+        parent_tool_names=(
+            agent_context.get("prompt_tool_names")
+            if isinstance(agent_context.get("prompt_tool_names"), list)
+            else agent_context.get("enabled_tool_names")
+        ),
+    )
     if not child_tool_names:
         error = "No eligible read-only tools are available for sub-agent delegation."
         return {"status": "error", "error": error}, f"Failed: {error}"
@@ -5622,6 +5630,35 @@ def _run_validate_project_workspace(tool_args: dict, runtime_state: dict):
     return result, f"Workspace validation: {result.get('status', 'ok')}"
 
 
+def _run_import_github_repository_to_canvas(tool_args: dict, runtime_state: dict):
+    confirmed = tool_args.get("confirmed") is True
+    if not confirmed:
+        error = (
+            "User confirmation is required before importing a GitHub repository into Canvas. "
+            "Ask for confirmation first, then retry with confirmed=true."
+        )
+        return {"status": "error", "error": error}, error
+
+    url = str(tool_args.get("url") or "").strip()
+    if not url:
+        error = "GitHub repository URL is required."
+        return {"status": "error", "error": error}, error
+
+    canvas_state = _get_canvas_runtime_state(runtime_state)
+    result = import_github_repository_into_canvas(canvas_state, url)
+    imported_count = int(result.get("imported_count") or 0)
+    created_count = int(result.get("created_count") or 0)
+    updated_count = int(result.get("updated_count") or 0)
+    primary_document_path = str(result.get("primary_document_path") or "").strip()
+    summary = (
+        f"GitHub repo imported: {imported_count} file(s) "
+        f"({created_count} created, {updated_count} updated)"
+    )
+    if primary_document_path:
+        summary += f"; active file: {primary_document_path}"
+    return result, summary
+
+
 def _run_rewrite_canvas_document(tool_args: dict, runtime_state: dict):
     canvas_state = _get_canvas_runtime_state(runtime_state)
     document = rewrite_canvas_document(
@@ -6137,6 +6174,7 @@ _TOOL_EXECUTORS = {
     "search_files": _run_search_files,
     "write_project_tree": _run_write_project_tree,
     "validate_project_workspace": _run_validate_project_workspace,
+    "import_github_repository_to_canvas": _run_import_github_repository_to_canvas,
     "create_canvas_document": _run_create_canvas_document,
     "rewrite_canvas_document": _run_rewrite_canvas_document,
     "preview_canvas_changes": _run_preview_canvas_changes,
@@ -6376,6 +6414,8 @@ def _tool_input_preview(tool_name: str, tool_args: dict) -> str:
         if query and path_prefix:
             return f"{query} @ {path_prefix}"[:300]
         return (query or path_prefix)[:300]
+    if tool_name == "import_github_repository_to_canvas":
+        return str(tool_args.get("url") or "").strip()[:300]
     if tool_name in {"expand_canvas_document", "scroll_canvas_document"}:
         target = str(tool_args.get("document_path") or tool_args.get("document_id") or "active document").strip()
         if tool_name == "scroll_canvas_document":

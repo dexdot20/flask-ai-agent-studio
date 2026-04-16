@@ -140,6 +140,7 @@ const canvasResetFiltersBtn = document.getElementById("canvas-reset-filters-btn"
 const canvasEditBtn = document.getElementById("canvas-edit-btn");
 const canvasNewBtn = document.getElementById("canvas-new-btn");
 const canvasUploadBtn = document.getElementById("canvas-upload-btn");
+const canvasImportGithubBtn = document.getElementById("canvas-import-github-btn");
 const canvasUploadInput = document.getElementById("canvas-upload-input");
 const canvasSaveBtn = document.getElementById("canvas-save-btn");
 const canvasCancelBtn = document.getElementById("canvas-cancel-btn");
@@ -4446,7 +4447,31 @@ function scheduleCanvasAutoRefreshAfterUpload(delay = 350) {
   }, delay);
 }
 
-async function createCanvasDocumentFromData({ title, content, format, language = null, statusMessage = "Creating canvas file..." }) {
+function normalizeCanvasPathCandidate(value) {
+  return String(value || "").trim().replace(/\\/g, "/").replace(/^\/+/, "");
+}
+
+function inferCanvasPathFromLabel(value) {
+  const normalized = normalizeCanvasPathCandidate(value);
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.includes("/")) {
+    return normalized;
+  }
+  return /\.[a-z0-9]{1,10}$/i.test(normalized) ? normalized : "";
+}
+
+function getCanvasTitleFromPathOrLabel(value) {
+  const normalized = normalizeCanvasPathCandidate(value);
+  if (!normalized) {
+    return "Untitled";
+  }
+  const parts = normalized.split("/").filter(Boolean);
+  return String(parts[parts.length - 1] || normalized || "Untitled").trim() || "Untitled";
+}
+
+async function createCanvasDocumentFromData({ title, content, format, language = null, path = null, statusMessage = "Creating canvas file..." }) {
   if (!currentConvId) {
     setCanvasStatus("Conversation is not available yet.", "warning");
     return;
@@ -4478,6 +4503,7 @@ async function createCanvasDocumentFromData({ title, content, format, language =
         content,
         format,
         language,
+        path,
       }),
     });
     const payload = await response.json().catch(() => ({}));
@@ -4517,22 +4543,25 @@ async function createCanvasDocumentFromPrompt() {
   if (guardCanvasMutation("create another file")) {
     return;
   }
-  const nextTitle = String(globalThis.prompt("New canvas file name", "Untitled") || "").trim();
-  if (!nextTitle) {
+  const requestedPathOrName = String(globalThis.prompt("New canvas file path or name", "Untitled") || "").trim();
+  if (!requestedPathOrName) {
     setCanvasStatus("Canvas file creation cancelled.", "muted");
     return;
   }
 
   const nextFormat = getCanvasFormatControlValue();
+  const nextPath = inferCanvasPathFromLabel(requestedPathOrName) || null;
   await createCanvasDocumentFromData({
-    title: nextTitle,
+    title: getCanvasTitleFromPathOrLabel(requestedPathOrName),
     content: "",
     format: nextFormat,
+    path: nextPath,
   });
 }
 
 async function createCanvasDocumentFromFile(file) {
-  const nextTitle = String(file?.name || "").trim() || "Uploaded file";
+  const nextPath = normalizeCanvasPathCandidate(file?.webkitRelativePath || file?.name || "") || null;
+  const nextTitle = getCanvasTitleFromPathOrLabel(nextPath || file?.name || "Uploaded file");
 
   if (!currentConvId) {
     setCanvasStatus("Conversation is not available yet.", "warning");
@@ -4558,6 +4587,9 @@ async function createCanvasDocumentFromFile(file) {
     const formData = new FormData();
     formData.append("file", file, nextTitle);
     formData.append("title", nextTitle);
+    if (nextPath) {
+      formData.append("path", nextPath);
+    }
 
     const response = await fetch(`/api/conversations/${currentConvId}/canvas`, {
       method: "POST",
@@ -4591,6 +4623,72 @@ async function createCanvasDocumentFromFile(file) {
     clearPendingCanvasUploadPreview();
     setCanvasMutationState("", { rerender: false });
     setCanvasStatus(error.message || "Canvas upload failed.", "danger");
+    renderCanvasPanel();
+  }
+}
+
+async function importGithubRepositoryToCanvas() {
+  if (!currentConvId) {
+    setCanvasStatus("Conversation is not available yet.", "warning");
+    return;
+  }
+  if (guardCanvasMutation("import a repository")) {
+    return;
+  }
+
+  const repoUrl = String(globalThis.prompt("GitHub repository URL", "https://github.com/") || "").trim();
+  if (!repoUrl) {
+    setCanvasStatus("GitHub import cancelled.", "muted");
+    return;
+  }
+
+  if (canvasNewBtn) {
+    canvasNewBtn.disabled = true;
+  }
+  if (canvasUploadBtn) {
+    canvasUploadBtn.disabled = true;
+  }
+  if (canvasImportGithubBtn) {
+    canvasImportGithubBtn.disabled = true;
+  }
+
+  cancelPendingConversationRefreshes();
+  setCanvasMutationState("import-github");
+  setCanvasStatus("Importing GitHub repository into Canvas...", "muted");
+
+  try {
+    const response = await fetch(`/api/conversations/${currentConvId}/canvas/import-github`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ url: repoUrl }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.error || "GitHub import failed.");
+    }
+
+    setCanvasMutationState("", { rerender: false });
+    history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
+    streamingCanvasDocuments = [];
+    pendingCanvasDiff = null;
+    activeCanvasDocumentId = String(payload.active_document_id || "").trim() || null;
+    isCanvasEditing = false;
+    editingCanvasDocumentId = null;
+    renderConversationHistory();
+    renderCanvasPanel();
+    scheduleCanvasAutoRefreshAfterUpload();
+    const importedCount = Number(payload.imported_count || 0);
+    const primaryDocumentPath = String(payload.primary_document_path || "").trim();
+    const statusParts = [`Imported ${importedCount} file${importedCount === 1 ? "" : "s"}`];
+    if (primaryDocumentPath) {
+      statusParts.push(`active: ${primaryDocumentPath}`);
+    }
+    setCanvasStatus(statusParts.join(" · "), "success");
+  } catch (error) {
+    setCanvasMutationState("", { rerender: false });
+    setCanvasStatus(error.message || "GitHub import failed.", "danger");
     renderCanvasPanel();
   }
 }
@@ -5267,6 +5365,10 @@ function syncCanvasActionButtons({
     disabled: isStreamingPreviewActive || isBusy,
   });
   setCanvasButtonState(canvasUploadBtn, {
+    hidden: false,
+    disabled: isStreamingPreviewActive || isBusy,
+  });
+  setCanvasButtonState(canvasImportGithubBtn, {
     hidden: false,
     disabled: isStreamingPreviewActive || isBusy,
   });
@@ -10452,6 +10554,11 @@ if (canvasNewBtn) {
 if (canvasUploadBtn) {
   canvasUploadBtn.addEventListener("click", () => {
     openCanvasUploadPicker();
+  });
+}
+if (canvasImportGithubBtn) {
+  canvasImportGithubBtn.addEventListener("click", () => {
+    void importGithubRepositoryToCanvas();
   });
 }
 if (canvasUploadInput) {

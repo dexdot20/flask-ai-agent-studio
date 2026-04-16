@@ -1570,6 +1570,38 @@ TOOL_SPECS = [
         },
     },
     {
+        "name": "import_github_repository_to_canvas",
+        "description": (
+            "Download a GitHub repository archive, extract supported text files, and add them into the current conversation Canvas as path-aware project files. "
+            "This mutates Canvas and may update existing files with matching paths."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "GitHub repository URL to import, such as https://github.com/owner/repo or https://github.com/owner/repo/tree/branch/subdir."
+                },
+                "confirmed": {
+                    "type": "boolean",
+                    "description": "Must be true only after the user explicitly confirms that the GitHub repository should be imported into Canvas."
+                }
+            },
+            "required": ["url", "confirmed"]
+        },
+        "prompt": {
+            "purpose": "Imports a GitHub repository into Canvas as path-aware project files and chooses one high-signal file as the active document.",
+            "inputs": {"url": "GitHub repository URL", "confirmed": "explicit user confirmation flag"},
+            "guidance": (
+                "Before calling this tool, you MUST obtain explicit user confirmation to start the repository import. "
+                "Use ask_clarifying_question or an equivalent confirmation request first when the user has not clearly approved the import yet. "
+                "Call this tool only after the user says yes, then pass confirmed=true. "
+                "Use it when the user wants a GitHub repository pulled into Canvas for code reading, navigation, or editing. "
+                "The import keeps project-relative paths so Canvas tree and path-based targeting work immediately."
+            ),
+        },
+    },
+    {
         "name": "create_canvas_document",
         "description": (
             "Create a canvas document for the current conversation. "
@@ -2303,6 +2335,9 @@ _TOOL_RUNTIME_METADATA_OVERRIDES = {
         "read_only": True,
         "parallel_safe": True,
         "state_domains": ("workspace",),
+    },
+    "import_github_repository_to_canvas": {
+        "state_domains": ("canvas", "web"),
     },
 }
 

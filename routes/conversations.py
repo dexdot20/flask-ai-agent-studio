@@ -81,6 +81,7 @@ from db import (
     update_persona,
 )
 from doc_service import build_canvas_markdown, extract_document_text, infer_canvas_format, infer_canvas_language, read_uploaded_document
+from github_import_service import import_github_repository_into_canvas
 from model_registry import (
     DEEPSEEK_PROVIDER,
     apply_model_target_request_options,
@@ -1053,6 +1054,10 @@ def register_conversation_routes(app) -> None:
         content = str(data.get("content") or "")
         format_name = str(data.get("format") or "").strip() or ""
         language = str(data.get("language") or "").strip() or None
+        path = str(data.get("path") or "").strip() or None
+        role = str(data.get("role") or "").strip() or None
+        project_id = str(data.get("project_id") or "").strip() or None
+        workspace_id = str(data.get("workspace_id") or "").strip() or None
         summary = str(data.get("summary") or "").strip() or None
         source_assistant_message_id = _parse_optional_int(data.get("source_assistant_message_id"))
         source_sub_agent_trace_index = _parse_optional_int(data.get("source_sub_agent_trace_index"))
@@ -1064,6 +1069,7 @@ def register_conversation_routes(app) -> None:
             except ValueError as exc:
                 return jsonify({"error": str(exc)}), 400
             title = os.path.basename(str(data.get("title") or filename).strip()) or filename
+            path = str(data.get("path") or path or filename).strip() or filename
             resolved_format = format_name or infer_canvas_format(title)
             resolved_language = language if language is not None else infer_canvas_language(title)
             if resolved_format == "markdown" and mime_type == "application/pdf":
@@ -1110,7 +1116,11 @@ def register_conversation_routes(app) -> None:
                 content=content,
                 format_name=format_name,
                 language_name=language,
+                path=path,
+                role=role,
                 summary=summary,
+                project_id=project_id,
+                workspace_id=workspace_id,
             )
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
@@ -1157,6 +1167,70 @@ def register_conversation_routes(app) -> None:
                 "active_document_id": document.get("id"),
                 "messages": updated_messages,
                 "saved_sub_agent_trace": saved_sub_agent_trace,
+            }
+        ), 201
+
+    @app.route("/api/conversations/<int:conv_id>/canvas/import-github", methods=["POST"])
+    def import_github_canvas(conv_id):
+        data = request.get_json(silent=True) or {}
+        url = str(data.get("url") or "").strip()
+        if not url:
+            return jsonify({"error": "GitHub repository URL is required."}), 400
+
+        conversation, messages = _load_conversation_payload(conv_id)
+        if not conversation:
+            return jsonify({"error": "Not found."}), 404
+
+        latest_canvas_state = find_latest_canvas_state(messages)
+        runtime_state = create_canvas_runtime_state(
+            latest_canvas_state.get("documents"),
+            active_document_id=latest_canvas_state.get("active_document_id"),
+        )
+
+        try:
+            import_result = import_github_repository_into_canvas(runtime_state, url)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        next_documents = get_canvas_runtime_documents(runtime_state)
+        metadata = serialize_message_metadata(
+            {
+                "canvas_documents": next_documents,
+                "active_document_id": get_canvas_runtime_active_document_id(runtime_state),
+                "canvas_viewports": runtime_state.get("viewports") if isinstance(runtime_state.get("viewports"), dict) else {},
+                "canvas_cleared": not next_documents,
+            }
+        )
+
+        with get_db() as conn:
+            insert_message(
+                conn,
+                conv_id,
+                "tool",
+                "",
+                metadata=metadata,
+            )
+            conn.execute(
+                "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
+                (conv_id,),
+            )
+
+        if RAG_ENABLED:
+            sync_conversations_to_rag_safe(conversation_id=conv_id)
+
+        _, updated_messages = _load_conversation_payload(conv_id)
+        return jsonify(
+            {
+                "documents": next_documents,
+                "active_document_id": get_canvas_runtime_active_document_id(runtime_state),
+                "imported_count": int(import_result.get("imported_count") or 0),
+                "created_count": int(import_result.get("created_count") or 0),
+                "updated_count": int(import_result.get("updated_count") or 0),
+                "primary_document_path": str(import_result.get("primary_document_path") or "").strip() or None,
+                "project_id": str(import_result.get("project_id") or "").strip() or None,
+                "workspace_id": str(import_result.get("workspace_id") or "").strip() or None,
+                "source_url": str(import_result.get("source_url") or "").strip() or url,
+                "messages": updated_messages,
             }
         ), 201
 
