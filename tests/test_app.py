@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import os
 import sys
 import tempfile
@@ -30,6 +31,8 @@ from agent import (
     FINAL_ANSWER_ERROR_TEXT,
     FINAL_ANSWER_MISSING_TEXT,
     SUB_AGENT_ALLOWED_TOOL_NAMES,
+    _get_agent_trace_logger,
+    _get_default_deepseek_client,
     _apply_tool_output_budget,
     _build_compact_tool_message_content,
     _build_final_answer_instruction,
@@ -6179,8 +6182,8 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("const fragment = document.createDocumentFragment();", script_text)
         self.assertIn("messagesEl.replaceChildren(fragment);", script_text)
         self.assertIn("function isPersistedMessageId(messageId)", script_text)
-        self.assertIn("function isCanvasStreamingPreviewTool(toolName)", script_text)
-        self.assertIn("isCanvasStreamingPreviewTool(event.tool)", script_text)
+        self.assertIn("function isCanvasStreamingPreviewTool(toolName,", script_text)
+        self.assertIn("isCanvasStreamingPreviewTool(event.tool,", script_text)
 
         style_path = Path(__file__).resolve().parent.parent / "static" / "style.css"
         style_text = style_path.read_text(encoding="utf-8")
@@ -6474,6 +6477,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         def fake_run_agent_stream(*args, **kwargs):
             captured["prompt_tool_names"] = list(kwargs.get("prompt_tool_names") or [])
+            captured["enabled_tool_names"] = list(args[3] if len(args) > 3 else (kwargs.get("enabled_tool_names") or []))
             return iter(
                 [
                     {"type": "answer_start"},
@@ -6501,7 +6505,10 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(captured["prompt_tool_names"], ["search_web", "fetch_url"])
+        # search_web is callable (in enabled_tool_names) but not prompt-described; fetch_url IS prompt-visible
+        self.assertIn("search_web", captured["enabled_tool_names"])
+        self.assertNotIn("search_web", captured["prompt_tool_names"])
+        self.assertIn("fetch_url", captured["prompt_tool_names"])
 
     def test_resolve_runtime_tool_names_keeps_canvas_tools_when_canvas_documents_exist(self):
         runtime_names = resolve_runtime_tool_names(
@@ -6809,7 +6816,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn('task_full: String(entry.task_full || "").trim()', script_text)
         self.assertIn("sub-agent-run__note", script_text)
         self.assertIn("sub-agent-run__instructions-body", script_text)
-        self.assertIn("Should the research be saved to the Canvas?", script_text)
+        self.assertIn("Research saved to Canvas.", script_text)
         self.assertIn("summaryText !== fallbackNote", script_text)
         self.assertIn("function createAssistantMessageActions(message)", script_text)
         self.assertIn("Edit message", script_text)
@@ -7024,6 +7031,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("Object.prototype.hasOwnProperty.call(payload || {}, key)", script_text)
         self.assertIn("const payload = buildSettingsDeltaPayload(fullPayload, appSettings);", script_text)
         self.assertIn('setSettingsStatus("No changes to save", "muted")', script_text)
+        self.assertIn("function getSelectedSubAgentTools()", script_text)
+        self.assertIn("function applySelectedSubAgentTools(selected)", script_text)
+        self.assertIn("subAgentToolToggleEls.forEach((element) => {", script_text)
+        self.assertIn("applySelectedSubAgentTools(appSettings.sub_agent_allowed_tool_names || []);", script_text)
+        self.assertIn("appSettings.sub_agent_allowed_tool_names = Array.isArray(data.sub_agent_allowed_tool_names) ? data.sub_agent_allowed_tool_names : [];", script_text)
+        self.assertIn("sub_agent_allowed_tool_names: getSelectedSubAgentTools(),", script_text)
 
     def test_settings_api_persists_search_tool_query_limit(self):
         response = self.client.patch("/api/settings", json={"search_tool_query_limit": 9})
@@ -7032,6 +7045,55 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         payload = response.get_json()
         self.assertEqual(payload["search_tool_query_limit"], 9)
         self.assertEqual(get_app_settings()["search_tool_query_limit"], "9")
+
+    def test_default_deepseek_client_is_initialized_lazily_and_cached(self):
+        import agent as agent_module
+
+        original_client = agent_module._DEFAULT_PROVIDER_CLIENT
+        agent_module._DEFAULT_PROVIDER_CLIENT = None
+        fake_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=Mock())))
+
+        try:
+            with patch("agent.get_provider_client", return_value=fake_client) as mocked_get_provider_client:
+                self.assertIs(_get_default_deepseek_client(), fake_client)
+                self.assertIs(_get_default_deepseek_client(), fake_client)
+
+            mocked_get_provider_client.assert_called_once_with(model_registry.DEEPSEEK_PROVIDER)
+        finally:
+            agent_module._DEFAULT_PROVIDER_CLIENT = original_client
+
+    def test_agent_trace_logger_reuses_existing_rotating_handler(self):
+        import agent as agent_module
+
+        original_logger = agent_module._AGENT_TRACE_LOGGER
+        agent_module._AGENT_TRACE_LOGGER = None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = os.path.join(tmpdir, "agent-trace.log")
+            existing_handler = logging.handlers.RotatingFileHandler(
+                log_path,
+                maxBytes=2_000_000,
+                backupCount=3,
+                encoding="utf-8",
+            )
+            fake_logger = Mock()
+            fake_logger.handlers = [existing_handler]
+
+            try:
+                with (
+                    patch("agent.AGENT_TRACE_LOG_PATH", log_path),
+                    patch("agent.logging.getLogger", return_value=fake_logger),
+                ):
+                    resolved_first = _get_agent_trace_logger()
+                    resolved_second = _get_agent_trace_logger()
+
+                self.assertIs(resolved_first, fake_logger)
+                self.assertIs(resolved_second, fake_logger)
+                fake_logger.addHandler.assert_not_called()
+                fake_logger.setLevel.assert_called_with(logging.INFO)
+            finally:
+                existing_handler.close()
+                agent_module._AGENT_TRACE_LOGGER = original_logger
 
     def test_run_agent_stream_executes_append_scratchpad_tool(self):
         responses = [

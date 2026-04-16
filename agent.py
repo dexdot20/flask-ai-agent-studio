@@ -11,6 +11,7 @@ import json
 import logging
 import math
 import os
+import threading
 import time
 from typing import Any
 try:
@@ -29,6 +30,7 @@ from canvas_service import (
     build_canvas_document_result_snapshot,
     build_canvas_document_context_result,
     build_canvas_tool_result,
+    CANVAS_MUTATING_TOOL_NAMES,
     clear_canvas_viewport,
     clear_overlapping_canvas_viewports,
     clear_canvas,
@@ -36,6 +38,7 @@ from canvas_service import (
     create_canvas_runtime_state,
     delete_canvas_document,
     delete_canvas_lines,
+    find_canvas_document,
     focus_canvas_page,
     get_canvas_runtime_active_document_id,
     get_canvas_runtime_documents,
@@ -44,7 +47,6 @@ from canvas_service import (
     insert_canvas_lines,
     join_canvas_lines,
     list_canvas_lines,
-    _find_canvas_document,
     preview_canvas_changes,
     replace_canvas_lines,
     rewrite_canvas_document,
@@ -129,6 +131,8 @@ from messages import (
     _build_canvas_prompt_payload,
     _build_pending_clarification_message_content,
     build_current_time_context,
+    CANVAS_RUNTIME_CONTEXT_INSERT_BEFORE_HEADINGS,
+    CANVAS_RUNTIME_CONTEXT_REFRESH_HEADINGS,
     refresh_canvas_sections_in_context_injection,
 )
 from image_service import answer_image_question
@@ -187,60 +191,6 @@ REASONING_REPLAY_MARKER = "[AGENT REASONING CONTEXT]"
 MAX_REASONING_REPLAY_ENTRIES = 2
 MAX_REASONING_REPLAY_CHARS = 4_000
 MAX_REASONING_REPLAY_TOTAL_CHARS = 10_000
-CANVAS_TOOL_NAMES = {
-    "expand_canvas_document",
-    "batch_read_canvas_documents",
-    "scroll_canvas_document",
-    "search_canvas_document",
-    "validate_canvas_document",
-    "create_canvas_document",
-    "rewrite_canvas_document",
-    "preview_canvas_changes",
-    "batch_canvas_edits",
-    "transform_canvas_lines",
-    "update_canvas_metadata",
-    "set_canvas_viewport",
-    "focus_canvas_page",
-    "clear_canvas_viewport",
-    "replace_canvas_lines",
-    "insert_canvas_lines",
-    "delete_canvas_lines",
-    "delete_canvas_document",
-    "clear_canvas",
-}
-CANVAS_MUTATION_TOOL_NAMES = {
-    "create_canvas_document",
-    "rewrite_canvas_document",
-    "batch_canvas_edits",
-    "transform_canvas_lines",
-    "update_canvas_metadata",
-    "set_canvas_viewport",
-    "focus_canvas_page",
-    "clear_canvas_viewport",
-    "replace_canvas_lines",
-    "insert_canvas_lines",
-    "delete_canvas_lines",
-    "delete_canvas_document",
-    "clear_canvas",
-}
-CANVAS_CONTEXT_READ_TOOL_NAMES = {
-    "expand_canvas_document",
-    "batch_read_canvas_documents",
-    "scroll_canvas_document",
-}
-# All canvas read/inspect tools (superset of CANVAS_CONTEXT_READ_TOOL_NAMES).
-# Used by the canvas dependency barrier and the self-read guard to identify
-# tools that must not observe stale pre-mutation canvas state.
-CANVAS_ALL_READ_TOOL_NAMES = set(CANVAS_READ_BARRIER_TOOL_NAMES)
-CANVAS_STREAM_OPEN_TOOL_NAMES = {
-    "create_canvas_document",
-    "rewrite_canvas_document",
-    "batch_canvas_edits",
-    "transform_canvas_lines",
-    "replace_canvas_lines",
-    "insert_canvas_lines",
-    "delete_canvas_lines",
-}
 CANVAS_STREAM_CONTENT_TOOL_NAMES = {
     "create_canvas_document",
     "rewrite_canvas_document",
@@ -252,16 +202,28 @@ CANVAS_STREAM_REPLACE_CONTENT_TOOL_NAMES = {
     "insert_canvas_lines",
     "delete_canvas_lines",
 }
-RUNTIME_CONTEXT_INJECTION_SECTION_MARKERS = {
-    "## Current Date and Time",
-    "## Conversation Summaries",
-    "## Tool Execution History",
-    "## Active Tools This Turn",
-    "## Canvas File Set Summary",
-    "## Active Canvas Document",
-    "## Ignored Canvas Documents",
-    "## Pinned Canvas Viewports",
+# Derived: all tools that open a streaming canvas operation.
+CANVAS_STREAM_OPEN_TOOL_NAMES = CANVAS_STREAM_CONTENT_TOOL_NAMES | CANVAS_STREAM_REPLACE_CONTENT_TOOL_NAMES
+CANVAS_CONTEXT_READ_TOOL_NAMES = {
+    "expand_canvas_document",
+    "batch_read_canvas_documents",
+    "scroll_canvas_document",
 }
+# All canvas read/inspect tools (superset of CANVAS_CONTEXT_READ_TOOL_NAMES).
+# Used by the canvas dependency barrier and the self-read guard to identify
+# tools that must not observe stale pre-mutation canvas state.
+CANVAS_ALL_READ_TOOL_NAMES = set(CANVAS_READ_BARRIER_TOOL_NAMES)
+# CANVAS_MUTATION_TOOL_NAMES: alias for the authoritative set imported from canvas_service.
+CANVAS_MUTATION_TOOL_NAMES = CANVAS_MUTATING_TOOL_NAMES
+# Derived: all canvas-related tool names (mutations + reads).
+CANVAS_TOOL_NAMES = CANVAS_MUTATION_TOOL_NAMES | CANVAS_CONTEXT_READ_TOOL_NAMES | CANVAS_ALL_READ_TOOL_NAMES
+# Derived: runtime section markers are the canvas sections that get refreshed
+# each turn plus the insert-before anchors and the time section.
+RUNTIME_CONTEXT_INJECTION_SECTION_MARKERS = (
+    CANVAS_RUNTIME_CONTEXT_REFRESH_HEADINGS
+    | set(CANVAS_RUNTIME_CONTEXT_INSERT_BEFORE_HEADINGS)
+    | {"## Current Date and Time"}
+)
 DSML_INVOKE_TAG_RE = re.compile(r'<[^>]*invoke\s+name="(?P<name>[^"]+)"[^>]*>', re.IGNORECASE)
 DSML_FUNCTION_CALLS_TAG_RE = re.compile(r'<[^>]*function_calls[^>]*>', re.IGNORECASE)
 DSML_PARAMETER_TAG_RE = re.compile(
@@ -329,7 +291,30 @@ SYSTEM_BREAKDOWN_SECTION_KEY_BY_HEADING = {
 }
 SYSTEM_BREAKDOWN_REDUCTION_ORDER = MESSAGE_USAGE_BREAKDOWN_REDUCTION_ORDER
 _AGENT_TRACE_LOGGER = None
-client = get_provider_client(DEEPSEEK_PROVIDER)
+_AGENT_TRACE_LOGGER_LOCK = threading.Lock()
+_DEFAULT_PROVIDER_CLIENT = None
+_DEFAULT_PROVIDER_CLIENT_LOCK = threading.Lock()
+
+
+def _get_default_deepseek_client():
+    global _DEFAULT_PROVIDER_CLIENT
+    if _DEFAULT_PROVIDER_CLIENT is not None:
+        return _DEFAULT_PROVIDER_CLIENT
+
+    with _DEFAULT_PROVIDER_CLIENT_LOCK:
+        if _DEFAULT_PROVIDER_CLIENT is None:
+            _DEFAULT_PROVIDER_CLIENT = get_provider_client(DEEPSEEK_PROVIDER)
+    return _DEFAULT_PROVIDER_CLIENT
+
+
+class _LazyClientProxy:
+    """Compatibility proxy that defers default client creation until first use."""
+
+    def __getattr__(self, name: str):
+        return getattr(_get_default_deepseek_client(), name)
+
+
+client = _LazyClientProxy()
 
 
 def _get_agent_trace_logger():
@@ -337,18 +322,28 @@ def _get_agent_trace_logger():
     if _AGENT_TRACE_LOGGER is not None:
         return _AGENT_TRACE_LOGGER
 
-    logger = logging.getLogger("chatbot.agent.trace")
-    if not logger.handlers:
-        log_dir = os.path.dirname(AGENT_TRACE_LOG_PATH)
-        if log_dir:
-            os.makedirs(log_dir, exist_ok=True)
-        handler = RotatingFileHandler(AGENT_TRACE_LOG_PATH, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-        logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
-    _AGENT_TRACE_LOGGER = logger
-    return logger
+    with _AGENT_TRACE_LOGGER_LOCK:
+        if _AGENT_TRACE_LOGGER is not None:
+            return _AGENT_TRACE_LOGGER
+
+        logger = logging.getLogger("chatbot.agent.trace")
+        target_log_path = os.path.abspath(AGENT_TRACE_LOG_PATH)
+        has_target_handler = any(
+            isinstance(handler, RotatingFileHandler)
+            and os.path.abspath(str(getattr(handler, "baseFilename", ""))) == target_log_path
+            for handler in logger.handlers
+        )
+        if not has_target_handler:
+            log_dir = os.path.dirname(target_log_path)
+            if log_dir:
+                os.makedirs(log_dir, exist_ok=True)
+            handler = RotatingFileHandler(target_log_path, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
+            handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+            logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        _AGENT_TRACE_LOGGER = logger
+        return logger
 
 
 def get_model_pricing(model_id: str, settings: dict | None = None) -> dict:
@@ -1248,8 +1243,12 @@ def _is_session_cacheable_tool(tool_name: str) -> bool:
 
 
 def _resolve_sub_agent_tool_names(settings: dict, parent_tool_names: list[str] | None = None) -> list[str]:
-    del settings
-    configured_tool_names = parent_tool_names if isinstance(parent_tool_names, list) and parent_tool_names else SUB_AGENT_ALLOWED_TOOL_NAMES
+    allowed = settings.get("sub_agent_allowed_tool_names") if isinstance(settings, dict) else None
+    configured_tool_names = (
+        allowed if isinstance(allowed, list) and allowed
+        else parent_tool_names if isinstance(parent_tool_names, list) and parent_tool_names
+        else SUB_AGENT_ALLOWED_TOOL_NAMES
+    )
     normalized_tool_names: list[str] = []
     for tool_name in configured_tool_names:
         normalized_tool_name = _normalize_tool_name(tool_name)
@@ -1703,7 +1702,7 @@ def _build_canvas_expected_context(
         return None, None
 
     try:
-        _, document = _find_canvas_document(canvas_state, document_id=document_id, document_path=document_path)
+        _, document = find_canvas_document(canvas_state, document_id=document_id, document_path=document_path)
     except Exception:
         return None, None
 
@@ -3752,7 +3751,7 @@ def _build_streaming_canvas_line_edit_preview(
     document_id = str(tool_args.get("document_id") or "").strip() or None
     document_path = str(tool_args.get("document_path") or "").strip() or None
     try:
-        _, document = _find_canvas_document(canvas_state, document_id=document_id, document_path=document_path)
+        _, document = find_canvas_document(canvas_state, document_id=document_id, document_path=document_path)
     except Exception:
         return None, None
 
@@ -3807,7 +3806,7 @@ def _build_streaming_canvas_batch_edit_preview(
     document_id = str(target_args.get("document_id") or "").strip() or None
     document_path = str(target_args.get("document_path") or "").strip() or None
     try:
-        _, document = _find_canvas_document(canvas_state, document_id=document_id, document_path=document_path)
+        _, document = find_canvas_document(canvas_state, document_id=document_id, document_path=document_path)
     except Exception:
         return None, None
 
@@ -3836,7 +3835,7 @@ def _build_streaming_canvas_transform_preview(
     document_id = str(tool_args.get("document_id") or "").strip() or None
     document_path = str(tool_args.get("document_path") or "").strip() or None
     try:
-        _, document = _find_canvas_document(canvas_state, document_id=document_id, document_path=document_path)
+        _, document = find_canvas_document(canvas_state, document_id=document_id, document_path=document_path)
     except Exception:
         return None, None
 
@@ -6298,7 +6297,7 @@ def _build_already_visible_canvas_expand_result(tool_args: dict, runtime_state: 
     target_document_path = tool_args.get("document_path")
     if target_document_id or target_document_path:
         try:
-            _, target_document = _find_canvas_document(
+            _, target_document = find_canvas_document(
                 canvas_state,
                 document_id=target_document_id,
                 document_path=target_document_path,
@@ -6351,7 +6350,7 @@ def _resolve_canvas_document_locator(
     resolved_document_id = ""
     resolved_document_path = ""
     try:
-        _, resolved_document = _find_canvas_document(
+        _, resolved_document = find_canvas_document(
             canvas_state,
             document_id=document_id,
             document_path=document_path,

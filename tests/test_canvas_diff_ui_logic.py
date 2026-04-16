@@ -235,11 +235,8 @@ def test_streaming_canvas_preview_infers_heading_title_for_generic_drafts() -> N
 
 
 def test_expand_canvas_document_is_not_treated_as_streaming_canvas_preview() -> None:
-    source = AGENT_PY_PATH.read_text(encoding="utf-8")
-    match = re.search(r"CANVAS_STREAM_OPEN_TOOL_NAMES = \{(?P<body>.*?)\n\}", source, re.S)
-    assert match, "CANVAS_STREAM_OPEN_TOOL_NAMES was not found in agent.py"
-    body = match.group("body")
-    assert '"expand_canvas_document"' not in body
+    from agent import CANVAS_STREAM_OPEN_TOOL_NAMES
+    assert "expand_canvas_document" not in CANVAS_STREAM_OPEN_TOOL_NAMES
 
 
 def test_update_streaming_canvas_preview_element_uses_text_content_fast_paths() -> None:

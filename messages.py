@@ -9,6 +9,7 @@ from datetime import datetime
 
 from canvas_service import (
     build_canvas_project_manifest,
+    CANVAS_CONTENT_MUTATING_TOOL_NAMES,
     extract_canvas_documents,
     get_canvas_document_canvas_mode,
     get_canvas_document_capabilities,
@@ -194,18 +195,7 @@ def _format_summary_message_for_model(content: str, metadata: dict | None = None
     if normalized_content:
         return f"{summary_prefix}\n\n{normalized_content}"
     return summary_prefix
-CANVAS_MUTATING_TOOL_NAMES = {
-    "create_canvas_document",
-    "rewrite_canvas_document",
-    "batch_canvas_edits",
-    "transform_canvas_lines",
-    "update_canvas_metadata",
-    "replace_canvas_lines",
-    "insert_canvas_lines",
-    "delete_canvas_lines",
-    "delete_canvas_document",
-    "clear_canvas",
-}
+
 # Tools whose results may still be inputs for other calls in the same batch;
 # they are parallel-safe among themselves but must not be batched with any
 # call that depends on their output.
@@ -1894,7 +1884,7 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
         ]
 
     active_set = set(active_tool_names or [])
-    if not active_set.intersection(CANVAS_MUTATING_TOOL_NAMES):
+    if not active_set.intersection(CANVAS_CONTENT_MUTATING_TOOL_NAMES):
         return []
 
     search_guidance_line = _build_canvas_search_guidance_line(active_tool_names)

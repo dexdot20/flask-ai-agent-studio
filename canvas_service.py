@@ -72,6 +72,40 @@ CANVAS_FILE_PRIORITY = {
     "note": 70,
 }
 
+# Authoritative set of tool names that mutate canvas state (content or viewport).
+# This is the single source of truth imported by agent.py and messages.py.
+CANVAS_MUTATING_TOOL_NAMES: frozenset[str] = frozenset({
+    "create_canvas_document",
+    "rewrite_canvas_document",
+    "batch_canvas_edits",
+    "transform_canvas_lines",
+    "update_canvas_metadata",
+    "set_canvas_viewport",
+    "focus_canvas_page",
+    "clear_canvas_viewport",
+    "replace_canvas_lines",
+    "insert_canvas_lines",
+    "delete_canvas_lines",
+    "delete_canvas_document",
+    "clear_canvas",
+})
+
+# Subset of CANVAS_MUTATING_TOOL_NAMES that modify document *content* (not just
+# viewport/navigation state).  Used by the prompt layer to decide whether to
+# include editing-specific guidance sections.
+CANVAS_CONTENT_MUTATING_TOOL_NAMES: frozenset[str] = frozenset({
+    "create_canvas_document",
+    "rewrite_canvas_document",
+    "batch_canvas_edits",
+    "transform_canvas_lines",
+    "update_canvas_metadata",
+    "replace_canvas_lines",
+    "insert_canvas_lines",
+    "delete_canvas_lines",
+    "delete_canvas_document",
+    "clear_canvas",
+})
+
 
 def _normalize_line_endings(text: str) -> str:
     return str(text or "").replace("\r\n", "\n").replace("\r", "\n")
@@ -1236,6 +1270,15 @@ def _find_canvas_document(
         raise ValueError(f"Canvas document not found for id: {target_id}")
 
     return len(documents) - 1, documents[-1]
+
+
+def find_canvas_document(
+    runtime_state: dict,
+    document_id: str | None = None,
+    document_path: str | None = None,
+) -> tuple[int, dict]:
+    """Public wrapper around _find_canvas_document for use outside this module."""
+    return _find_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
 
 
 def _store_canvas_document(runtime_state: dict, document: dict) -> dict:

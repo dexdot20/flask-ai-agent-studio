@@ -2272,6 +2272,7 @@ _TOOL_RUNTIME_METADATA_OVERRIDES = {
         "parallel_safe": True,
         "session_cacheable": True,
         "state_domains": ("web",),
+        "prompt_visible": False,
     },
     "fetch_url": {
         "read_only": True,
