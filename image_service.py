@@ -57,6 +57,8 @@ def _run_helper_llm_image_analysis(
     user_text: str = "",
     model_id: str,
     settings: dict | None = None,
+    conversation_id: int | None = None,
+    source_message_id: int | None = None,
 ) -> dict:
     helper_model_id = _resolve_helper_model_id(settings, fallback_model_id=model_id)
     if not helper_model_id:
@@ -102,7 +104,39 @@ def _run_helper_llm_image_analysis(
         }
 
     request_kwargs = apply_model_target_request_options(request_kwargs, target)
-    response = target["client"].chat.completions.create(**request_kwargs)
+    from activity_service import ActivityTimer, STATUS_OK, STATUS_ERROR, extract_usage_from_response, log_activity_call
+    _timer = ActivityTimer()
+    try:
+        with _timer:
+            response = target["client"].chat.completions.create(**request_kwargs)
+    except Exception as _exc:
+        log_activity_call(
+            conversation_id=max(0, int(conversation_id or 0)),
+            provider=str((target.get("record") or {}).get("provider") or ""),
+            api_model=str(target.get("api_model") or ""),
+            operation="image_analysis",
+            call_type="image_analysis",
+            request_payload=request_kwargs,
+            response_status=STATUS_ERROR,
+            error_type=type(_exc).__name__,
+            error_message=str(_exc),
+            latency_ms=_timer.elapsed_ms,
+            source_message_id=source_message_id,
+        )
+        raise
+    _usage = extract_usage_from_response(response)
+    log_activity_call(
+        conversation_id=max(0, int(conversation_id or 0)),
+        provider=str((target.get("record") or {}).get("provider") or ""),
+        api_model=str(target.get("api_model") or ""),
+        operation="image_analysis",
+        call_type="image_analysis",
+        request_payload=request_kwargs,
+        response_status=STATUS_OK,
+        latency_ms=_timer.elapsed_ms,
+        source_message_id=source_message_id,
+        **_usage,
+    )
     choice = response.choices[0] if getattr(response, "choices", None) else None
     message = getattr(choice, "message", None) if choice else None
     raw_output = extract_text_from_response_content(getattr(message, "content", "")).strip()
@@ -172,6 +206,8 @@ def analyze_uploaded_image(
     model_id: str = "",
     settings: dict | None = None,
     processing_method: str = "auto",
+    conversation_id: int | None = None,
+    source_message_id: int | None = None,
 ) -> dict:
     if not IMAGE_UPLOADS_ENABLED:
         raise RuntimeError(IMAGE_UPLOADS_DISABLED_FEATURE_ERROR)
@@ -188,6 +224,8 @@ def analyze_uploaded_image(
                     user_text=user_text,
                     model_id=model_id,
                     settings=settings,
+                    conversation_id=conversation_id,
+                    source_message_id=source_message_id,
                 )
             if step == "llm_direct":
                 return _prepare_direct_multimodal_analysis(model_id, settings)
@@ -209,6 +247,8 @@ def answer_image_question(
     *,
     settings: dict | None = None,
     model_id: str = "",
+    conversation_id: int | None = None,
+    source_message_id: int | None = None,
 ) -> str:
     normalized_question = str(question or "").strip()
     if not normalized_question:
@@ -256,7 +296,39 @@ def answer_image_question(
         "temperature": 0.2,
     }
     request_kwargs = apply_model_target_request_options(request_kwargs, target)
-    response = target["client"].chat.completions.create(**request_kwargs)
+    from activity_service import ActivityTimer, STATUS_OK, STATUS_ERROR, extract_usage_from_response, log_activity_call
+    _timer = ActivityTimer()
+    try:
+        with _timer:
+            response = target["client"].chat.completions.create(**request_kwargs)
+    except Exception as _exc:
+        log_activity_call(
+            conversation_id=max(0, int(conversation_id or 0)),
+            provider=str((target.get("record") or {}).get("provider") or ""),
+            api_model=str(target.get("api_model") or ""),
+            operation="image_question",
+            call_type="image_question",
+            request_payload=request_kwargs,
+            response_status=STATUS_ERROR,
+            error_type=type(_exc).__name__,
+            error_message=str(_exc),
+            latency_ms=_timer.elapsed_ms,
+            source_message_id=source_message_id,
+        )
+        raise
+    _usage = extract_usage_from_response(response)
+    log_activity_call(
+        conversation_id=max(0, int(conversation_id or 0)),
+        provider=str((target.get("record") or {}).get("provider") or ""),
+        api_model=str(target.get("api_model") or ""),
+        operation="image_question",
+        call_type="image_question",
+        request_payload=request_kwargs,
+        response_status=STATUS_OK,
+        latency_ms=_timer.elapsed_ms,
+        source_message_id=source_message_id,
+        **_usage,
+    )
     choice = response.choices[0] if getattr(response, "choices", None) else None
     message = getattr(choice, "message", None) if choice else None
     raw_output = extract_text_from_response_content(getattr(message, "content", "")).strip()

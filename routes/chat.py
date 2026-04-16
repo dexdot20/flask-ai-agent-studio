@@ -2006,9 +2006,42 @@ def _reformat_summary_response_as_json(
         target,
     )
     try:
-        response = target["client"].chat.completions.create(**request_kwargs)
-    except Exception as exc:
-        return "", [str(exc)]
+        from activity_service import ActivityTimer, STATUS_OK, STATUS_ERROR, extract_usage_from_response, log_activity_call
+        _timer = ActivityTimer()
+        try:
+            with _timer:
+                response = target["client"].chat.completions.create(**request_kwargs)
+        except Exception as exc:
+            log_activity_call(
+                conversation_id=0,
+                provider=str((target.get("record") or {}).get("provider") or ""),
+                api_model=str(target.get("api_model") or ""),
+                operation="summarize_reformat",
+                call_type="summarize_reformat",
+                request_payload=request_kwargs,
+                response_status=STATUS_ERROR,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                latency_ms=_timer.elapsed_ms,
+            )
+            return "", [str(exc)]
+        _usage = extract_usage_from_response(response)
+        log_activity_call(
+            conversation_id=0,
+            provider=str((target.get("record") or {}).get("provider") or ""),
+            api_model=str(target.get("api_model") or ""),
+            operation="summarize_reformat",
+            call_type="summarize_reformat",
+            request_payload=request_kwargs,
+            response_status=STATUS_OK,
+            latency_ms=_timer.elapsed_ms,
+            **_usage,
+        )
+    except Exception:
+        try:
+            response = target["client"].chat.completions.create(**request_kwargs)
+        except Exception as exc:
+            return "", [str(exc)]
     return _extract_chat_completion_text(response), []
 
 
@@ -4575,6 +4608,8 @@ def register_chat_routes(app) -> None:
                         model_id=model,
                         settings=settings,
                         processing_method=normalize_image_processing_method(settings.get("image_processing_method")),
+                        conversation_id=conv_id,
+                        source_message_id=int(latest_user_message.get("id") or 0) or None,
                     )
                     attachment = {
                         "kind": "image",
@@ -5293,6 +5328,19 @@ def register_chat_routes(app) -> None:
                             response_summary=(
                                 entry.get("response_summary") if entry.get("response_summary") is not None else {}
                             ),
+                            operation=str(entry.get("operation") or entry.get("call_type") or "").strip() or None,
+                            prompt_tokens=entry.get("prompt_tokens"),
+                            completion_tokens=entry.get("completion_tokens"),
+                            total_tokens=entry.get("total_tokens"),
+                            estimated_input_tokens=entry.get("estimated_input_tokens"),
+                            cache_hit_tokens=entry.get("cache_hit_tokens"),
+                            cache_miss_tokens=entry.get("cache_miss_tokens"),
+                            cache_write_tokens=entry.get("cache_write_tokens"),
+                            cost=entry.get("cost"),
+                            latency_ms=entry.get("latency_ms"),
+                            response_status=str(entry.get("response_status") or "").strip() or None,
+                            error_type=str(entry.get("error_type") or "").strip() or None,
+                            error_message=str(entry.get("error_message") or "").strip() or None,
                         )
                 model_invocations_persisted = True
 

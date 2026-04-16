@@ -128,6 +128,7 @@ from config import (
 )
 from proxy_settings import normalize_proxy_enabled_operations
 from tool_registry import TOOL_SPEC_BY_NAME, get_tool_runtime_metadata
+from model_registry import get_all_models
 from token_utils import estimate_text_tokens
 
 _db_path = DB_PATH
@@ -565,6 +566,7 @@ def initialize_database() -> None:
     ensure_messages_position_column()
     ensure_messages_deleted_at_column()
     ensure_rag_documents_expires_at_column()
+    ensure_model_invocations_activity_columns()
 
 
 def _normalize_user_profile_value(value, max_length: int = 500) -> str:
@@ -3784,7 +3786,124 @@ def _parse_json_value(raw_value, fallback):
         return fallback
 
 
+def _get_activity_pricing(provider: str, api_model: str) -> dict[str, float] | None:
+    normalized_provider = str(provider or "").strip().lower()
+    normalized_api_model = str(api_model or "").strip()
+    if not normalized_provider or not normalized_api_model:
+        return None
+    for record in get_all_models():
+        if str(record.get("provider") or "").strip().lower() != normalized_provider:
+            continue
+        if str(record.get("api_model") or "").strip() != normalized_api_model:
+            continue
+        pricing = record.get("pricing") if isinstance(record.get("pricing"), dict) else {}
+        return {
+            "input": float(pricing.get("input") or 0.0),
+            "input_cache_hit": float(pricing.get("input_cache_hit") or pricing.get("input") or 0.0),
+            "input_cache_write": float(pricing.get("input_cache_write") or pricing.get("input") or 0.0),
+            "output": float(pricing.get("output") or 0.0),
+        }
+    return None
+
+
+def _calculate_activity_cost(
+    provider: str,
+    api_model: str,
+    prompt_tokens: int | None,
+    completion_tokens: int | None,
+    cache_hit_tokens: int | None = 0,
+    cache_miss_tokens: int | None = None,
+    cache_write_tokens: int | None = 0,
+) -> float | None:
+    pricing = _get_activity_pricing(provider, api_model)
+    if not isinstance(pricing, dict):
+        return None
+    if not any(float(pricing.get(key) or 0.0) > 0.0 for key in ("input", "input_cache_hit", "output")):
+        return None
+
+    normalized_prompt_tokens = max(0, int(prompt_tokens or 0))
+    normalized_completion_tokens = max(0, int(completion_tokens or 0))
+    normalized_cache_hit_tokens = max(0, int(cache_hit_tokens or 0))
+    normalized_cache_write_tokens = max(0, int(cache_write_tokens or 0))
+    if cache_miss_tokens is None:
+        normalized_cache_miss_tokens = (
+            normalized_prompt_tokens
+            if normalized_cache_hit_tokens <= 0
+            else max(0, normalized_prompt_tokens - normalized_cache_hit_tokens)
+        )
+    else:
+        normalized_cache_miss_tokens = max(0, int(cache_miss_tokens or 0))
+        accounted_prompt_tokens = normalized_cache_hit_tokens + normalized_cache_miss_tokens
+        if normalized_prompt_tokens > accounted_prompt_tokens:
+            normalized_cache_miss_tokens += normalized_prompt_tokens - accounted_prompt_tokens
+
+    input_cost = (normalized_cache_hit_tokens / 1_000_000) * float(pricing.get("input_cache_hit") or 0.0)
+    input_cost += (normalized_cache_write_tokens / 1_000_000) * float(pricing.get("input_cache_write") or 0.0)
+    input_cost += (normalized_cache_miss_tokens / 1_000_000) * float(pricing.get("input") or 0.0)
+    output_cost = (normalized_completion_tokens / 1_000_000) * float(pricing.get("output") or 0.0)
+    return round(input_cost + output_cost, 6)
+
+
+def ensure_model_invocations_activity_columns() -> None:
+    """Add Activity-logging columns to model_invocations if they are missing."""
+    new_columns = {
+        "operation": "TEXT",
+        "prompt_tokens": "INTEGER",
+        "completion_tokens": "INTEGER",
+        "total_tokens": "INTEGER",
+        "estimated_input_tokens": "INTEGER",
+        "cache_hit_tokens": "INTEGER",
+        "cache_miss_tokens": "INTEGER",
+        "cache_write_tokens": "INTEGER",
+        "cost": "REAL",
+        "latency_ms": "INTEGER",
+        "response_status": "TEXT",
+        "error_type": "TEXT",
+        "error_message": "TEXT",
+        "request_payload_bytes": "INTEGER",
+        "request_payload_hash": "TEXT",
+    }
+    with get_db() as conn:
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(model_invocations)").fetchall()}
+        for col, col_type in new_columns.items():
+            if col not in existing:
+                conn.execute(f"ALTER TABLE model_invocations ADD COLUMN {col} {col_type}")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_model_invocations_created_at ON model_invocations(created_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_model_invocations_provider_created ON model_invocations(provider, created_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_model_invocations_call_type_created ON model_invocations(call_type, created_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_model_invocations_status_created ON model_invocations(response_status, created_at)"
+        )
+
+
+def delete_expired_activity_records(retention_days: int = 30) -> int:
+    """Delete model_invocations rows older than retention_days. Returns deleted row count."""
+    days = max(1, int(retention_days or 30))
+    with get_db() as conn:
+        cursor = conn.execute(
+            "DELETE FROM model_invocations WHERE created_at < datetime('now', ?)",
+            (f"-{days} days",),
+        )
+        return int(cursor.rowcount or 0)
+
+
 def _model_invocation_row_to_dict(row) -> dict:
+    keys = row.keys() if hasattr(row, "keys") else []
+    def _int_col(col):
+        val = row[col] if col in keys else None
+        return int(val) if val is not None else None
+    def _real_col(col):
+        val = row[col] if col in keys else None
+        return float(val) if val is not None else None
+    def _text_col(col):
+        val = row[col] if col in keys else None
+        return str(val or "").strip() or None
     return {
         "id": int(row["id"]),
         "conversation_id": int(row["conversation_id"]),
@@ -3798,8 +3917,23 @@ def _model_invocation_row_to_dict(row) -> dict:
         "sub_agent_depth": int(row["sub_agent_depth"] or 0),
         "provider": str(row["provider"] or "").strip(),
         "api_model": str(row["api_model"] or "").strip(),
+        "operation": _text_col("operation"),
         "request": _parse_json_value(row["request_payload"], {}),
         "response_summary": _parse_json_value(row["response_summary"], {}),
+        "prompt_tokens": _int_col("prompt_tokens"),
+        "completion_tokens": _int_col("completion_tokens"),
+        "total_tokens": _int_col("total_tokens"),
+        "estimated_input_tokens": _int_col("estimated_input_tokens"),
+        "cache_hit_tokens": _int_col("cache_hit_tokens"),
+        "cache_miss_tokens": _int_col("cache_miss_tokens"),
+        "cache_write_tokens": _int_col("cache_write_tokens"),
+        "cost": _real_col("cost"),
+        "latency_ms": _int_col("latency_ms"),
+        "response_status": _text_col("response_status"),
+        "error_type": _text_col("error_type"),
+        "error_message": _text_col("error_message"),
+        "request_payload_bytes": _int_col("request_payload_bytes"),
+        "request_payload_hash": _text_col("request_payload_hash"),
         "created_at": str(row["created_at"] or "").strip() or None,
     }
 
@@ -3820,7 +3954,45 @@ def insert_model_invocation(
     is_retry: bool = False,
     retry_reason: str | None = None,
     sub_agent_depth: int = 0,
+    # Activity fields
+    operation: str | None = None,
+    prompt_tokens: int | None = None,
+    completion_tokens: int | None = None,
+    total_tokens: int | None = None,
+    estimated_input_tokens: int | None = None,
+    cache_hit_tokens: int | None = None,
+    cache_miss_tokens: int | None = None,
+    cache_write_tokens: int | None = None,
+    cost: float | None = None,
+    latency_ms: int | None = None,
+    response_status: str | None = None,
+    error_type: str | None = None,
+    error_message: str | None = None,
 ) -> int:
+    normalized_prompt_tokens = int(prompt_tokens) if prompt_tokens is not None else None
+    normalized_completion_tokens = int(completion_tokens) if completion_tokens is not None else None
+    normalized_total_tokens = int(total_tokens) if total_tokens is not None else None
+    normalized_estimated_input_tokens = int(estimated_input_tokens) if estimated_input_tokens is not None else None
+    normalized_cache_hit_tokens = int(cache_hit_tokens) if cache_hit_tokens is not None else None
+    normalized_cache_miss_tokens = int(cache_miss_tokens) if cache_miss_tokens is not None else None
+    normalized_cache_write_tokens = int(cache_write_tokens) if cache_write_tokens is not None else None
+    normalized_latency_ms = int(latency_ms) if latency_ms is not None else None
+    if normalized_total_tokens is None and normalized_prompt_tokens is not None and normalized_completion_tokens is not None:
+        normalized_total_tokens = normalized_prompt_tokens + normalized_completion_tokens
+    normalized_cost = float(cost) if cost is not None else _calculate_activity_cost(
+        provider,
+        api_model,
+        normalized_prompt_tokens,
+        normalized_completion_tokens,
+        cache_hit_tokens=normalized_cache_hit_tokens,
+        cache_miss_tokens=normalized_cache_miss_tokens,
+        cache_write_tokens=normalized_cache_write_tokens,
+    )
+
+    raw_payload = _serialize_json_value(request_payload)
+    payload_bytes = len(raw_payload.encode("utf-8")) if raw_payload else 0
+    payload_hash = hashlib.sha256(raw_payload.encode("utf-8")).hexdigest() if raw_payload else None
+
     cursor = conn.execute(
         """INSERT INTO model_invocations (
                conversation_id,
@@ -3835,8 +4007,23 @@ def insert_model_invocation(
                provider,
                api_model,
                request_payload,
-               response_summary
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               response_summary,
+               operation,
+               prompt_tokens,
+               completion_tokens,
+               total_tokens,
+               estimated_input_tokens,
+               cache_hit_tokens,
+               cache_miss_tokens,
+               cache_write_tokens,
+               cost,
+               latency_ms,
+               response_status,
+               error_type,
+               error_message,
+               request_payload_bytes,
+               request_payload_hash
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             int(conversation_id),
             _coerce_positive_int(assistant_message_id),
@@ -3849,8 +4036,23 @@ def insert_model_invocation(
             max(0, int(sub_agent_depth or 0)),
             str(provider or "").strip(),
             str(api_model or "").strip(),
-            _serialize_json_value(request_payload),
+            raw_payload,
             _serialize_json_value(response_summary if response_summary is not None else {}),
+            str(operation or "").strip() or None,
+            normalized_prompt_tokens,
+            normalized_completion_tokens,
+            normalized_total_tokens,
+            normalized_estimated_input_tokens,
+            normalized_cache_hit_tokens,
+            normalized_cache_miss_tokens,
+            normalized_cache_write_tokens,
+            normalized_cost,
+            normalized_latency_ms,
+            str(response_status or "").strip() or None,
+            str(error_type or "").strip() or None,
+            str(error_message or "").strip() or None,
+            payload_bytes,
+            payload_hash,
         ),
     )
     return int(cursor.lastrowid)
@@ -3861,13 +4063,145 @@ def list_conversation_model_invocations(conversation_id: int) -> list[dict]:
         rows = conn.execute(
             """SELECT id, conversation_id, assistant_message_id, source_message_id, step, call_index,
                       call_type, is_retry, retry_reason, sub_agent_depth, provider, api_model,
-                      request_payload, response_summary, created_at
+                      request_payload, response_summary, operation,
+                      prompt_tokens, completion_tokens, total_tokens, estimated_input_tokens,
+                      cache_hit_tokens, cache_miss_tokens, cache_write_tokens,
+                      cost, latency_ms, response_status, error_type, error_message,
+                      request_payload_bytes, request_payload_hash, created_at
                FROM model_invocations
                WHERE conversation_id = ?
                ORDER BY id ASC""",
             (int(conversation_id),),
         ).fetchall()
     return [_model_invocation_row_to_dict(row) for row in rows]
+
+
+_ACTIVITY_ALLOWED_SORT = {"created_at", "id", "provider", "call_type", "response_status", "total_tokens", "cost", "latency_ms"}
+_ACTIVITY_ALLOWED_DIRECTIONS = {"ASC", "DESC"}
+
+
+def list_activity_records(
+    *,
+    conversation_id: int | None = None,
+    provider: str | None = None,
+    call_type: str | None = None,
+    operation: str | None = None,
+    response_status: str | None = None,
+    since_iso: str | None = None,
+    until_iso: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    sort_by: str = "created_at",
+    sort_dir: str = "DESC",
+    include_request: bool = False,
+) -> list[dict]:
+    """Paginated, filterable activity log. RAW request_payload included only when include_request=True."""
+    safe_sort = sort_by if sort_by in _ACTIVITY_ALLOWED_SORT else "created_at"
+    safe_dir = sort_dir.upper() if sort_dir.upper() in _ACTIVITY_ALLOWED_DIRECTIONS else "DESC"
+    safe_limit = max(1, min(200, int(limit or 50)))
+    safe_offset = max(0, int(offset or 0))
+
+    payload_col = "request_payload" if include_request else "NULL AS request_payload"
+    conditions: list[str] = []
+    params: list = []
+
+    if conversation_id is not None:
+        conditions.append("conversation_id = ?")
+        params.append(int(conversation_id))
+    if provider:
+        conditions.append("provider = ?")
+        params.append(str(provider).strip())
+    if call_type:
+        conditions.append("call_type = ?")
+        params.append(str(call_type).strip())
+    if operation:
+        conditions.append("operation = ?")
+        params.append(str(operation).strip())
+    if response_status:
+        conditions.append("response_status = ?")
+        params.append(str(response_status).strip())
+    if since_iso:
+        conditions.append("created_at >= ?")
+        params.append(str(since_iso).strip())
+    if until_iso:
+        conditions.append("created_at <= ?")
+        params.append(str(until_iso).strip())
+
+    where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    query = f"""SELECT id, conversation_id, assistant_message_id, source_message_id, step, call_index,
+                       call_type, is_retry, retry_reason, sub_agent_depth, provider, api_model,
+                       {payload_col}, response_summary, operation,
+                       prompt_tokens, completion_tokens, total_tokens, estimated_input_tokens,
+                       cache_hit_tokens, cache_miss_tokens, cache_write_tokens,
+                       cost, latency_ms, response_status, error_type, error_message,
+                       request_payload_bytes, request_payload_hash, created_at
+                FROM model_invocations
+                {where_clause}
+                ORDER BY {safe_sort} {safe_dir}
+                LIMIT ? OFFSET ?"""
+    params.extend([safe_limit, safe_offset])
+
+    with get_db() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [_model_invocation_row_to_dict(row) for row in rows]
+
+
+def count_activity_records(
+    *,
+    conversation_id: int | None = None,
+    provider: str | None = None,
+    call_type: str | None = None,
+    operation: str | None = None,
+    response_status: str | None = None,
+    since_iso: str | None = None,
+    until_iso: str | None = None,
+) -> int:
+    conditions: list[str] = []
+    params: list = []
+
+    if conversation_id is not None:
+        conditions.append("conversation_id = ?")
+        params.append(int(conversation_id))
+    if provider:
+        conditions.append("provider = ?")
+        params.append(str(provider).strip())
+    if call_type:
+        conditions.append("call_type = ?")
+        params.append(str(call_type).strip())
+    if operation:
+        conditions.append("operation = ?")
+        params.append(str(operation).strip())
+    if response_status:
+        conditions.append("response_status = ?")
+        params.append(str(response_status).strip())
+    if since_iso:
+        conditions.append("created_at >= ?")
+        params.append(str(since_iso).strip())
+    if until_iso:
+        conditions.append("created_at <= ?")
+        params.append(str(until_iso).strip())
+
+    where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    with get_db() as conn:
+        row = conn.execute(f"SELECT COUNT(*) AS cnt FROM model_invocations {where_clause}", params).fetchone()
+    return int(row["cnt"] or 0)
+
+
+def get_activity_record(record_id: int) -> dict | None:
+    """Return a single activity record with full request_payload."""
+    with get_db() as conn:
+        row = conn.execute(
+            """SELECT id, conversation_id, assistant_message_id, source_message_id, step, call_index,
+                      call_type, is_retry, retry_reason, sub_agent_depth, provider, api_model,
+                      request_payload, response_summary, operation,
+                      prompt_tokens, completion_tokens, total_tokens, estimated_input_tokens,
+                      cache_hit_tokens, cache_miss_tokens, cache_write_tokens,
+                      cost, latency_ms, response_status, error_type, error_message,
+                      request_payload_bytes, request_payload_hash, created_at
+               FROM model_invocations WHERE id = ?""",
+            (int(record_id),),
+        ).fetchone()
+    return _model_invocation_row_to_dict(row) if row else None
 
 
 def _build_runtime_default_settings() -> dict[str, str]:

@@ -270,6 +270,8 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("tool_memory_ttl_news_seconds", payload)
         self.assertIn("fetch_raw_max_text_chars", payload)
         self.assertIn("fetch_summary_max_chars", payload)
+        self.assertTrue(payload["activity_enabled"])
+        self.assertEqual(payload["activity_retention_days"], 30)
         self.assertEqual(payload["chat_summary_detail_level"], "balanced")
         self.assertEqual(payload["rag_auto_inject"], bool(payload["features"]["rag_enabled"]))
         self.assertEqual(payload["chat_summary_mode"], "auto")
@@ -4427,7 +4429,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn('data-settings-tab="context"', html)
         self.assertIn('data-settings-tab="tools"', html)
         self.assertIn('data-settings-tab="knowledge"', html)
+        self.assertIn('data-settings-tab="activity"', html)
         self.assertIn("Manual knowledge", html)
+        self.assertIn("Activity Log", html)
+        self.assertIn('id="activity-filter-conversation"', html)
+        self.assertIn('id="activity-detail-copy-btn"', html)
+        self.assertIn('id="activity-detail-view-request"', html)
         self.assertIn("Upload document", html)
         self.assertIn('src="/static/settings.js?v=', html)
         self.assertIn('id="kb-sync-btn"', html)
@@ -12146,6 +12153,109 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             payload["transcript"][1]["metadata"]["reasoning_content"],
             "Reasoned through the request.",
         )
+
+    def test_activity_api_lists_records_without_raw_payload(self):
+        conversation_id = self._create_conversation("Activity API Chat")
+
+        with get_db() as conn:
+            insert_model_invocation(
+                conn,
+                conversation_id,
+                step=1,
+                call_index=1,
+                call_type="agent_step",
+                provider="deepseek",
+                api_model="deepseek-chat",
+                operation="agent_step",
+                request_payload={
+                    "model": "deepseek-chat",
+                    "messages": [{"role": "user", "content": "Hello activity"}],
+                },
+                response_summary={"status": "ok"},
+                prompt_tokens=11,
+                completion_tokens=7,
+                total_tokens=18,
+                latency_ms=321,
+                response_status="ok",
+            )
+
+        response = self.client.get(f"/api/activity?conversation_id={conversation_id}&limit=10")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["total"], 1)
+        self.assertEqual(len(payload["records"]), 1)
+        record = payload["records"][0]
+        self.assertEqual(record["provider"], "deepseek")
+        self.assertEqual(record["api_model"], "deepseek-chat")
+        self.assertEqual(record["prompt_tokens"], 11)
+        self.assertEqual(record["completion_tokens"], 7)
+        self.assertEqual(record["total_tokens"], 18)
+        self.assertEqual(record["latency_ms"], 321)
+        self.assertEqual(record["response_status"], "ok")
+        self.assertEqual(record["cost"], 0.000006)
+        self.assertEqual(record["request"], {})
+        self.assertIsNotNone(record["request_payload_hash"])
+        self.assertGreater(record["request_payload_bytes"], 0)
+
+    def test_activity_api_detail_returns_raw_payload(self):
+        conversation_id = self._create_conversation("Activity Detail Chat")
+
+        with get_db() as conn:
+            record_id = insert_model_invocation(
+                conn,
+                conversation_id,
+                step=1,
+                call_index=1,
+                call_type="prune",
+                provider="deepseek",
+                api_model="deepseek-chat",
+                operation="prune",
+                request_payload={
+                    "model": "deepseek-chat",
+                    "messages": [{"role": "user", "content": "Trim this"}],
+                },
+                response_summary={"status": "ok"},
+                response_status="ok",
+            )
+
+        response = self.client.get(f"/api/activity/{record_id}")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["record"]["id"], record_id)
+        self.assertEqual(payload["record"]["operation"], "prune")
+        self.assertEqual(payload["record"]["request"]["messages"][0]["content"], "Trim this")
+
+    def test_activity_purge_expired_endpoint_deletes_old_rows(self):
+        conversation_id = self._create_conversation("Activity Retention Chat")
+
+        with get_db() as conn:
+            record_id = insert_model_invocation(
+                conn,
+                conversation_id,
+                step=1,
+                call_index=1,
+                call_type="agent_step",
+                provider="deepseek",
+                api_model="deepseek-chat",
+                operation="agent_step",
+                request_payload={"model": "deepseek-chat"},
+                response_summary={"status": "ok"},
+                response_status="ok",
+            )
+            conn.execute(
+                "UPDATE model_invocations SET created_at = datetime('now', '-31 days') WHERE id = ?",
+                (record_id,),
+            )
+
+        response = self.client.post("/api/activity/purge-expired")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["retention_days"], 30)
+        self.assertGreaterEqual(payload["deleted"], 1)
+        self.assertEqual(self.client.get(f"/api/activity/{record_id}").status_code, 404)
 
     def test_conversation_export_endpoint_marks_legacy_json_export_when_no_exact_snapshots(self):
         conversation_id = self._create_conversation("Legacy Raw Export")

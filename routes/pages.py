@@ -618,7 +618,17 @@ def build_settings_payload() -> dict:
         "fetch_url_summarized_max_output_tokens": get_fetch_url_summarized_max_output_tokens(raw),
         "features": get_feature_flags(raw),
         "tool_catalog": build_tool_catalog(),
+        "activity_enabled": _coerce_bool_setting(raw.get("activity_enabled"), default=True),
+        "activity_retention_days": max(1, int(raw.get("activity_retention_days") or 30)),
     }
+
+
+def _coerce_bool_setting(value, *, default: bool = True) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in {"false", "0", "off", "no"}
 
 
 def build_scratchpad_sections_payload(settings: dict) -> dict:

@@ -8017,6 +8017,143 @@ body[data-page="settings"] .settings-stat-card {
   flex-shrink: 0;
 }
 
+.activity-toolbar-row {
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.activity-filter-select {
+  min-width: 120px;
+}
+
+.activity-filter-select--wide {
+  min-width: 220px;
+}
+
+#activity-filter-operation.activity-filter-select {
+  min-width: 140px;
+}
+
+#activity-filter-status.activity-filter-select {
+  min-width: 100px;
+}
+
+.activity-list-root {
+  overflow: auto;
+}
+
+.activity-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+.activity-table th,
+.activity-table td {
+  padding: 0.7rem 0.55rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.activity-table thead th {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.activity-table .activity-cell-nowrap {
+  white-space: nowrap;
+}
+
+.activity-table .activity-cell-model {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-detail-btn,
+.activity-status-pill {
+  font-size: 0.7rem;
+}
+
+.activity-status-pill {
+  padding: 0.1rem 0.4rem;
+}
+
+.activity-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.9rem;
+}
+
+.activity-detail-close-btn {
+  margin-left: auto;
+}
+
+.activity-detail-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 0.9rem;
+}
+
+.activity-detail-summary-card {
+  padding: 0.8rem 0.9rem;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.activity-detail-summary-card span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  margin-bottom: 0.24rem;
+}
+
+.activity-detail-summary-card strong {
+  display: block;
+  font-size: 0.95rem;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.activity-detail-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.activity-detail-view-toggle {
+  display: inline-flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.activity-detail-view-btn.is-active {
+  border-color: rgba(79, 110, 247, 0.36);
+  background: rgba(79, 110, 247, 0.12);
+}
+
+.activity-detail-payload {
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 60vh;
+  overflow: auto;
+  background: var(--surface-2, #1e1e2e);
+  padding: 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.75rem;
+}
+
 .scratchpad-list {
   display: flex;
   flex-direction: column;

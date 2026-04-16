@@ -27,6 +27,7 @@ def create_app(database_path: str | None = None, *, load_persisted_runtime_setti
 
     from db import configure_db_path, initialize_database
     from routes import (
+        register_activity_routes,
         install_auth_guard,
         register_auth_routes,
         register_chat_routes,
@@ -89,6 +90,7 @@ def create_app(database_path: str | None = None, *, load_persisted_runtime_setti
     register_page_routes(app)
     register_conversation_routes(app)
     register_chat_routes(app)
+    register_activity_routes(app)
 
     return app
 

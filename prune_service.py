@@ -684,7 +684,50 @@ def prune_message(message_id: int) -> dict:
             },
             target,
         )
-        response = target["client"].chat.completions.create(**request_kwargs)
+        from activity_service import ActivityTimer, STATUS_OK, STATUS_ERROR, extract_usage_from_response, log_activity_call
+        _conv_id_for_log = int(row["conversation_id"] or 0)
+        _timer = ActivityTimer()
+        _response_status = STATUS_OK
+        _error_type: str | None = None
+        _error_msg: str | None = None
+        _response = None
+        try:
+            with _timer:
+                _response = target["client"].chat.completions.create(**request_kwargs)
+            response = _response
+        except Exception as _exc:
+            _response_status = STATUS_ERROR
+            _error_type = type(_exc).__name__
+            _error_msg = str(_exc)
+            log_activity_call(
+                conversation_id=_conv_id_for_log,
+                provider=str((target.get("record") or {}).get("provider") or ""),
+                api_model=str(target.get("api_model") or ""),
+                operation="prune",
+                call_type="prune",
+                request_payload=request_kwargs,
+                response_status=_response_status,
+                error_type=_error_type,
+                error_message=_error_msg,
+                latency_ms=_timer.elapsed_ms,
+                is_retry=attempt > 0,
+                retry_reason="empty_response" if attempt > 0 else None,
+            )
+            raise
+        _usage = extract_usage_from_response(_response)
+        log_activity_call(
+            conversation_id=_conv_id_for_log,
+            provider=str((target.get("record") or {}).get("provider") or ""),
+            api_model=str(target.get("api_model") or ""),
+            operation="prune",
+            call_type="prune",
+            request_payload=request_kwargs,
+            response_status=STATUS_OK,
+            latency_ms=_timer.elapsed_ms,
+            is_retry=attempt > 0,
+            retry_reason="empty_response" if attempt > 0 else None,
+            **_usage,
+        )
         pruned_content = _extract_response_text(response)
         if pruned_content:
             break

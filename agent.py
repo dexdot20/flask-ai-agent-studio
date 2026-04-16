@@ -2593,6 +2593,19 @@ def _append_model_invocation_log(
     model_target: dict,
     request_payload,
     response_summary,
+    operation: str | None = None,
+    prompt_tokens: int | None = None,
+    completion_tokens: int | None = None,
+    total_tokens: int | None = None,
+    estimated_input_tokens: int | None = None,
+    cache_hit_tokens: int | None = None,
+    cache_miss_tokens: int | None = None,
+    cache_write_tokens: int | None = None,
+    cost: float | None = None,
+    latency_ms: int | None = None,
+    response_status: str | None = None,
+    error_type: str | None = None,
+    error_message: str | None = None,
 ) -> None:
     if not isinstance(invocation_log_sink, list):
         return
@@ -2608,8 +2621,21 @@ def _append_model_invocation_log(
             "sub_agent_depth": _coerce_int_range(context.get("sub_agent_depth"), 0, 0, 8),
             "provider": str((record or {}).get("provider") or "").strip(),
             "api_model": str(model_target.get("api_model") or "").strip(),
+            "operation": str(operation or call_type or "").strip() or None,
             "request_payload": _snapshot_model_invocation_value(request_payload),
             "response_summary": _snapshot_model_invocation_value(response_summary),
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "estimated_input_tokens": estimated_input_tokens,
+            "cache_hit_tokens": cache_hit_tokens,
+            "cache_miss_tokens": cache_miss_tokens,
+            "cache_write_tokens": cache_write_tokens,
+            "cost": cost,
+            "latency_ms": latency_ms,
+            "response_status": response_status,
+            "error_type": error_type,
+            "error_message": error_message,
         }
     )
 
@@ -2695,8 +2721,11 @@ def _summarize_fetched_page_result(
         target,
     )
     try:
+        _t0_fetch_sum = time.monotonic()
         response = target["client"].chat.completions.create(**request_kwargs)
+        _fetch_sum_latency_ms = max(0, round((time.monotonic() - _t0_fetch_sum) * 1000))
     except Exception as exc:
+        _fetch_sum_latency_ms = max(0, round((time.monotonic() - _t0_fetch_sum) * 1000)) if "_t0_fetch_sum" in dir() else None
         _append_model_invocation_log(
             invocation_log_sink,
             agent_context=agent_context,
@@ -2710,6 +2739,11 @@ def _summarize_fetched_page_result(
                 "error": str(exc),
                 "usage": {"missing_provider_usage": True},
             },
+            operation="fetch_summarize",
+            response_status="error",
+            error_type=type(exc).__name__,
+            error_message=str(exc),
+            latency_ms=_fetch_sum_latency_ms,
         )
         raise
     summary_text = _clean_tool_text(_extract_chat_completion_text(response), limit=RAG_TOOL_RESULT_MAX_TEXT_CHARS)
@@ -2738,6 +2772,15 @@ def _summarize_fetched_page_result(
             },
             "content_text": summary_text,
         },
+        operation="fetch_summarize",
+        response_status="ok",
+        latency_ms=_fetch_sum_latency_ms,
+        prompt_tokens=response_usage.get("prompt_tokens"),
+        completion_tokens=response_usage.get("completion_tokens"),
+        total_tokens=response_usage.get("total_tokens"),
+        cache_hit_tokens=response_usage.get("prompt_cache_hit_tokens"),
+        cache_miss_tokens=response_usage.get("prompt_cache_miss_tokens"),
+        cache_write_tokens=response_usage.get("prompt_cache_write_tokens"),
     )
 
     summarized_result = {
@@ -5248,6 +5291,8 @@ def _run_image_explain(tool_args: dict, runtime_state: dict):
         initial_analysis=asset.get("initial_analysis"),
         settings=get_app_settings(),
         model_id=str(((runtime_state.get("agent_context") or {}).get("model") or "")).strip(),
+        conversation_id=normalized_conversation_id,
+        source_message_id=int(((runtime_state.get("agent_context") or {}).get("source_message_id") or 0)) or None,
     )
     return {
         "status": "ok",
