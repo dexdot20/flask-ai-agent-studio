@@ -56,7 +56,7 @@ from canvas_service import (
     update_canvas_metadata,
     validate_canvas_document,
 )
-from github_import_service import import_github_repository_into_canvas
+from github_import_service import import_github_repository_into_canvas, preview_github_repository_for_canvas
 from project_workspace_service import (
     create_directory as workspace_create_directory,
     create_file as workspace_create_file,
@@ -5631,14 +5631,6 @@ def _run_validate_project_workspace(tool_args: dict, runtime_state: dict):
 
 
 def _run_import_github_repository_to_canvas(tool_args: dict, runtime_state: dict):
-    confirmed = tool_args.get("confirmed") is True
-    if not confirmed:
-        error = (
-            "User confirmation is required before importing a GitHub repository into Canvas. "
-            "Ask for confirmation first, then retry with confirmed=true."
-        )
-        return {"status": "error", "error": error}, error
-
     url = str(tool_args.get("url") or "").strip()
     if not url:
         error = "GitHub repository URL is required."
@@ -5656,6 +5648,20 @@ def _run_import_github_repository_to_canvas(tool_args: dict, runtime_state: dict
     )
     if primary_document_path:
         summary += f"; active file: {primary_document_path}"
+    return result, summary
+
+
+def _run_preview_github_import_to_canvas(tool_args: dict, runtime_state: dict):
+    del runtime_state
+    url = str(tool_args.get("url") or "").strip()
+    if not url:
+        error = "GitHub repository URL is required."
+        return {"status": "error", "error": error}, error
+
+    result = preview_github_repository_for_canvas(url)
+    total_files = int(result.get("total_files") or 0)
+    repo_label = f"{result.get('owner')}/{result.get('repo')}@{result.get('ref')}"
+    summary = f"Preview: {repo_label} — {total_files} file(s) ready to import"
     return result, summary
 
 
@@ -6175,6 +6181,7 @@ _TOOL_EXECUTORS = {
     "write_project_tree": _run_write_project_tree,
     "validate_project_workspace": _run_validate_project_workspace,
     "import_github_repository_to_canvas": _run_import_github_repository_to_canvas,
+    "preview_github_import_to_canvas": _run_preview_github_import_to_canvas,
     "create_canvas_document": _run_create_canvas_document,
     "rewrite_canvas_document": _run_rewrite_canvas_document,
     "preview_canvas_changes": _run_preview_canvas_changes,
@@ -6414,7 +6421,7 @@ def _tool_input_preview(tool_name: str, tool_args: dict) -> str:
         if query and path_prefix:
             return f"{query} @ {path_prefix}"[:300]
         return (query or path_prefix)[:300]
-    if tool_name == "import_github_repository_to_canvas":
+    if tool_name in {"import_github_repository_to_canvas", "preview_github_import_to_canvas"}:
         return str(tool_args.get("url") or "").strip()[:300]
     if tool_name in {"expand_canvas_document", "scroll_canvas_document"}:
         target = str(tool_args.get("document_path") or tool_args.get("document_id") or "active document").strip()

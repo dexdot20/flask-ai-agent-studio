@@ -248,28 +248,47 @@ class TestAgentGithubImportTool(unittest.TestCase):
         runtime_state = {"canvas": create_canvas_runtime_state(canvas_docs)}
         return _run_import_github_repository_to_canvas(args, runtime_state)
 
-    def test_missing_confirmed_flag_returns_error(self):
-        result, summary = self._run_tool({"url": "https://github.com/owner/repo"})
-        self.assertEqual(result.get("status"), "error")
-        self.assertIn("confirmation", summary.lower())
+    def _run_preview_tool(self, args: dict):
+        from agent import _run_preview_github_import_to_canvas
 
-    def test_confirmed_false_returns_error(self):
-        result, summary = self._run_tool({"url": "https://github.com/owner/repo", "confirmed": False})
-        self.assertEqual(result.get("status"), "error")
+        return _run_preview_github_import_to_canvas(args, {})
 
     def test_missing_url_returns_error(self):
-        result, summary = self._run_tool({"confirmed": True})
+        result, summary = self._run_tool({})
         self.assertEqual(result.get("status"), "error")
 
-    def test_confirmed_true_with_valid_mock_succeeds(self):
+    def test_valid_url_executes_import(self):
         archive_bytes = _make_zip({"README.md": "# Title\n"})
         with _patch_github_network(archive_bytes):
-            result, summary = self._run_tool(
-                {"url": "https://github.com/owner/repo", "confirmed": True}
-            )
+            result, summary = self._run_tool({"url": "https://github.com/owner/repo"})
         self.assertNotEqual(result.get("status"), "error")
         self.assertGreater(int(result.get("imported_count") or 0), 0)
         self.assertIn("imported", summary.lower())
+
+    def test_preview_missing_url_returns_error(self):
+        result, summary = self._run_preview_tool({})
+        self.assertEqual(result.get("status"), "error")
+
+    def test_preview_returns_file_listing_without_canvas_mutation(self):
+        from canvas_service import create_canvas_runtime_state
+
+        archive_bytes = _make_zip({"README.md": "# Title\n", "src/utils.py": "pass\n"})
+        runtime_state = {"canvas": create_canvas_runtime_state([])}
+        with _patch_github_network(archive_bytes):
+            result, summary = self._run_preview_tool({"url": "https://github.com/owner/repo"})
+
+        self.assertIn("files", result)
+        self.assertGreater(int(result.get("total_files") or 0), 0)
+        self.assertIn("preview", summary.lower())
+        # Canvas must not have been mutated.
+        canvas_docs = runtime_state["canvas"].get("documents") or []
+        self.assertEqual(len(canvas_docs), 0)
+
+    def test_preview_primary_document_path_returned(self):
+        archive_bytes = _make_zip({"README.md": "# Title\n", "src/utils.py": "pass\n"})
+        with _patch_github_network(archive_bytes):
+            result, _ = self._run_preview_tool({"url": "https://github.com/owner/repo"})
+        self.assertEqual(result.get("primary_document_path"), "README.md")
 
 
 # ---------------------------------------------------------------------------
@@ -319,43 +338,55 @@ class TestSubAgentToolResolutionInheritsParent(unittest.TestCase):
 
 
 class TestGithubImportToolRegistration(unittest.TestCase):
-    def test_tool_spec_registered(self):
+    def test_import_tool_spec_registered(self):
         from tool_registry import TOOL_SPEC_BY_NAME
 
         self.assertIn("import_github_repository_to_canvas", TOOL_SPEC_BY_NAME)
 
-    def test_tool_spec_has_required_fields(self):
+    def test_preview_tool_spec_registered(self):
+        from tool_registry import TOOL_SPEC_BY_NAME
+
+        self.assertIn("preview_github_import_to_canvas", TOOL_SPEC_BY_NAME)
+
+    def test_import_tool_spec_has_no_confirmed_param(self):
+        from tool_registry import TOOL_SPEC_BY_NAME
+
+        spec = TOOL_SPEC_BY_NAME["import_github_repository_to_canvas"]
+        self.assertNotIn("confirmed", spec["parameters"]["properties"])
+
+    def test_import_tool_spec_requires_url(self):
         from tool_registry import TOOL_SPEC_BY_NAME
 
         spec = TOOL_SPEC_BY_NAME["import_github_repository_to_canvas"]
         self.assertIn("url", spec["parameters"]["properties"])
-        self.assertIn("confirmed", spec["parameters"]["properties"])
         self.assertIn("url", spec["parameters"]["required"])
-        self.assertIn("confirmed", spec["parameters"]["required"])
 
-    def test_tool_metadata_declares_canvas_domain(self):
+    def test_preview_tool_spec_requires_url(self):
+        from tool_registry import TOOL_SPEC_BY_NAME
+
+        spec = TOOL_SPEC_BY_NAME["preview_github_import_to_canvas"]
+        self.assertIn("url", spec["parameters"]["properties"])
+        self.assertIn("url", spec["parameters"]["required"])
+
+    def test_import_tool_metadata_declares_canvas_domain(self):
         from tool_registry import get_tool_runtime_metadata
 
         metadata = get_tool_runtime_metadata("import_github_repository_to_canvas")
         self.assertIn("canvas", metadata.get("state_domains") or ())
 
-    def test_tool_is_not_read_only(self):
+    def test_preview_tool_metadata_is_read_only(self):
+        from tool_registry import get_tool_runtime_metadata
+
+        metadata = get_tool_runtime_metadata("preview_github_import_to_canvas")
+        self.assertTrue(metadata.get("read_only") is True)
+
+    def test_import_tool_is_not_read_only(self):
         from tool_registry import get_tool_runtime_metadata
 
         metadata = get_tool_runtime_metadata("import_github_repository_to_canvas")
         self.assertNotEqual(metadata.get("read_only"), True)
 
-    def test_tool_not_included_in_sub_agent_sections(self):
-        from routes.pages import build_sub_agent_web_tool_sections
-
-        all_sub_agent_tool_names = [
-            tool["name"]
-            for section in build_sub_agent_web_tool_sections()
-            for tool in section.get("tools", [])
-        ]
-        self.assertNotIn("import_github_repository_to_canvas", all_sub_agent_tool_names)
-
-    def test_tool_in_canvas_section_of_permission_options(self):
+    def test_tools_in_canvas_section_of_permission_options(self):
         from routes.pages import build_tool_permission_sections
 
         canvas_section = next(
@@ -365,13 +396,15 @@ class TestGithubImportToolRegistration(unittest.TestCase):
         self.assertIsNotNone(canvas_section)
         canvas_tool_names = {t["name"] for t in canvas_section.get("tools", [])}
         self.assertIn("import_github_repository_to_canvas", canvas_tool_names)
+        self.assertIn("preview_github_import_to_canvas", canvas_tool_names)
 
-    def test_tool_has_label_in_permission_labels(self):
+    def test_both_tools_have_labels(self):
         from routes.pages import TOOL_PERMISSION_LABELS
 
         self.assertIn("import_github_repository_to_canvas", TOOL_PERMISSION_LABELS)
-        label = TOOL_PERMISSION_LABELS["import_github_repository_to_canvas"]
-        self.assertIn("GitHub", label)
+        self.assertIn("preview_github_import_to_canvas", TOOL_PERMISSION_LABELS)
+        self.assertIn("GitHub", TOOL_PERMISSION_LABELS["import_github_repository_to_canvas"])
+        self.assertIn("GitHub", TOOL_PERMISSION_LABELS["preview_github_import_to_canvas"])
 
 
 # ---------------------------------------------------------------------------

@@ -475,3 +475,25 @@ def import_github_repository_into_canvas(runtime_state: dict, url: str) -> dict:
         "documents": imported_documents,
         "active_document_id": str((primary_document or {}).get("id") or "").strip() or None,
     }
+
+
+def preview_github_repository_for_canvas(url: str) -> dict:
+    """Return structured metadata about what would be imported WITHOUT mutating Canvas."""
+    repo_payload = load_github_repo_canvas_entries(url)
+    documents = repo_payload.get("documents") or []
+    preview_entries: list[dict] = []
+    for entry in documents:
+        path = str(entry.get("path") or "").strip()
+        size = int(entry.get("size") or len(str(entry.get("content") or "")))
+        preview_entries.append({"path": path, "size_bytes": size})
+    return {
+        "owner": repo_payload.get("owner"),
+        "repo": repo_payload.get("repo"),
+        "ref": repo_payload.get("ref"),
+        "source_url": repo_payload.get("source_url"),
+        "total_files": int(repo_payload.get("imported_count") or 0),
+        "skipped_binary": int(repo_payload.get("skipped_binary_count") or 0),
+        "skipped_filtered": int(repo_payload.get("skipped_filtered_count") or 0),
+        "primary_document_path": repo_payload.get("primary_document_path"),
+        "files": preview_entries,
+    }

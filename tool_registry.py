@@ -1570,10 +1570,39 @@ TOOL_SPECS = [
         },
     },
     {
+        "name": "preview_github_import_to_canvas",
+        "description": (
+            "Fetch metadata for a GitHub repository and return a structured preview of which files would be imported into Canvas. "
+            "Does NOT modify Canvas. Use this before importing to show the user what will change."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "GitHub repository URL, such as https://github.com/owner/repo or https://github.com/owner/repo/tree/branch/subdir."
+                }
+            },
+            "required": ["url"]
+        },
+        "prompt": {
+            "purpose": "Returns a file listing preview for a GitHub repository without mutating Canvas.",
+            "inputs": {"url": "GitHub repository URL"},
+            "guidance": (
+                "ALWAYS call this tool first when the user wants to import a GitHub repository into Canvas. "
+                "After receiving the preview, present the file list and total count to the user, then call ask_clarifying_question "
+                "to obtain explicit approval BEFORE proceeding. "
+                "Do NOT call import_github_repository_to_canvas in the same turn as this tool. "
+                "Only call import_github_repository_to_canvas in a subsequent turn after the user has confirmed."
+            ),
+        },
+    },
+    {
         "name": "import_github_repository_to_canvas",
         "description": (
             "Download a GitHub repository archive, extract supported text files, and add them into the current conversation Canvas as path-aware project files. "
-            "This mutates Canvas and may update existing files with matching paths."
+            "This mutates Canvas and may update existing files with matching paths. "
+            "REQUIRED: You MUST have called preview_github_import_to_canvas and obtained explicit user approval via ask_clarifying_question in a PREVIOUS turn before calling this."
         ),
         "parameters": {
             "type": "object",
@@ -1581,22 +1610,19 @@ TOOL_SPECS = [
                 "url": {
                     "type": "string",
                     "description": "GitHub repository URL to import, such as https://github.com/owner/repo or https://github.com/owner/repo/tree/branch/subdir."
-                },
-                "confirmed": {
-                    "type": "boolean",
-                    "description": "Must be true only after the user explicitly confirms that the GitHub repository should be imported into Canvas."
                 }
             },
-            "required": ["url", "confirmed"]
+            "required": ["url"]
         },
         "prompt": {
             "purpose": "Imports a GitHub repository into Canvas as path-aware project files and chooses one high-signal file as the active document.",
-            "inputs": {"url": "GitHub repository URL", "confirmed": "explicit user confirmation flag"},
+            "inputs": {"url": "GitHub repository URL"},
             "guidance": (
-                "Before calling this tool, you MUST obtain explicit user confirmation to start the repository import. "
-                "Use ask_clarifying_question or an equivalent confirmation request first when the user has not clearly approved the import yet. "
-                "Call this tool only after the user says yes, then pass confirmed=true. "
-                "Use it when the user wants a GitHub repository pulled into Canvas for code reading, navigation, or editing. "
+                "ONLY call this tool after all of the following conditions are met: "
+                "(1) you called preview_github_import_to_canvas in a previous turn, "
+                "(2) you presented the file listing to the user, "
+                "(3) you called ask_clarifying_question and the user explicitly confirmed in their most recent message. "
+                "Never call this tool speculatively or in the same turn as the preview tool. "
                 "The import keeps project-relative paths so Canvas tree and path-based targeting work immediately."
             ),
         },
@@ -2338,6 +2364,11 @@ _TOOL_RUNTIME_METADATA_OVERRIDES = {
     },
     "import_github_repository_to_canvas": {
         "state_domains": ("canvas", "web"),
+    },
+    "preview_github_import_to_canvas": {
+        "read_only": True,
+        "parallel_safe": False,
+        "state_domains": ("web",),
     },
 }
 

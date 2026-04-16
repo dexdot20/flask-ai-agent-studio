@@ -5623,12 +5623,22 @@ function renderCanvasMetaBar(renderState) {
   }
 }
 
-function renderCanvasDocumentTabs(visibleDocuments) {
+function renderCanvasDocumentTabs(visibleDocuments, allDocuments) {
   if (!canvasDocumentTabsEl) {
     return;
   }
 
-  canvasDocumentTabsEl.hidden = visibleDocuments.length <= 1;
+  // In project mode the tree panel already handles navigation.
+  // Show tabs only when there are a small number of files without paths.
+  const isProjectMode = getCanvasMode(allDocuments || visibleDocuments) === "project";
+  const MAX_FLAT_TABS = 8;
+  if (isProjectMode || visibleDocuments.length <= 1 || visibleDocuments.length > MAX_FLAT_TABS) {
+    canvasDocumentTabsEl.hidden = true;
+    canvasDocumentTabsEl.innerHTML = "";
+    return;
+  }
+
+  canvasDocumentTabsEl.hidden = false;
   canvasDocumentTabsEl.innerHTML = "";
   visibleDocuments.forEach((entry) => {
     const button = globalThis.document.createElement("button");
@@ -6238,7 +6248,7 @@ function renderCanvasPanel() {
   }
 
   updateCanvasActiveDocumentDisplay(renderState);
-  renderCanvasDocumentTabs(visibleDocuments);
+  renderCanvasDocumentTabs(visibleDocuments, renderDocuments);
   syncCanvasViewportControls();
 }
 
