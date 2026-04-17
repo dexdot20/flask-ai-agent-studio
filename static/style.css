@@ -8058,9 +8058,19 @@ body[data-page="settings"] .settings-stat-card {
 }
 
 .activity-toolbar-row {
+  display: flex;
+  align-items: flex-end;
   gap: 0.5rem;
   flex-wrap: wrap;
   margin-bottom: 0.75rem;
+}
+
+.activity-toolbar-row .settings-label {
+  margin-top: 0;
+}
+
+.activity-toolbar-actions {
+  margin-left: auto;
 }
 
 .activity-filter-select {
@@ -8080,6 +8090,10 @@ body[data-page="settings"] .settings-stat-card {
 }
 
 .activity-list-root {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.015);
+  padding: 12px;
   overflow: auto;
 }
 
@@ -8120,8 +8134,33 @@ body[data-page="settings"] .settings-stat-card {
   font-size: 0.7rem;
 }
 
+.activity-detail-btn {
+  min-height: 30px;
+  padding: 5px 10px;
+}
+
 .activity-status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+  font-weight: 600;
   padding: 0.1rem 0.4rem;
+}
+
+.activity-status-pill[data-tone="ok"] {
+  color: #92d7ac;
+  border-color: rgba(146, 215, 172, 0.28);
+  background: rgba(146, 215, 172, 0.08);
+}
+
+.activity-status-pill[data-tone="error"] {
+  color: #f08d8d;
+  border-color: rgba(240, 141, 141, 0.28);
+  background: rgba(240, 141, 141, 0.08);
 }
 
 .activity-pagination {
@@ -8134,6 +8173,10 @@ body[data-page="settings"] .settings-stat-card {
 
 .activity-detail-close-btn {
   margin-left: auto;
+}
+
+.settings-page-section-card--activity-detail {
+  align-self: start;
 }
 
 .activity-detail-summary {

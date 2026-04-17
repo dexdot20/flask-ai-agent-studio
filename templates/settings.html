@@ -1617,97 +1617,108 @@
             </div>
           </div>
         </section>
-      </div>
-    </section>
 
         <section class="settings-tab-panel" data-settings-panel="activity" aria-labelledby="activity-tab" hidden>
-          <div class="settings-page-body">
-            <div class="settings-group">
-              <section class="settings-subsection">
-                <div class="settings-subsection__header">
-                  <span class="settings-subsection__eyebrow">Outbound LLM requests</span>
-                  <h3 class="settings-subsection__title">Activity Log</h3>
+          <div class="settings-page-grid settings-page-grid--two">
+            <section class="settings-page-section-card settings-page-section-card--activity-log">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Outbound LLM requests</span>
+                  <h3>Activity Log</h3>
                 </div>
-                <p class="settings-copy">Every provider request — model, token count, cost, latency and full RAW payload — logged here automatically.</p>
+                <p>Every provider request — model, token count, cost, latency, and raw request/response summary payloads.</p>
+              </div>
 
-                <div class="settings-row settings-row--inline activity-toolbar-row">
-                  <label class="settings-label" for="activity-filter-conversation">Conversation</label>
-                  <select id="activity-filter-conversation" class="settings-select activity-filter-select activity-filter-select--wide">
-                    <option value="">All chats</option>
-                  </select>
-                  <label class="settings-label" for="activity-filter-provider">Provider</label>
-                  <select id="activity-filter-provider" class="settings-select activity-filter-select">
-                    <option value="">All</option>
-                  </select>
-                  <label class="settings-label" for="activity-filter-operation">Operation</label>
-                  <select id="activity-filter-operation" class="settings-select activity-filter-select">
-                    <option value="">All</option>
-                    <option value="agent_step">Chat / Agent</option>
-                    <option value="fetch_summarize">Fetch Summarize</option>
-                    <option value="prune">Prune</option>
-                    <option value="image_analysis">Image Analysis</option>
-                    <option value="image_question">Image Question</option>
-                    <option value="summarize_reformat">Summarize Reformat</option>
-                  </select>
-                  <label class="settings-label" for="activity-filter-status">Status</label>
-                  <select id="activity-filter-status" class="settings-select activity-filter-select">
-                    <option value="">All</option>
-                    <option value="ok">OK</option>
-                    <option value="error">Error</option>
-                    <option value="stream_error">Stream Error</option>
-                    <option value="cancelled">Cancelled</option>
-                  </select>
-                  <button class="settings-btn" id="activity-filter-apply-btn" type="button">Apply</button>
-                  <button class="settings-btn settings-btn--muted" id="activity-filter-reset-btn" type="button">Reset</button>
-                  <button class="settings-btn settings-btn--danger" id="activity-purge-btn" type="button">Purge Expired</button>
-                </div>
+              <div class="activity-toolbar-row" role="group" aria-label="Activity filters">
+                <label class="settings-label" for="activity-filter-conversation">Conversation</label>
+                <select id="activity-filter-conversation" class="settings-select activity-filter-select activity-filter-select--wide">
+                  <option value="">All chats</option>
+                </select>
 
-                <div id="activity-list-root" class="activity-list-root">
-                  <p class="settings-copy" id="activity-list-placeholder">Loading activity log…</p>
-                  <table class="activity-table" id="activity-table" hidden>
-                    <thead>
-                      <tr>
-                        <th>Time</th>
-                        <th>Provider</th>
-                        <th>Model</th>
-                        <th>Operation</th>
-                        <th>Status</th>
-                        <th>Tokens (in/out)</th>
-                        <th>Cost</th>
-                        <th>Latency</th>
-                        <th></th>
-                      </tr>
-                    </thead>
-                    <tbody id="activity-table-body"></tbody>
-                  </table>
-                  <div class="activity-pagination" id="activity-pagination" hidden>
-                    <button class="settings-btn settings-btn--muted" id="activity-prev-btn" type="button">&#8592; Prev</button>
-                    <span id="activity-page-info"></span>
-                    <button class="settings-btn settings-btn--muted" id="activity-next-btn" type="button">Next &#8594;</button>
-                  </div>
-                </div>
-              </section>
+                <label class="settings-label" for="activity-filter-provider">Provider</label>
+                <select id="activity-filter-provider" class="settings-select activity-filter-select">
+                  <option value="">All</option>
+                </select>
 
-              <section class="settings-subsection settings-subsection--compact" id="activity-detail-section" hidden>
-                <div class="settings-subsection__header">
-                  <span class="settings-subsection__eyebrow">Request detail</span>
-                  <h4 class="settings-subsection__title" id="activity-detail-title">Record #…</h4>
-                  <button class="settings-btn settings-btn--muted" id="activity-detail-copy-btn" type="button">Copy JSON</button>
-                  <button class="settings-btn settings-btn--muted activity-detail-close-btn" id="activity-detail-close-btn" type="button">Close</button>
+                <label class="settings-label" for="activity-filter-operation">Operation</label>
+                <select id="activity-filter-operation" class="settings-select activity-filter-select">
+                  <option value="">All</option>
+                  <option value="agent_step">Chat / Agent</option>
+                  <option value="fetch_summarize">Fetch Summarize</option>
+                  <option value="prune">Prune</option>
+                  <option value="image_analysis">Image Analysis</option>
+                  <option value="image_question">Image Question</option>
+                  <option value="summarize_reformat">Summarize Reformat</option>
+                </select>
+
+                <label class="settings-label" for="activity-filter-status">Status</label>
+                <select id="activity-filter-status" class="settings-select activity-filter-select">
+                  <option value="">All</option>
+                  <option value="ok">OK</option>
+                  <option value="error">Error</option>
+                  <option value="stream_error">Stream Error</option>
+                  <option value="cancelled">Cancelled</option>
+                </select>
+
+                <div class="settings-inline-actions activity-toolbar-actions">
+                  <button class="btn-primary" id="activity-filter-apply-btn" type="button">Apply</button>
+                  <button class="btn-ghost" id="activity-filter-reset-btn" type="button">Reset</button>
+                  <button class="btn-ghost btn-ghost--danger" id="activity-purge-btn" type="button">Purge expired</button>
                 </div>
-                <div class="activity-detail-summary" id="activity-detail-summary" hidden></div>
-                <div class="activity-detail-toolbar">
-                  <div class="activity-detail-view-toggle" role="tablist" aria-label="Activity detail view">
-                    <button class="settings-btn settings-btn--muted activity-detail-view-btn is-active" id="activity-detail-view-full" type="button" data-activity-detail-view="full">Full</button>
-                    <button class="settings-btn settings-btn--muted activity-detail-view-btn" id="activity-detail-view-request" type="button" data-activity-detail-view="request">Request</button>
-                    <button class="settings-btn settings-btn--muted activity-detail-view-btn" id="activity-detail-view-response" type="button" data-activity-detail-view="response">Response</button>
-                  </div>
+              </div>
+
+              <div id="activity-list-root" class="activity-list-root">
+                <p class="settings-copy" id="activity-list-placeholder">Loading activity log…</p>
+                <table class="activity-table" id="activity-table" hidden>
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Provider</th>
+                      <th>Model</th>
+                      <th>Operation</th>
+                      <th>Status</th>
+                      <th>Tokens (in/out)</th>
+                      <th>Cost</th>
+                      <th>Latency</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="activity-table-body"></tbody>
+                </table>
+                <div class="activity-pagination" id="activity-pagination" hidden>
+                  <button class="btn-ghost" id="activity-prev-btn" type="button">&#8592; Prev</button>
+                  <span id="activity-page-info"></span>
+                  <button class="btn-ghost" id="activity-next-btn" type="button">Next &#8594;</button>
                 </div>
-                <pre id="activity-detail-payload" class="activity-detail-payload"></pre>
-              </section>
-            </div>
+              </div>
+            </section>
+
+            <section class="settings-page-section-card settings-page-section-card--activity-detail" id="activity-detail-section" hidden>
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Request detail</span>
+                  <h3 id="activity-detail-title">Record #…</h3>
+                </div>
+                <div class="settings-inline-actions">
+                  <button class="btn-ghost" id="activity-detail-copy-btn" type="button">Copy JSON</button>
+                  <button class="btn-ghost activity-detail-close-btn" id="activity-detail-close-btn" type="button">Close</button>
+                </div>
+              </div>
+
+              <div class="activity-detail-summary" id="activity-detail-summary" hidden></div>
+              <div class="activity-detail-toolbar">
+                <div class="activity-detail-view-toggle" role="tablist" aria-label="Activity detail view">
+                  <button class="btn-ghost activity-detail-view-btn is-active" id="activity-detail-view-full" type="button" data-activity-detail-view="full">Full</button>
+                  <button class="btn-ghost activity-detail-view-btn" id="activity-detail-view-request" type="button" data-activity-detail-view="request">Request</button>
+                  <button class="btn-ghost activity-detail-view-btn" id="activity-detail-view-response" type="button" data-activity-detail-view="response">Response</button>
+                </div>
+              </div>
+              <pre id="activity-detail-payload" class="activity-detail-payload"></pre>
+            </section>
           </div>
         </section>
+      </div>
+    </section>
   </main>
 
   <script id="app-bootstrap" type="application/json">{{ {"settings": settings, "features": settings.features, "csrf_token": csrf_token}|tojson }}</script>

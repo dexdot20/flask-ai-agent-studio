@@ -3858,7 +3858,7 @@ void loadKnowledgeBaseDocuments();
   }
   function statusBadge(s) {
     const tone = s === "ok" ? "ok" : "error";
-    return `<span class="settings-pill activity-status-pill" data-tone="${tone}">${escapeHtml(s || "—")}</span>`;
+    return `<span class="activity-status-pill" data-tone="${tone}">${escapeHtml(s || "—")}</span>`;
   }
 
   async function loadConversationOptions() {
@@ -3940,7 +3940,7 @@ void loadKnowledgeBaseDocuments();
         `<td>${escapeHtml(fmtNum(r.prompt_tokens))} / ${escapeHtml(fmtNum(r.completion_tokens))}</td>`,
         `<td>${escapeHtml(fmtCost(r.cost))}</td>`,
         `<td>${escapeHtml(fmtMs(r.latency_ms))}</td>`,
-        `<td><button class="settings-btn settings-btn--muted activity-detail-btn" data-id="${r.id}" type="button">View</button></td>`,
+        `<td><button class="btn-ghost activity-detail-btn" data-id="${r.id}" type="button">View</button></td>`,
       ].join("");
       tbodyEl.appendChild(tr);
     }
