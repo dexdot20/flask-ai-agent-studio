@@ -3309,6 +3309,7 @@ def _filter_clarification_answers_for_questions(
 
 def _find_latest_active_pending_clarification(messages: list[dict]) -> dict | None:
     answered_assistant_ids: set[str] = set()
+    answered_question_key_sets: list[set[str]] = []
     for message in messages:
         if not isinstance(message, dict):
             continue
@@ -3320,6 +3321,10 @@ def _find_latest_active_pending_clarification(messages: list[dict]) -> dict | No
         assistant_message_id = str((clarification_response or {}).get("assistant_message_id") or "").strip()
         if isinstance(answers, dict) and answers and assistant_message_id:
             answered_assistant_ids.add(assistant_message_id)
+        if isinstance(answers, dict) and answers:
+            answer_keys = {str(key or "").strip() for key in answers.keys() if str(key or "").strip()}
+            if answer_keys:
+                answered_question_key_sets.append(answer_keys)
 
     latest_pending: dict | None = None
     for message in messages:
@@ -3334,6 +3339,16 @@ def _find_latest_active_pending_clarification(messages: list[dict]) -> dict | No
         pending_clarification = extract_pending_clarification(metadata)
         questions = pending_clarification.get("questions") if isinstance(pending_clarification, dict) else []
         if not isinstance(questions, list) or not questions:
+            continue
+        question_ids = {
+            str(question.get("id") or "").strip()
+            for question in questions
+            if isinstance(question, dict) and str(question.get("id") or "").strip()
+        }
+        if question_ids and any(question_ids.issubset(answer_keys) for answer_keys in answered_question_key_sets):
+            # Treat stale pending clarifications as answered when question IDs
+            # are already fully covered by any user clarification response,
+            # even if assistant_message_id drifted across rendered/tool turns.
             continue
         latest_pending = {
             "assistant_message_id": assistant_message_id,

@@ -14939,6 +14939,128 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ],
         )
 
+    def test_build_api_messages_strips_reordered_clarification_tool_chain_when_latest_user_is_response(self):
+        normalized = normalize_chat_messages(
+            [
+                {
+                    "id": 1,
+                    "role": "assistant",
+                    "content": "Please answer this question:\n1. Budget?",
+                },
+                {
+                    "id": 2,
+                    "role": "user",
+                    "content": "- Budget? → 200-300 TL",
+                    "metadata": {
+                        "clarification_response": {
+                            "assistant_message_id": 1,
+                            "answers": {"budget": {"display": "200-300 TL"}},
+                        }
+                    },
+                },
+                {
+                    "id": 3,
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call-clar-1",
+                            "type": "function",
+                            "function": {
+                                "name": "ask_clarifying_question",
+                                "arguments": '{"questions":[{"id":"budget","label":"Budget?","input_type":"text"}]}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "id": 4,
+                    "role": "tool",
+                    "content": '{"status":"needs_user_input"}',
+                    "tool_call_id": "call-clar-1",
+                },
+            ]
+        )
+
+        api_messages = build_api_messages(normalized)
+
+        self.assertEqual(
+            api_messages,
+            [
+                {"role": "assistant", "content": "Please answer this question:\n1. Budget?"},
+                {"role": "user", "content": "- budget → 200-300 TL"},
+            ],
+        )
+
+    def test_build_api_messages_strips_answered_clarification_tool_chain_when_assistant_id_drifts(self):
+        normalized = normalize_chat_messages(
+            [
+                {
+                    "id": 10,
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {
+                                "name": "ask_clarifying_question",
+                                "arguments": '{"questions":[{"id":"budget","label":"Budget?","input_type":"text"},{"id":"goal","label":"Goal?","input_type":"text"}]}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "id": 11,
+                    "role": "tool",
+                    "content": '{"status":"needs_user_input"}',
+                    "tool_call_id": "call-1",
+                },
+                {
+                    "id": 12,
+                    "role": "assistant",
+                    "content": "Before I answer, I need details.",
+                    "metadata": {
+                        "pending_clarification": {
+                            "questions": [
+                                {"id": "budget", "label": "Budget?", "input_type": "text"},
+                                {"id": "goal", "label": "Goal?", "input_type": "text"},
+                            ]
+                        }
+                    },
+                },
+                {
+                    "id": 13,
+                    "role": "user",
+                    "content": "Q/A",
+                    "metadata": {
+                        "clarification_response": {
+                            # Deliberately mismatched assistant id, but with full
+                            # question-id coverage.
+                            "assistant_message_id": 999,
+                            "answers": {"budget": {"display": "200"}, "goal": {"display": "sales"}},
+                        }
+                    },
+                },
+            ]
+        )
+
+        api_messages = build_api_messages(normalized)
+
+        self.assertEqual(
+            api_messages,
+            [
+                {
+                    "role": "assistant",
+                    "content": "Before I answer, I need details.",
+                },
+                {
+                    "role": "user",
+                    "content": "Q/A\n\n- budget → 200\n- goal → sales",
+                },
+            ],
+        )
+
     def test_build_api_messages_strips_saved_sub_agent_tool_blocks(self):
         normalized = normalize_chat_messages(
             [
@@ -15228,6 +15350,45 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("needs_user_input", context)
         self.assertIn("Awaiting user clarification answers", context)
         self.assertNotIn("All clarification answers provided by the user", context)
+
+    def test_build_tool_trace_context_treats_id_drifted_pending_as_answered_by_question_ids(self):
+        canonical_messages = normalize_chat_messages(
+            [
+                {
+                    "id": 50,
+                    "role": "assistant",
+                    "content": "",
+                    "metadata": {
+                        "tool_trace": [
+                            {"tool_name": "ask_clarifying_question", "state": "done", "summary": "asked questions"}
+                        ],
+                        "pending_clarification": {
+                            "questions": [
+                                {"id": "q1", "label": "Question 1", "input_type": "text"},
+                                {"id": "q2", "label": "Question 2", "input_type": "text"},
+                            ]
+                        },
+                    },
+                },
+                {
+                    "id": 51,
+                    "role": "user",
+                    "content": "answers",
+                    "metadata": {
+                        "clarification_response": {
+                            # Simulates assistant message id drift between rendered
+                            # and tool-backed clarification turns.
+                            "assistant_message_id": 999,
+                            "answers": {"q1": {"display": "a1"}, "q2": {"display": "a2"}},
+                        }
+                    },
+                },
+            ]
+        )
+
+        context = _build_tool_trace_context(canonical_messages)
+
+        self.assertIsNone(context)
 
     def test_build_api_messages_uses_null_content_for_tool_only_assistant_turns(self):
         api_messages = build_api_messages(

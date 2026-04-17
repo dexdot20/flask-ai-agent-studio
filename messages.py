@@ -1141,6 +1141,7 @@ def _filter_clarification_answers_for_questions(
 def _collect_answered_clarification_skip_indexes(messages: list[dict]) -> set[int]:
     skip_indexes: set[int] = set()
     answered_assistant_ids: set[str] = set()
+    answered_question_key_sets: list[set[str]] = []
     assistant_index_by_id: dict[str, int] = {}
 
     for index, message in enumerate(messages):
@@ -1158,6 +1159,10 @@ def _collect_answered_clarification_skip_indexes(messages: list[dict]) -> set[in
         assistant_message_id = str((clarification_response or {}).get("assistant_message_id") or "").strip()
         if isinstance(answers, dict) and answers and assistant_message_id:
             answered_assistant_ids.add(assistant_message_id)
+        if isinstance(answers, dict) and answers:
+            answer_keys = {str(key or "").strip() for key in answers.keys() if str(key or "").strip()}
+            if answer_keys:
+                answered_question_key_sets.append(answer_keys)
 
     if not answered_assistant_ids:
         return skip_indexes
@@ -1168,11 +1173,21 @@ def _collect_answered_clarification_skip_indexes(messages: list[dict]) -> set[in
         assistant_metadata = (
             assistant_message.get("metadata") if isinstance(assistant_message.get("metadata"), dict) else {}
         )
-        if not extract_pending_clarification(assistant_metadata):
+        pending_clarification = extract_pending_clarification(assistant_metadata)
+        if not pending_clarification:
             continue
         assistant_message_id = str(assistant_message.get("id") or "").strip()
-        if not assistant_message_id or assistant_message_id not in answered_assistant_ids:
+        if not assistant_message_id:
             continue
+        if assistant_message_id not in answered_assistant_ids:
+            questions = pending_clarification.get("questions") if isinstance(pending_clarification, dict) else []
+            question_ids = {
+                str(question.get("id") or "").strip()
+                for question in questions
+                if isinstance(question, dict) and str(question.get("id") or "").strip()
+            }
+            if not question_ids or not any(question_ids.issubset(answer_keys) for answer_keys in answered_question_key_sets):
+                continue
 
         # Keep the pending-clarification assistant message itself so the model
         # still sees the asked question text, but strip obsolete tool-call/tool
@@ -1329,6 +1344,46 @@ def build_api_messages(
         (index for index, message in enumerate(messages) if message.get("role") == "user"),
         default=-1,
     )
+    latest_user_metadata = (
+        messages[latest_user_message_index].get("metadata")
+        if latest_user_message_index >= 0 and isinstance(messages[latest_user_message_index], dict)
+        else {}
+    )
+    latest_user_metadata = latest_user_metadata if isinstance(latest_user_metadata, dict) else {}
+    latest_clarification_response = extract_clarification_response(latest_user_metadata)
+    latest_clarification_answers = (
+        latest_clarification_response.get("answers") if isinstance(latest_clarification_response, dict) else {}
+    )
+    latest_user_is_clarification_response = bool(
+        isinstance(latest_clarification_answers, dict) and latest_clarification_answers
+    )
+    if latest_user_is_clarification_response:
+        # Defensive cleanup for legacy/reordered transcripts: when the latest user
+        # turn is a clarification response, any ask_clarifying_question tool-call
+        # scaffolding should be treated as already consumed and removed from the
+        # model input, regardless of exact message-id linkage.
+        clarification_call_ids_to_strip: set[str] = set()
+        for index, message in enumerate(messages):
+            if not isinstance(message, dict) or str(message.get("role") or "").strip() != "assistant":
+                continue
+            tool_calls = parse_message_tool_calls(message.get("tool_calls"))
+            matching_call_ids = {
+                str(tool_call.get("id") or "").strip()
+                for tool_call in tool_calls
+                if str(((tool_call.get("function") or {}).get("name") or "")).strip() == "ask_clarifying_question"
+            }
+            if matching_call_ids:
+                skip_indexes.add(index)
+                clarification_call_ids_to_strip.update(call_id for call_id in matching_call_ids if call_id)
+
+        if clarification_call_ids_to_strip:
+            for index, message in enumerate(messages):
+                if not isinstance(message, dict) or str(message.get("role") or "").strip() != "tool":
+                    continue
+                tool_call_id = str(message.get("tool_call_id") or "").strip()
+                if tool_call_id and tool_call_id in clarification_call_ids_to_strip:
+                    skip_indexes.add(index)
+
     active_tool_names_by_id: dict[str, str] = {}
     active_tool_names_in_order: list[str] = []
     active_tool_name_index = 0
