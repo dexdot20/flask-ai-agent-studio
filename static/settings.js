@@ -3633,9 +3633,7 @@ function registerDirtyListeners() {
   canvasScrollLinesEl?.addEventListener("input", markDirty);
   summaryModelPreferenceEl?.addEventListener("change", markDirty);
   fetchSummarizeModelPreferenceEl?.addEventListener("change", markDirty);
-  pruneModelPreferenceEl?.addEventListener("change", markDirty);
   fixTextModelPreferenceEl?.addEventListener("change", markDirty);
-  titleModelPreferenceEl?.addEventListener("change", markDirty);
   uploadMetadataModelPreferenceEl?.addEventListener("change", markDirty);
   subAgentModelPreferenceEl?.addEventListener("change", markDirty);
   imageHelperModelEl?.addEventListener("change", markDirty);
