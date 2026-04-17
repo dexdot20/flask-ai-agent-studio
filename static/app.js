@@ -5342,7 +5342,11 @@ function clearDeferredCanvasRenderFlushTimer() {
 }
 
 function shouldDeferCanvasRenderForStreaming() {
-  return Boolean(isStreaming && activeAnswerRenderPending);
+  // If the Canvas panel is already open, prioritize keeping the live draft
+  // visually up to date. We still throttle preview paints separately, so this
+  // only disables the hard defer that can otherwise starve the Canvas preview
+  // while answer frames keep arriving back-to-back.
+  return Boolean(isStreaming && activeAnswerRenderPending && !isCanvasOpen());
 }
 
 function scheduleDeferredCanvasRenderFlush(delay = CANVAS_STREAMING_RENDER_DEFER_INTERVAL_MS) {

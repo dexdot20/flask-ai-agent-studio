@@ -466,6 +466,24 @@ def test_schedule_canvas_preview_render_defers_when_answer_frame_is_pending() ->
     )
 
 
+def test_should_defer_canvas_render_for_streaming_only_when_canvas_is_closed() -> None:
+    source = _load_app_js_source()
+    func_match = re.search(
+        r"function shouldDeferCanvasRenderForStreaming\(\) \{(?P<body>.*?)\n\}",
+        source,
+        re.S,
+    )
+    assert func_match, "shouldDeferCanvasRenderForStreaming was not found in static/app.js"
+    body = func_match.group("body")
+
+    assert "activeAnswerRenderPending" in body, (
+        "Canvas render defer helper must still coordinate with pending answer frames"
+    )
+    assert "!isCanvasOpen()" in body, (
+        "Canvas render defer helper must stop hard-deferring previews once the Canvas panel is open"
+    )
+
+
 def test_open_canvas_uses_deferred_panel_render_during_streaming() -> None:
     source = _load_app_js_source()
     func_match = re.search(

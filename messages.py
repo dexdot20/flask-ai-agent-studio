@@ -468,8 +468,7 @@ def _build_knowledge_base_payload(retrieved_context, active_tool_names: list[str
     if not RAG_ENABLED:
         return None
 
-    search_enabled = "search_knowledge_base" in set(active_tool_names or [])
-    if not retrieved_context and not search_enabled:
+    if not retrieved_context:
         return None
 
     payload = {}
@@ -477,28 +476,16 @@ def _build_knowledge_base_payload(retrieved_context, active_tool_names: list[str
         formatted_context = format_knowledge_base_auto_context(retrieved_context)
         if formatted_context:
             payload["auto_injected_context"] = formatted_context
-    if search_enabled:
-        payload["guidance"] = (
-            "Use retrieved context directly when sufficient, and avoid redundant knowledge-base searches."
-        )
     return payload or None
 
 
 def _build_tool_memory_payload(tool_memory_context, active_tool_names: list[str]) -> dict | None:
-    search_enabled = "search_tool_memory" in set(active_tool_names or [])
-    if not tool_memory_context and not search_enabled:
+    if not tool_memory_context:
         return None
 
     payload = {}
     if tool_memory_context:
         payload["auto_injected_context"] = tool_memory_context
-    if search_enabled:
-        payload["guidance"] = (
-            "Tool Memory stores results from previous web searches, news lookups, and URL fetches. "
-            "BEFORE repeating any web request, check Tool Memory first by calling search_tool_memory with a relevant query. "
-            "Use remembered results when they answer the question adequately. "
-            "Only perform a new web request when no matching memory exists or the stored data is clearly outdated for the question at hand."
-        )
     return payload or None
 
 
@@ -1909,6 +1896,7 @@ def _build_canvas_truncated_excerpt_guidance(active_tool_names: list[str]) -> st
 
 
 def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload: dict | None = None) -> list[str]:
+    active_set = set(active_tool_names or [])
     active_document = (
         (canvas_payload or {}).get("active_document")
         if isinstance((canvas_payload or {}).get("active_document"), dict)
@@ -1923,7 +1911,6 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
             "",
         ]
 
-    active_set = set(active_tool_names or [])
     if not active_set.intersection(CANVAS_CONTENT_MUTATING_TOOL_NAMES):
         return []
 

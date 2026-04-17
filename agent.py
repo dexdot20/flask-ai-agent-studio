@@ -599,7 +599,24 @@ def _align_breakdown_to_provider_total(breakdown: dict[str, int], total_tokens: 
     target_total = max(0, int(total_tokens or 0))
     current_total = sum(adjusted.values())
     if current_total < target_total:
-        adjusted["unknown_provider_overhead"] = adjusted.get("unknown_provider_overhead", 0) + (target_total - current_total)
+        missing_tokens = target_total - current_total
+        weighted_keys = [key for key, value in adjusted.items() if key != "unknown_provider_overhead" and value > 0]
+        if weighted_keys and current_total > 0:
+            remaining = missing_tokens
+            weighted_total = sum(adjusted[key] for key in weighted_keys)
+            for index, key in enumerate(weighted_keys):
+                if remaining <= 0:
+                    break
+                if index == len(weighted_keys) - 1:
+                    share = remaining
+                else:
+                    share = min(remaining, int((missing_tokens * adjusted[key]) / max(1, weighted_total)))
+                adjusted[key] = adjusted.get(key, 0) + share
+                remaining -= share
+            if remaining > 0:
+                adjusted["unknown_provider_overhead"] = adjusted.get("unknown_provider_overhead", 0) + remaining
+        else:
+            adjusted["unknown_provider_overhead"] = adjusted.get("unknown_provider_overhead", 0) + missing_tokens
         return adjusted
 
     overflow = current_total - target_total
