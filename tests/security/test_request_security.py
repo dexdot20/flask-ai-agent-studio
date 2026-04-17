@@ -158,3 +158,63 @@ def test_enforce_rate_limit_keeps_bucket_names_isolated_for_same_client(security
     assert second_login.status_code == 429
     assert ("203.0.113.10", "login") in request_security._RATE_LIMIT_STATE
     assert ("203.0.113.10", "settings") in request_security._RATE_LIMIT_STATE
+
+
+def test_request_client_identifier_prefers_access_route(security_app):
+    with security_app.test_request_context(
+        "/chat",
+        method="POST",
+        environ_base={"REMOTE_ADDR": "203.0.113.44"},
+        headers={"X-Forwarded-For": "198.51.100.5, 203.0.113.44"},
+    ):
+        identifier = request_security._get_request_client_identifier()
+
+    assert identifier == "198.51.100.5"
+
+
+def test_enforce_rate_limit_uses_redis_backend_when_available(security_app, monkeypatch):
+    class _FakeRedis:
+        def __init__(self):
+            self._rows: dict[str, dict[str, float]] = {}
+
+        def zremrangebyscore(self, key, min_score, max_score):
+            bucket = self._rows.setdefault(key, {})
+            stale_members = [member for member, score in bucket.items() if float(score) <= float(max_score)]
+            for member in stale_members:
+                bucket.pop(member, None)
+
+        def zcard(self, key):
+            return len(self._rows.setdefault(key, {}))
+
+        def zrange(self, key, start, stop, withscores=False):
+            del start, stop
+            bucket = self._rows.setdefault(key, {})
+            ordered = sorted(bucket.items(), key=lambda item: item[1])
+            if not ordered:
+                return []
+            member, score = ordered[0]
+            if withscores:
+                return [(member, score)]
+            return [member]
+
+        def zadd(self, key, mapping):
+            bucket = self._rows.setdefault(key, {})
+            for member, score in dict(mapping or {}).items():
+                bucket[str(member)] = float(score)
+
+        def expire(self, key, ttl_seconds):
+            del key, ttl_seconds
+            return True
+
+    fake_redis = _FakeRedis()
+    monkeypatch.setattr(request_security, "_get_rate_limit_rule", lambda: ("chat", 1, 60))
+    monkeypatch.setattr(request_security, "_get_redis_rate_limit_client", lambda: fake_redis)
+
+    with security_app.test_request_context("/chat", method="POST", environ_base={"REMOTE_ADDR": "203.0.113.12"}):
+        first = request_security.enforce_rate_limit()
+    with security_app.test_request_context("/chat", method="POST", environ_base={"REMOTE_ADDR": "203.0.113.12"}):
+        second = request_security.enforce_rate_limit()
+
+    assert first is None
+    assert second.status_code == 429
+    assert request_security._RATE_LIMIT_STATE == {}

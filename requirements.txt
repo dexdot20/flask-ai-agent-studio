@@ -17,3 +17,4 @@ pdfplumber>=0.11
 tiktoken>=0.9
 json-repair>=0.7
 defusedxml>=0.7
+redis>=5.0
