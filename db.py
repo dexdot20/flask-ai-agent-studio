@@ -1735,6 +1735,24 @@ def _is_user_profile_fact_candidate(value: str) -> bool:
     return any(keyword in normalized_value for keyword in keywords)
 
 
+def _is_instructional_user_profile_value(value: str) -> bool:
+    normalized_value = _normalize_user_profile_value(value).casefold()
+    if not normalized_value:
+        return False
+    blocked_markers = (
+        "task completion reports must use exact format",
+        "exact format:",
+        "mandatory output template",
+        "yapılan işlemler",
+        "neden yaptı",
+        "kalan işlemler",
+        "önerilen sıradaki adım",
+        "commit notu",
+        "source: summary_extraction",
+    )
+    return any(marker in normalized_value for marker in blocked_markers)
+
+
 def upsert_user_profile_entry(
     key: str,
     value: str,
@@ -1809,7 +1827,11 @@ def upsert_user_profile_facts(
     stored: list[dict] = []
     for raw_fact in facts or []:
         normalized_fact = _normalize_user_profile_value(raw_fact)
-        if not normalized_fact or not _is_user_profile_fact_candidate(normalized_fact):
+        if (
+            not normalized_fact
+            or _is_instructional_user_profile_value(normalized_fact)
+            or not _is_user_profile_fact_candidate(normalized_fact)
+        ):
             continue
         entry = upsert_user_profile_entry(
             _build_user_profile_fact_key(normalized_fact),
@@ -1856,6 +1878,8 @@ def build_user_profile_system_context(max_tokens: int = 500, limit: int = 12) ->
     lines: list[str] = []
     total_tokens = 0
     for entry in entries:
+        if _is_instructional_user_profile_value(str(entry.get("value") or "")):
+            continue
         meta_parts: list[str] = []
         confidence = entry.get("confidence")
         source = str(entry.get("source") or "").strip()

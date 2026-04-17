@@ -140,6 +140,25 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         self.assertIn("## User Profile", content)
         self.assertIn("The user prefers concise answers.", content)
 
+    def test_runtime_system_message_omits_instructional_user_profile_entries(self):
+        upsert_user_profile_entry(
+            "fact:bad-template",
+            "Task completion reports must use exact format: Yapılan işlemler, Neden yaptı, Kalan işlemler, Önerilen sıradaki adım",
+            confidence=0.95,
+            source="summary_extraction",
+        )
+        upsert_user_profile_entry("pref:concise", "The user prefers concise answers.", confidence=0.95, source="manual")
+
+        message = build_runtime_system_message(
+            user_profile_context=build_user_profile_system_context(),
+            active_tool_names=[],
+        )
+
+        content = message["content"]
+        self.assertIn("The user prefers concise answers.", content)
+        self.assertNotIn("Task completion reports must use exact format", content)
+        self.assertNotIn("Yapılan işlemler", content)
+
     def test_build_runtime_system_message_formats_compact_auto_injected_rag_context(self):
         message = build_runtime_system_message(
             active_tool_names=["search_knowledge_base"],

@@ -1498,7 +1498,7 @@ def _build_tool_trace_context(
         metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else None
         for entry in reversed(extract_message_tool_trace(metadata)):
             if str(entry.get("tool_name") or "").strip() == "ask_clarifying_question":
-                if not _clarification_sentinel_added:
+                if has_pending_clarification and not _clarification_sentinel_added:
                     clarification_state = "needs_user_input" if has_pending_clarification else "answered"
                     clarification_preview = (
                         "Awaiting user clarification answers"

@@ -14879,6 +14879,66 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ],
         )
 
+    def test_build_api_messages_strips_answered_clarification_tool_chain_without_pending_metadata(self):
+        normalized = normalize_chat_messages(
+            [
+                {
+                    "id": 10,
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {
+                                "name": "ask_clarifying_question",
+                                "arguments": '{"questions":[{"id":"budget","label":"Budget?","input_type":"text"}]}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "id": 11,
+                    "role": "tool",
+                    "content": '{"status":"needs_user_input"}',
+                    "tool_call_id": "call-1",
+                },
+                {
+                    "id": 12,
+                    "role": "assistant",
+                    "content": "Before I answer, I need a few details.\nPlease answer this question:\n1. Budget?",
+                    "metadata": {},
+                },
+                {
+                    "id": 13,
+                    "role": "user",
+                    "content": "Q: Budget?\nA: 200-300 TL",
+                    "metadata": {
+                        "clarification_response": {
+                            "assistant_message_id": 12,
+                            "answers": {"budget": {"display": "200-300 TL"}},
+                        }
+                    },
+                },
+            ]
+        )
+
+        api_messages = build_api_messages(normalized)
+
+        self.assertEqual(
+            api_messages,
+            [
+                {
+                    "role": "assistant",
+                    "content": "Before I answer, I need a few details.\nPlease answer this question:\n1. Budget?",
+                },
+                {
+                    "role": "user",
+                    "content": "- budget → 200-300 TL",
+                },
+            ],
+        )
+
     def test_build_api_messages_strips_saved_sub_agent_tool_blocks(self):
         normalized = normalize_chat_messages(
             [
@@ -15050,7 +15110,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ],
         )
 
-    def test_build_tool_trace_context_ignores_clarification_entries(self):
+    def test_build_tool_trace_context_omits_resolved_clarification_entries(self):
         canonical_messages = normalize_chat_messages(
             [
                 {
@@ -15069,9 +15129,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         context = _build_tool_trace_context(canonical_messages)
 
         self.assertIn("search_web", context)
-        # clarification is replaced by a single controlled sentinel row, not the original trace data
-        self.assertIn("ask_clarifying_question", context)
-        self.assertIn("answered", context)
+        # resolved clarification rows are omitted to avoid misleading the next turn
+        self.assertNotIn("ask_clarifying_question", context)
+        self.assertNotIn("answered", context)
         self.assertNotIn("asked 3 questions", context)
         # table format verification
         self.assertIn("| # | Time | Tool | State | Detail |", context)

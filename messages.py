@@ -1141,10 +1141,15 @@ def _filter_clarification_answers_for_questions(
 def _collect_answered_clarification_skip_indexes(messages: list[dict]) -> set[int]:
     skip_indexes: set[int] = set()
     answered_assistant_ids: set[str] = set()
+    assistant_index_by_id: dict[str, int] = {}
 
-    for message in messages:
+    for index, message in enumerate(messages):
         if not isinstance(message, dict):
             continue
+        if str(message.get("role") or "").strip() == "assistant":
+            message_id = str(message.get("id") or "").strip()
+            if message_id:
+                assistant_index_by_id[message_id] = index
         if str(message.get("role") or "").strip() != "user":
             continue
         metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
@@ -1172,6 +1177,43 @@ def _collect_answered_clarification_skip_indexes(messages: list[dict]) -> set[in
         # Keep the pending-clarification assistant message itself so the model
         # still sees the asked question text, but strip obsolete tool-call/tool
         # scaffolding when it exists.
+        tool_indexes: list[int] = []
+        probe_index = assistant_index - 1
+        while probe_index >= 0 and str(messages[probe_index].get("role") or "").strip() == "tool":
+            tool_indexes.append(probe_index)
+            probe_index -= 1
+
+        if probe_index < 0 or str(messages[probe_index].get("role") or "").strip() != "assistant":
+            continue
+
+        tool_call_message = messages[probe_index]
+        tool_calls = parse_message_tool_calls(tool_call_message.get("tool_calls"))
+        clarification_call_ids = {
+            str(tool_call.get("id") or "").strip()
+            for tool_call in tool_calls
+            if str(((tool_call.get("function") or {}).get("name") or "")).strip() == "ask_clarifying_question"
+        }
+        if not clarification_call_ids:
+            continue
+
+        matched_tool_indexes = {
+            index
+            for index in tool_indexes
+            if str(messages[index].get("tool_call_id") or "").strip() in clarification_call_ids
+        }
+        if matched_tool_indexes:
+            skip_indexes.add(probe_index)
+            skip_indexes.update(matched_tool_indexes)
+
+    # Fallback: some legacy transcripts store answered clarification on a rendered
+    # assistant message that does not carry pending_clarification metadata.
+    # In that case, still strip the obsolete ask_clarifying_question tool-call
+    # scaffolding directly preceding the answered assistant message.
+    for answered_assistant_id in answered_assistant_ids:
+        assistant_index = assistant_index_by_id.get(answered_assistant_id)
+        if assistant_index is None:
+            continue
+
         tool_indexes: list[int] = []
         probe_index = assistant_index - 1
         while probe_index >= 0 and str(messages[probe_index].get("role") or "").strip() == "tool":
