@@ -722,7 +722,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(payload["operation_model_fallback_preferences"]["sub_agent"], ["deepseek-chat"])
         self.assertNotIn("legacy_unused", payload["operation_model_fallback_preferences"])
 
-    def test_settings_patch_accepts_read_only_sub_agent_tools_and_drops_non_read_only(self):
+    def test_settings_patch_rejects_non_read_only_sub_agent_tools(self):
         response = self.client.patch(
             "/api/settings",
             json={
@@ -736,12 +736,8 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             },
         )
 
-        self.assertEqual(response.status_code, 200)
-        payload = response.get_json()
-        self.assertEqual(
-            payload["sub_agent_allowed_tool_names"],
-            ["search_web", "read_file", "expand_canvas_document"],
-        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("sub_agent_allowed_tool_names", response.get_json()["error"])
 
     def test_sub_agent_tool_sections_include_runtime_read_only_tools(self):
         sections = build_sub_agent_web_tool_sections()

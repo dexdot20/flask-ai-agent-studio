@@ -419,12 +419,16 @@ def build_tool_permission_sections() -> list[dict[str, object]]:
     return sections
 
 
-def build_sub_agent_web_tool_sections() -> list[dict[str, object]]:
-    allowed_tools = {
+def _get_sub_agent_read_only_tool_name_set() -> set[str]:
+    return {
         tool_name
         for tool_name in TOOL_SPEC_BY_NAME
         if tool_name != "sub_agent" and get_tool_runtime_metadata(tool_name).get("read_only") is True
     }
+
+
+def build_sub_agent_read_only_tool_sections() -> list[dict[str, object]]:
+    allowed_tools = _get_sub_agent_read_only_tool_name_set()
     sections: list[dict[str, object]] = []
     for section in build_tool_permission_sections():
         filtered_tools = [tool for tool in section["tools"] if tool["name"] in allowed_tools]
@@ -432,6 +436,11 @@ def build_sub_agent_web_tool_sections() -> list[dict[str, object]]:
             continue
         sections.append({**section, "tools": filtered_tools})
     return sections
+
+
+def build_sub_agent_web_tool_sections() -> list[dict[str, object]]:
+    """Backward-compatible alias for legacy imports/tests."""
+    return build_sub_agent_read_only_tool_sections()
 
 
 def build_tool_catalog() -> list[dict[str, str]]:
@@ -680,7 +689,7 @@ def register_page_routes(app) -> None:
             "settings.html",
             settings=settings,
             tool_sections=build_tool_permission_sections(),
-            sub_agent_tool_sections=build_sub_agent_web_tool_sections(),
+            sub_agent_tool_sections=build_sub_agent_read_only_tool_sections(),
             proxy_operation_options=PROXY_OPERATION_OPTIONS,
             auth_enabled=is_login_pin_enabled(),
             page_lang=_resolve_page_lang(),
@@ -1885,6 +1894,25 @@ def register_page_routes(app) -> None:
         if sub_agent_allowed_tool_names_raw is not None:
             if not isinstance(sub_agent_allowed_tool_names_raw, list):
                 return jsonify({"error": "sub_agent_allowed_tool_names must be an array."}), 400
+            allowed_sub_agent_tools = _get_sub_agent_read_only_tool_name_set()
+            invalid_sub_agent_tools = []
+            for tool_name in sub_agent_allowed_tool_names_raw:
+                if not isinstance(tool_name, str):
+                    invalid_sub_agent_tools.append(str(tool_name))
+                    continue
+                normalized_tool_name = tool_name.strip()
+                if normalized_tool_name not in allowed_sub_agent_tools:
+                    invalid_sub_agent_tools.append(normalized_tool_name)
+            if invalid_sub_agent_tools:
+                invalid_label = ", ".join(sorted({name for name in invalid_sub_agent_tools if name}))
+                return jsonify(
+                    {
+                        "error": (
+                            "sub_agent_allowed_tool_names contains tools that are not read-only or unsupported"
+                            + (f": {invalid_label}." if invalid_label else ".")
+                        )
+                    }
+                ), 400
             normalized_sub_agent_tools = normalize_sub_agent_allowed_tool_names(sub_agent_allowed_tool_names_raw)
             settings["sub_agent_allowed_tool_names"] = json.dumps(normalized_sub_agent_tools, ensure_ascii=False)
 

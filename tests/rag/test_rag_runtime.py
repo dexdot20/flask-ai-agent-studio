@@ -175,6 +175,10 @@ class TestRagRuntime(BaseAppRoutesTestCase):
         _, kwargs = mocked_ingest.call_args
         self.assertEqual(kwargs["expires_at"], "1970-01-01 02:16:40")
         self.assertEqual(kwargs["metadata"]["expires_at_ts"], 8_200)
+        self.assertEqual(kwargs["metadata"]["workspace_id"], "tool-memory")
+        self.assertEqual(kwargs["metadata"]["project_id"], "search_news_ddgs")
+        self.assertEqual(kwargs["metadata"]["document_id"], kwargs["source_key"])
+        self.assertTrue(str(kwargs["metadata"]["document_path"]).startswith("tool_memory/"))
 
     def test_upsert_tool_memory_result_sanitizes_html_entities(self):
         with patch("rag_service.time.time", return_value=1_000), patch("rag_service.ingest_rag_chunks") as mocked_ingest:
@@ -328,6 +332,19 @@ class TestRagRuntime(BaseAppRoutesTestCase):
         self.assertIn(1, page_numbers)
         self.assertIn(2, page_numbers)
         self.assertEqual(page_numbers[0], 1)
+
+    def test_chunk_text_document_assigns_section_metadata(self):
+        text = "# Intro\n\nAlpha content\n\n## Details\n\nBeta content"
+
+        chunks = chunk_text_document(text, "doc", "uploaded-document", "general", chunk_size=120, overlap=0)
+
+        section_ids = [str(chunk.metadata.get("section_id") or "") for chunk in chunks]
+        section_titles = [str(chunk.metadata.get("section_title") or "") for chunk in chunks]
+        self.assertIn("intro", section_ids)
+        self.assertIn("details", section_ids)
+        self.assertIn("Intro", section_titles)
+        self.assertIn("Details", section_titles)
+        self.assertTrue(all("chunk_id_in_document" in chunk.metadata for chunk in chunks))
 
     def test_chunks_from_records_skips_short_noise_messages(self):
         chunks = chunks_from_records(

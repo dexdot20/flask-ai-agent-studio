@@ -13,6 +13,7 @@ DEFAULT_CHUNK_OVERLAP = RAG_CHUNK_OVERLAP
 MAX_METADATA_VALUE_LENGTH = 500
 _INVISIBLE_TEXT_RE = re.compile(r"[\u00ad\u200b-\u200f\u2028\u2029\ufeff]")
 _PAGE_MARKER_RE = re.compile(r"^##\s+Page\s+(\d+)\s*$", re.IGNORECASE)
+_SECTION_HEADING_RE = re.compile(r"^#{1,6}\s+(.+?)\s*$")
 
 
 @dataclass(slots=True)
@@ -93,6 +94,20 @@ def _paragraph_page_number(paragraph: str, fallback_page_number: int | None) -> 
     return fallback_page_number
 
 
+def _normalize_section_id(value: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9_-]+", "-", str(value or "").strip().lower()).strip("-")
+    return cleaned or "section"
+
+
+def _extract_section_title(paragraph: str) -> str | None:
+    first_line = str(paragraph or "").split("\n", 1)[0].strip()
+    match = _SECTION_HEADING_RE.match(first_line)
+    if not match:
+        return None
+    title = re.sub(r"\s+", " ", match.group(1)).strip()
+    return title or None
+
+
 def split_text_into_chunks(
     text: str, chunk_size: int = DEFAULT_CHUNK_SIZE, overlap: int = DEFAULT_CHUNK_OVERLAP
 ) -> list[str]:
@@ -160,20 +175,29 @@ def chunk_text_document(
         return []
 
     base_metadata = dict(metadata or {})
-    chunk_entries: list[tuple[str, int | None]] = []
+    chunk_entries: list[tuple[str, int | None, str | None, str | None]] = []
     current_chunk = ""
     current_chunk_page: int | None = None
     current_page: int | None = None
+    current_section_title: str | None = None
+    current_section_id: str | None = None
 
     def flush_current_chunk() -> None:
         nonlocal current_chunk, current_chunk_page
         cleaned = _normalize_whitespace(current_chunk)
         if cleaned:
-            chunk_entries.append((cleaned, current_chunk_page))
+            chunk_entries.append((cleaned, current_chunk_page, current_section_id, current_section_title))
         current_chunk = ""
         current_chunk_page = None
 
     for paragraph in paragraphs:
+        next_section_title = _extract_section_title(paragraph)
+        if next_section_title:
+            next_section_id = _normalize_section_id(next_section_title)
+            if current_chunk and current_section_id and next_section_id != current_section_id:
+                flush_current_chunk()
+            current_section_title = next_section_title
+            current_section_id = next_section_id
         paragraph_page = _paragraph_page_number(paragraph, current_page)
         if paragraph_page is not None:
             current_page = paragraph_page
@@ -216,13 +240,18 @@ def chunk_text_document(
 
     items: list[Chunk] = []
     seen_texts: set[str] = set()
-    for index, (chunk_text, page_number) in enumerate(chunk_entries):
+    for index, (chunk_text, page_number, section_id, section_title) in enumerate(chunk_entries):
         if chunk_text in seen_texts:
             continue
         seen_texts.add(chunk_text)
         chunk_metadata = dict(base_metadata)
         if page_number is not None:
             chunk_metadata["page_number"] = int(page_number)
+        if section_id:
+            chunk_metadata["section_id"] = section_id
+        if section_title:
+            chunk_metadata["section_title"] = section_title
+        chunk_metadata["chunk_id_in_document"] = len(items)
         chunk_id = _build_chunk_id(source_name, source_type, normalized_category, chunk_text)
         items.append(
             Chunk(

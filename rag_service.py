@@ -218,6 +218,49 @@ def _conversation_rag_source_name(source_type: str, conversation_id: int, title:
     return f"{source_type}:{conversation_id}:{title}"
 
 
+def _build_hierarchical_rag_metadata(
+    *,
+    source_type: str,
+    source_key: str,
+    source_name: str,
+    metadata: dict | None = None,
+) -> dict:
+    base = dict(metadata or {})
+    normalized_source_type = normalize_category(source_type)
+    if normalized_source_type == RAG_SOURCE_CONVERSATION:
+        conversation_id = base.get("conversation_id")
+        workspace_id = f"conversation:{conversation_id}" if conversation_id not in (None, "") else "conversation"
+        project_id = "chat-history"
+        document_path = f"conversations/{conversation_id}" if conversation_id not in (None, "") else "conversations"
+    elif normalized_source_type == RAG_SOURCE_TOOL_RESULT:
+        conversation_id = base.get("conversation_id")
+        workspace_id = (
+            f"conversation:{conversation_id}" if conversation_id not in (None, "") else "conversation:unknown"
+        )
+        project_id = "tool-results"
+        document_path = f"tool_results/{conversation_id}" if conversation_id not in (None, "") else "tool_results"
+    elif normalized_source_type == RAG_SOURCE_TOOL_MEMORY:
+        workspace_id = "tool-memory"
+        project_id = str(base.get("tool_name") or "tool-memory").strip() or "tool-memory"
+        document_path = f"tool_memory/{project_id}"
+    elif normalized_source_type == RAG_SOURCE_UPLOADED_DOCUMENT:
+        workspace_id = "knowledge-base"
+        project_id = "manual-uploads"
+        file_name = str(base.get("file_name") or "").strip()
+        document_path = file_name or f"uploads/{source_key}"
+    else:
+        workspace_id = str(base.get("workspace_id") or "knowledge-base").strip() or "knowledge-base"
+        project_id = str(base.get("project_id") or normalized_source_type or "general").strip() or "general"
+        document_path = str(base.get("document_path") or source_name or source_key).strip() or source_key
+
+    enriched = dict(base)
+    enriched.setdefault("workspace_id", workspace_id)
+    enriched.setdefault("project_id", project_id)
+    enriched.setdefault("document_id", str(base.get("document_id") or source_key).strip() or source_key)
+    enriched.setdefault("document_path", document_path)
+    return enriched
+
+
 def conversation_rag_source_key(source_type: str, conversation_id: int) -> str:
     return build_rag_source_key(source_type, str(conversation_id))
 
@@ -516,7 +559,12 @@ def _build_conversation_sync_metadata(conversation: dict, source_key: str, sync_
     updated_at = str(conversation.get("updated_at") or "").strip()
     if updated_at:
         metadata["conversation_updated_at"] = updated_at
-    return metadata
+    return _build_hierarchical_rag_metadata(
+        source_type=RAG_SOURCE_CONVERSATION,
+        source_key=source_key,
+        source_name=str(conversation.get("title") or "Untitled"),
+        metadata=metadata,
+    )
 
 
 def _conversation_source_needs_sync(
@@ -951,6 +999,12 @@ def _normalize_rag_hits(
                 "source_name": metadata.get("source_name"),
                 "source_type": source_type,
                 "category": normalize_rag_category(metadata.get("category"), default=source_type),
+                "workspace_id": metadata.get("workspace_id"),
+                "project_id": metadata.get("project_id"),
+                "document_id": metadata.get("document_id"),
+                "document_path": metadata.get("document_path"),
+                "section_id": metadata.get("section_id"),
+                "section_title": metadata.get("section_title"),
                 "chunk_index": metadata.get("chunk_index"),
                 "archived_conversation": metadata.get("archived_conversation") is True,
                 "archived_message_count": int(metadata.get("archived_message_count") or 0)
@@ -1036,6 +1090,12 @@ def upsert_tool_memory_result(tool_name: str, args_preview: str, result_content:
         "source_type": RAG_SOURCE_TOOL_MEMORY,
         "expires_at_ts": expires_at_ts,
     }
+    metadata = _build_hierarchical_rag_metadata(
+        source_type=RAG_SOURCE_TOOL_MEMORY,
+        source_key=source_key,
+        source_name=source_name,
+        metadata=metadata,
+    )
     chunks = chunks_from_records(
         records,
         source_name=source_name,
@@ -1262,6 +1322,12 @@ def ingest_uploaded_rag_document(
         "source_type": RAG_SOURCE_UPLOADED_DOCUMENT,
         "created_at_ts": int(time.time()),
     }
+    metadata = _build_hierarchical_rag_metadata(
+        source_type=RAG_SOURCE_UPLOADED_DOCUMENT,
+        source_key=source_key,
+        source_name=cleaned_source_name,
+        metadata=metadata,
+    )
     parts = [f"Title: {cleaned_source_name}"]
     if cleaned_filename and cleaned_filename != cleaned_source_name:
         parts.append(f"File: {cleaned_filename}")
@@ -1304,6 +1370,12 @@ def ingest_rag_chunks(
     if source_type not in RAG_SUPPORTED_SOURCE_TYPES or category not in RAG_SUPPORTED_CATEGORIES:
         raise ValueError("Unsupported RAG source type or category.")
     normalized_metadata = dict(metadata or {})
+    normalized_metadata = _build_hierarchical_rag_metadata(
+        source_type=source_type,
+        source_key=source_key,
+        source_name=source_name,
+        metadata=normalized_metadata,
+    )
     normalized_metadata["indexed_at_ts"] = int(time.time())
     for chunk in chunks:
         if hasattr(chunk, "metadata"):

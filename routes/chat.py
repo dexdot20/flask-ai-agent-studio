@@ -43,9 +43,7 @@ from config import (
     OCR_ENABLED,
     PROMPT_RAG_AUTO_MAX_TOKENS,
     RAG_ENABLED,
-    RAG_SENSITIVITY_PRESETS,
     RAG_SOURCE_CONVERSATION,
-    RAG_SOURCE_TOOL_MEMORY,
     RAG_SOURCE_TOOL_RESULT,
     SCRATCHPAD_SECTION_SETTING_KEYS,
     SUMMARY_RETRY_REDUCTION_FACTOR,
@@ -118,16 +116,10 @@ from db import (
     get_prompt_summary_max_tokens,
     get_prompt_tool_trace_max_tokens,
     get_prompt_tool_memory_max_tokens,
-    get_rag_auto_inject_enabled,
-    get_rag_auto_inject_source_types,
-    get_rag_auto_inject_top_k,
-    get_rag_source_types,
-    get_rag_sensitivity,
     get_summary_retry_min_source_tokens,
     get_summary_source_target_tokens,
     get_summary_skip_first,
     get_summary_skip_last,
-    get_tool_memory_auto_inject_enabled,
     get_unsummarized_visible_messages,
     insert_message,
     insert_model_invocation,
@@ -189,12 +181,6 @@ from project_workspace_service import (
     restore_temporary_workspace_snapshot,
 )
 from rag import preload_embedder
-from rag_service import (
-    build_rag_auto_context,
-    build_tool_memory_auto_context,
-    conversation_archived_rag_source_key,
-    conversation_rag_source_key,
-)
 from rag_service import sync_conversations_to_rag_background, sync_conversations_to_rag_safe
 from routes.request_utils import is_valid_model_id, normalize_model_id, parse_messages_payload, parse_optional_int
 from token_utils import estimate_text_tokens
@@ -4909,7 +4895,6 @@ def register_chat_routes(app) -> None:
         fetch_url_clip_aggressiveness = get_fetch_url_clip_aggressiveness(settings)
         fetch_url_token_threshold = get_fetch_url_token_threshold(settings)
         clarification_response = None
-        rag_query_text = ""
         if latest_user_message is not None:
             clarification_response = extract_clarification_response(latest_user_message.get("metadata"))
             clarification_answers = (
@@ -4921,18 +4906,6 @@ def register_chat_routes(app) -> None:
                 )
                 if not freeform_clarification_content:
                     active_tool_names = [name for name in active_tool_names if name != "ask_clarifying_question"]
-            rag_query_text = _build_clarification_rag_query(
-                latest_user_message["content"],
-                clarification_response,
-            ) or build_user_message_for_model(
-                latest_user_message["content"],
-                latest_user_message.get("metadata"),
-            )
-        if rag_query_text and conv_id and CONVERSATION_MEMORY_ENABLED:
-            rag_memory_rows = get_conversation_memory(conv_id)
-        else:
-            rag_memory_rows = None
-        rag_query_text = _enrich_rag_query_with_context(rag_query_text, rag_memory_rows, messages)
         persisted_user_message_id = None
         edit_replay_snapshot = None
         canonical_messages = messages
@@ -5098,34 +5071,8 @@ def register_chat_routes(app) -> None:
             if preflight_summary_outcome and preflight_summary_outcome.get("applied"):
                 canonical_messages = preflight_summary_outcome.get("messages") or get_conversation_messages(conv_id)
 
-        rag_exclude_source_keys = (
-            {
-                conversation_rag_source_key(RAG_SOURCE_CONVERSATION, conv_id),
-                conversation_rag_source_key(RAG_SOURCE_TOOL_RESULT, conv_id),
-                conversation_archived_rag_source_key(conv_id),
-            }
-            if conv_id
-            else None
-        )
-        rag_allowed_source_types = set(get_rag_auto_inject_source_types(settings))
-        if get_tool_memory_auto_inject_enabled(settings):
-            rag_allowed_source_types.discard(RAG_SOURCE_TOOL_MEMORY)
-        retrieved_context = build_rag_auto_context(
-            rag_query_text,
-            get_rag_auto_inject_enabled(settings),
-            threshold=RAG_SENSITIVITY_PRESETS[get_rag_sensitivity(settings)],
-            top_k=get_rag_auto_inject_top_k(settings),
-            exclude_source_keys=rag_exclude_source_keys,
-            allowed_source_types=rag_allowed_source_types,
-        )
-        tool_memory_context = (
-            build_tool_memory_auto_context(
-                rag_query_text,
-                top_k=get_rag_auto_inject_top_k(settings),
-            )
-            if get_tool_memory_auto_inject_enabled(settings)
-            else None
-        )
+        retrieved_context = None
+        tool_memory_context = None
         latest_canvas_state = find_latest_canvas_state(canonical_messages)
         decrement_canvas_viewport_ttls(latest_canvas_state)
         initial_canvas_documents = latest_canvas_state.get("documents") or []

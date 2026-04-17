@@ -2733,8 +2733,7 @@ function syncOverviewStats() {
       statRagEl.textContent = "Disabled";
     } else {
       const sourceCount = getSelectedRagSourceTypes().length;
-      const autoInjectCount = getSelectedRagAutoInjectSourceTypes().length;
-      statRagEl.textContent = `${sourceCount} search / ${autoInjectCount} inject`;
+      statRagEl.textContent = `${sourceCount} searchable`;
     }
   }
 }
@@ -2799,7 +2798,6 @@ function applySettingsToForm() {
   if (entropyProtectToolResultsEl) entropyProtectToolResultsEl.checked = Boolean(appSettings.entropy_protect_tool_results ?? true);
   if (entropyReferenceBoostEl) entropyReferenceBoostEl.checked = Boolean(appSettings.entropy_reference_boost ?? true);
   if (reasoningAutoCollapseEl) reasoningAutoCollapseEl.checked = Boolean(appSettings.reasoning_auto_collapse);
-  if (toolMemoryAutoInjectEl) toolMemoryAutoInjectEl.checked = Boolean(appSettings.tool_memory_auto_inject);
   if (pruningEnabledEl) pruningEnabledEl.checked = Boolean(appSettings.pruning_enabled);
   if (pruningTokenThresholdEl) pruningTokenThresholdEl.value = String(appSettings.pruning_token_threshold || 80000);
   if (pruningBatchSizeEl) pruningBatchSizeEl.value = String(appSettings.pruning_batch_size || 10);
@@ -2849,7 +2847,7 @@ function applySettingsToForm() {
     ragContextSizeEl.value = appSettings.rag_context_size || "medium";
   }
   applySelectedRagSourceTypes(appSettings.rag_source_types || []);
-  applySelectedRagAutoInjectSourceTypes(appSettings.rag_auto_inject_source_types || appSettings.rag_source_types || []);
+  applySelectedRagAutoInjectSourceTypes([]);
   if (imageProcessingMethodEl) {
     imageProcessingMethodEl.value = appSettings.image_processing_method || "auto";
   }
@@ -3007,7 +3005,7 @@ function applyServerSettingsData(data) {
   appSettings.entropy_protect_tool_results = Boolean(data.entropy_protect_tool_results ?? true);
   appSettings.entropy_reference_boost = Boolean(data.entropy_reference_boost ?? true);
   appSettings.reasoning_auto_collapse = Boolean(data.reasoning_auto_collapse);
-  appSettings.tool_memory_auto_inject = Boolean(data.tool_memory_auto_inject);
+  appSettings.tool_memory_auto_inject = false;
   appSettings.pruning_enabled = Boolean(data.pruning_enabled);
   appSettings.pruning_token_threshold = data.pruning_token_threshold || 80000;
   appSettings.pruning_batch_size = data.pruning_batch_size || 10;
@@ -3040,13 +3038,11 @@ function applyServerSettingsData(data) {
   appSettings.sub_agent_allowed_tool_names = Array.isArray(data.sub_agent_allowed_tool_names) ? data.sub_agent_allowed_tool_names : [];
   appSettings.active_tools = Array.isArray(data.active_tools) ? data.active_tools : [];
   appSettings.proxy_enabled_operations = Array.isArray(data.proxy_enabled_operations) ? data.proxy_enabled_operations : [];
-  appSettings.rag_auto_inject = Boolean(data.rag_auto_inject);
+  appSettings.rag_auto_inject = false;
   appSettings.rag_sensitivity = data.rag_sensitivity || "normal";
   appSettings.rag_context_size = data.rag_context_size || "medium";
   appSettings.rag_source_types = Array.isArray(data.rag_source_types) ? data.rag_source_types : [];
-  appSettings.rag_auto_inject_source_types = Array.isArray(data.rag_auto_inject_source_types)
-    ? data.rag_auto_inject_source_types
-    : appSettings.rag_source_types;
+  appSettings.rag_auto_inject_source_types = [];
   if (data.features && typeof data.features === "object") {
     Object.assign(featureFlags, data.features);
   }
@@ -3125,7 +3121,7 @@ async function saveSettings() {
     entropy_protect_code_blocks: Boolean(entropyProtectCodeBlocksEl?.checked),
     entropy_protect_tool_results: Boolean(entropyProtectToolResultsEl?.checked),
     entropy_reference_boost: Boolean(entropyReferenceBoostEl?.checked),
-    tool_memory_auto_inject: isRagEnabledDraft ? Boolean(toolMemoryAutoInjectEl?.checked) : false,
+    tool_memory_auto_inject: false,
     pruning_enabled: Boolean(pruningEnabledEl?.checked),
     pruning_token_threshold: readNumericSetting(pruningTokenThresholdEl, 80000, { allowZero: false }),
     pruning_batch_size: readNumericSetting(pruningBatchSizeEl, 10, { allowZero: false }),
@@ -3172,11 +3168,11 @@ async function saveSettings() {
     active_tools: getSelectedTools(),
     sub_agent_allowed_tool_names: getSelectedSubAgentTools(),
     proxy_enabled_operations: getSelectedProxyOperations(),
-    rag_auto_inject: isRagEnabledDraft ? getSelectedRagAutoInjectSourceTypes().length > 0 : false,
+    rag_auto_inject: false,
     rag_sensitivity: ragSensitivityEl?.value || "normal",
     rag_context_size: ragContextSizeEl?.value || "medium",
     rag_source_types: isRagEnabledDraft ? getSelectedRagSourceTypes() : [],
-    rag_auto_inject_source_types: isRagEnabledDraft ? getSelectedRagAutoInjectSourceTypes() : [],
+    rag_auto_inject_source_types: [],
     scratchpad: (scratchpadSections[DEFAULT_SCRATCHPAD_SECTION_ID] || []).join("\n"),
     scratchpad_sections: DEFAULT_SCRATCHPAD_SECTION_ORDER.reduce((acc, sectionId) => {
       acc[sectionId] = (scratchpadSections[sectionId] || []).join("\n");
