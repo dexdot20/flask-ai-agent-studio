@@ -198,7 +198,7 @@ from rag_service import (
 from rag_service import sync_conversations_to_rag_background, sync_conversations_to_rag_safe
 from routes.request_utils import is_valid_model_id, normalize_model_id, parse_messages_payload, parse_optional_int
 from token_utils import estimate_text_tokens
-from tool_registry import get_prompt_visible_tool_names, resolve_runtime_tool_names
+from tool_registry import get_prompt_visible_tool_names, get_ui_hidden_tool_names, resolve_runtime_tool_names
 from video_transcript_service import (
     build_video_transcript_context_block,
     read_youtube_video_reference,
@@ -1157,15 +1157,20 @@ def _clip_summary_tool_text(value: str, limit: int = SUMMARY_TOOL_RESULT_TEXT_LI
     return normalized[: max(0, limit - 1)].rstrip() + "…"
 
 
-def _build_assistant_summary_content(content: str, metadata: dict | None) -> str:
+def _build_assistant_summary_content(
+    content: str, metadata: dict | None, hidden_tool_names: set[str] | None = None
+) -> str:
     base_content = str(content or "").strip()
     tool_results = extract_message_tool_results(metadata)
     if not tool_results:
         return base_content
 
+    hidden_set = set(hidden_tool_names) if hidden_tool_names else set()
     tool_lines: list[str] = []
     for entry in tool_results[:SUMMARY_TOOL_RESULT_LIMIT]:
         tool_name = str(entry.get("tool_name") or "tool").strip() or "tool"
+        if hidden_set and tool_name in hidden_set:
+            continue
         tool_text = (
             str(entry.get("summary") or "").strip()
             or str(entry.get("content") or "").strip()
@@ -3398,7 +3403,9 @@ def _infer_clarification_response_from_user_text(
     if not assistant_message_id:
         return None
 
-    normalized_lines = [str(line or "").strip() for line in str(user_text or "").splitlines() if str(line or "").strip()]
+    normalized_lines = [
+        str(line or "").strip() for line in str(user_text or "").splitlines() if str(line or "").strip()
+    ]
     if not normalized_lines:
         return None
 
@@ -4592,6 +4599,91 @@ def register_chat_routes(app) -> None:
                 (conversation_id,),
             )
 
+    def _persist_compacted_conversation_messages(
+        conversation_id: int,
+        compacted_messages: list[dict],
+        current_user_message_id: int | None = None,
+    ) -> None:
+        if not conversation_id or not isinstance(compacted_messages, list):
+            return
+
+        with get_db() as conn:
+            conn.execute("BEGIN TRANSACTION")
+            try:
+                existing_rows = conn.execute(
+                    "SELECT id, role, content, tool_calls FROM messages WHERE conversation_id = ? AND deleted_at IS NULL",
+                    (conversation_id,),
+                ).fetchall()
+
+                existing_signatures = set()
+                for row in existing_rows:
+                    role = str(row["role"] or "").strip()
+                    content = str(row["content"] or "").strip()
+                    tool_calls = str(row["tool_calls"] or "").strip()
+                    sig = f"{role}:{content[:200]}:{tool_calls[:100]}"
+                    existing_signatures.add(sig)
+
+                rows_to_delete = [row["id"] for row in existing_rows]
+                if rows_to_delete:
+                    placeholders = ",".join("?" * len(rows_to_delete))
+                    conn.execute(
+                        f"UPDATE messages SET deleted_at = datetime('now') WHERE id IN ({placeholders})",
+                        tuple(rows_to_delete),
+                    )
+
+                for message in compacted_messages:
+                    if not isinstance(message, dict):
+                        continue
+
+                    role = str(message.get("role") or "").strip()
+                    content = message.get("content")
+                    if content is None:
+                        content = ""
+                    if not isinstance(content, str):
+                        content = str(content)
+
+                    if role not in {"system", "user", "assistant", "tool"}:
+                        continue
+
+                    tool_calls_str = ""
+                    if role == "assistant":
+                        tool_calls = message.get("tool_calls")
+                        if tool_calls:
+                            serialized = serialize_message_tool_calls(tool_calls)
+                            tool_calls_str = str(serialized or "").strip()
+                    elif role == "tool":
+                        tool_call_id = str(message.get("tool_call_id") or "").strip()
+                        tool_calls_str = f"tool_call_id:{tool_call_id}"
+
+                    sig = f"{role}:{content[:200]}:{tool_calls_str[:100]}"
+                    if sig in existing_signatures:
+                        continue
+
+                    tool_calls = None
+                    tool_call_id = None
+                    if role == "assistant":
+                        tool_calls = serialize_message_tool_calls(message.get("tool_calls"))
+                    elif role == "tool":
+                        tool_call_id = str(message.get("tool_call_id") or "").strip() or None
+
+                    insert_message(
+                        conn,
+                        conversation_id,
+                        role,
+                        content,
+                        tool_calls=tool_calls,
+                        tool_call_id=tool_call_id,
+                    )
+
+                conn.execute(
+                    "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
+                    (conversation_id,),
+                )
+                conn.commit()
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+
     @app.route("/api/fix-text", methods=["POST"])
     def fix_text():
         data = request.get_json(silent=True) or {}
@@ -5074,7 +5166,7 @@ def register_chat_routes(app) -> None:
                 _conv_msgs_clar = get_conversation_messages(conv_id)
                 _saw_clar_tool = False
                 _saw_user_after_clar = False
-                for _clar_msg in (_conv_msgs_clar or []):
+                for _clar_msg in _conv_msgs_clar or []:
                     if _saw_clar_tool:
                         if str(_clar_msg.get("role") or "") == "user":
                             _saw_user_after_clar = True
@@ -5818,6 +5910,16 @@ def register_chat_routes(app) -> None:
                                 + "\n"
                             )
                         continue
+                    elif event["type"] == "compaction_applied":
+                        compacted_messages = event.get("messages") or []
+                        if conv_id and compacted_messages:
+                            with app_obj.app_context():
+                                _persist_compacted_conversation_messages(
+                                    conv_id,
+                                    compacted_messages,
+                                    current_user_message_id=persisted_user_message_id,
+                                )
+                        continue
                     yield json.dumps(event, ensure_ascii=False) + "\n"
             except AgentRunCancelledError as exc:
                 interruption_message = str(exc or current_cancel_reason()).strip() or current_cancel_reason()
@@ -5951,7 +6053,7 @@ def register_chat_routes(app) -> None:
                     )
                     return
 
-                rollback_edited_replay_state("stream_error")
+                stream_error_msg = str(exc) if exc else "Stream failed"
                 if isinstance(edit_replay_snapshot, dict):
                     yield (
                         json.dumps(
@@ -5959,7 +6061,7 @@ def register_chat_routes(app) -> None:
                                 "type": "tool_error",
                                 "step": 1,
                                 "tool": "chat",
-                                "error": "Edited replay failed. Previous state restored.",
+                                "error": "Stream failed. Your message has been saved. Please try sending it again.",
                             },
                             ensure_ascii=False,
                         )
@@ -5978,7 +6080,7 @@ def register_chat_routes(app) -> None:
                         )
                     yield json.dumps({"type": "done"}, ensure_ascii=False) + "\n"
                     finalize_edited_replay_snapshot()
-                    LOGGER.warning("Edited replay stream failed: %s", exc)
+                    LOGGER.warning("Stream failed: %s", stream_error_msg)
                     return
                 finalize_edited_replay_snapshot()
                 raise

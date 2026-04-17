@@ -1182,7 +1182,9 @@ def _collect_answered_clarification_skip_indexes(messages: list[dict]) -> set[in
                 for question in questions
                 if isinstance(question, dict) and str(question.get("id") or "").strip()
             }
-            if not question_ids or not any(question_ids.issubset(answer_keys) for answer_keys in answered_question_key_sets):
+            if not question_ids or not any(
+                question_ids.issubset(answer_keys) for answer_keys in answered_question_key_sets
+            ):
                 continue
 
         # Keep the pending-clarification assistant message itself so the model
@@ -1644,7 +1646,11 @@ def _build_canvas_prompt_payload(
             )
             numbered_line = f"{index}: {preview_line}"
             extra_chars = len(numbered_line) + (1 if visible_lines else 0)
-            if not active_document_always_expanded and visible_lines and (len(visible_lines) >= max_lines or visible_char_count + extra_chars > max_chars):
+            if (
+                not active_document_always_expanded
+                and visible_lines
+                and (len(visible_lines) >= max_lines or visible_char_count + extra_chars > max_chars)
+            ):
                 break
             if not active_document_always_expanded and not visible_lines and extra_chars > max_chars:
                 visible_lines.append(numbered_line[:max_chars])
@@ -2171,15 +2177,7 @@ def _build_canvas_runtime_context_sections(
             "- Multi-page guidance: if the task refers to a specific PDF-style page, call focus_canvas_page only when the document already exposes explicit '## Page N' markers in its text content."
         )
     if canvas_payload["visible_lines"] and not active_document_ignored:
-        canvas_content_unchanged = previous_canvas_content_hash and previous_canvas_content_hash == canvas_payload.get(
-            "content_hash"
-        )
-        if canvas_content_unchanged:
-            active_lines.append(
-                f"[Document content unchanged since last turn — cached version is current. Total: {canvas_payload['total_lines']} lines]"
-            )
-        else:
-            active_lines.append("```text\n" + "\n".join(canvas_payload["visible_lines"]) + "\n```")
+        active_lines.append("```text\n" + "\n".join(canvas_payload["visible_lines"]) + "\n```")
     elif get_canvas_document_capabilities(active_document)["line_addressable"] and not active_document_ignored:
         active_lines.append("(The active canvas document is empty.)")
     sections.append(_finalize_prompt_text(active_lines))

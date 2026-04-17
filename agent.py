@@ -14,6 +14,7 @@ import os
 import threading
 import time
 from typing import Any
+
 try:
     from json_repair import repair_json as _repair_json
 except ImportError:  # pragma: no cover
@@ -153,7 +154,12 @@ from model_registry import (
     resolve_model_target,
     should_retry_model_target_tool_choice_with_auto,
 )
-from rag_service import get_exact_tool_memory_match, search_knowledge_base_tool, search_tool_memory, upsert_tool_memory_result
+from rag_service import (
+    get_exact_tool_memory_match,
+    search_knowledge_base_tool,
+    search_tool_memory,
+    upsert_tool_memory_result,
+)
 from tool_registry import (
     CANVAS_READ_BARRIER_TOOL_NAMES,
     TOOL_SPEC_BY_NAME,
@@ -228,17 +234,17 @@ RUNTIME_CONTEXT_INJECTION_SECTION_MARKERS = (
     | {"## Current Date and Time"}
 )
 DSML_INVOKE_TAG_RE = re.compile(r'<[^>]*invoke\s+name="(?P<name>[^"]+)"[^>]*>', re.IGNORECASE)
-DSML_FUNCTION_CALLS_TAG_RE = re.compile(r'<[^>]*function_calls[^>]*>', re.IGNORECASE)
+DSML_FUNCTION_CALLS_TAG_RE = re.compile(r"<[^>]*function_calls[^>]*>", re.IGNORECASE)
 DSML_PARAMETER_TAG_RE = re.compile(
     r'<[^>]*parameter\s+name="(?P<name>[^"]+)"(?P<attrs>[^>]*)>(?P<value>.*?)</[^>]*parameter\s*>',
     re.IGNORECASE | re.DOTALL,
 )
 DSML_STRING_ATTR_RE = re.compile(r'\bstring\s*=\s*["\']true["\']', re.IGNORECASE)
 TOOL_ARGUMENT_CODE_FENCE_RE = re.compile(
-    r'^\s*```(?:json|javascript|js|python|py)?\s*(?P<body>.*?)\s*```\s*$',
+    r"^\s*```(?:json|javascript|js|python|py)?\s*(?P<body>.*?)\s*```\s*$",
     re.IGNORECASE | re.DOTALL,
 )
-_VALID_IDENTIFIER_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+_VALID_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 TOOL_ARGUMENT_LANGUAGE_LABELS = {"json", "javascript", "js", "python", "py"}
 SEARCH_QUERY_BATCHED_TOOL_NAMES = {
     "search_web",
@@ -410,9 +416,15 @@ def _extract_usage_metrics(usage) -> dict[str, int]:
             if attr_value is not None:
                 payload[key] = attr_value
 
-    prompt_cache_hit_present = "prompt_cache_hit_tokens" in payload and payload.get("prompt_cache_hit_tokens") is not None
-    prompt_cache_miss_present = "prompt_cache_miss_tokens" in payload and payload.get("prompt_cache_miss_tokens") is not None
-    prompt_cache_write_present = "prompt_cache_write_tokens" in payload and payload.get("prompt_cache_write_tokens") is not None
+    prompt_cache_hit_present = (
+        "prompt_cache_hit_tokens" in payload and payload.get("prompt_cache_hit_tokens") is not None
+    )
+    prompt_cache_miss_present = (
+        "prompt_cache_miss_tokens" in payload and payload.get("prompt_cache_miss_tokens") is not None
+    )
+    prompt_cache_write_present = (
+        "prompt_cache_write_tokens" in payload and payload.get("prompt_cache_write_tokens") is not None
+    )
     prompt_tokens_present = "prompt_tokens" in payload and payload.get("prompt_tokens") is not None
     completion_tokens_present = "completion_tokens" in payload and payload.get("completion_tokens") is not None
     total_tokens_present = "total_tokens" in payload and payload.get("total_tokens") is not None
@@ -446,7 +458,9 @@ def _extract_usage_metrics(usage) -> dict[str, int]:
     metrics["cache_hit_present"] = prompt_cache_hit_present
     metrics["cache_miss_present"] = prompt_cache_miss_present
     metrics["cache_write_present"] = prompt_cache_write_present
-    metrics["cache_metrics_present"] = prompt_cache_hit_present or prompt_cache_miss_present or prompt_cache_write_present
+    metrics["cache_metrics_present"] = (
+        prompt_cache_hit_present or prompt_cache_miss_present or prompt_cache_write_present
+    )
     metrics["usage_fields_present"] = (
         prompt_tokens_present
         or completion_tokens_present
@@ -600,7 +614,11 @@ def _rebalance_breakdown_to_total(breakdown: dict[str, int], total_tokens: int) 
 
 
 def _align_breakdown_to_provider_total(breakdown: dict[str, int], total_tokens: int) -> dict[str, int]:
-    adjusted = {key: max(0, int(value)) for key, value in breakdown.items() if key in INPUT_BREAKDOWN_KEYS and value and value > 0}
+    adjusted = {
+        key: max(0, int(value))
+        for key, value in breakdown.items()
+        if key in INPUT_BREAKDOWN_KEYS and value and value > 0
+    }
     target_total = max(0, int(total_tokens or 0))
     current_total = sum(adjusted.values())
     if current_total < target_total:
@@ -858,16 +876,11 @@ def _summarize_input_breakdown_for_error(messages_to_send: list[dict]) -> str:
         summary_parts.append(prompt_part)
 
     largest_buckets = [
-        (key, max(0, int(value or 0)))
-        for key, value in breakdown.items()
-        if max(0, int(value or 0)) > 0
+        (key, max(0, int(value or 0))) for key, value in breakdown.items() if max(0, int(value or 0)) > 0
     ]
     largest_buckets.sort(key=lambda item: item[1], reverse=True)
     if largest_buckets:
-        bucket_summary = ", ".join(
-            f"{str(key).replace('_', ' ')} ~{value:,}"
-            for key, value in largest_buckets[:3]
-        )
+        bucket_summary = ", ".join(f"{str(key).replace('_', ' ')} ~{value:,}" for key, value in largest_buckets[:3])
         summary_parts.append(f"Largest input buckets: {bucket_summary}")
     return ". ".join(summary_parts).strip().rstrip(".")
 
@@ -995,7 +1008,7 @@ def _format_tool_execution_error(error: Exception | str) -> str:
     lowered = raw_text.casefold()
     if class_name.endswith("Error") and class_name not in {"ValueError", "RuntimeError"}:
         if lowered.startswith(class_name.casefold()):
-            raw_text = raw_text[len(class_name):].lstrip(": ") or raw_text
+            raw_text = raw_text[len(class_name) :].lstrip(": ") or raw_text
     if raw_text.lower().startswith("traceback"):
         return "Tool execution failed before producing a usable result."
     return raw_text
@@ -1138,7 +1151,7 @@ def _iter_search_query_batches(raw_queries, *, batch_size: int | None = None):
     normalized_queries = _normalize_search_queries(raw_queries)
     resolved_batch_size = _resolve_search_query_batch_size(batch_size)
     for index in range(0, len(normalized_queries), resolved_batch_size):
-        yield normalized_queries[index:index + resolved_batch_size]
+        yield normalized_queries[index : index + resolved_batch_size]
 
 
 def _get_search_tool_queries(tool_args: dict):
@@ -1268,8 +1281,10 @@ def _is_session_cacheable_tool(tool_name: str) -> bool:
 def _resolve_sub_agent_tool_names(settings: dict, parent_tool_names: list[str] | None = None) -> list[str]:
     allowed = settings.get("sub_agent_allowed_tool_names") if isinstance(settings, dict) else None
     configured_tool_names = (
-        allowed if isinstance(allowed, list) and allowed
-        else parent_tool_names if isinstance(parent_tool_names, list) and parent_tool_names
+        allowed
+        if isinstance(allowed, list) and allowed
+        else parent_tool_names
+        if isinstance(parent_tool_names, list) and parent_tool_names
         else SUB_AGENT_ALLOWED_TOOL_NAMES
     )
     normalized_tool_names: list[str] = []
@@ -1425,7 +1440,12 @@ def _build_sub_agent_retry_messages(child_history: list[dict]) -> list[dict]:
                 tool_call_name_index += 1
             if not tool_name:
                 tool_name = "tool"
-            tool_message: dict[str, Any] = {"role": "tool", "content": content, "name": tool_name, "tool_call_id": tool_call_id}
+            tool_message: dict[str, Any] = {
+                "role": "tool",
+                "content": content,
+                "name": tool_name,
+                "tool_call_id": tool_call_id,
+            }
             if tool_message.get("content"):
                 retry_messages.append(tool_message)
             index += 1
@@ -1610,7 +1630,9 @@ def _normalize_sub_agent_tool_trace(entries: list[dict]) -> list[dict]:
         cleaned = {
             "tool_name": tool_name,
             "step": _coerce_int_range(entry.get("step"), 1, 1, 999),
-            "state": str(entry.get("state") or "done").strip() if str(entry.get("state") or "").strip() in {"running", "done", "error"} else "done",
+            "state": str(entry.get("state") or "done").strip()
+            if str(entry.get("state") or "").strip() in {"running", "done", "error"}
+            else "done",
         }
         preview = _clean_tool_text(entry.get("preview") or "", limit=300)
         if preview:
@@ -1684,13 +1706,15 @@ def _build_sub_agent_messages(
         "Use English for tool planning, reasoning, status updates, and the final answer unless told otherwise.",
         f"When using read-only search tools like search_web or search_news, batch queries between 1 and {normalized_search_tool_query_limit} items per list and split broader searches into multiple calls.",
         "Default to batching independent read-only tool calls into the same turn when they do not depend on each other; avoid one-by-one fan-out unless a later tool truly needs an earlier result.",
-        "Synthesize your findings and return a concise, definitive final answer that directly helps the parent assistant continue."
+        "Synthesize your findings and return a concise, definitive final answer that directly helps the parent assistant continue.",
     ]
     parts.append(build_current_time_context(now))
     if allowed_tools:
         parts.append(f"Available read-only tools: {', '.join(allowed_tools)}.")
     if max_parallel_tools is not None:
-        normalized_parallel_tools = max(MAX_PARALLEL_TOOLS_MIN, min(MAX_PARALLEL_TOOLS_MAX, int(max_parallel_tools or 0)))
+        normalized_parallel_tools = max(
+            MAX_PARALLEL_TOOLS_MIN, min(MAX_PARALLEL_TOOLS_MAX, int(max_parallel_tools or 0))
+        )
         parts.append(
             f"At most {normalized_parallel_tools} tool call(s) can execute in parallel in one turn. "
             f"If you need more independent reads than that, prioritize the best {normalized_parallel_tools} first and avoid low-value fan-out."
@@ -1738,7 +1762,7 @@ def _build_canvas_expected_context(
             return None, None
         if start_line < 1 or end_line < start_line:
             return None, None
-        expected_lines = existing_lines[start_line - 1:end_line]
+        expected_lines = existing_lines[start_line - 1 : end_line]
         return start_line, expected_lines or None
 
     if mode == "insert":
@@ -1751,7 +1775,7 @@ def _build_canvas_expected_context(
 
         expected_start_line = max(1, after_line - 1)
         expected_end_line = min(len(existing_lines), after_line + 1)
-        expected_lines = existing_lines[expected_start_line - 1:expected_end_line]
+        expected_lines = existing_lines[expected_start_line - 1 : expected_end_line]
         return expected_start_line, expected_lines or None
 
     return None, None
@@ -1818,9 +1842,8 @@ def _conversation_has_clarification_tool_call(messages: list[dict]) -> bool:
 
 
 def _is_tool_execution_result_message(message: dict) -> bool:
-    return str(message.get("role") or "").strip() == "system" and str(message.get("content") or "").startswith(
-        TOOL_EXECUTION_RESULTS_MARKER
-    )
+    content = str(message.get("content") or "").strip()
+    return content.startswith(TOOL_EXECUTION_RESULTS_MARKER)
 
 
 def _iter_agent_exchange_blocks(messages: list[dict]) -> list[dict]:
@@ -2107,10 +2130,7 @@ def _trace_agent_event(event: str, *, raw_fields: dict | None = None, **fields):
     for key, value in fields.items():
         payload[key] = _serialize_for_log(value)
     if AGENT_TRACE_LOG_INCLUDE_RAW and isinstance(raw_fields, dict) and raw_fields:
-        payload["raw"] = {
-            str(key): _serialize_for_raw_log(value)
-            for key, value in raw_fields.items()
-        }
+        payload["raw"] = {str(key): _serialize_for_raw_log(value) for key, value in raw_fields.items()}
     try:
         logger = _get_agent_trace_logger()
         if logger is None:
@@ -2257,12 +2277,7 @@ def _score_fetch_excerpt_window(window: str, *, anchor_terms: list[str] | None =
         anchor_hits = sum(1 for term in normalized_anchor_terms if term in lowered_window)
         reference_score = min(1.0, anchor_hits / max(1, min(4, len(normalized_anchor_terms))))
 
-    return (
-        lexical_score * 0.38
-        + structural_score * 0.24
-        + density_score * 0.18
-        + reference_score * 0.20
-    )
+    return lexical_score * 0.38 + structural_score * 0.24 + density_score * 0.18 + reference_score * 0.20
 
 
 def _select_entropy_middle_excerpt_start(
@@ -2412,7 +2427,9 @@ def _build_fetch_clipped_text(result: dict, token_threshold: int, clip_aggressiv
             anchor_parts.append(field_value)
     outline = result.get("outline") if isinstance(result.get("outline"), list) else []
     if outline:
-        anchor_parts.extend(_clean_tool_text(item, limit=120) for item in outline[:12] if _clean_tool_text(item, limit=120))
+        anchor_parts.extend(
+            _clean_tool_text(item, limit=120) for item in outline[:12] if _clean_tool_text(item, limit=120)
+        )
     clipped_content, clip_details = _clip_text_preserving_ends(
         raw_content,
         target_chars,
@@ -2504,7 +2521,9 @@ def _build_fetch_context_summary(result: dict, limit: int = 420) -> str:
     if meta_description:
         parts.append(f"Description: {meta_description}")
     if outline:
-        headings = "; ".join(_clean_tool_text(item, limit=80) for item in outline[:4] if _clean_tool_text(item, limit=80))
+        headings = "; ".join(
+            _clean_tool_text(item, limit=80) for item in outline[:4] if _clean_tool_text(item, limit=80)
+        )
         if headings:
             parts.append(f"Outline anchors: {headings}")
     if structured_data:
@@ -2660,9 +2679,7 @@ def _build_model_invocation_usage_summary(
     if estimated_input_tokens is not None:
         summary["estimated_input_tokens"] = max(0, int(estimated_input_tokens or 0))
     if isinstance(estimated_breakdown, dict):
-        summary["input_breakdown"] = {
-            str(key): max(0, int(value or 0)) for key, value in estimated_breakdown.items()
-        }
+        summary["input_breakdown"] = {str(key): max(0, int(value or 0)) for key, value in estimated_breakdown.items()}
     if tool_schema_tokens is not None:
         summary["tool_schema_tokens"] = max(0, int(tool_schema_tokens or 0))
     return summary
@@ -2765,7 +2782,9 @@ def _build_fetch_summary_source_text(
     if structured_data:
         parts.append("Structured data:\n" + structured_data)
     if outline:
-        headings = [f"- {_clean_tool_text(item, limit=120)}" for item in outline[:40] if _clean_tool_text(item, limit=120)]
+        headings = [
+            f"- {_clean_tool_text(item, limit=120)}" for item in outline[:40] if _clean_tool_text(item, limit=120)
+        ]
         if headings:
             parts.append("Page outline:\n" + "\n".join(headings))
     if content:
@@ -2826,7 +2845,9 @@ def _summarize_fetched_page_result(
         response = target["client"].chat.completions.create(**request_kwargs)
         _fetch_sum_latency_ms = max(0, round((time.monotonic() - _t0_fetch_sum) * 1000))
     except Exception as exc:
-        _fetch_sum_latency_ms = max(0, round((time.monotonic() - _t0_fetch_sum) * 1000)) if "_t0_fetch_sum" in dir() else None
+        _fetch_sum_latency_ms = (
+            max(0, round((time.monotonic() - _t0_fetch_sum) * 1000)) if "_t0_fetch_sum" in dir() else None
+        )
         _append_model_invocation_log(
             invocation_log_sink,
             agent_context=agent_context,
@@ -2894,7 +2915,10 @@ def _summarize_fetched_page_result(
     }
     if focus_text:
         summarized_result["focus"] = focus_text
-    return summarized_result, f"Page summarized: {summarized_result.get('title') or summarized_result.get('url') or 'page'}"
+    return (
+        summarized_result,
+        f"Page summarized: {summarized_result.get('title') or summarized_result.get('url') or 'page'}",
+    )
 
 
 def _prepare_fetch_result_for_model(
@@ -2933,7 +2957,9 @@ def _prepare_fetch_result_for_model(
         return prepared
 
     clip_aggressiveness = _normalize_fetch_clip_aggressiveness(fetch_url_clip_aggressiveness)
-    clipped_text, token_estimate, clip_details = _build_fetch_clipped_text(prepared, token_threshold, clip_aggressiveness)
+    clipped_text, token_estimate, clip_details = _build_fetch_clipped_text(
+        prepared, token_threshold, clip_aggressiveness
+    )
     if not clipped_text or clipped_text == content:
         return prepared
 
@@ -3045,7 +3071,11 @@ def _build_fetch_tool_message_content(tool_args: dict, summary: str, transcript_
     if structured_data:
         parts.append("## Structured Data\n" + structured_data)
     if body:
-        body_heading = "## Page Content [Excerpted]" if content_mode in {"clipped_text", "budget_compact", "budget_brief"} else "## Page Content [Full]"
+        body_heading = (
+            "## Page Content [Excerpted]"
+            if content_mode in {"clipped_text", "budget_compact", "budget_brief"}
+            else "## Page Content [Full]"
+        )
         parts.append(body_heading + "\n" + body)
     return "\n\n".join(parts).strip()
 
@@ -3473,7 +3503,7 @@ def _extract_first_balanced_json_like_object(text: str) -> str | None:
         if char == "}":
             depth -= 1
             if depth == 0:
-                return raw_text[start_index:index + 1]
+                return raw_text[start_index : index + 1]
 
     return None
 
@@ -3525,10 +3555,7 @@ def _close_unbalanced_json_like_object(text: str) -> str | None:
     if quote_char or escape_next or not stack:
         return None
 
-    closing_suffix = "".join(
-        "}" if opener == "{" else "]"
-        for opener in reversed(stack)
-    )
+    closing_suffix = "".join("}" if opener == "{" else "]" for opener in reversed(stack))
     return f"{object_text}{closing_suffix}"
 
 
@@ -3624,7 +3651,7 @@ def _extract_dsml_tool_calls_from_content(content_text: str) -> tuple[str, list[
             continue
 
         next_start = invoke_matches[index].start() if index < len(invoke_matches) else len(raw_content)
-        arguments_text = raw_content[match.end():next_start]
+        arguments_text = raw_content[match.end() : next_start]
         parsed_arguments = _parse_dsml_argument_object(arguments_text) or {}
         tool_calls.append(
             {
@@ -3789,7 +3816,11 @@ def _extract_partial_json_string_value(arguments_text: str, field_name: str) -> 
                     look_ahead = index + 1
                     while look_ahead < len(raw_arguments) and raw_arguments[look_ahead].isspace():
                         look_ahead += 1
-                    if candidate_key == raw_field_name and look_ahead < len(raw_arguments) and raw_arguments[look_ahead] == ":":
+                    if (
+                        candidate_key == raw_field_name
+                        and look_ahead < len(raw_arguments)
+                        and raw_arguments[look_ahead] == ":"
+                    ):
                         look_ahead += 1
                         while look_ahead < len(raw_arguments) and raw_arguments[look_ahead].isspace():
                             look_ahead += 1
@@ -3856,7 +3887,7 @@ def _extract_partial_json_string_value(arguments_text: str, field_name: str) -> 
             index += 1
             continue
         if escape_char == "u":
-            hex_value = raw_arguments[index + 1:index + 5]
+            hex_value = raw_arguments[index + 1 : index + 5]
             if len(hex_value) < 4 or any(char not in string.hexdigits for char in hex_value):
                 break
             value_chars.append(chr(int(hex_value, 16)))
@@ -3921,7 +3952,11 @@ def _build_streaming_canvas_line_edit_preview(
         ):
             return None, document
 
-        replacement = [] if tool_name == "delete_canvas_lines" else _normalize_streaming_canvas_preview_lines(tool_args.get("lines"))
+        replacement = (
+            []
+            if tool_name == "delete_canvas_lines"
+            else _normalize_streaming_canvas_preview_lines(tool_args.get("lines"))
+        )
         if replacement is None:
             return None, document
         next_lines = [*existing_lines[: start_line - 1], *replacement, *existing_lines[end_line:]]
@@ -4032,17 +4067,27 @@ def _build_streaming_canvas_tool_preview(
                 if value is not None:
                     snapshot[field_name] = str(value).strip()
         if tool_name in CANVAS_STREAM_CONTENT_TOOL_NAMES:
-            if parse_error is None and isinstance(parsed_arguments, dict) and parsed_arguments.get("content") is not None:
+            if (
+                parse_error is None
+                and isinstance(parsed_arguments, dict)
+                and parsed_arguments.get("content") is not None
+            ):
                 content = str(parsed_arguments.get("content") or "")
             else:
                 content = _extract_partial_json_string_value(arguments_text, "content")
         elif tool_name in CANVAS_STREAM_REPLACE_CONTENT_TOOL_NAMES:
             if tool_name in {"replace_canvas_lines", "insert_canvas_lines", "delete_canvas_lines"}:
-                content, resolved_document = _build_streaming_canvas_line_edit_preview(canvas_state, tool_name, parsed_arguments or {})
+                content, resolved_document = _build_streaming_canvas_line_edit_preview(
+                    canvas_state, tool_name, parsed_arguments or {}
+                )
             elif tool_name == "batch_canvas_edits":
-                content, resolved_document = _build_streaming_canvas_batch_edit_preview(canvas_state, parsed_arguments or {})
+                content, resolved_document = _build_streaming_canvas_batch_edit_preview(
+                    canvas_state, parsed_arguments or {}
+                )
             else:
-                content, resolved_document = _build_streaming_canvas_transform_preview(canvas_state, parsed_arguments or {})
+                content, resolved_document = _build_streaming_canvas_transform_preview(
+                    canvas_state, parsed_arguments or {}
+                )
             if resolved_document:
                 resolved_document_id = str(resolved_document.get("id") or "").strip()
                 resolved_document_path = str(resolved_document.get("path") or "").strip()
@@ -4069,8 +4114,7 @@ def _build_streaming_canvas_tool_preview(
 
 def _finalize_stream_tool_calls(tool_call_parts: list[dict]) -> tuple[list[dict] | None, str | None]:
     meaningful_tool_call_parts = [
-        raw_call for raw_call in tool_call_parts
-        if _stream_tool_call_entry_has_meaningful_content(raw_call)
+        raw_call for raw_call in tool_call_parts if _stream_tool_call_entry_has_meaningful_content(raw_call)
     ]
     if not meaningful_tool_call_parts:
         return None, None
@@ -4273,10 +4317,7 @@ def _validate_tool_arguments(tool_name: str, tool_args: dict) -> str | None:
 
     # Strip keys that are clearly not valid property names (e.g. code content that leaked
     # into a key position due to model serialisation errors: contains ';', '*', '=', spaces, etc.).
-    bogus_keys = [
-        k for k in list(tool_args)
-        if k not in properties and not _VALID_IDENTIFIER_RE.match(k)
-    ]
+    bogus_keys = [k for k in list(tool_args) if k not in properties and not _VALID_IDENTIFIER_RE.match(k)]
     for bk in bogus_keys:
         del tool_args[bk]
 
@@ -4284,9 +4325,9 @@ def _validate_tool_arguments(tool_name: str, tool_args: dict) -> str | None:
         property_schema = properties.get(key)
         if not property_schema:
             return f"Unexpected argument '{key}' for {tool_name}"
-        
+
         expected_type = property_schema.get("type")
-        
+
         if expected_type == "array" and isinstance(value, str):
             parsed_value = _parse_json_like_value(value)
             if isinstance(parsed_value, list):
@@ -4350,18 +4391,16 @@ def _validate_tool_arguments(tool_name: str, tool_args: dict) -> str | None:
             minimum = property_schema.get("minimum")
             maximum = property_schema.get("maximum")
             if minimum is not None and value < minimum:
-                if (
-                    (tool_name == "grep_fetched_content" and key in {"context_lines", "max_matches"})
-                    or (tool_name == "scroll_fetched_content" and key == "window_lines")
+                if (tool_name == "grep_fetched_content" and key in {"context_lines", "max_matches"}) or (
+                    tool_name == "scroll_fetched_content" and key == "window_lines"
                 ):
                     value = minimum
                     tool_args[key] = value
                 else:
                     return f"Argument '{key}' in {tool_name} must be >= {minimum}"
             if maximum is not None and value > maximum:
-                if (
-                    (tool_name == "grep_fetched_content" and key in {"context_lines", "max_matches"})
-                    or (tool_name == "scroll_fetched_content" and key == "window_lines")
+                if (tool_name == "grep_fetched_content" and key in {"context_lines", "max_matches"}) or (
+                    tool_name == "scroll_fetched_content" and key == "window_lines"
                 ):
                     value = maximum
                     tool_args[key] = value
@@ -4441,12 +4480,20 @@ def _build_tool_execution_result_message(transcript_results: list[dict]) -> dict
                 limit=220,
             )
             summary_notice = _clean_tool_text(result_payload.get("summary_notice") or "", limit=220)
-            if summary_notice and result_payload.get("content_mode") in {"clipped_text", "budget_compact", "budget_brief"}:
+            if summary_notice and result_payload.get("content_mode") in {
+                "clipped_text",
+                "budget_compact",
+                "budget_brief",
+            }:
                 parts.append(f"  Recovery: {summary_notice}")
-            elif recovery_hint and result_payload.get("content_mode") in {"clipped_text", "budget_compact", "budget_brief"}:
+            elif recovery_hint and result_payload.get("content_mode") in {
+                "clipped_text",
+                "budget_compact",
+                "budget_brief",
+            }:
                 parts.append(f"  Recovery: {recovery_hint}")
 
-    return {"role": "system", "content": "\n".join(parts)}
+    return {"role": "user", "content": "\n".join(parts)}
 
 
 def _merge_tool_execution_result_message(messages: list[dict], tool_execution_result_message: dict | None) -> None:
@@ -4708,7 +4755,7 @@ def _build_search_memory_value(tool_name: str, result: dict) -> str:
     matches = result.get("matches") if isinstance(result.get("matches"), list) else []
     count = max(0, int(result.get("count") or len(matches)))
     if not matches:
-        return f"{label} for \"{query or 'unknown query'}\" found no matches."
+        return f'{label} for "{query or "unknown query"}" found no matches.'
 
     fragments: list[str] = []
     for index, match in enumerate(matches[:SEARCH_MEMORY_PROMOTION_MATCH_LIMIT], start=1):
@@ -4737,13 +4784,15 @@ def _build_search_memory_value(tool_name: str, result: dict) -> str:
         if fragment:
             fragments.append(f"#{index} {fragment}")
 
-    prefix = f"{label} for \"{query or 'unknown query'}\" found {count} match{'es' if count != 1 else ''}."
+    prefix = f'{label} for "{query or "unknown query"}" found {count} match{"es" if count != 1 else ""}.'
     if not fragments:
         return prefix
     return f"{prefix} Top results: {' | '.join(fragments)}"
 
 
-def _maybe_save_search_result_to_conversation_memory(tool_name: str, tool_args: dict, result: dict, runtime_state: dict) -> dict | None:
+def _maybe_save_search_result_to_conversation_memory(
+    tool_name: str, tool_args: dict, result: dict, runtime_state: dict
+) -> dict | None:
     if not _coerce_tool_bool(tool_args.get("save_to_conversation_memory")):
         return None
 
@@ -4772,7 +4821,9 @@ def _maybe_save_search_result_to_conversation_memory(tool_name: str, tool_args: 
 
     source_message_id = agent_context.get("source_message_id")
     message_id = int(source_message_id) if source_message_id not in (None, "") else None
-    key = str(tool_args.get("memory_key") or "").strip() or _build_search_memory_default_key(tool_name, result.get("query", ""))
+    key = str(tool_args.get("memory_key") or "").strip() or _build_search_memory_default_key(
+        tool_name, result.get("query", "")
+    )
     entry = insert_conversation_memory_entry(
         conversation_id,
         "tool_result",
@@ -4817,7 +4868,10 @@ def _run_save_to_conversation_memory(tool_args: dict, runtime_state: dict):
     agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
     conversation_id = int(agent_context.get("conversation_id") or 0)
     if conversation_id <= 0:
-        return {"status": "error", "error": "No active conversation context was provided."}, "Conversation memory unavailable"
+        return {
+            "status": "error",
+            "error": "No active conversation context was provided.",
+        }, "Conversation memory unavailable"
 
     source_message_id = agent_context.get("source_message_id")
     message_id = int(source_message_id) if source_message_id not in (None, "") else None
@@ -4841,9 +4895,7 @@ def _run_save_to_conversation_memory(tool_args: dict, runtime_state: dict):
             )
             updated = entry.get("updated_existing") is True
             results.append({"key": entry.get("key") or item.get("key", ""), "updated_existing": updated})
-            summaries.append(
-                f"{'updated' if updated else 'saved'}: {entry.get('key') or item.get('key', '')}"
-            )
+            summaries.append(f"{'updated' if updated else 'saved'}: {entry.get('key') or item.get('key', '')}")
         return {"status": "ok", "saved": results}, "Conversation memory batch — " + ", ".join(summaries)
 
     # Single-entry fallback (original behaviour)
@@ -4860,11 +4912,7 @@ def _run_save_to_conversation_memory(tool_args: dict, runtime_state: dict):
         "status": "ok",
         "key": entry.get("key") or tool_args.get("key", ""),
         "updated_existing": updated,
-    }, (
-        f"Conversation memory updated: {entry['key']}"
-        if updated
-        else f"Conversation memory saved: {entry['key']}"
-    )
+    }, (f"Conversation memory updated: {entry['key']}" if updated else f"Conversation memory saved: {entry['key']}")
 
 
 def _run_delete_conversation_memory_entry(tool_args: dict, runtime_state: dict):
@@ -4874,7 +4922,10 @@ def _run_delete_conversation_memory_entry(tool_args: dict, runtime_state: dict):
     agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
     conversation_id = int(agent_context.get("conversation_id") or 0)
     if conversation_id <= 0:
-        return {"status": "error", "error": "No active conversation context was provided."}, "Conversation memory unavailable"
+        return {
+            "status": "error",
+            "error": "No active conversation context was provided.",
+        }, "Conversation memory unavailable"
 
     source_message_id = agent_context.get("source_message_id")
     message_id = int(source_message_id) if source_message_id not in (None, "") else None
@@ -4895,11 +4946,17 @@ def _run_save_to_persona_memory(tool_args: dict, runtime_state: dict):
     agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
     conversation_id = int(agent_context.get("conversation_id") or 0)
     if conversation_id <= 0:
-        return {"status": "error", "error": "No active conversation context was provided."}, "Persona memory unavailable"
+        return {
+            "status": "error",
+            "error": "No active conversation context was provided.",
+        }, "Persona memory unavailable"
 
     persona = get_effective_conversation_persona(conversation_id)
     if not isinstance(persona, dict) or int(persona.get("id") or 0) <= 0:
-        return {"status": "error", "error": "No active persona is available for this conversation."}, "Persona memory unavailable"
+        return {
+            "status": "error",
+            "error": "No active persona is available for this conversation.",
+        }, "Persona memory unavailable"
 
     source_message_id = agent_context.get("source_message_id")
     message_id = int(source_message_id) if source_message_id not in (None, "") else None
@@ -4916,22 +4973,24 @@ def _run_save_to_persona_memory(tool_args: dict, runtime_state: dict):
         "persona_id": int(persona["id"]),
         "key": entry.get("key") or tool_args.get("key", ""),
         "updated_existing": updated,
-    }, (
-        f"Persona memory updated: {entry['key']}"
-        if updated
-        else f"Persona memory saved: {entry['key']}"
-    )
+    }, (f"Persona memory updated: {entry['key']}" if updated else f"Persona memory saved: {entry['key']}")
 
 
 def _run_delete_persona_memory_entry(tool_args: dict, runtime_state: dict):
     agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
     conversation_id = int(agent_context.get("conversation_id") or 0)
     if conversation_id <= 0:
-        return {"status": "error", "error": "No active conversation context was provided."}, "Persona memory unavailable"
+        return {
+            "status": "error",
+            "error": "No active conversation context was provided.",
+        }, "Persona memory unavailable"
 
     persona = get_effective_conversation_persona(conversation_id)
     if not isinstance(persona, dict) or int(persona.get("id") or 0) <= 0:
-        return {"status": "error", "error": "No active persona is available for this conversation."}, "Persona memory unavailable"
+        return {
+            "status": "error",
+            "error": "No active persona is available for this conversation.",
+        }, "Persona memory unavailable"
 
     source_message_id = agent_context.get("source_message_id")
     message_id = int(source_message_id) if source_message_id not in (None, "") else None
@@ -5094,7 +5153,10 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
                 final_result = {
                     "status": "error",
                     "summary": timeout_error,
-                    "model": _clean_tool_text(child_model_candidates[max(0, attempt_index - 2)] if child_model_candidates else parent_model, limit=120),
+                    "model": _clean_tool_text(
+                        child_model_candidates[max(0, attempt_index - 2)] if child_model_candidates else parent_model,
+                        limit=120,
+                    ),
                     "error": timeout_error,
                     "timed_out": True,
                 }
@@ -5140,14 +5202,44 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
                     fetch_url_token_threshold=get_fetch_url_token_threshold(settings),
                     fetch_url_clip_aggressiveness=get_fetch_url_clip_aggressiveness(settings),
                     initial_canvas_documents=get_canvas_runtime_documents(runtime_state.get("canvas")),
-                    initial_canvas_active_document_id=get_canvas_runtime_active_document_id(runtime_state.get("canvas")),
-                    canvas_prompt_max_lines=((runtime_state.get("canvas_prompt") or {}).get("max_lines") if isinstance(runtime_state.get("canvas_prompt"), dict) else None),
-                    canvas_prompt_max_chars=((runtime_state.get("canvas_prompt") or {}).get("max_chars") if isinstance(runtime_state.get("canvas_prompt"), dict) else None),
-                    canvas_prompt_max_tokens=((runtime_state.get("canvas_prompt") or {}).get("max_tokens") if isinstance(runtime_state.get("canvas_prompt"), dict) else None),
-                    canvas_prompt_code_line_max_chars=((runtime_state.get("canvas_prompt") or {}).get("code_line_max_chars") if isinstance(runtime_state.get("canvas_prompt"), dict) else None),
-                    canvas_prompt_text_line_max_chars=((runtime_state.get("canvas_prompt") or {}).get("text_line_max_chars") if isinstance(runtime_state.get("canvas_prompt"), dict) else None),
-                    canvas_expand_max_lines=((runtime_state.get("canvas_limits") or {}).get("expand_max_lines") if isinstance(runtime_state.get("canvas_limits"), dict) else None),
-                    canvas_scroll_window_lines=((runtime_state.get("canvas_limits") or {}).get("scroll_window_lines") if isinstance(runtime_state.get("canvas_limits"), dict) else None),
+                    initial_canvas_active_document_id=get_canvas_runtime_active_document_id(
+                        runtime_state.get("canvas")
+                    ),
+                    canvas_prompt_max_lines=(
+                        (runtime_state.get("canvas_prompt") or {}).get("max_lines")
+                        if isinstance(runtime_state.get("canvas_prompt"), dict)
+                        else None
+                    ),
+                    canvas_prompt_max_chars=(
+                        (runtime_state.get("canvas_prompt") or {}).get("max_chars")
+                        if isinstance(runtime_state.get("canvas_prompt"), dict)
+                        else None
+                    ),
+                    canvas_prompt_max_tokens=(
+                        (runtime_state.get("canvas_prompt") or {}).get("max_tokens")
+                        if isinstance(runtime_state.get("canvas_prompt"), dict)
+                        else None
+                    ),
+                    canvas_prompt_code_line_max_chars=(
+                        (runtime_state.get("canvas_prompt") or {}).get("code_line_max_chars")
+                        if isinstance(runtime_state.get("canvas_prompt"), dict)
+                        else None
+                    ),
+                    canvas_prompt_text_line_max_chars=(
+                        (runtime_state.get("canvas_prompt") or {}).get("text_line_max_chars")
+                        if isinstance(runtime_state.get("canvas_prompt"), dict)
+                        else None
+                    ),
+                    canvas_expand_max_lines=(
+                        (runtime_state.get("canvas_limits") or {}).get("expand_max_lines")
+                        if isinstance(runtime_state.get("canvas_limits"), dict)
+                        else None
+                    ),
+                    canvas_scroll_window_lines=(
+                        (runtime_state.get("canvas_limits") or {}).get("scroll_window_lines")
+                        if isinstance(runtime_state.get("canvas_limits"), dict)
+                        else None
+                    ),
                     workspace_runtime_state=runtime_state.get("workspace"),
                     agent_context={
                         "sub_agent_depth": sub_agent_depth + 1,
@@ -5156,7 +5248,11 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
                         "cancel_event": agent_context.get("cancel_event"),
                         "cancel_reason": agent_context.get("cancel_reason"),
                     },
-                    invocation_log_sink=(runtime_state.get("invocation_log_sink") if isinstance(runtime_state.get("invocation_log_sink"), list) else None),
+                    invocation_log_sink=(
+                        runtime_state.get("invocation_log_sink")
+                        if isinstance(runtime_state.get("invocation_log_sink"), list)
+                        else None
+                    ),
                 )
                 try:
                     for event in child_events:
@@ -5173,8 +5269,12 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
                             child_reasoning += str(event.get("text") or "")
                         elif event_type in {"step_update", "tool_result", "tool_error"}:
                             if event_type == "tool_error":
-                                internal_error_text = _clean_tool_text(event.get("error") or "", limit=SUB_AGENT_MAX_ERROR_CHARS)
-                                if _is_sub_agent_internal_final_answer_error(event.get("tool") or "", internal_error_text):
+                                internal_error_text = _clean_tool_text(
+                                    event.get("error") or "", limit=SUB_AGENT_MAX_ERROR_CHARS
+                                )
+                                if _is_sub_agent_internal_final_answer_error(
+                                    event.get("tool") or "", internal_error_text
+                                ):
                                     missing_final_answer_output = True
                                     continue
                             _upsert_sub_agent_tool_trace(child_tool_trace, child_tool_trace_map, event)
@@ -5190,17 +5290,24 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
                             if event_type == "tool_error":
                                 error_text = _clean_tool_text(event.get("error") or "", limit=SUB_AGENT_MAX_ERROR_CHARS)
                                 if error_text:
-                                    if str(event.get("tool") or "").strip() == "api" and _is_retryable_model_error(error_text):
+                                    if str(event.get("tool") or "").strip() == "api" and _is_retryable_model_error(
+                                        error_text
+                                    ):
                                         retryable_model_error = True
                                         break
                                     child_errors.append(error_text)
                         elif event_type == "tool_capture":
-                            child_tool_results = event.get("tool_results") if isinstance(event.get("tool_results"), list) else []
+                            child_tool_results = (
+                                event.get("tool_results") if isinstance(event.get("tool_results"), list) else []
+                            )
                         elif event_type == "tool_history":
                             raw_messages = event.get("messages") if isinstance(event.get("messages"), list) else []
                             for message in raw_messages:
                                 normalized_message = _normalize_sub_agent_history_message(message)
-                                if normalized_message is not None and len(child_history) < SUB_AGENT_MAX_TRANSCRIPT_MESSAGES:
+                                if (
+                                    normalized_message is not None
+                                    and len(child_history) < SUB_AGENT_MAX_TRANSCRIPT_MESSAGES
+                                ):
                                     child_history.append(normalized_message)
                 finally:
                     close_method = getattr(child_events, "close", None)
@@ -5229,7 +5336,10 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
                 saw_timeout = True
             trace_error_text = next(
                 (
-                    _clean_tool_text(entry.get("summary") or f"{entry.get('tool_name', 'tool')} failed.", limit=SUB_AGENT_MAX_ERROR_CHARS)
+                    _clean_tool_text(
+                        entry.get("summary") or f"{entry.get('tool_name', 'tool')} failed.",
+                        limit=SUB_AGENT_MAX_ERROR_CHARS,
+                    )
                     for entry in reversed(normalized_tool_trace)
                     if isinstance(entry, dict) and entry.get("state") == "error"
                 ),
@@ -5257,7 +5367,11 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
             if missing_final_answer_state and not has_partial_output and not error_text:
                 error_text = "The delegated model did not return a final answer."
 
-            if (timed_out or retryable_model_error or missing_final_answer_state) and retry_count < retry_attempts and time.monotonic() < overall_deadline:
+            if (
+                (timed_out or retryable_model_error or missing_final_answer_state)
+                and retry_count < retry_attempts
+                and time.monotonic() < overall_deadline
+            ):
                 retry_reason = (
                     "a timeout"
                     if timed_out
@@ -5280,11 +5394,7 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
             if fallback_continues:
                 next_model = _clean_tool_text(child_model_candidates[attempt_index], limit=120)
                 reason_label = (
-                    "timeout"
-                    if timed_out
-                    else "missing final answer"
-                    if missing_final_answer_state
-                    else "model error"
+                    "timeout" if timed_out else "missing final answer" if missing_final_answer_state else "model error"
                 )
                 prompt_reason_label = (
                     "a timeout"
@@ -5300,7 +5410,11 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
                         {
                             "model": child_model,
                             "error": error_text
-                            or ("The delegated model did not return a final answer." if missing_final_answer_state else "")
+                            or (
+                                "The delegated model did not return a final answer."
+                                if missing_final_answer_state
+                                else ""
+                            )
                             or fallback_note
                             or "Retryable model failure.",
                         }
@@ -5376,11 +5490,15 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
             return final_result, final_summary
 
     if final_result is None:
-        final_error = fallback_attempts[-1]["error"] if fallback_attempts else "Sub-agent could not complete the delegated task."
+        final_error = (
+            fallback_attempts[-1]["error"] if fallback_attempts else "Sub-agent could not complete the delegated task."
+        )
         final_result = {
             "status": "error",
             "summary": final_error,
-            "model": _clean_tool_text(child_model_candidates[-1] if child_model_candidates else parent_model, limit=120),
+            "model": _clean_tool_text(
+                child_model_candidates[-1] if child_model_candidates else parent_model, limit=120
+            ),
             "error": final_error,
         }
         if fallback_attempts:
@@ -5509,7 +5627,9 @@ def _run_search_tool_memory(tool_args: dict, runtime_state: dict):
     if conversation_memory_result is not None:
         result = dict(result)
         result["conversation_memory"] = conversation_memory_result
-    return result, _build_search_summary(f"{result.get('count', 0)} tool memory matches found", conversation_memory_result)
+    return result, _build_search_summary(
+        f"{result.get('count', 0)} tool memory matches found", conversation_memory_result
+    )
 
 
 def _run_search_web(tool_args: dict, runtime_state: dict):
@@ -5580,7 +5700,9 @@ def _run_scroll_fetched_content(tool_args: dict, runtime_state: dict):
     if result.get("error"):
         summary = f"scroll_fetched_content error: {_clean_tool_text(result['error'], limit=120)}"
     else:
-        target_label = _clean_tool_text(result.get("title") or result.get("url") or tool_args.get("url") or "page", limit=80)
+        target_label = _clean_tool_text(
+            result.get("title") or result.get("url") or tool_args.get("url") or "page", limit=80
+        )
         summary = f"scroll_fetched_content: {target_label} {result.get('start_line')}-{result.get('end_line_actual')}"
     return result, summary
 
@@ -5603,7 +5725,9 @@ def _run_fetch_url_summarized(tool_args: dict, runtime_state: dict):
 
     agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
     parent_model = str(agent_context.get("model") or "").strip()
-    invocation_log_sink = runtime_state.get("invocation_log_sink") if isinstance(runtime_state.get("invocation_log_sink"), list) else None
+    invocation_log_sink = (
+        runtime_state.get("invocation_log_sink") if isinstance(runtime_state.get("invocation_log_sink"), list) else None
+    )
     return _summarize_fetched_page_result(
         result,
         focus,
@@ -5626,7 +5750,9 @@ def _run_grep_fetched_content(tool_args: dict, runtime_state: dict):
     if result.get("error"):
         summary = f"grep_fetched_content error: {_clean_tool_text(result['error'], limit=120)}"
     elif match_count == 0:
-        summary = f"grep_fetched_content: no matches for pattern '{_clean_tool_text(tool_args.get('pattern', ''), limit=60)}'"
+        summary = (
+            f"grep_fetched_content: no matches for pattern '{_clean_tool_text(tool_args.get('pattern', ''), limit=60)}'"
+        )
     else:
         summary = f"grep_fetched_content: {match_count} match(es) for pattern '{_clean_tool_text(tool_args.get('pattern', ''), limit=60)}'"
     return result, summary
@@ -5666,7 +5792,9 @@ def _run_expand_canvas_document(tool_args: dict, runtime_state: dict):
         document_id=tool_args.get("document_id"),
         document_path=tool_args.get("document_path"),
         max_lines=expand_max_lines,
-        max_chars=scale_canvas_char_limit(expand_max_lines, default_lines=800, default_chars=20_000) if expand_max_lines else None,
+        max_chars=scale_canvas_char_limit(expand_max_lines, default_lines=800, default_chars=20_000)
+        if expand_max_lines
+        else None,
     )
     target_label = str(result.get("document_path") or result.get("title") or "Canvas").strip()
     return result, f"Canvas expanded: {target_label}"
@@ -5675,7 +5803,10 @@ def _run_expand_canvas_document(tool_args: dict, runtime_state: dict):
 def _run_batch_read_canvas_documents(tool_args: dict, runtime_state: dict):
     canvas_state = _get_canvas_runtime_state(runtime_state)
     result = batch_read_canvas_documents(canvas_state, tool_args.get("documents") or [])
-    return result, f"Canvas batch read returned {result.get('success_count', 0)}/{result.get('requested_count', 0)} document(s)"
+    return (
+        result,
+        f"Canvas batch read returned {result.get('success_count', 0)}/{result.get('requested_count', 0)} document(s)",
+    )
 
 
 def _run_scroll_canvas_document(tool_args: dict, runtime_state: dict):
@@ -5713,7 +5844,10 @@ def _run_search_canvas_document(tool_args: dict, runtime_state: dict):
     else:
         first_match = (result.get("matches") or [{}])[0]
         scope_label = str(first_match.get("document_path") or first_match.get("title") or "active canvas").strip()
-    return result, f"{result.get('returned_count', len(result.get('matches') or []))} canvas matches found in {scope_label}"
+    return (
+        result,
+        f"{result.get('returned_count', len(result.get('matches') or []))} canvas matches found in {scope_label}",
+    )
 
 
 def _run_validate_canvas_document(tool_args: dict, runtime_state: dict):
@@ -5812,10 +5946,7 @@ def _run_import_github_repository_to_canvas(tool_args: dict, runtime_state: dict
     created_count = int(result.get("created_count") or 0)
     updated_count = int(result.get("updated_count") or 0)
     primary_document_path = str(result.get("primary_document_path") or "").strip()
-    summary = (
-        f"GitHub repo imported: {imported_count} file(s) "
-        f"({created_count} created, {updated_count} updated)"
-    )
+    summary = f"GitHub repo imported: {imported_count} file(s) ({created_count} created, {updated_count} updated)"
     if primary_document_path:
         summary += f"; active file: {primary_document_path}"
     return result, summary
@@ -6018,8 +6149,12 @@ def _run_batch_canvas_edits(tool_args: dict, runtime_state: dict):
     edit_start_line = None
     edit_end_line = None
     if changed_ranges:
-        edit_start_line = min(int(entry.get("edit_start_line") or 0) for entry in changed_ranges if entry.get("edit_start_line"))
-        edit_end_line = max(int(entry.get("edit_end_line") or 0) for entry in changed_ranges if entry.get("edit_end_line"))
+        edit_start_line = min(
+            int(entry.get("edit_start_line") or 0) for entry in changed_ranges if entry.get("edit_start_line")
+        )
+        edit_end_line = max(
+            int(entry.get("edit_end_line") or 0) for entry in changed_ranges if entry.get("edit_end_line")
+        )
     result = build_canvas_tool_result(
         batch_result["document"],
         action="lines_batch_edited",
@@ -6442,8 +6577,10 @@ def _refresh_latest_canvas_context_injection_message(messages: list[dict], runti
             canvas_prompt_max_lines=_coerce_int_range(prompt_state.get("max_lines"), 0, 0, 10_000) or None,
             canvas_prompt_max_chars=_coerce_int_range(prompt_state.get("max_chars"), 0, 0, 1_000_000) or None,
             canvas_prompt_max_tokens=_coerce_int_range(prompt_state.get("max_tokens"), 0, 0, 1_000_000) or None,
-            canvas_prompt_code_line_max_chars=_coerce_int_range(prompt_state.get("code_line_max_chars"), 0, 0, 10_000) or None,
-            canvas_prompt_text_line_max_chars=_coerce_int_range(prompt_state.get("text_line_max_chars"), 0, 0, 10_000) or None,
+            canvas_prompt_code_line_max_chars=_coerce_int_range(prompt_state.get("code_line_max_chars"), 0, 0, 10_000)
+            or None,
+            canvas_prompt_text_line_max_chars=_coerce_int_range(prompt_state.get("text_line_max_chars"), 0, 0, 10_000)
+            or None,
         )
         if refreshed_content == content:
             return False
@@ -6458,7 +6595,9 @@ def _build_already_visible_canvas_expand_result(tool_args: dict, runtime_state: 
     if not isinstance(prompt_payload, dict) or prompt_payload.get("is_truncated") is not False:
         return None
 
-    active_document = prompt_payload.get("active_document") if isinstance(prompt_payload.get("active_document"), dict) else None
+    active_document = (
+        prompt_payload.get("active_document") if isinstance(prompt_payload.get("active_document"), dict) else None
+    )
     if not isinstance(active_document, dict):
         return None
     if prompt_payload.get("active_document_ignored") is True or active_document.get("ignored") is True:
@@ -6546,7 +6685,9 @@ def _resolve_canvas_read_targets(tool_name: str, tool_args: dict, canvas_state: 
 
     raw_targets: list[dict] = []
     if normalized_tool_name == "batch_read_canvas_documents":
-        request_entries = normalized_tool_args.get("documents") if isinstance(normalized_tool_args.get("documents"), list) else []
+        request_entries = (
+            normalized_tool_args.get("documents") if isinstance(normalized_tool_args.get("documents"), list) else []
+        )
         explicit_target_seen = False
         for request_entry in request_entries:
             if not isinstance(request_entry, dict):
@@ -6559,10 +6700,12 @@ def _resolve_canvas_read_targets(tool_name: str, tool_args: dict, canvas_state: 
         if request_entries and not explicit_target_seen:
             raw_targets = [{"document_id": None, "document_path": None}]
     else:
-        raw_targets = [{
-            "document_id": normalized_tool_args.get("document_id"),
-            "document_path": normalized_tool_args.get("document_path"),
-        }]
+        raw_targets = [
+            {
+                "document_id": normalized_tool_args.get("document_id"),
+                "document_path": normalized_tool_args.get("document_path"),
+            }
+        ]
 
     resolved_targets: list[dict] = []
     seen_keys: set[tuple[str, str]] = set()
@@ -6867,7 +7010,9 @@ def _format_list_tool_result(items: list[dict], title: str, link_key: str, extra
     return _clean_tool_text("\n\n".join(lines), limit=RAG_TOOL_RESULT_MAX_TEXT_CHARS)
 
 
-def _build_tool_result_storage_entry(tool_name: str, tool_args: dict, result, summary: str, transcript_result=None) -> dict | None:
+def _build_tool_result_storage_entry(
+    tool_name: str, tool_args: dict, result, summary: str, transcript_result=None
+) -> dict | None:
     if tool_name in {"search_knowledge_base", "search_tool_memory"}:
         return None
 
@@ -6875,7 +7020,9 @@ def _build_tool_result_storage_entry(tool_name: str, tool_args: dict, result, su
     if tool_name == "fetch_url":
         if isinstance(result, dict):
             display_result = transcript_result if isinstance(transcript_result, dict) else result
-            display_content = _clean_tool_text(display_result.get("content") or "", limit=RAG_TOOL_RESULT_MAX_TEXT_CHARS)
+            display_content = _clean_tool_text(
+                display_result.get("content") or "", limit=RAG_TOOL_RESULT_MAX_TEXT_CHARS
+            )
             raw_content = _clean_tool_text(
                 result.get("raw_content") or result.get("content") or "",
                 limit=FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS,
@@ -6933,7 +7080,9 @@ def _build_tool_result_storage_entry(tool_name: str, tool_args: dict, result, su
         for artifact in artifacts[:6]:
             if not isinstance(artifact, dict):
                 continue
-            label = _clean_tool_text(artifact.get("label") or artifact.get("title") or artifact.get("type") or "artifact", limit=80)
+            label = _clean_tool_text(
+                artifact.get("label") or artifact.get("title") or artifact.get("type") or "artifact", limit=80
+            )
             artifact_summary = _clean_tool_text(artifact.get("summary") or artifact.get("content") or "", limit=160)
             if label and artifact_summary:
                 artifact_lines.append(f"- {label}: {artifact_summary}")
@@ -6945,7 +7094,9 @@ def _build_tool_result_storage_entry(tool_name: str, tool_args: dict, result, su
         title = _clean_tool_text(result.get("title") or "", limit=160)
         url = _clean_tool_text(result.get("source_url") or tool_args.get("url") or "", limit=220)
         language = _clean_tool_text(result.get("transcript_language") or "", limit=32)
-        context_block = _clean_tool_text(result.get("transcript_context_block") or "", limit=RAG_TOOL_RESULT_MAX_TEXT_CHARS)
+        context_block = _clean_tool_text(
+            result.get("transcript_context_block") or "", limit=RAG_TOOL_RESULT_MAX_TEXT_CHARS
+        )
         if title:
             parts.append(f"Title: {title}")
         if url:
@@ -6980,7 +7131,9 @@ def _build_tool_result_storage_entry(tool_name: str, tool_args: dict, result, su
             result.get("raw_content") or result.get("content") or "",
             limit=FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS,
         )
-        display_content = _clean_tool_text(display_result.get("content") or "", limit=FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS)
+        display_content = _clean_tool_text(
+            display_result.get("content") or "", limit=FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS
+        )
         content_mode = str(display_result.get("content_mode") or "").strip()
         summary_notice = _clean_tool_text(display_result.get("summary_notice") or "", limit=300)
         recovery_hint = _clean_tool_text(display_result.get("recovery_hint") or "", limit=240)
@@ -7091,8 +7244,10 @@ def _build_budget_compacted_transcript_result(entry: dict, char_limit: int, ultr
             compacted["recovery_hint"] = recovery_hint
         return compacted
 
-    serialized = transcript_result if isinstance(transcript_result, str) else _serialize_tool_message_content(
-        transcript_result if transcript_result is not None else result
+    serialized = (
+        transcript_result
+        if isinstance(transcript_result, str)
+        else _serialize_tool_message_content(transcript_result if transcript_result is not None else result)
     )
     parts = []
     if summary:
@@ -7111,8 +7266,12 @@ def _build_budget_compacted_transcript_result(entry: dict, char_limit: int, ultr
 def _build_budget_compacted_execution_error(entry: dict, char_limit: int, ultra_compact: bool = False) -> str:
     tool_name = str(entry.get("tool_name") or "").strip()
     tool_args = entry.get("tool_args") if isinstance(entry.get("tool_args"), dict) else {}
-    error_text = _clean_tool_text(entry.get("execution_error") or "", limit=max(80, min(char_limit, 140 if ultra_compact else 240)))
-    recovery_hint = _clean_tool_text(_build_recovery_hint_for_tool(tool_name, tool_args), limit=180 if ultra_compact else 220)
+    error_text = _clean_tool_text(
+        entry.get("execution_error") or "", limit=max(80, min(char_limit, 140 if ultra_compact else 240))
+    )
+    recovery_hint = _clean_tool_text(
+        _build_recovery_hint_for_tool(tool_name, tool_args), limit=180 if ultra_compact else 220
+    )
 
     parts = []
     if error_text:
@@ -7216,7 +7375,9 @@ def _apply_tool_output_budget(
             candidate_messages.append(tool_execution_result_message)
         return _estimate_messages_tokens(candidate_messages)
 
-    full_tool_messages, full_transcript_results, full_tool_execution_result_message = _render_tool_output_entries(tool_output_entries)
+    full_tool_messages, full_transcript_results, full_tool_execution_result_message = _render_tool_output_entries(
+        tool_output_entries
+    )
     if _estimate_total_tokens(full_tool_messages, full_tool_execution_result_message) <= soft_limit:
         return full_tool_messages, full_transcript_results, full_tool_execution_result_message, False
 
@@ -7260,7 +7421,9 @@ def _apply_tool_output_budget(
         entry["compacted_for_budget"] = True
         compacted_entries.append(entry)
 
-    compact_tool_messages, compact_transcript_results, compact_tool_execution_result_message = _render_tool_output_entries(compacted_entries)
+    compact_tool_messages, compact_transcript_results, compact_tool_execution_result_message = (
+        _render_tool_output_entries(compacted_entries)
+    )
     if _estimate_total_tokens(compact_tool_messages, compact_tool_execution_result_message) <= soft_limit:
         return compact_tool_messages, compact_transcript_results, compact_tool_execution_result_message, True
 
@@ -7283,7 +7446,9 @@ def _apply_tool_output_budget(
         entry["compacted_for_budget"] = True
         ultra_entries.append(entry)
 
-    ultra_tool_messages, ultra_transcript_results, ultra_tool_execution_result_message = _render_tool_output_entries(ultra_entries)
+    ultra_tool_messages, ultra_transcript_results, ultra_tool_execution_result_message = _render_tool_output_entries(
+        ultra_entries
+    )
     return ultra_tool_messages, ultra_transcript_results, ultra_tool_execution_result_message, True
 
 
@@ -7397,7 +7562,9 @@ def _append_working_state_blocker(working_state: dict, tool_name: str, error: st
         del blockers[:-6]
 
 
-def _append_reasoning_replay_entry(reasoning_state: dict, step: int, reasoning_text: str, tool_calls: list[dict] | None) -> None:
+def _append_reasoning_replay_entry(
+    reasoning_state: dict, step: int, reasoning_text: str, tool_calls: list[dict] | None
+) -> None:
     if not isinstance(reasoning_state, dict):
         return
 
@@ -7517,7 +7684,9 @@ def _build_working_state_instruction(working_state: dict) -> dict | None:
             lines.append(line)
         if lines:
             parts.append("Failed paths to avoid repeating without a concrete reason:\n" + "\n".join(lines))
-    parts.append("Prefer a different tool or produce the best available answer if these blockers make repetition low-value.")
+    parts.append(
+        "Prefer a different tool or produce the best available answer if these blockers make repetition low-value."
+    )
     return {"role": "system", "content": "\n\n".join(parts)}
 
 
@@ -7597,7 +7766,9 @@ def run_agent_stream(
     ui_hidden_tool_names = set(get_ui_hidden_tool_names(normalized_enabled_tool_names))
     normalized_prompt_tool_names = [
         name
-        for name in _normalize_tool_name_list(prompt_tool_names if prompt_tool_names is not None else enabled_tool_names)
+        for name in _normalize_tool_name_list(
+            prompt_tool_names if prompt_tool_names is not None else enabled_tool_names
+        )
         if name in normalized_enabled_tool_names
     ]
     # Auto-ensure read_scratchpad is available whenever a scratchpad write tool is present.
@@ -7629,7 +7800,9 @@ def run_agent_stream(
             "code_line_max_chars": int(canvas_prompt_code_line_max_chars or 0),
             "text_line_max_chars": int(canvas_prompt_text_line_max_chars or 0),
         },
-        "workspace": workspace_runtime_state if isinstance(workspace_runtime_state, dict) else create_workspace_runtime_state(),
+        "workspace": workspace_runtime_state
+        if isinstance(workspace_runtime_state, dict)
+        else create_workspace_runtime_state(),
         "invocation_log_sink": invocation_log_sink if isinstance(invocation_log_sink, list) else None,
     }
     runtime_state["agent_context"] = {
@@ -7689,7 +7862,9 @@ def run_agent_stream(
         current_canvas_snapshot = get_canvas_runtime_snapshot(runtime_state.get("canvas"))
         current_canvas_documents = current_canvas_snapshot.get("documents") or []
         active_canvas_document_id = current_canvas_snapshot.get("active_document_id")
-        sub_agent_traces = runtime_state.get("sub_agent_traces") if isinstance(runtime_state.get("sub_agent_traces"), list) else []
+        sub_agent_traces = (
+            runtime_state.get("sub_agent_traces") if isinstance(runtime_state.get("sub_agent_traces"), list) else []
+        )
         visible_tool_results = [
             entry
             for entry in persisted_tool_results
@@ -7764,7 +7939,8 @@ def run_agent_stream(
                     completion_tokens,
                     total_tokens,
                 )
-            ) or bool(metrics.get("usage_fields_present")),
+            )
+            or bool(metrics.get("usage_fields_present")),
             "cache_hit_present": bool(metrics.get("cache_hit_present")),
             "cache_miss_present": bool(metrics.get("cache_miss_present")),
             "cache_write_present": bool(metrics.get("cache_write_present")),
@@ -7783,7 +7959,9 @@ def run_agent_stream(
         prompt_cache_hit_tokens = _coerce_usage_int(prompt_cache_hit_tokens)
         prompt_cache_write_tokens = _coerce_usage_int(prompt_cache_write_tokens)
         if prompt_cache_miss_tokens is None:
-            prompt_cache_miss_tokens = prompt_tokens if prompt_cache_hit_tokens <= 0 else max(0, prompt_tokens - prompt_cache_hit_tokens)
+            prompt_cache_miss_tokens = (
+                prompt_tokens if prompt_cache_hit_tokens <= 0 else max(0, prompt_tokens - prompt_cache_hit_tokens)
+            )
         else:
             prompt_cache_miss_tokens = _coerce_usage_int(prompt_cache_miss_tokens)
             accounted_prompt_tokens = prompt_cache_hit_tokens + prompt_cache_miss_tokens
@@ -7865,9 +8043,7 @@ def run_agent_stream(
         prompt_tokens_total = max(0, int(usage_totals["prompt_tokens"] or 0))
         input_breakdown = dict(usage_totals["input_breakdown"])
         estimated_input_tokens = max(0, int(usage_totals["estimated_input_tokens"] or 0))
-        provider_usage_partial = any(
-            bool(call.get("missing_provider_usage")) for call in usage_totals["model_calls"]
-        )
+        provider_usage_partial = any(bool(call.get("missing_provider_usage")) for call in usage_totals["model_calls"])
         if prompt_tokens_total > 0 and not provider_usage_partial:
             input_breakdown = _align_breakdown_to_provider_total(input_breakdown, prompt_tokens_total)
             estimated_input_tokens = prompt_tokens_total
@@ -7913,10 +8089,14 @@ def run_agent_stream(
             "provider_usage_partial": provider_usage_partial,
         }
 
-    def remember_tool_result(tool_name: str, tool_args: dict, result, summary: str, cache_key: str, transcript_result=None):
+    def remember_tool_result(
+        tool_name: str, tool_args: dict, result, summary: str, cache_key: str, transcript_result=None
+    ):
         if cache_key in persisted_tool_cache_keys:
             return
-        entry = _build_tool_result_storage_entry(tool_name, tool_args, result, summary, transcript_result=transcript_result)
+        entry = _build_tool_result_storage_entry(
+            tool_name, tool_args, result, summary, transcript_result=transcript_result
+        )
         if not entry:
             return
         persisted_tool_cache_keys.add(cache_key)
@@ -8100,10 +8280,18 @@ def run_agent_stream(
                 provider_prompt_tokens=provider_usage["prompt_tokens"] if provider_usage["received"] else None,
                 request_tools=turn_tools,
             )
-            prompt_token_basis = provider_usage["prompt_tokens"] if provider_usage["prompt_tokens"] > 0 else estimated_input_tokens
-            cache_hit_tokens = provider_usage["prompt_cache_hit_tokens"] if provider_usage["cache_hit_present"] else None
-            cache_miss_tokens = provider_usage["prompt_cache_miss_tokens"] if provider_usage["cache_miss_present"] else None
-            cache_write_tokens = provider_usage["prompt_cache_write_tokens"] if provider_usage["cache_write_present"] else 0
+            prompt_token_basis = (
+                provider_usage["prompt_tokens"] if provider_usage["prompt_tokens"] > 0 else estimated_input_tokens
+            )
+            cache_hit_tokens = (
+                provider_usage["prompt_cache_hit_tokens"] if provider_usage["cache_hit_present"] else None
+            )
+            cache_miss_tokens = (
+                provider_usage["prompt_cache_miss_tokens"] if provider_usage["cache_miss_present"] else None
+            )
+            cache_write_tokens = (
+                provider_usage["prompt_cache_write_tokens"] if provider_usage["cache_write_present"] else 0
+            )
             cache_metrics_estimated = False
 
             if cache_hit_tokens is None and cache_miss_tokens is None:
@@ -8125,10 +8313,14 @@ def run_agent_stream(
                     cache_metrics_estimated = True
                 accounted_prompt_tokens = _coerce_usage_int(cache_hit_tokens) + _coerce_usage_int(cache_miss_tokens)
                 if prompt_token_basis > accounted_prompt_tokens:
-                    cache_miss_tokens = _coerce_usage_int(cache_miss_tokens) + (prompt_token_basis - accounted_prompt_tokens)
+                    cache_miss_tokens = _coerce_usage_int(cache_miss_tokens) + (
+                        prompt_token_basis - accounted_prompt_tokens
+                    )
                     cache_metrics_estimated = True
                 if isinstance(cache_estimate_context, dict):
-                    openrouter_cache_estimate_state["previous_cacheable_text"] = str(cache_estimate_context.get("cacheable_text") or "")
+                    openrouter_cache_estimate_state["previous_cacheable_text"] = str(
+                        cache_estimate_context.get("cacheable_text") or ""
+                    )
 
             final_cache_hit_tokens = _coerce_usage_int(cache_hit_tokens)
             final_cache_miss_tokens = _coerce_usage_int(cache_miss_tokens)
@@ -8235,7 +8427,9 @@ def run_agent_stream(
                     _raise_if_agent_cancelled(runtime_state.get("agent_context"))
                     reasoning_delta, content_delta, reasoning_details_delta = _extract_stream_delta_texts(chunk)
                     if reasoning_details_delta:
-                        turn_reasoning_details = _merge_reasoning_details(turn_reasoning_details, reasoning_details_delta)
+                        turn_reasoning_details = _merge_reasoning_details(
+                            turn_reasoning_details, reasoning_details_delta
+                        )
                     if reasoning_delta:
                         reasoning_parts.append(reasoning_delta)
                         for event in emit_turn_reasoning(reasoning_delta):
@@ -8244,7 +8438,9 @@ def run_agent_stream(
                         delta = getattr(chunk.choices[0], "delta", None)
                         if delta is not None:
                             _merge_stream_tool_call_delta(tool_call_parts, delta)
-                            canvas_preview = _build_streaming_canvas_tool_preview(tool_call_parts, runtime_state.get("canvas"))
+                            canvas_preview = _build_streaming_canvas_tool_preview(
+                                tool_call_parts, runtime_state.get("canvas")
+                            )
                             if canvas_preview is not None:
                                 preview_tool_name = canvas_preview["tool"]
                                 preview_key = str(canvas_preview.get("preview_key") or "").strip()
@@ -8259,7 +8455,9 @@ def run_agent_stream(
                                         "snapshot": canvas_preview["snapshot"],
                                     }
                                 preview_content = canvas_preview.get("content")
-                                preview_content_mode = str(canvas_preview.get("content_mode") or "append").strip().lower()
+                                preview_content_mode = (
+                                    str(canvas_preview.get("content_mode") or "append").strip().lower()
+                                )
                                 if preview_content is not None:
                                     if preview_content_mode == "replace":
                                         if preview_content != streamed_canvas_preview_content:
@@ -8310,10 +8508,18 @@ def run_agent_stream(
                         provider_usage["completion_tokens"] += usage_snapshot["completion_tokens"]
                         provider_usage["total_tokens"] += usage_snapshot["total_tokens"]
                         provider_usage["received"] = provider_usage["received"] or usage_snapshot["received"]
-                        provider_usage["cache_hit_present"] = provider_usage["cache_hit_present"] or usage_snapshot["cache_hit_present"]
-                        provider_usage["cache_miss_present"] = provider_usage["cache_miss_present"] or usage_snapshot["cache_miss_present"]
-                        provider_usage["cache_write_present"] = provider_usage["cache_write_present"] or usage_snapshot["cache_write_present"]
-                        provider_usage["cache_metrics_present"] = provider_usage["cache_metrics_present"] or usage_snapshot["cache_metrics_present"]
+                        provider_usage["cache_hit_present"] = (
+                            provider_usage["cache_hit_present"] or usage_snapshot["cache_hit_present"]
+                        )
+                        provider_usage["cache_miss_present"] = (
+                            provider_usage["cache_miss_present"] or usage_snapshot["cache_miss_present"]
+                        )
+                        provider_usage["cache_write_present"] = (
+                            provider_usage["cache_write_present"] or usage_snapshot["cache_write_present"]
+                        )
+                        provider_usage["cache_metrics_present"] = (
+                            provider_usage["cache_metrics_present"] or usage_snapshot["cache_metrics_present"]
+                        )
             except Exception as exc:
                 stream_error = str(exc)
                 _trace_agent_event(
@@ -8634,14 +8840,17 @@ def run_agent_stream(
             slot["has_step_update"] = True
 
             tool_limit = _get_tool_step_limit(tool_name, max_steps)
-            if tool_call_counts[tool_name] >= tool_limit:
+            step_key = f"{step}"
+            tool_step_key = f"{tool_name}:{step_key}"
+            step_tool_call_counts = runtime_state.setdefault("step_tool_call_counts", {})
+            if step_tool_call_counts.get(tool_step_key, 0) >= tool_limit:
                 error = f"Per-tool step limit reached for {tool_name}. Try a different tool or produce the best available answer."
                 _append_working_state_blocker(working_state, tool_name, error)
                 slot["kind"] = "error"
                 slot["error"] = error
                 slots.append(slot)
                 continue
-            tool_call_counts[tool_name] += 1
+            step_tool_call_counts[tool_step_key] = step_tool_call_counts.get(tool_step_key, 0) + 1
 
             if _is_session_cacheable_tool(tool_name) and cache_key in tool_result_cache:
                 cached_result, cached_summary = tool_result_cache[cache_key]
@@ -8717,7 +8926,9 @@ def run_agent_stream(
 
             visible_tool_calls = [
                 tool_call
-                for tool_call in (assistant_message.get("tool_calls") if isinstance(assistant_message.get("tool_calls"), list) else [])
+                for tool_call in (
+                    assistant_message.get("tool_calls") if isinstance(assistant_message.get("tool_calls"), list) else []
+                )
                 if str(tool_call.get("id") or "").strip() not in hidden_tool_call_ids
             ]
 
@@ -8753,8 +8964,12 @@ def run_agent_stream(
         pending_slots = [s for s in slots if s["kind"] == "execute"]
         if pending_slots:
             _raise_if_agent_cancelled(runtime_state.get("agent_context"))
-            parallel_slots = [s for s in pending_slots if _is_parallel_safe_tool_call(s["tool_name"], s.get("tool_args") or {})]
-            sequential_slots = [s for s in pending_slots if not _is_parallel_safe_tool_call(s["tool_name"], s.get("tool_args") or {})]
+            parallel_slots = [
+                s for s in pending_slots if _is_parallel_safe_tool_call(s["tool_name"], s.get("tool_args") or {})
+            ]
+            sequential_slots = [
+                s for s in pending_slots if not _is_parallel_safe_tool_call(s["tool_name"], s.get("tool_args") or {})
+            ]
 
             # Canvas dependency barrier: when the batch contains both canvas
             # mutations and canvas reads, the reads must not run in the
@@ -8780,6 +8995,7 @@ def run_agent_stream(
             parallel_slots = [*direct_parallel_slots, *buffered_sub_agent_slots]
 
             if len(parallel_slots) > 1 and normalized_parallel_tool_limit > 1:
+
                 def _run_slot(s):
                     try:
                         res, summ, events = _execute_streaming_tool_with_event_buffer(
@@ -8791,7 +9007,9 @@ def run_agent_stream(
                     except Exception as exc:
                         return {"ok": False, "error": _format_tool_execution_error(exc)}
 
-                with ThreadPoolExecutor(max_workers=min(normalized_parallel_tool_limit, len(parallel_slots))) as executor:
+                with ThreadPoolExecutor(
+                    max_workers=min(normalized_parallel_tool_limit, len(parallel_slots))
+                ) as executor:
                     futures_list = [(executor.submit(_run_slot, s), s) for s in parallel_slots]
                 for future, s in futures_list:
                     s["exec_result"] = future.result()
@@ -8808,7 +9026,9 @@ def run_agent_stream(
                         s["exec_result"] = {"ok": False, "error": _format_tool_execution_error(exc)}
 
             for s in parallel_slots:
-                buffered_events = s.get("exec_result", {}).get("events") if isinstance(s.get("exec_result"), dict) else []
+                buffered_events = (
+                    s.get("exec_result", {}).get("events") if isinstance(s.get("exec_result"), dict) else []
+                )
                 if isinstance(buffered_events, list):
                     for event in buffered_events:
                         if isinstance(event, dict):
@@ -8851,7 +9071,9 @@ def run_agent_stream(
 
                     # Track mutated canvas document IDs/paths for the self-read guard.
                     if _tool_name in CANVAS_MUTATION_TOOL_NAMES and s["exec_result"].get("ok"):
-                        tracked_doc_ids, tracked_doc_paths = _collect_canvas_mutation_locators(_tool_name, _tool_args, res)
+                        tracked_doc_ids, tracked_doc_paths = _collect_canvas_mutation_locators(
+                            _tool_name, _tool_args, res
+                        )
                         _canvas_mutated_doc_ids.update(tracked_doc_ids)
                         _canvas_mutated_doc_paths.update(tracked_doc_paths)
                 except Exception as exc:
@@ -9119,7 +9341,9 @@ def run_agent_stream(
                             clarification=clarification_event.get("clarification"),
                             raw_fields={"clarification_event": clarification_event, "tool_result": result},
                         )
-                        public_history_messages = _build_public_tool_history_messages(assistant_tool_call_message, tool_messages)
+                        public_history_messages = _build_public_tool_history_messages(
+                            assistant_tool_call_message, tool_messages
+                        )
                         if public_history_messages:
                             yield {
                                 "type": "tool_history",
@@ -9145,7 +9369,13 @@ def run_agent_stream(
                         raw_fields={"tool_args": tool_args, "error": error},
                     )
                     if tool_name not in ui_hidden_tool_names:
-                        yield {"type": "tool_error", "step": step, "tool": tool_name, "error": error, "call_id": call_id}
+                        yield {
+                            "type": "tool_error",
+                            "step": step,
+                            "tool": tool_name,
+                            "error": error,
+                            "call_id": call_id,
+                        }
                     tool_messages.append(
                         {
                             "role": "tool",
@@ -9172,13 +9402,15 @@ def run_agent_stream(
                     )
 
         if tool_output_entries:
-            tool_messages, transcript_results, tool_execution_result_message, tool_results_budget_compacted = _apply_tool_output_budget(
-                messages,
-                tool_output_entries,
-                prompt_max_input_tokens=configured_prompt_max_input_tokens,
-                context_compaction_threshold=configured_context_compaction_threshold,
-                fetch_url_token_threshold=fetch_url_token_threshold,
-                fetch_url_clip_aggressiveness=fetch_url_clip_aggressiveness,
+            tool_messages, transcript_results, tool_execution_result_message, tool_results_budget_compacted = (
+                _apply_tool_output_budget(
+                    messages,
+                    tool_output_entries,
+                    prompt_max_input_tokens=configured_prompt_max_input_tokens,
+                    context_compaction_threshold=configured_context_compaction_threshold,
+                    fetch_url_token_threshold=fetch_url_token_threshold,
+                    fetch_url_clip_aggressiveness=fetch_url_clip_aggressiveness,
+                )
             )
             if tool_results_budget_compacted:
                 _trace_agent_event(
@@ -9244,7 +9476,9 @@ def run_agent_stream(
             stream_error = turn_result.get("stream_error")
             answer_emitted = bool(turn_result.get("answer_emitted"))
             if stream_error and _is_context_overflow_error(stream_error) and not final_phase_compaction_used:
-                _, compacted = apply_context_compaction(final_extra_messages, reason="reactive_final_stream", force=True)
+                _, compacted = apply_context_compaction(
+                    final_extra_messages, reason="reactive_final_stream", force=True
+                )
                 if compacted:
                     final_phase_compaction_used = True
                     _trace_agent_event(
@@ -9308,7 +9542,9 @@ def run_agent_stream(
         except Exception as exc:
             error = str(exc)
             if _is_context_overflow_error(error) and not final_phase_compaction_used:
-                _, compacted = apply_context_compaction(final_extra_messages, reason="reactive_final_answer", force=True)
+                _, compacted = apply_context_compaction(
+                    final_extra_messages, reason="reactive_final_answer", force=True
+                )
                 if compacted:
                     final_phase_compaction_used = True
                     _trace_agent_event(
@@ -9350,4 +9586,5 @@ def run_agent_stream(
     if usage_totals["total_tokens"]:
         yield usage_event()
     yield build_tool_capture_event()
+    yield {"type": "compaction_applied", "messages": messages}
     yield {"type": "done"}

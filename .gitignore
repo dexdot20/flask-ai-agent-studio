@@ -47,3 +47,5 @@ AGENTS.md
 sample/
 backup/
 memory/
+list_python_files_markdown.py
+docs/ACTIVE_PROBLEMS.md
