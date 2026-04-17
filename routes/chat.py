@@ -1491,6 +1491,7 @@ def _build_tool_trace_context(
 ) -> str | None:
     trace_entries: list[dict] = []
     _clarification_sentinel_added = False
+    has_pending_clarification = _find_latest_active_pending_clarification(canonical_messages) is not None
     for message in reversed(canonical_messages):
         if not isinstance(message, dict):
             continue
@@ -1498,11 +1499,17 @@ def _build_tool_trace_context(
         for entry in reversed(extract_message_tool_trace(metadata)):
             if str(entry.get("tool_name") or "").strip() == "ask_clarifying_question":
                 if not _clarification_sentinel_added:
+                    clarification_state = "needs_user_input" if has_pending_clarification else "answered"
+                    clarification_preview = (
+                        "Awaiting user clarification answers"
+                        if has_pending_clarification
+                        else "All clarification answers provided by the user"
+                    )
                     trace_entries.append(
                         {
                             "tool_name": "ask_clarifying_question",
-                            "state": "answered",
-                            "preview": "All clarification answers provided by the user",
+                            "state": clarification_state,
+                            "preview": clarification_preview,
                         }
                     )
                     _clarification_sentinel_added = True

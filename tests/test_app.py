@@ -217,97 +217,111 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         response = self.client.get("/api/settings")
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
-        self.assertEqual(payload["general_instructions"], "")
-        self.assertEqual(payload["ai_personality"], "")
-        self.assertEqual(payload["effective_user_preferences"], "")
-        self.assertEqual(payload["personas"], [])
-        self.assertIsNone(payload["default_persona_id"])
-        self.assertEqual(payload["scratchpad"], "")
-        self.assertEqual(payload["max_steps"], 5)
-        self.assertEqual(payload["max_parallel_tools"], 4)
-        self.assertEqual(payload["clarification_max_questions"], 5)
-        self.assertAlmostEqual(payload["temperature"], 0.7)
-        self.assertEqual(payload["canvas_prompt_max_lines"], 250)
-        self.assertEqual(payload["canvas_prompt_max_tokens"], 4000)
-        self.assertEqual(payload["canvas_prompt_max_chars"], 20000)
-        self.assertEqual(payload["canvas_prompt_code_line_max_chars"], 180)
-        self.assertEqual(payload["canvas_prompt_text_line_max_chars"], 100)
-        self.assertEqual(payload["canvas_expand_max_lines"], 1600)
-        self.assertEqual(payload["canvas_scroll_window_lines"], 200)
-        self.assertEqual(payload["sub_agent_max_steps"], 6)
-        self.assertEqual(payload["sub_agent_timeout_seconds"], 240)
-        self.assertEqual(payload["sub_agent_retry_attempts"], 2)
-        self.assertEqual(payload["sub_agent_retry_delay_seconds"], 5)
-        self.assertEqual(payload["sub_agent_max_parallel_tools"], 4)
-        self.assertEqual(payload["sub_agent_allowed_tool_names"], SUB_AGENT_ALLOWED_TOOL_NAMES)
-        self.assertTrue(payload["sub_agent_canvas_auto_save"])
-        self.assertFalse(payload["sub_agent_canvas_auto_open"])
-        self.assertEqual(payload["web_cache_ttl_hours"], 24)
-        self.assertTrue(payload["openrouter_prompt_cache_enabled"])
-        self.assertIn("openrouter_http_referer", payload)
-        self.assertIn("openrouter_app_title", payload)
-        self.assertIn("login_session_timeout_minutes", payload)
-        self.assertIn("login_max_failed_attempts", payload)
-        self.assertIn("login_lockout_seconds", payload)
-        self.assertIn("login_remember_session_days", payload)
-        self.assertIn("conversation_memory_enabled", payload)
-        self.assertIn("ocr_enabled", payload)
-        self.assertIn("ocr_provider", payload)
-        self.assertIn("rag_enabled", payload)
-        self.assertIn("youtube_transcripts_enabled", payload)
-        self.assertIn("youtube_transcript_language", payload)
-        self.assertIn("youtube_transcript_model_size", payload)
-        self.assertIn("chat_summary_model", payload)
-        self.assertIn("rag_chunk_size", payload)
-        self.assertIn("rag_chunk_overlap", payload)
-        self.assertIn("rag_max_chunks_per_source", payload)
-        self.assertIn("rag_search_top_k", payload)
-        self.assertIn("rag_search_min_similarity", payload)
-        self.assertIn("rag_query_expansion_enabled", payload)
-        self.assertIn("rag_query_expansion_max_variants", payload)
-        self.assertIn("tool_memory_ttl_default_seconds", payload)
-        self.assertIn("tool_memory_ttl_web_seconds", payload)
-        self.assertIn("tool_memory_ttl_news_seconds", payload)
-        self.assertIn("fetch_raw_max_text_chars", payload)
-        self.assertIn("fetch_summary_max_chars", payload)
-        self.assertTrue(payload["activity_enabled"])
-        self.assertEqual(payload["activity_retention_days"], 30)
-        self.assertEqual(payload["chat_summary_detail_level"], "balanced")
+        self.assert_mapping_subset(
+            payload,
+            {
+                "general_instructions": "",
+                "ai_personality": "",
+                "effective_user_preferences": "",
+                "personas": [],
+                "default_persona_id": None,
+                "scratchpad": "",
+                "max_steps": 5,
+                "max_parallel_tools": 4,
+                "clarification_max_questions": 5,
+                "temperature": 0.7,
+                "canvas_prompt_max_lines": 250,
+                "canvas_prompt_max_tokens": 4000,
+                "canvas_prompt_max_chars": 20000,
+                "canvas_prompt_code_line_max_chars": 180,
+                "canvas_prompt_text_line_max_chars": 100,
+                "canvas_expand_max_lines": 1600,
+                "canvas_scroll_window_lines": 200,
+                "sub_agent_max_steps": 6,
+                "sub_agent_timeout_seconds": 240,
+                "sub_agent_retry_attempts": 2,
+                "sub_agent_retry_delay_seconds": 5,
+                "sub_agent_max_parallel_tools": 4,
+                "sub_agent_allowed_tool_names": SUB_AGENT_ALLOWED_TOOL_NAMES,
+                "sub_agent_canvas_auto_save": True,
+                "sub_agent_canvas_auto_open": False,
+                "web_cache_ttl_hours": 24,
+                "openrouter_prompt_cache_enabled": True,
+                "activity_enabled": True,
+                "activity_retention_days": 30,
+                "chat_summary_detail_level": "balanced",
+                "chat_summary_mode": "auto",
+                "chat_summary_trigger_token_count": 80000,
+                "prompt_max_input_tokens": PROMPT_MAX_INPUT_TOKENS,
+                "prompt_response_token_reserve": PROMPT_RESPONSE_TOKEN_RESERVE,
+                "prompt_recent_history_max_tokens": PROMPT_RECENT_HISTORY_MAX_TOKENS,
+                "prompt_summary_max_tokens": PROMPT_SUMMARY_MAX_TOKENS,
+                "prompt_preflight_summary_token_count": PROMPT_PREFLIGHT_SUMMARY_TOKEN_COUNT,
+                "prompt_rag_max_tokens": PROMPT_RAG_MAX_TOKENS,
+                "prompt_tool_memory_max_tokens": PROMPT_TOOL_MEMORY_MAX_TOKENS,
+                "prompt_tool_trace_max_tokens": PROMPT_TOOL_TRACE_MAX_TOKENS,
+                "summary_source_target_tokens": SUMMARY_SOURCE_TARGET_TOKENS,
+                "summary_retry_min_source_tokens": SUMMARY_RETRY_MIN_SOURCE_TOKENS,
+                "context_compaction_threshold": AGENT_CONTEXT_COMPACTION_THRESHOLD,
+                "context_compaction_keep_recent_rounds": AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS,
+                "context_selection_strategy": "classic",
+                "entropy_profile": "balanced",
+                "entropy_rag_budget_ratio": 35,
+                "entropy_protect_code_blocks": True,
+                "entropy_protect_tool_results": True,
+                "entropy_reference_boost": True,
+                "reasoning_auto_collapse": False,
+                "pruning_enabled": False,
+                "pruning_token_threshold": 80000,
+                "pruning_batch_size": 10,
+                "pruning_target_reduction_ratio": PRUNING_TARGET_REDUCTION_RATIO,
+                "pruning_min_target_tokens": PRUNING_MIN_TARGET_TOKENS,
+                "fetch_url_token_threshold": 3500,
+                "fetch_url_clip_aggressiveness": 50,
+                "fetch_html_converter_mode": "hybrid",
+                "fetch_url_summarized_max_input_chars": 80000,
+                "fetch_url_summarized_max_output_tokens": 2400,
+                "custom_models": [],
+                "visible_model_order": ["deepseek-chat", "deepseek-reasoner"],
+                "proxy_enabled_operations": DEFAULT_PROXY_ENABLED_OPERATIONS,
+                "image_processing_method": "auto",
+                "rag_sensitivity": "strict",
+                "rag_context_size": "small",
+                "tool_memory_auto_inject": False,
+            },
+        )
+        self.assert_keys_present(
+            payload,
+            [
+                "openrouter_http_referer",
+                "openrouter_app_title",
+                "login_session_timeout_minutes",
+                "login_max_failed_attempts",
+                "login_lockout_seconds",
+                "login_remember_session_days",
+                "conversation_memory_enabled",
+                "ocr_enabled",
+                "ocr_provider",
+                "rag_enabled",
+                "youtube_transcripts_enabled",
+                "youtube_transcript_language",
+                "youtube_transcript_model_size",
+                "chat_summary_model",
+                "rag_chunk_size",
+                "rag_chunk_overlap",
+                "rag_max_chunks_per_source",
+                "rag_search_top_k",
+                "rag_search_min_similarity",
+                "rag_query_expansion_enabled",
+                "rag_query_expansion_max_variants",
+                "tool_memory_ttl_default_seconds",
+                "tool_memory_ttl_web_seconds",
+                "tool_memory_ttl_news_seconds",
+                "fetch_raw_max_text_chars",
+                "fetch_summary_max_chars",
+            ],
+        )
         self.assertEqual(payload["rag_auto_inject"], bool(payload["features"]["rag_enabled"]))
-        self.assertEqual(payload["chat_summary_mode"], "auto")
-        self.assertEqual(payload["chat_summary_trigger_token_count"], 80000)
-        self.assertEqual(payload["prompt_max_input_tokens"], PROMPT_MAX_INPUT_TOKENS)
-        self.assertEqual(payload["prompt_response_token_reserve"], PROMPT_RESPONSE_TOKEN_RESERVE)
-        self.assertEqual(payload["prompt_recent_history_max_tokens"], PROMPT_RECENT_HISTORY_MAX_TOKENS)
-        self.assertEqual(payload["prompt_summary_max_tokens"], PROMPT_SUMMARY_MAX_TOKENS)
-        self.assertEqual(payload["prompt_preflight_summary_token_count"], PROMPT_PREFLIGHT_SUMMARY_TOKEN_COUNT)
-        self.assertEqual(payload["prompt_rag_max_tokens"], PROMPT_RAG_MAX_TOKENS)
-        self.assertEqual(payload["prompt_tool_memory_max_tokens"], PROMPT_TOOL_MEMORY_MAX_TOKENS)
-        self.assertEqual(payload["prompt_tool_trace_max_tokens"], PROMPT_TOOL_TRACE_MAX_TOKENS)
-        self.assertEqual(payload["summary_source_target_tokens"], SUMMARY_SOURCE_TARGET_TOKENS)
-        self.assertEqual(payload["summary_retry_min_source_tokens"], SUMMARY_RETRY_MIN_SOURCE_TOKENS)
-        self.assertAlmostEqual(payload["context_compaction_threshold"], AGENT_CONTEXT_COMPACTION_THRESHOLD)
-        self.assertEqual(payload["context_compaction_keep_recent_rounds"], AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS)
-        self.assertEqual(payload["context_selection_strategy"], "classic")
-        self.assertEqual(payload["entropy_profile"], "balanced")
-        self.assertEqual(payload["entropy_rag_budget_ratio"], 35)
-        self.assertTrue(payload["entropy_protect_code_blocks"])
-        self.assertTrue(payload["entropy_protect_tool_results"])
-        self.assertTrue(payload["entropy_reference_boost"])
-        self.assertFalse(payload["reasoning_auto_collapse"])
-        self.assertFalse(payload["pruning_enabled"])
-        self.assertEqual(payload["pruning_token_threshold"], 80000)
-        self.assertEqual(payload["pruning_batch_size"], 10)
-        self.assertAlmostEqual(payload["pruning_target_reduction_ratio"], PRUNING_TARGET_REDUCTION_RATIO)
-        self.assertEqual(payload["pruning_min_target_tokens"], PRUNING_MIN_TARGET_TOKENS)
-        self.assertEqual(payload["fetch_url_token_threshold"], 3500)
-        self.assertEqual(payload["fetch_url_clip_aggressiveness"], 50)
-        self.assertEqual(payload["fetch_html_converter_mode"], "hybrid")
-        self.assertEqual(payload["fetch_url_summarized_max_input_chars"], 80000)
-        self.assertEqual(payload["fetch_url_summarized_max_output_tokens"], 2400)
-        self.assertEqual(payload["custom_models"], [])
-        self.assertEqual(payload["visible_model_order"], ["deepseek-chat", "deepseek-reasoner"])
-        self.assertEqual(payload["proxy_enabled_operations"], DEFAULT_PROXY_ENABLED_OPERATIONS)
         self.assertEqual(
             payload["operation_model_preferences"],
             {
@@ -328,9 +342,6 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 "sub_agent": [],
             },
         )
-        self.assertEqual(payload["image_processing_method"], "auto")
-        self.assertEqual(payload["rag_sensitivity"], "strict")
-        self.assertEqual(payload["rag_context_size"], "small")
         self.assertEqual(
             payload["rag_source_types"],
             ["conversation", "tool_result", "tool_memory", "uploaded_document"]
@@ -343,7 +354,6 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             if payload["features"]["rag_enabled"]
             else [],
         )
-        self.assertFalse(payload["tool_memory_auto_inject"])
 
     def test_settings_patch_roundtrips_runtime_managed_fields(self):
         response = self.client.patch(
@@ -15065,6 +15075,99 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertNotIn("asked 3 questions", context)
         # table format verification
         self.assertIn("| # | Time | Tool | State | Detail |", context)
+
+    def test_build_tool_trace_context_marks_clarification_pending_when_unanswered(self):
+        canonical_messages = normalize_chat_messages(
+            [
+                {
+                    "id": 11,
+                    "role": "assistant",
+                    "content": "",
+                    "metadata": {
+                        "tool_trace": [
+                            {
+                                "tool_name": "ask_clarifying_question",
+                                "state": "done",
+                                "summary": "asked 3 questions",
+                            }
+                        ]
+                    },
+                },
+                {
+                    "id": 12,
+                    "role": "assistant",
+                    "content": "",
+                    "metadata": {
+                        "pending_clarification": {
+                            "questions": [
+                                {
+                                    "id": "q1",
+                                    "label": "When did symptoms start?",
+                                    "input_type": "text",
+                                }
+                            ]
+                        }
+                    },
+                },
+            ]
+        )
+
+        context = _build_tool_trace_context(canonical_messages)
+
+        self.assertIn("ask_clarifying_question", context)
+        self.assertIn("needs_user_input", context)
+        self.assertIn("Awaiting user clarification answers", context)
+        self.assertNotIn("All clarification answers provided by the user", context)
+
+    def test_build_tool_trace_context_prefers_pending_over_old_answered_rounds(self):
+        canonical_messages = normalize_chat_messages(
+            [
+                {
+                    "id": 30,
+                    "role": "assistant",
+                    "content": "",
+                    "metadata": {
+                        "tool_trace": [
+                            {"tool_name": "ask_clarifying_question", "state": "done", "summary": "asked round 1"}
+                        ],
+                        "pending_clarification": {
+                            "questions": [{"id": "old_q", "label": "Old question", "input_type": "text"}]
+                        },
+                    },
+                },
+                {
+                    "id": 31,
+                    "role": "user",
+                    "content": "old answer",
+                    "metadata": {
+                        "clarification_response": {
+                            "assistant_message_id": 30,
+                            "answers": {"old_q": {"display": "old value"}},
+                        }
+                    },
+                },
+                {
+                    "id": 32,
+                    "role": "assistant",
+                    "content": "",
+                    "metadata": {
+                        "tool_trace": [
+                            {"tool_name": "ask_clarifying_question", "state": "done", "summary": "asked round 2"}
+                        ],
+                        "pending_clarification": {
+                            "questions": [{"id": "new_q", "label": "New question", "input_type": "text"}]
+                        },
+                    },
+                },
+            ]
+        )
+
+        context = _build_tool_trace_context(canonical_messages)
+
+        self.assertIn("ask_clarifying_question", context)
+        self.assertIn("needs_user_input", context)
+        self.assertIn("Awaiting user clarification answers", context)
+        self.assertNotIn("All clarification answers provided by the user", context)
 
     def test_build_api_messages_uses_null_content_for_tool_only_assistant_turns(self):
         api_messages = build_api_messages(

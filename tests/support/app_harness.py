@@ -31,6 +31,17 @@ class BaseAppRoutesTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 201)
         return response.get_json()["id"]
 
+    def assert_mapping_subset(self, actual: dict, expected: dict) -> None:
+        self.assertIsInstance(actual, dict)
+        for key, value in expected.items():
+            self.assertIn(key, actual)
+            self.assertEqual(actual[key], value)
+
+    def assert_keys_present(self, actual: dict, keys: list[str]) -> None:
+        self.assertIsInstance(actual, dict)
+        for key in keys:
+            self.assertIn(key, actual)
+
     def _insert_pending_clarification_assistant(
         self,
         conversation_id: int,
