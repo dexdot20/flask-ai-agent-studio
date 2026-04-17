@@ -15,7 +15,6 @@ import threading
 import time
 from typing import Any
 
-from json_repair import repair_json as _repair_json
 import re
 import string
 from logging.handlers import RotatingFileHandler
@@ -95,8 +94,6 @@ from config import (
     SUB_AGENT_ALLOWED_TOOL_NAMES as DEFAULT_SUB_AGENT_ALLOWED_TOOL_NAMES,
 )
 from db import (
-    MESSAGE_USAGE_BREAKDOWN_PROTECTED_KEYS,
-    MESSAGE_USAGE_BREAKDOWN_REDUCTION_ORDER,
     append_to_scratchpad,
     count_scratchpad_notes,
     delete_conversation_memory_entry,
@@ -136,11 +133,6 @@ from messages import (
     refresh_canvas_sections_in_context_injection,
 )
 from image_service import answer_image_question
-from json_parsing_utils import (
-    close_unbalanced_json_like_fragment,
-    extract_first_balanced_json_like_fragment,
-    parse_json_like_text as parse_json_like_text_shared,
-)
 from model_registry import (
     DEEPSEEK_PROVIDER,
     apply_chat_parameter_overrides,
@@ -283,24 +275,6 @@ INPUT_BREAKDOWN_KEYS = (
     "tool_results",
     "unknown_provider_overhead",
 )
-SYSTEM_BREAKDOWN_SECTION_KEY_BY_HEADING = {
-    "## Scratchpad (AI Persistent Memory)": "scratchpad",
-    "## Tool Execution History": "tool_trace",
-    "## Tool Memory": "tool_memory",
-    "## Knowledge Base": "rag_context",
-    "## Canvas File Set Summary": "canvas",
-    "## Canvas Workspace Summary": "canvas",
-    "## Canvas Editing Guidance": "canvas",
-    "## Code Document Rules": "canvas",
-    "## Canvas Decision Matrix": "canvas",
-    "## Canvas Project Manifest": "canvas",
-    "## Canvas Relationship Map": "canvas",
-    "## Active Canvas Document": "canvas",
-    "## Other Canvas Documents": "canvas",
-    "## Available Tools": "tool_specs",
-    "## Tool Calling": "core_instructions",
-}
-SYSTEM_BREAKDOWN_REDUCTION_ORDER = MESSAGE_USAGE_BREAKDOWN_REDUCTION_ORDER
 _AGENT_TRACE_LOGGER = None
 _AGENT_TRACE_LOGGER_LOCK = threading.Lock()
 
@@ -531,52 +505,24 @@ def _estimate_request_tools_tokens(request_tools: list[dict] | None) -> int:
     return _estimate_serialized_tokens({"tools": request_tools, "tool_choice": "auto"})
 
 
-def _distribute_overhead_tokens(
-    breakdown: dict[str, int],
-    overhead_tokens: int,
-    recipients: tuple[str, ...],
-) -> dict[str, int]:
-    remaining = max(0, int(overhead_tokens or 0))
-    if remaining <= 0:
-        return breakdown
-
-    target_keys = [key for key in recipients if breakdown.get(key, 0) > 0]
-    if not target_keys and recipients:
-        target_keys = [recipients[0]]
-    if not target_keys:
-        target_keys = ["core_instructions"]
-
-    weighted_total = sum(max(0, int(breakdown.get(key, 0))) for key in target_keys)
-    if weighted_total <= 0:
-        breakdown[target_keys[0]] = breakdown.get(target_keys[0], 0) + remaining
-        return breakdown
-
-    for index, key in enumerate(target_keys):
-        if remaining <= 0:
-            break
-        if index == len(target_keys) - 1:
-            share = remaining
-        else:
-            weight = max(0, int(breakdown.get(key, 0)))
-            share = min(remaining, int((overhead_tokens * weight) / weighted_total))
-        breakdown[key] = breakdown.get(key, 0) + share
-        remaining -= share
-
-    return breakdown
-
-
-def _rebalance_breakdown_to_total(breakdown: dict[str, int], total_tokens: int) -> dict[str, int]:
-    adjusted = {key: max(0, int(value)) for key, value in breakdown.items() if value and value > 0}
+def _align_breakdown_to_provider_total(breakdown: dict[str, int], total_tokens: int) -> dict[str, int]:
+    adjusted = {
+        key: max(0, int(value or 0))
+        for key, value in (breakdown or {}).items()
+        if key in INPUT_BREAKDOWN_KEYS and int(value or 0) > 0
+    }
+    target_total = max(0, int(total_tokens or 0))
     current_total = sum(adjusted.values())
-    if current_total < total_tokens:
-        adjusted["core_instructions"] = adjusted.get("core_instructions", 0) + (total_tokens - current_total)
+    if current_total < target_total:
+        adjusted["unknown_provider_overhead"] = adjusted.get("unknown_provider_overhead", 0) + (
+            target_total - current_total
+        )
+        return adjusted
+    if current_total <= target_total:
         return adjusted
 
-    overflow = current_total - total_tokens
-    if overflow <= 0:
-        return adjusted
-
-    for key in SYSTEM_BREAKDOWN_REDUCTION_ORDER:
+    overflow = current_total - target_total
+    for key in ("unknown_provider_overhead", "internal_state", "assistant_history", "core_instructions"):
         if overflow <= 0:
             break
         available = adjusted.get(key, 0)
@@ -585,168 +531,32 @@ def _rebalance_breakdown_to_total(breakdown: dict[str, int], total_tokens: int) 
         reduction = min(available, overflow)
         adjusted[key] = available - reduction
         overflow -= reduction
-
-    if overflow > 0:
-        for key, available in sorted(adjusted.items(), key=lambda item: item[1], reverse=True):
-            if overflow <= 0:
-                break
-            if available <= 0:
-                continue
-            reduction = min(available, overflow)
-            adjusted[key] = available - reduction
-            overflow -= reduction
-
     return {key: value for key, value in adjusted.items() if value > 0}
-
-
-def _align_breakdown_to_provider_total(breakdown: dict[str, int], total_tokens: int) -> dict[str, int]:
-    adjusted = {
-        key: max(0, int(value))
-        for key, value in breakdown.items()
-        if key in INPUT_BREAKDOWN_KEYS and value and value > 0
-    }
-    target_total = max(0, int(total_tokens or 0))
-    current_total = sum(adjusted.values())
-    if current_total < target_total:
-        missing_tokens = target_total - current_total
-        weighted_keys = [key for key, value in adjusted.items() if key != "unknown_provider_overhead" and value > 0]
-        if weighted_keys and current_total > 0:
-            remaining = missing_tokens
-            weighted_total = sum(adjusted[key] for key in weighted_keys)
-            for index, key in enumerate(weighted_keys):
-                if remaining <= 0:
-                    break
-                if index == len(weighted_keys) - 1:
-                    share = remaining
-                else:
-                    share = min(remaining, int((missing_tokens * adjusted[key]) / max(1, weighted_total)))
-                adjusted[key] = adjusted.get(key, 0) + share
-                remaining -= share
-            if remaining > 0:
-                adjusted["unknown_provider_overhead"] = adjusted.get("unknown_provider_overhead", 0) + remaining
-        else:
-            adjusted["unknown_provider_overhead"] = adjusted.get("unknown_provider_overhead", 0) + missing_tokens
-        return adjusted
-
-    overflow = current_total - target_total
-    if overflow <= 0:
-        return adjusted
-
-    protected_floor_keys = set()
-    if target_total > 0:
-        protected_candidates = [key for key in MESSAGE_USAGE_BREAKDOWN_PROTECTED_KEYS if adjusted.get(key, 0) > 0]
-        protected_floor_keys = set(protected_candidates[: min(len(protected_candidates), target_total)])
-
-    for key in SYSTEM_BREAKDOWN_REDUCTION_ORDER:
-        if overflow <= 0:
-            break
-        floor = 1 if key in protected_floor_keys else 0
-        available = adjusted.get(key, 0) - floor
-        if available <= 0:
-            continue
-        reduction = min(available, overflow)
-        adjusted[key] = available - reduction + floor
-        overflow -= reduction
-
-    if overflow > 0:
-        for key, available in sorted(adjusted.items(), key=lambda item: item[1], reverse=True):
-            if overflow <= 0:
-                break
-            floor = 1 if key in protected_floor_keys else 0
-            reducible = available - floor
-            if reducible <= 0:
-                continue
-            reduction = min(reducible, overflow)
-            adjusted[key] = available - reduction
-            overflow -= reduction
-
-    return {key: value for key, value in adjusted.items() if value > 0}
-
-
-def _estimate_system_message_breakdown(content: str, total_tokens: int) -> dict[str, int]:
-    section_matches = list(re.finditer(r"^## [^\n]+", content, flags=re.MULTILINE))
-    if not section_matches:
-        return {"core_instructions": total_tokens}
-
-    breakdown: dict[str, int] = {}
-    cursor = 0
-    for index, match in enumerate(section_matches):
-        start = match.start()
-        end = section_matches[index + 1].start() if index + 1 < len(section_matches) else len(content)
-        if start > cursor:
-            prefix = content[cursor:start]
-            prefix_tokens = _estimate_text_tokens(prefix)
-            if prefix_tokens > 0:
-                breakdown["core_instructions"] = breakdown.get("core_instructions", 0) + prefix_tokens
-
-        section_text = content[start:end]
-        section_tokens = _estimate_text_tokens(section_text)
-        if section_tokens > 0:
-            section_heading = match.group(0).strip()
-            section_key = SYSTEM_BREAKDOWN_SECTION_KEY_BY_HEADING.get(section_heading, "core_instructions")
-            breakdown[section_key] = breakdown.get(section_key, 0) + section_tokens
-        cursor = end
-
-    return _rebalance_breakdown_to_total(breakdown, total_tokens)
 
 
 def _estimate_message_breakdown(message: dict) -> dict[str, int]:
     role = str(message.get("role") or "").strip()
     content = str(message.get("content") or "")
-    total_tokens = _estimate_text_tokens(content)
-    message_id = str(message.get("id") or "").strip()
-    if message_id:
-        total_tokens += _estimate_text_tokens(message_id)
-    if total_tokens <= 0 and role != "assistant":
-        return {}
-
+    content_tokens = _estimate_text_tokens(content)
     if role == "user":
-        breakdown = {"user_messages": total_tokens}
-        return _distribute_overhead_tokens(breakdown, _estimate_message_wrapper_tokens(role), ("user_messages",))
+        return {"user_messages": content_tokens}
     if role == "assistant":
-        breakdown = {}
-        if total_tokens > 0:
-            breakdown["assistant_history"] = total_tokens
-        tool_calls = message.get("tool_calls") if isinstance(message.get("tool_calls"), list) else []
-        tool_call_tokens = _estimate_serialized_tokens(tool_calls)
+        tool_call_tokens = _estimate_serialized_tokens(message.get("tool_calls") or [])
+        breakdown: dict[str, int] = {}
+        if content_tokens > 0:
+            breakdown["assistant_history"] = content_tokens
         if tool_call_tokens > 0:
             breakdown["assistant_tool_calls"] = tool_call_tokens
-        return _distribute_overhead_tokens(
-            breakdown,
-            _estimate_message_wrapper_tokens(role, include_tool_calls=bool(tool_calls)),
-            ("assistant_history", "assistant_tool_calls"),
-        )
+        return breakdown
     if role == "tool":
-        tool_call_id = str(message.get("tool_call_id") or "").strip()
-        payload_tokens = total_tokens
-        if tool_call_id:
-            payload_tokens += _estimate_serialized_tokens({"tool_call_id": tool_call_id})
-        if payload_tokens <= 0:
-            return {}
-        breakdown = {"tool_results": payload_tokens}
-        return _distribute_overhead_tokens(breakdown, _estimate_message_wrapper_tokens(role), ("tool_results",))
-    if role != "system":
-        breakdown = {"core_instructions": total_tokens}
-        return _distribute_overhead_tokens(breakdown, _estimate_message_wrapper_tokens(role), ("core_instructions",))
-
-    # Classify system messages by their distinctive markers
-    if content.startswith(TOOL_EXECUTION_RESULTS_MARKER):
-        return {"tool_results": total_tokens}
-    if content.startswith(REASONING_REPLAY_MARKER):
-        return {"internal_state": total_tokens}
-    if content.startswith("[AGENT WORKING MEMORY]"):
-        return {"internal_state": total_tokens}
-    if content.startswith("[INSTRUCTION: FINAL ANSWER REQUIRED]"):
-        return {"core_instructions": total_tokens}
-    if content.startswith("[INSTRUCTION: MISSING FINAL ANSWER"):
-        return {"core_instructions": total_tokens}
-
-    breakdown = _estimate_system_message_breakdown(content, total_tokens) or {"core_instructions": total_tokens}
-    return _distribute_overhead_tokens(
-        breakdown,
-        _estimate_message_wrapper_tokens(role),
-        tuple(key for key, value in breakdown.items() if value > 0) or ("core_instructions",),
-    )
+        return {"tool_results": content_tokens}
+    if role == "system":
+        if content.startswith(TOOL_EXECUTION_RESULTS_MARKER):
+            return {"tool_results": content_tokens}
+        if content.startswith(REASONING_REPLAY_MARKER) or content.startswith("[AGENT WORKING MEMORY]"):
+            return {"internal_state": content_tokens}
+        return {"core_instructions": content_tokens}
+    return {"core_instructions": content_tokens} if content_tokens > 0 else {}
 
 
 def _estimate_input_breakdown(
@@ -765,7 +575,7 @@ def _estimate_input_breakdown(
     if tool_schema_tokens > 0:
         breakdown["tool_specs"] += tool_schema_tokens
 
-    measured_total = sum(breakdown.values())
+    measured_total = sum(max(0, int(value or 0)) for value in breakdown.values())
     if provider_prompt_tokens is None:
         return breakdown, measured_total, tool_schema_tokens
 
@@ -3410,11 +3220,17 @@ def _read_api_field(value, key: str, default=None):
 
 
 def _parse_json_like_text(text: str):
-    return parse_json_like_text_shared(
-        text,
-        repair_json_func=_repair_json,
-        repair_objects_only=True,
-    )
+    raw_text = str(text or "").strip()
+    if not raw_text:
+        return None
+    try:
+        return json.loads(raw_text)
+    except Exception:
+        pass
+    try:
+        return ast.literal_eval(raw_text)
+    except Exception:
+        return None
 
 
 def _strip_tool_argument_code_fence(text: str) -> str | None:
@@ -3437,14 +3253,6 @@ def _strip_tool_argument_language_label(text: str) -> str | None:
     if not cleaned_remainder.startswith(("{", "[", "<")):
         return None
     return cleaned_remainder
-
-
-def _extract_first_balanced_json_like_object(text: str) -> str | None:
-    return extract_first_balanced_json_like_fragment(text, allowed_openers="{")
-
-
-def _close_unbalanced_json_like_object(text: str) -> str | None:
-    return close_unbalanced_json_like_fragment(text, allowed_openers="{")
 
 
 def _iter_tool_argument_text_candidates(arguments_text: str):
@@ -3475,13 +3283,7 @@ def _iter_tool_argument_text_candidates(arguments_text: str):
         if unlabeled and unlabeled not in seen:
             pending.append(unlabeled)
 
-        object_text = _extract_first_balanced_json_like_object(candidate)
-        if object_text and object_text not in seen:
-            pending.append(object_text)
-
-        repaired_object = _close_unbalanced_json_like_object(candidate)
-        if repaired_object and repaired_object not in seen:
-            pending.append(repaired_object)
+        # Strict parsing mode: do not attempt custom fragment repair.
 
 
 def _parse_dsml_argument_value(value_text: str, attrs_text: str = ""):

@@ -9,7 +9,6 @@ from typing import Iterable
 from uuid import uuid4
 
 import markdown as markdown_lib
-from json_repair import repair_json as _repair_json
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -17,11 +16,6 @@ from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, Preformatted, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from export_styles import MONO_FONT, build_print_pdf_styles
-from json_parsing_utils import (
-    close_unbalanced_json_like_fragment,
-    extract_first_balanced_json_like_fragment,
-    parse_json_like_text,
-)
 from markdown_rendering import append_markdown_pdf_story
 
 CANVAS_MAX_DOCUMENTS = 50
@@ -1553,36 +1547,30 @@ def _coerce_batch_canvas_json_value(value):
     if not raw_value:
         return value
 
-    fragment = _extract_batch_canvas_json_fragment(raw_value)
-    if raw_value[0] not in "[{" and fragment:
-        raw_value = fragment
+    if not raw_value:
+        return value
 
-    if not raw_value or raw_value[0] not in "[{":
-        if fragment:
-            raw_value = fragment
-        if not raw_value or raw_value[0] not in "[{":
+    candidate_text = raw_value
+    if candidate_text[0] not in "[{":
+        opener_positions = [(candidate_text.find("["), "[", "]"), (candidate_text.find("{"), "{", "}")]
+        opener_positions = [item for item in opener_positions if item[0] >= 0]
+        if not opener_positions:
             return value
+        opener_index, opener, closer = min(opener_positions, key=lambda item: item[0])
+        closer_index = candidate_text.rfind(closer)
+        if closer_index <= opener_index:
+            return value
+        candidate_text = candidate_text[opener_index : closer_index + 1].strip()
 
-    candidates = [raw_value]
     try:
-        repaired = _repair_json(raw_value)
+        return json.loads(candidate_text)
     except Exception:
-        repaired = None
-    if repaired and repaired not in candidates:
-        candidates.append(repaired)
-    closed_fragment = close_unbalanced_json_like_fragment(raw_value, allowed_openers="[{")
-    if closed_fragment and closed_fragment not in candidates:
-        candidates.append(closed_fragment)
-
-    for candidate in candidates:
-        parsed_candidate = parse_json_like_text(candidate, repair_json_func=_repair_json, repair_objects_only=False)
-        if parsed_candidate is not None:
-            return parsed_candidate
+        pass
+    try:
+        return ast.literal_eval(candidate_text)
+    except Exception:
+        pass
     return value
-
-
-def _extract_batch_canvas_json_fragment(text: str) -> str | None:
-    return extract_first_balanced_json_like_fragment(text, allowed_openers="[{")
 
 
 def _normalize_batch_canvas_operations_input(operations):
@@ -2884,20 +2872,12 @@ def _validate_canvas_json_content(content: str) -> list[dict]:
     try:
         json.loads(content)
     except json.JSONDecodeError as exc:
-        suggestion = None
-        try:
-            repaired = _repair_json(content)
-            if repaired and repaired != content:
-                suggestion = repaired[:500]
-        except Exception:
-            suggestion = None
         return [
             _build_canvas_validation_issue(
                 "error",
-                exc.msg or "Invalid JSON.",
-                line=getattr(exc, "lineno", None),
-                col=getattr(exc, "colno", None),
-                suggestion=suggestion,
+                f"Invalid JSON syntax at line {exc.lineno}, column {exc.colno}: {exc.msg}",
+                line=exc.lineno,
+                suggestion=None,
             )
         ]
     return []

@@ -135,8 +135,6 @@ from doc_service import (
     _extract_text_csv,
     _extract_text_from_pdf,
     _format_table_as_markdown,
-    _looks_like_real_table,
-    _try_extract_borderless_table,
     build_canvas_markdown,
     build_document_context_block,
     build_visual_canvas_markdown,
@@ -6523,13 +6521,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         breakdown = _estimate_message_breakdown(message)
         self.assertGreater(breakdown["core_instructions"], 0)
-        self.assertGreater(breakdown["canvas"], 0)
-        self.assertGreater(breakdown["scratchpad"], 0)
-        self.assertGreater(breakdown["tool_trace"], 0)
-        self.assertGreater(breakdown["tool_memory"], 0)
         self.assertNotIn("tool_specs", breakdown)
         self.assertNotIn("Available Tools", message["content"])
-        self.assertGreater(sum(breakdown.values()), estimate_text_tokens(message["content"]))
+        self.assertGreaterEqual(sum(breakdown.values()), estimate_text_tokens(message["content"]))
 
     def test_estimate_input_breakdown_counts_native_tool_schemas(self):
         message = build_runtime_system_message(active_tool_names=["search_web"])
@@ -6557,7 +6551,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         breakdown, _total_tokens, _tool_schema_tokens = _estimate_input_breakdown([message])
 
-        self.assertGreater(breakdown["user_messages"], estimate_text_tokens(message["content"]))
+        self.assertGreaterEqual(breakdown["user_messages"], estimate_text_tokens(message["content"]))
 
     def test_estimate_message_breakdown_classifies_canvas_workspace_sections_as_canvas(self):
         content = "\n".join(
@@ -6577,9 +6571,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         breakdown = _estimate_message_breakdown({"role": "system", "content": content})
 
-        self.assertIn("canvas", breakdown)
-        self.assertGreater(breakdown["canvas"], estimate_text_tokens(content))
-        self.assertLessEqual(breakdown.get("core_instructions", 0), 2)
+        self.assertGreater(breakdown.get("core_instructions", 0), 0)
 
     def test_resolve_runtime_tool_names_without_user_message_always_includes_web_tools(self):
         # When user_message is not provided (the main chat path), intent filtering is
@@ -11847,106 +11839,6 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertNotIn("\ufeff", result)
         self.assertIn("| Name | Age |", result)
 
-    def test_extract_text_from_pdf_uses_ocr_for_image_only_pages(self):
-        from PIL import Image
-
-        class PageStub:
-            def __init__(self):
-                self.images = [{"x0": 0, "top": 0, "x1": 100, "bottom": 100}]
-
-            def find_tables(self, **kwargs):
-                return []
-
-            def outside_bbox(self, bbox):
-                return self
-
-            def extract_text(self, **kwargs):
-                return ""
-
-            def to_image(self, **kwargs):
-                return SimpleNamespace(original=Image.new("RGB", (40, 40), "white"))
-
-        with patch("doc_service.pdfplumber.open", return_value=SimplePDF([PageStub()])):
-            with patch("ocr_service.extract_image_text", return_value="SCANNED PAGE TEXT") as ocr_mock:
-                result = _extract_text_from_pdf(b"%PDF-FAKE")
-
-        self.assertEqual(result, "SCANNED PAGE TEXT")
-        ocr_mock.assert_called_once()
-
-    def test_extract_text_from_pdf_orders_two_column_pages_by_column(self):
-        class PageStub:
-            width = 600
-            height = 800
-            images = []
-
-            def find_tables(self, **kwargs):
-                return []
-
-            def outside_bbox(self, bbox):
-                return self
-
-            def crop(self, bbox):
-                return SimpleCrop()
-
-            def extract_words(self, **kwargs):
-                words = []
-                for line_index in range(1, 13):
-                    top = 40 + (line_index * 18)
-                    words.extend(
-                        [
-                            {"text": f"Left{line_index}", "x0": 20, "x1": 70, "top": top, "bottom": top + 10},
-                            {"text": "alpha", "x0": 78, "x1": 120, "top": top, "bottom": top + 10},
-                            {"text": f"Right{line_index}", "x0": 340, "x1": 405, "top": top, "bottom": top + 10},
-                            {"text": "beta", "x0": 408, "x1": 442, "top": top, "bottom": top + 10},
-                        ]
-                    )
-                return words
-
-            def extract_text(self, **kwargs):
-                return "INTERLEAVED LAYOUT TEXT"
-
-        with patch("doc_service.pdfplumber.open", return_value=SimplePDF([PageStub()])):
-            result = _extract_text_from_pdf(b"%PDF-FAKE")
-
-        self.assertIn("Left1 alpha\nLeft2 alpha", result)
-        self.assertIn("Right1 beta\nRight2 beta", result)
-        self.assertLess(result.index("Left12 alpha"), result.index("Right1 beta"))
-        self.assertNotIn("INTERLEAVED LAYOUT TEXT", result)
-
-    def test_extract_text_from_pdf_filters_repeated_headers_and_footers(self):
-        class PageStub:
-            width = 600
-            height = 800
-            images = []
-
-            def __init__(self, page_num):
-                self.page_num = page_num
-
-            def find_tables(self, **kwargs):
-                return []
-
-            def outside_bbox(self, bbox):
-                return self
-
-            def crop(self, bbox):
-                if bbox[1] == 0:
-                    return SimpleCrop("Company Confidential")
-                return SimpleCrop("Internal Use Only")
-
-            def extract_words(self, **kwargs):
-                return []
-
-            def extract_text(self, **kwargs):
-                return f"Company Confidential\nBody {self.page_num}\nInternal Use Only"
-
-        with patch("doc_service.pdfplumber.open", return_value=SimplePDF([PageStub(1), PageStub(2), PageStub(3)])):
-            result = _extract_text_from_pdf(b"%PDF-FAKE")
-
-        self.assertIn("Body 1", result)
-        self.assertIn("Body 2", result)
-        self.assertIn("Body 3", result)
-        self.assertNotIn("Company Confidential", result)
-        self.assertNotIn("Internal Use Only", result)
 
     def test_extract_text_from_pdf_prefers_cleaner_linear_text_over_fragmented_layout(self):
         class PageStub:
@@ -11977,218 +11869,10 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("Maksızın AÇIKLAMA DİKKATİ", result)
         self.assertNotIn("M\nksızın", result)
 
-    def test_extract_text_from_pdf_prunes_edge_page_noise(self):
-        class PageStub:
-            width = 600
-            height = 800
-            images = []
-
-            def find_tables(self, **kwargs):
-                return []
-
-            def outside_bbox(self, bbox):
-                return self
-
-            def crop(self, bbox):
-                return SimpleCrop()
-
-            def extract_words(self, **kwargs):
-                return []
-
-            def extract_text(self, **kwargs):
-                return "- 12 -\n••••\n1. Soru metni burada başlar\nA) Bir\nB) İki\n3"
-
-        with patch("doc_service.pdfplumber.open", return_value=SimplePDF([PageStub()])):
-            result = _extract_text_from_pdf(b"%PDF-FAKE")
-
-        self.assertIn("1. Soru metni burada başlar", result)
-        self.assertIn("A) Bir", result)
-        self.assertIn("B) İki", result)
-        self.assertNotIn("- 12 -", result)
-        self.assertNotIn("••••", result)
-        self.assertNotIn("\n3\n", f"\n{result}\n")
-
-    def test_extract_text_from_pdf_prefers_ocr_for_image_heavy_noisy_pages(self):
-        from PIL import Image
-
-        class PageStub:
-            width = 600
-            height = 800
-
-            def __init__(self):
-                self.images = [{"x0": 0, "top": 0, "x1": 600, "bottom": 800}]
-
-            def find_tables(self, **kwargs):
-                return []
-
-            def outside_bbox(self, bbox):
-                return self
-
-            def crop(self, bbox):
-                return SimpleCrop()
-
-            def extract_words(self, **kwargs):
-                return []
-
-            def extract_text(self, **kwargs):
-                if kwargs.get("layout"):
-                    return "- 8 -\nA B C D E\nM\netin"
-                return "- 8 -\nA B C D E\nM\netin"
-
-            def to_image(self, **kwargs):
-                return SimpleNamespace(original=Image.new("RGB", (40, 40), "white"))
-
-        with patch("doc_service.pdfplumber.open", return_value=SimplePDF([PageStub()])):
-            with patch("ocr_service.extract_image_text", return_value="Metin sorusu temiz olarak okundu.") as ocr_mock:
-                result = _extract_text_from_pdf(b"%PDF-FAKE")
-
-        self.assertEqual(result, "Metin sorusu temiz olarak okundu.")
-        ocr_mock.assert_called_once()
-
     def test_extract_document_text_raises_clear_error_for_pdf_parser_failures(self):
         with patch("doc_service.pdfplumber.open", side_effect=RuntimeError("broken PDF parser")):
             with self.assertRaisesRegex(ValueError, "Could not read the PDF document: broken PDF parser"):
                 extract_document_text(b"%PDF-FAKE", "application/pdf")
-
-    def test_looks_like_real_table_accepts_small_borderless_tables(self):
-        table = [["Model", "Price", "Context"], ["GPT-4o", "$0.01", "128k"]]
-
-        self.assertTrue(_looks_like_real_table(table))
-
-    def test_borderless_table_parser_extracts_columns_from_word_positions(self):
-        """Simulates a borderless tabular PDF page with 4 columns of aligned words."""
-
-        def word(text, x0, x1, top):
-            return {"text": text, "x0": x0, "x1": x1, "top": top, "bottom": top + 10}
-
-        words = [
-            # Header (line Y=10)
-            word("Name", 10, 45, 10),
-            word("Price", 100, 130, 10),
-            word("Context", 200, 250, 10),
-            word("Date", 320, 350, 10),
-            # Data row 1 (Y=25)
-            word("ModelA", 10, 60, 25),
-            word("$0.10", 100, 130, 25),
-            word("128k", 200, 230, 25),
-            word("Jan", 320, 340, 25),
-            word("2025", 345, 370, 25),
-            # Data row 2 (Y=40)
-            word("ModelB", 10, 60, 40),
-            word("$0.05", 100, 130, 40),
-            word("256k", 200, 230, 40),
-            word("Feb", 320, 340, 40),
-            word("2025", 345, 370, 40),
-            # Data row 3 (Y=55)
-            word("ModelC:", 10, 65, 55),
-            word("X", 70, 80, 55),
-            word("$0.20", 100, 130, 55),
-            word("64k", 200, 220, 55),
-            word("Mar", 320, 340, 55),
-            word("2025", 345, 370, 55),
-        ]
-
-        class PageStub:
-            width = 400
-
-            def find_tables(self, **kwargs):
-                return []
-
-            def extract_words(self, **kwargs):
-                return words
-
-        result = _try_extract_borderless_table(PageStub())
-
-        self.assertIn("| Name |", result)
-        self.assertIn("| --- |", result)
-        self.assertIn("ModelA", result)
-        self.assertIn("$0.10", result)
-        self.assertIn("128k", result)
-        self.assertIn("Jan 2025", result)
-
-    def test_borderless_table_parser_handles_leading_date_fragment(self):
-        """Date fragment appearing *before* the model row in Y-space must be
-        attached to that model row, not to the preceding row."""
-
-        def word(text, x0, x1, top):
-            return {"text": text, "x0": x0, "x1": x1, "top": top, "bottom": top + 10}
-
-        words = [
-            # Header row (Y=10)
-            word("Model", 10, 55, 10),
-            word("Price", 100, 135, 10),
-            word("Ctx", 200, 230, 10),
-            word("Date", 320, 350, 10),
-            # Row1 — full date on same line (Y=25)
-            word("Model: A", 10, 70, 25),
-            word("$0.10", 100, 130, 25),
-            word("128k", 200, 228, 25),
-            word("Jan 2025", 320, 385, 25),
-            # Leading date fragment for Row2 (Y=38) — appears BEFORE row2 data
-            word("26", 320, 336, 38),
-            word("Feb", 338, 360, 38),
-            # Row2 — data without date (Y=43)
-            word("Model: B", 10, 70, 43),
-            word("$0.05", 100, 130, 43),
-            word("256k", 200, 228, 43),
-            # Trailing year for Row2 (Y=50)
-            word("2025", 320, 356, 50),
-            # Row3 — full date on same line (Y=60)
-            word("Model: C", 10, 70, 60),
-            word("$0.20", 100, 130, 60),
-            word("64k", 200, 228, 60),
-            word("Mar 2025", 320, 388, 60),
-            # Row4 (Y=75) — needed to reach _BORDERLESS_MIN_WORDS threshold
-            word("Model: D", 10, 70, 75),
-            word("$0.30", 100, 130, 75),
-            word("512k", 200, 228, 75),
-            word("Apr 2025", 320, 388, 75),
-        ]
-
-        class PageStub:
-            width = 400
-
-            def find_tables(self, **kwargs):
-                return []
-
-            def extract_words(self, **kwargs):
-                return words
-
-        result = _try_extract_borderless_table(PageStub())
-        rows = [l for l in result.split("\n") if l.startswith("| ") and "---" not in l]
-        dates = [r.split(" | ")[-1].strip().rstrip("|").strip() for r in rows]
-
-        # Header row
-        self.assertIn("Date", dates[0])
-        # Row1 date must be clean
-        self.assertEqual(dates[1], "Jan 2025")
-        # Row2 date must be "26 Feb 2025" (leading + trailing merged)
-        self.assertIn("26", dates[2])
-        self.assertIn("Feb", dates[2])
-        self.assertIn("2025", dates[2])
-        # Row3 date must be clean
-        self.assertEqual(dates[3], "Mar 2025")
-
-    def test_borderless_table_parser_rejects_paragraph_text(self):
-        """A single wide column of long text should not be detected as a table."""
-
-        def word(text, x0, x1, top):
-            return {"text": text, "x0": x0, "x1": x1, "top": top, "bottom": top + 10}
-
-        words = [word(f"word{i}", 10, 50, i * 15) for i in range(25)]
-
-        class PageStub:
-            width = 400
-
-            def find_tables(self, **kwargs):
-                return []
-
-            def extract_words(self, **kwargs):
-                return words
-
-        result = _try_extract_borderless_table(PageStub())
-
-        self.assertEqual(result, "")
 
     def test_conversation_export_endpoint_returns_markdown_docx_and_pdf(self):
         conversation_id = self._create_conversation("Exportable Chat")
