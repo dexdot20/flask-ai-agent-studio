@@ -53,28 +53,83 @@ def _get_category_collection(category: str | None):
     return get_collection(get_category_collection_name(category))
 
 
+def _normalize_metadata_filters(metadata_filters: dict[str, Any] | None) -> dict[str, list[Any]]:
+    normalized: dict[str, list[Any]] = {}
+    if not isinstance(metadata_filters, dict):
+        return normalized
+    for key, raw_value in metadata_filters.items():
+        cleaned_key = str(key or "").strip()
+        if not cleaned_key:
+            continue
+        if isinstance(raw_value, list):
+            values = [value for value in raw_value if value not in (None, "")]
+        else:
+            values = [raw_value] if raw_value not in (None, "") else []
+        if values:
+            normalized[cleaned_key] = values
+    return normalized
+
+
+def _build_metadata_filter_where(
+    metadata_filters: dict[str, Any] | None,
+    *,
+    filter_mode: str = "and",
+    base_where: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    normalized_filters = _normalize_metadata_filters(metadata_filters)
+    normalized_mode = str(filter_mode or "and").strip().lower()
+    if normalized_mode not in {"and", "or"}:
+        normalized_mode = "and"
+
+    clauses: list[dict[str, Any]] = []
+    if isinstance(base_where, dict) and base_where:
+        clauses.append(dict(base_where))
+
+    field_clauses: list[dict[str, Any]] = []
+    for key, values in normalized_filters.items():
+        if len(values) == 1:
+            field_clauses.append({key: values[0]})
+            continue
+        field_clauses.append({"$or": [{key: value} for value in values]})
+
+    if not field_clauses:
+        return clauses[0] if len(clauses) == 1 else (None if not clauses else {"$and": clauses})
+
+    if normalized_mode == "or":
+        combined_filter_clause = field_clauses[0] if len(field_clauses) == 1 else {"$or": field_clauses}
+    else:
+        combined_filter_clause = field_clauses[0] if len(field_clauses) == 1 else {"$and": field_clauses}
+
+    clauses.append(combined_filter_clause)
+    if len(clauses) == 1:
+        return clauses[0]
+    return {"$and": clauses}
+
+
 def _iter_query_collections(
     category: str | None = None,
     source_type_hint: str | None = None,
     metadata_filters: dict[str, Any] | None = None,
+    metadata_filter_mode: str = "and",
 ) -> list[tuple[Any, dict[str, Any] | None]]:
     collections: list[tuple[Any, dict[str, Any] | None]] = []
     seen_names: set[str] = set()
-
-    def _merge_where(base_where: dict[str, Any] | None = None) -> dict[str, Any] | None:
-        merged: dict[str, Any] = {}
-        if isinstance(base_where, dict):
-            merged.update(base_where)
-        if isinstance(metadata_filters, dict):
-            merged.update({key: value for key, value in metadata_filters.items() if value not in (None, "")})
-        return merged or None
 
     def add_collection(name: str, where: dict[str, Any] | None = None) -> None:
         normalized_name = str(name or "").strip()
         if not normalized_name or normalized_name in seen_names:
             return
         seen_names.add(normalized_name)
-        collections.append((get_collection(normalized_name), _merge_where(where)))
+        collections.append(
+            (
+                get_collection(normalized_name),
+                _build_metadata_filter_where(
+                    metadata_filters,
+                    filter_mode=metadata_filter_mode,
+                    base_where=where,
+                ),
+            )
+        )
 
     if category:
         normalized_category = normalize_category(category)
@@ -213,6 +268,7 @@ def query_chunks(
     category: str | None = None,
     source_type_hint: str | None = None,
     metadata_filters: dict[str, Any] | None = None,
+    metadata_filter_mode: str = "and",
 ) -> list[dict]:
     query = str(query or "").strip()
     if not query:
@@ -228,6 +284,7 @@ def query_chunks(
         category,
         source_type_hint=source_type_hint,
         metadata_filters=metadata_filters,
+        metadata_filter_mode=metadata_filter_mode,
     ):
         for row in _query_collection_rows(collection, query_embedding, top_k=top_k, where=where):
             row_id = str(row.get("id") or "").strip()

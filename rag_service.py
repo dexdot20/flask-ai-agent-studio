@@ -878,6 +878,7 @@ def _query_rag_hits(
     *,
     allowed_source_types: set[str] | list[str] | tuple[str, ...] | None = None,
     metadata_filters: dict[str, str] | None = None,
+    metadata_filter_mode: str = "and",
     expand_query: bool = True,
 ) -> list[dict]:
     if _is_query_poisoned(query):
@@ -902,6 +903,7 @@ def _query_rag_hits(
                 category=category,
                 source_type_hint=source_type_hint,
                 metadata_filters=metadata_filters,
+                metadata_filter_mode=metadata_filter_mode,
             )
         )
         deduped_hits = _dedupe_rag_hits(collected_hits)
@@ -1029,6 +1031,7 @@ def search_knowledge_base_tool(
     allowed_source_types: set[str] | list[str] | tuple[str, ...] | None = None,
     min_similarity: float | int | str | None = None,
     metadata_filters: dict[str, str] | None = None,
+    metadata_filter_mode: str = "and",
 ) -> dict:
     _require_rag_enabled()
     query = str(query or "").strip()
@@ -1046,6 +1049,7 @@ def search_knowledge_base_tool(
         category=normalized_category,
         allowed_source_types=allowed_source_types,
         metadata_filters=metadata_filters,
+        metadata_filter_mode=metadata_filter_mode,
     )
     matches = _normalize_rag_hits(
         query,
@@ -1059,6 +1063,7 @@ def search_knowledge_base_tool(
         "query": query,
         "category": normalized_category,
         "min_similarity": similarity_threshold,
+        "metadata_filter_mode": str(metadata_filter_mode or "and").strip().lower() or "and",
         "count": len(matches[: max(1, int(top_k))]),
         "matches": matches[: max(1, int(top_k))],
     }

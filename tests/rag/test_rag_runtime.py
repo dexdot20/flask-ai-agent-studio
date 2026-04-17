@@ -8,7 +8,7 @@ import rag_service
 from db import get_app_settings, get_user_profile_entries, save_app_settings
 from rag.chunker import Chunk, chunk_text_document
 from rag.ingestor import chunks_from_records
-from rag.store import query_chunks, upsert_chunks
+from rag.store import _build_metadata_filter_where, query_chunks, upsert_chunks
 from rag_service import (
     build_rag_auto_context,
     ensure_supported_rag_sources,
@@ -27,6 +27,56 @@ from tests.support.app_harness import BaseAppRoutesTestCase
 
 
 class TestRagRuntime(BaseAppRoutesTestCase):
+    def test_build_metadata_filter_where_defaults_to_and_across_fields_and_or_within_field(self):
+        where = _build_metadata_filter_where(
+            {
+                "workspace_id": ["conversation:12", "conversation:13"],
+                "section_id": ["intro", "details"],
+            },
+            filter_mode="and",
+            base_where={"category": "conversation"},
+        )
+
+        self.assertEqual(
+            where,
+            {
+                "$and": [
+                    {"category": "conversation"},
+                    {
+                        "$and": [
+                            {"$or": [{"workspace_id": "conversation:12"}, {"workspace_id": "conversation:13"}]},
+                            {"$or": [{"section_id": "intro"}, {"section_id": "details"}]},
+                        ]
+                    },
+                ]
+            },
+        )
+
+    def test_build_metadata_filter_where_supports_or_across_fields(self):
+        where = _build_metadata_filter_where(
+            {
+                "workspace_id": ["conversation:12", "conversation:13"],
+                "section_id": ["intro"],
+            },
+            filter_mode="or",
+            base_where={"category": "conversation"},
+        )
+
+        self.assertEqual(
+            where,
+            {
+                "$and": [
+                    {"category": "conversation"},
+                    {
+                        "$or": [
+                            {"$or": [{"workspace_id": "conversation:12"}, {"workspace_id": "conversation:13"}]},
+                            {"section_id": "intro"},
+                        ]
+                    },
+                ]
+            },
+        )
+
     def test_structured_summary_persists_user_profile_facts(self):
         conversation_id = self._create_conversation()
         with self.app.app_context():
@@ -238,9 +288,17 @@ class TestRagRuntime(BaseAppRoutesTestCase):
     def test_search_knowledge_base_tool_uses_query_expansion_and_dedupes_hits(self):
         original_query = "python liste sıralama nasıl yapılır"
 
-        def fake_query(query, top_k=5, category=None, source_type_hint=None, metadata_filters=None):
+        def fake_query(
+            query,
+            top_k=5,
+            category=None,
+            source_type_hint=None,
+            metadata_filters=None,
+            metadata_filter_mode="and",
+        ):
             del source_type_hint
             del metadata_filters
+            del metadata_filter_mode
             if query == original_query:
                 return [
                     {
@@ -640,12 +698,35 @@ class TestRagRuntime(BaseAppRoutesTestCase):
         self.assertEqual(
             mocked_search.call_args.kwargs["metadata_filters"],
             {
-                "workspace_id": "conversation:12",
-                "project_id": "chat-history",
-                "document_path": "conversations/12",
-                "section_id": "intro",
+                "workspace_id": ["conversation:12"],
+                "project_id": ["chat-history"],
+                "document_path": ["conversations/12"],
+                "section_id": ["intro"],
             },
         )
+        self.assertEqual(mocked_search.call_args.kwargs["metadata_filter_mode"], "and")
+
+    def test_rag_search_route_passes_multi_value_filters_with_or_mode(self):
+        with patch("routes.conversations.search_knowledge_base_tool", return_value={"query": "memory", "count": 0, "matches": []}) as mocked_search:
+            response = self.client.get(
+                "/api/rag/search?q=memory&workspace_id=conversation:12&workspace_id=conversation:13&section_id=intro,details&metadata_filter_mode=or"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            mocked_search.call_args.kwargs["metadata_filters"],
+            {
+                "workspace_id": ["conversation:12", "conversation:13"],
+                "section_id": ["intro", "details"],
+            },
+        )
+        self.assertEqual(mocked_search.call_args.kwargs["metadata_filter_mode"], "or")
+
+    def test_rag_search_route_rejects_invalid_metadata_filter_mode(self):
+        response = self.client.get("/api/rag/search?q=memory&metadata_filter_mode=xor")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("metadata_filter_mode", response.get_json()["error"])
 
     def test_rag_search_route_rejects_invalid_min_similarity(self):
         response = self.client.get("/api/rag/search?q=memory&min_similarity=abc")

@@ -390,6 +390,13 @@ def _parse_rag_metadata_filter_value(raw_values) -> list[str]:
     return parsed
 
 
+def _parse_rag_metadata_filter_mode(raw_value: str | None) -> tuple[str, bool]:
+    normalized = str(raw_value or "and").strip().lower()
+    if normalized in {"and", "or"}:
+        return normalized, False
+    return "and", bool(str(raw_value or "").strip())
+
+
 def _normalize_upload_metadata_title(raw_title: str) -> str:
     text = re.sub(r"\s+", " ", str(raw_title or "").replace("\n", " ")).strip()
     if not text:
@@ -1781,11 +1788,16 @@ def register_conversation_routes(app) -> None:
             "section_id",
             "section_title",
         )
-        metadata_filters: dict[str, str] = {}
+        metadata_filters: dict[str, list[str]] = {}
         for key in metadata_filter_keys:
             values = _parse_rag_metadata_filter_value(request.args.getlist(key) or request.args.get(key))
             if values:
-                metadata_filters[key] = values[0]
+                metadata_filters[key] = values
+        metadata_filter_mode, invalid_metadata_filter_mode = _parse_rag_metadata_filter_mode(
+            request.args.get("metadata_filter_mode") or request.args.get("filter_mode")
+        )
+        if invalid_metadata_filter_mode:
+            return jsonify({"error": "metadata_filter_mode must be either 'and' or 'or'."}), 400
         try:
             top_k = int(request.args.get("top_k") or RAG_SEARCH_DEFAULT_TOP_K)
         except (TypeError, ValueError):
@@ -1816,6 +1828,7 @@ def register_conversation_routes(app) -> None:
                     allowed_source_types=allowed_source_types,
                     min_similarity=min_similarity,
                     metadata_filters=metadata_filters or None,
+                    metadata_filter_mode=metadata_filter_mode,
                 )
             )
         except Exception:
