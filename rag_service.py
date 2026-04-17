@@ -75,6 +75,34 @@ DYNAMIC_RAG_CATEGORIES = {RAG_SOURCE_CONVERSATION, RAG_SOURCE_TOOL_MEMORY, RAG_S
 AUTO_INJECT_EXCERPT_LIMIT = 560
 AUTO_INJECT_STRONG_MATCH_MARGIN = 0.12
 MANUAL_UPLOAD_DESCRIPTION_LIMIT = 1_200
+RAG_QUERY_POISONING_DENYLIST = {
+    "canvas",
+    "tool",
+    "scratchpad",
+    "persona",
+    "rag",
+    "vector",
+    "chroma",
+    "embedding",
+    "chunk",
+    "retrieval",
+    "batch_edit",
+    "rewrite_document",
+    "scroll_canvas",
+    "expand_canvas",
+    "api",
+    "endpoint",
+    "route",
+    "handler",
+    "executor",
+    "system_message",
+    "user_message",
+    "assistant_message",
+    "context_injection",
+    "runtime_context",
+    "prompt_engineering",
+}
+RAG_QUERY_MIN_INFORMATIVE_TOKEN_COUNT = 2
 logger = logging.getLogger(__name__)
 
 
@@ -339,7 +367,15 @@ def upsert_rag_document_record(
                    metadata = excluded.metadata,
                    expires_at = excluded.expires_at,
                    updated_at = datetime('now')""",
-            (source_key, source_name, source_type, category, int(chunk_count), serialize_rag_metadata(metadata), expires_at),
+            (
+                source_key,
+                source_name,
+                source_type,
+                category,
+                int(chunk_count),
+                serialize_rag_metadata(metadata),
+                expires_at,
+            ),
         )
 
 
@@ -371,7 +407,11 @@ def ensure_supported_rag_sources(force: bool = False) -> int:
     global _rag_sources_verified, _rag_sources_last_verified_at
     now = time.time()
     removed = purge_expired_rag_documents()
-    if _rag_sources_verified and not force and (now - _rag_sources_last_verified_at) < _RAG_SOURCES_VERIFY_COOLDOWN_SECS:
+    if (
+        _rag_sources_verified
+        and not force
+        and (now - _rag_sources_last_verified_at) < _RAG_SOURCES_VERIFY_COOLDOWN_SECS
+    ):
         return removed
 
     with get_db() as conn:
@@ -413,7 +453,9 @@ def delete_rag_document_record(source_key: str):
         conn.execute("DELETE FROM rag_documents WHERE source_key = ?", (source_key,))
 
 
-def update_rag_document_record_metadata(source_key: str, metadata: dict | None, *, expires_at: str | None = None) -> None:
+def update_rag_document_record_metadata(
+    source_key: str, metadata: dict | None, *, expires_at: str | None = None
+) -> None:
     serialized_metadata = serialize_rag_metadata(metadata)
     with get_db() as conn:
         if expires_at is None:
@@ -566,6 +608,24 @@ def _clip_rag_excerpt(text: str, limit: int = 1200) -> str:
 
 def _normalize_query_tokens(query: str) -> list[str]:
     return [token for token in re.findall(r"[^\W_]+", str(query or "").lower(), flags=re.UNICODE) if token]
+
+
+def _filter_rag_query_poisoning(query: str) -> str:
+    cleaned_query = re.sub(r"\s+", " ", str(query or "").strip())
+    if not cleaned_query:
+        return cleaned_query
+
+    denylist_pattern = r"\b(" + "|".join(re.escape(kw) for kw in RAG_QUERY_POISONING_DENYLIST) + r")\b"
+    filtered_query = re.sub(denylist_pattern, " ", cleaned_query, flags=re.IGNORECASE)
+    filtered_query = re.sub(r"\s+", " ", filtered_query).strip()
+    return filtered_query
+
+
+def _is_query_poisoned(query: str) -> bool:
+    filtered = _filter_rag_query_poisoning(query)
+    if not filtered.strip():
+        return True
+    return False
 
 
 def _expand_query_variants(query: str) -> list[str]:
@@ -771,11 +831,18 @@ def _query_rag_hits(
     allowed_source_types: set[str] | list[str] | tuple[str, ...] | None = None,
     expand_query: bool = True,
 ) -> list[dict]:
+    if _is_query_poisoned(query):
+        return []
     collected_hits: list[dict] = []
     requested_top_k = max(1, int(top_k))
     candidate_top_k = max(requested_top_k, requested_top_k * max(2, int(RAG_MAX_CHUNKS_PER_SOURCE)))
-    normalized_query = re.sub(r"\s+", " ", str(query or "").strip())
-    variants = _expand_query_variants(normalized_query) if expand_query else ([normalized_query] if normalized_query else [])
+    filtered_query = _filter_rag_query_poisoning(query)
+    normalized_query = re.sub(r"\s+", " ", filtered_query.strip())
+    if not normalized_query:
+        return []
+    variants = (
+        _expand_query_variants(normalized_query) if expand_query else ([normalized_query] if normalized_query else [])
+    )
     source_type_hint = _resolve_source_type_hint(category, allowed_source_types)
     deduped_hits: list[dict] = []
     for variant in variants:
@@ -831,7 +898,9 @@ def _compact_auto_injected_rag_match(match: dict) -> dict | None:
     excerpt = _clip_rag_excerpt(match.get("text", ""), limit=AUTO_INJECT_EXCERPT_LIMIT)
     if not excerpt:
         return None
-    source_name = str(match.get("source_name") or match.get("source_type") or "Knowledge base").strip() or "Knowledge base"
+    source_name = (
+        str(match.get("source_name") or match.get("source_type") or "Knowledge base").strip() or "Knowledge base"
+    )
     compact_match = {
         "source_name": source_name,
         "text": excerpt,
@@ -884,7 +953,9 @@ def _normalize_rag_hits(
                 "category": normalize_rag_category(metadata.get("category"), default=source_type),
                 "chunk_index": metadata.get("chunk_index"),
                 "archived_conversation": metadata.get("archived_conversation") is True,
-                "archived_message_count": int(metadata.get("archived_message_count") or 0) if metadata.get("archived_message_count") not in (None, "") else 0,
+                "archived_message_count": int(metadata.get("archived_message_count") or 0)
+                if metadata.get("archived_message_count") not in (None, "")
+                else 0,
                 "_expires_at_ts": expires_at_ts,
                 "expires_at_utc": _format_utc_timestamp(expires_at_ts),
                 "similarity": round(float(similarity), 4) if similarity is not None else None,
@@ -1030,7 +1101,9 @@ def get_exact_tool_memory_match(tool_name: str, args_preview: str) -> dict | Non
     if not rows:
         return None
 
-    content = "\n\n".join(_clean_rag_text_block(row.get("text") or "") for row in rows if _clean_rag_text_block(row.get("text") or ""))
+    content = "\n\n".join(
+        _clean_rag_text_block(row.get("text") or "") for row in rows if _clean_rag_text_block(row.get("text") or "")
+    )
     if not content:
         return None
 
@@ -1440,7 +1513,9 @@ def sync_conversations_to_rag(conversation_id: int | None = None, force: bool = 
                     "messages": conversation["messages"],
                 }
             )
-            conversation_metadata = _build_conversation_sync_metadata(conversation, conversation_key, conversation_signature)
+            conversation_metadata = _build_conversation_sync_metadata(
+                conversation, conversation_key, conversation_signature
+            )
             if not _rag_source_content_changed(conversation_key, conversation_signature):
                 update_rag_document_record_metadata(conversation_key, conversation_metadata)
             elif conversation["messages"]:
@@ -1491,7 +1566,9 @@ def sync_conversations_to_rag(conversation_id: int | None = None, force: bool = 
                     "archived_messages": conversation.get("archived_messages") or [],
                 }
             )
-            archived_metadata = _build_conversation_sync_metadata(conversation, archived_conversation_key, archived_signature)
+            archived_metadata = _build_conversation_sync_metadata(
+                conversation, archived_conversation_key, archived_signature
+            )
             archived_metadata["archived_conversation"] = True
             archived_metadata["archived_message_count"] = len(conversation.get("archived_messages") or [])
             if not _rag_source_content_changed(archived_conversation_key, archived_signature):
@@ -1592,7 +1669,9 @@ def sync_conversations_to_rag_safe(conversation_id: int | None = None, force: bo
     try:
         return sync_conversations_to_rag(conversation_id=conversation_id, force=force)
     except Exception:
-        logger.exception("Automatic conversation sync failed", extra={"conversation_id": conversation_id, "force": force})
+        logger.exception(
+            "Automatic conversation sync failed", extra={"conversation_id": conversation_id, "force": force}
+        )
         return []
 
 

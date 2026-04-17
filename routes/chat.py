@@ -10,7 +10,7 @@ from queue import SimpleQueue
 import re
 import shutil
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from threading import Event, Lock
 from uuid import uuid4
 
@@ -2007,7 +2007,14 @@ def _reformat_summary_response_as_json(
         target,
     )
     try:
-        from activity_service import ActivityTimer, STATUS_OK, STATUS_ERROR, extract_usage_from_response, log_activity_call
+        from activity_service import (
+            ActivityTimer,
+            STATUS_OK,
+            STATUS_ERROR,
+            extract_usage_from_response,
+            log_activity_call,
+        )
+
         _timer = ActivityTimer()
         try:
             with _timer:
@@ -2849,7 +2856,7 @@ def _build_budgeted_prompt_messages(
         workspace_root=workspace_root,
     )
     prompt_budget = max(2_000, get_prompt_max_input_tokens(settings) - get_prompt_response_token_reserve(settings))
-    prompt_now = datetime.now().astimezone()
+    prompt_now = datetime.now(timezone.utc).astimezone()
     stable_runtime_message = build_runtime_system_message(
         assistant_behavior,
         runtime_tool_names,
@@ -4880,7 +4887,9 @@ def register_chat_routes(app) -> None:
 
         max_steps = max(1, min(50, int(settings.get("max_steps", 5))))
         temperature = get_model_temperature(settings)
-        conversation_parameter_overrides = get_conversation_parameter_overrides(conv_id) if conv_id is not None else None
+        conversation_parameter_overrides = (
+            get_conversation_parameter_overrides(conv_id) if conv_id is not None else None
+        )
         if conv_id is not None:
             override_names = get_conversation_active_tool_names(conv_id, settings)
             active_tool_names = override_names if override_names is not None else get_active_tool_names(settings)
@@ -6116,7 +6125,9 @@ def register_chat_routes(app) -> None:
                 conversation["model"] if conversation else "",
                 default=get_default_chat_model_id(settings),
             )
-            title_model = conversation_model if is_valid_model_id(conversation_model) else get_default_chat_model_id(settings)
+            title_model = (
+                conversation_model if is_valid_model_id(conversation_model) else get_default_chat_model_id(settings)
+            )
             result = collect_agent_response(
                 prompt,
                 title_model,

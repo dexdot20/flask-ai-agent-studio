@@ -5,7 +5,7 @@ import hashlib
 import json
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 from canvas_service import (
     build_canvas_project_manifest,
@@ -184,7 +184,7 @@ def _build_clarification_response_message_content(
 def _format_summary_message_for_model(content: str, metadata: dict | None = None) -> str:
     normalized_content = str(content or "").strip()
     if normalized_content.lower().startswith(SUMMARY_LABEL.lower()):
-        normalized_content = normalized_content[len(SUMMARY_LABEL):].strip()
+        normalized_content = normalized_content[len(SUMMARY_LABEL) :].strip()
 
     summary_prefix = MODEL_SUMMARY_LABEL
     summary_level = int(metadata.get("summary_level") or 0) if isinstance(metadata, dict) else 0
@@ -195,6 +195,7 @@ def _format_summary_message_for_model(content: str, metadata: dict | None = None
     if normalized_content:
         return f"{summary_prefix}\n\n{normalized_content}"
     return summary_prefix
+
 
 # Tools whose results may still be inputs for other calls in the same batch;
 # they are parallel-safe among themselves but must not be batched with any
@@ -338,7 +339,11 @@ def build_conversation_memory_section(entries) -> list[str]:
     seen: dict[tuple[str, str], int] = {}
     for index, entry in enumerate(normalized_entries):
         seen[(entry["entry_type"], entry["key"])] = index
-    normalized_entries = [entry for index, entry in enumerate(normalized_entries) if seen.get((entry["entry_type"], entry["key"])) == index]
+    normalized_entries = [
+        entry
+        for index, entry in enumerate(normalized_entries)
+        if seen.get((entry["entry_type"], entry["key"])) == index
+    ]
 
     parts = [
         "## Conversation Memory",
@@ -387,7 +392,9 @@ def _build_image_policy_payload(active_tool_names: list[str]) -> dict | None:
     }
 
 
-def _build_clarification_policy_payload(active_tool_names: list[str], clarification_max_questions: int | None = None) -> dict | None:
+def _build_clarification_policy_payload(
+    active_tool_names: list[str], clarification_max_questions: int | None = None
+) -> dict | None:
     if "ask_clarifying_question" not in set(active_tool_names or []):
         return None
     return {
@@ -423,7 +430,9 @@ def format_knowledge_base_auto_context(retrieved_context) -> str:
     for index, match in enumerate(matches, start=1):
         if not isinstance(match, dict):
             continue
-        source_name = str(match.get("source_name") or match.get("source") or f"Match {index}").strip() or f"Match {index}"
+        source_name = (
+            str(match.get("source_name") or match.get("source") or f"Match {index}").strip() or f"Match {index}"
+        )
         similarity = match.get("similarity")
         excerpt = str(match.get("text") or match.get("excerpt") or "").strip()
         is_archived = match.get("archived_conversation") is True
@@ -431,12 +440,12 @@ def format_knowledge_base_auto_context(retrieved_context) -> str:
         # Build a human-readable source label so the model cannot mistake
         # retrieved chunks for messages from the current conversation.
         if source_name.startswith("conversation_archive:"):
-            remainder = source_name[len("conversation_archive:"):]
+            remainder = source_name[len("conversation_archive:") :]
             _parts = remainder.split(":", 1)
             title = (_parts[1].strip() if len(_parts) == 2 else _parts[0].strip()) or "Untitled"
             source_label = f"Retrieved from a different archived past conversation: {title}"
         elif source_name.startswith("conversation:"):
-            remainder = source_name[len("conversation:"):]
+            remainder = source_name[len("conversation:") :]
             _parts = remainder.split(":", 1)
             title = (_parts[1].strip() if len(_parts) == 2 else _parts[0].strip()) or "Untitled"
             source_label = f"Retrieved from a different past conversation: {title}"
@@ -469,7 +478,9 @@ def _build_knowledge_base_payload(retrieved_context, active_tool_names: list[str
         if formatted_context:
             payload["auto_injected_context"] = formatted_context
     if search_enabled:
-        payload["guidance"] = "Use retrieved context directly when sufficient, and avoid redundant knowledge-base searches."
+        payload["guidance"] = (
+            "Use retrieved context directly when sufficient, and avoid redundant knowledge-base searches."
+        )
     return payload or None
 
 
@@ -746,7 +757,9 @@ def _build_full_canvas_preview_lines_if_fit(
     return numbered_lines
 
 
-def _document_attachment_is_represented_in_canvas(attachment: dict, canvas_document_lookup: dict[str, list[str]]) -> bool:
+def _document_attachment_is_represented_in_canvas(
+    attachment: dict, canvas_document_lookup: dict[str, list[str]]
+) -> bool:
     if not canvas_document_lookup:
         return False
 
@@ -802,7 +815,11 @@ def build_user_message_for_model(
         if attachment.get("kind") == "document":
             if str(attachment.get("submission_mode") or "").strip().lower() == "visual":
                 file_name = str(attachment.get("file_name") or "PDF").strip() or "PDF"
-                page_image_ids = attachment.get("visual_page_image_ids") if isinstance(attachment.get("visual_page_image_ids"), list) else []
+                page_image_ids = (
+                    attachment.get("visual_page_image_ids")
+                    if isinstance(attachment.get("visual_page_image_ids"), list)
+                    else []
+                )
                 try:
                     page_count = max(0, int(attachment.get("visual_page_count") or len(page_image_ids) or 0))
                 except (TypeError, ValueError):
@@ -863,7 +880,9 @@ def build_user_message_for_model(
         key_points = attachment.get("key_points") if isinstance(attachment.get("key_points"), list) else []
         if analysis_method == "llm_direct":
             direct_label = image_name or (f"image_id={image_id}" if image_id else "uploaded image")
-            direct_notice = f"Uploaded image for direct multimodal analysis: {direct_label}. The original image is attached below."
+            direct_notice = (
+                f"Uploaded image for direct multimodal analysis: {direct_label}. The original image is attached below."
+            )
             if direct_notice not in direct_image_notices:
                 direct_image_notices.append(direct_notice)
             continue
@@ -871,7 +890,13 @@ def build_user_message_for_model(
         if has_vision:
             vision_attachments.append(attachment)
 
-    if not file_context_blocks and not video_context_blocks and not vision_attachments and not visual_document_notices and not direct_image_notices:
+    if (
+        not file_context_blocks
+        and not video_context_blocks
+        and not vision_attachments
+        and not visual_document_notices
+        and not direct_image_notices
+    ):
         return content
 
     parts = []
@@ -915,7 +940,9 @@ def build_user_message_for_model(
     return "\n\n".join(parts)
 
 
-def _build_visual_document_api_blocks(metadata: dict | None, *, warning_messages: list[str] | None = None) -> list[dict]:
+def _build_visual_document_api_blocks(
+    metadata: dict | None, *, warning_messages: list[str] | None = None
+) -> list[dict]:
     attachments = extract_message_attachments(metadata)
     blocks: list[dict] = []
     for attachment in attachments:
@@ -924,7 +951,9 @@ def _build_visual_document_api_blocks(metadata: dict | None, *, warning_messages
         if str(attachment.get("submission_mode") or "").strip().lower() != "visual":
             continue
         file_name = str(attachment.get("file_name") or "PDF").strip() or "PDF"
-        image_ids = attachment.get("visual_page_image_ids") if isinstance(attachment.get("visual_page_image_ids"), list) else []
+        image_ids = (
+            attachment.get("visual_page_image_ids") if isinstance(attachment.get("visual_page_image_ids"), list) else []
+        )
         page_numbers = [
             int(page_number)
             for page_number in (attachment.get("visual_page_numbers") or [])
@@ -1144,7 +1173,9 @@ def _collect_answered_clarification_skip_indexes(messages: list[dict]) -> set[in
     for assistant_index, assistant_message in enumerate(messages):
         if not isinstance(assistant_message, dict):
             continue
-        assistant_metadata = assistant_message.get("metadata") if isinstance(assistant_message.get("metadata"), dict) else {}
+        assistant_metadata = (
+            assistant_message.get("metadata") if isinstance(assistant_message.get("metadata"), dict) else {}
+        )
         if not extract_pending_clarification(assistant_metadata):
             continue
         assistant_message_id = str(assistant_message.get("id") or "").strip()
@@ -1182,6 +1213,7 @@ def _collect_answered_clarification_skip_indexes(messages: list[dict]) -> set[in
             skip_indexes.add(probe_index)
             skip_indexes.update(matched_tool_indexes)
     return skip_indexes
+
 
 def _collect_canvas_saved_sub_agent_skip_indexes(messages: list[dict]) -> set[int]:
     skip_indexes: set[int] = set()
@@ -1235,17 +1267,12 @@ def _sanitize_tool_call_chain(api_messages: list[dict]) -> list[dict]:
       they still carry text content).
     """
     present_call_ids: set[str] = {
-        msg["tool_call_id"]
-        for msg in api_messages
-        if msg.get("role") == "tool" and msg.get("tool_call_id")
+        msg["tool_call_id"] for msg in api_messages if msg.get("role") == "tool" and msg.get("tool_call_id")
     }
     result: list[dict] = []
     for msg in api_messages:
         if msg.get("role") == "assistant" and msg.get("tool_calls"):
-            surviving = [
-                tc for tc in msg["tool_calls"]
-                if str(tc.get("id") or "").strip() in present_call_ids
-            ]
+            surviving = [tc for tc in msg["tool_calls"] if str(tc.get("id") or "").strip() in present_call_ids]
             if len(surviving) == len(msg["tool_calls"]):
                 result.append(msg)
                 continue
@@ -1367,13 +1394,6 @@ def build_api_messages(
             api_message["tool_call_id"] = tool_call_id
 
         api_messages.append(api_message)
-        if role == "user" and context_injection:
-            api_messages.append(
-                {
-                    "role": "system",
-                    "content": context_injection,
-                }
-            )
     return _sanitize_tool_call_chain(api_messages)
 
 
@@ -1439,7 +1459,9 @@ def _build_canvas_prompt_payload(
                 active_document = document
                 break
 
-    manifest_file_list = (manifest or {}).get("file_list") if isinstance((manifest or {}).get("file_list"), list) else []
+    manifest_file_list = (
+        (manifest or {}).get("file_list") if isinstance((manifest or {}).get("file_list"), list) else []
+    )
     ignored_documents = [
         _with_canvas_document_prompt_metrics(entry)
         for entry in manifest_file_list
@@ -1457,8 +1479,7 @@ def _build_canvas_prompt_payload(
     filtered_viewports = [
         viewport
         for viewport in (canvas_viewports or [])
-        if isinstance(viewport, dict)
-        and str(viewport.get("document_id") or "").strip() not in ignored_document_ids
+        if isinstance(viewport, dict) and str(viewport.get("document_id") or "").strip() not in ignored_document_ids
     ]
 
     content = str(active_document.get("content") or "")
@@ -1590,15 +1611,17 @@ def _build_canvas_prompt_payload(
 
 def _build_canvas_workspace_summary(canvas_payload: dict) -> list[str]:
     manifest = canvas_payload.get("manifest") if isinstance(canvas_payload.get("manifest"), dict) else {}
-    active_document = canvas_payload.get("active_document") if isinstance(canvas_payload.get("active_document"), dict) else {}
+    active_document = (
+        canvas_payload.get("active_document") if isinstance(canvas_payload.get("active_document"), dict) else {}
+    )
     if int(canvas_payload.get("document_count") or 0) <= 1 and (canvas_payload.get("mode") or "document") != "project":
         return []
 
     is_project_mode = str(canvas_payload.get("mode") or "document").strip().lower() == "project"
-    has_explicit_paths = any(
-        str(entry.get("path") or "").strip()
-        for entry in (canvas_payload.get("other_documents") or [])
-    ) or str(active_document.get("path") or "").strip() != ""
+    has_explicit_paths = (
+        any(str(entry.get("path") or "").strip() for entry in (canvas_payload.get("other_documents") or []))
+        or str(active_document.get("path") or "").strip() != ""
+    )
 
     def _document_label(entry: dict) -> str:
         if not isinstance(entry, dict):
@@ -1644,10 +1667,10 @@ def _build_canvas_workspace_summary(canvas_payload: dict) -> list[str]:
         lines.append("- Canvas view status: hidden (active document is ignored for prompt content)")
     elif total_lines and visible_line_end:
         if visible_line_end >= total_lines:
+            lines.append(f"- Canvas view status: full document visible ({visible_line_end}/{total_lines} lines)")
             lines.append(
-                f"- Canvas view status: full document visible ({visible_line_end}/{total_lines} lines)"
+                "- Canvas visibility note: the entire document is already in view; do not expand it just to see more of this same file."
             )
-            lines.append("- Canvas visibility note: the entire document is already in view; do not expand it just to see more of this same file.")
         else:
             lines.append(f"- Canvas view status: truncated excerpt ({visible_line_end}/{total_lines} lines visible)")
     else:
@@ -1656,21 +1679,19 @@ def _build_canvas_workspace_summary(canvas_payload: dict) -> list[str]:
     if total_pages > 1:
         lines.append(f"- Active document pages: {total_pages}")
 
-    other_documents = canvas_payload.get("other_documents") if isinstance(canvas_payload.get("other_documents"), list) else []
-    other_labels = [
-        _document_label(entry)
-        for entry in other_documents
-        if _document_label(entry)
-    ]
+    other_documents = (
+        canvas_payload.get("other_documents") if isinstance(canvas_payload.get("other_documents"), list) else []
+    )
+    other_labels = [_document_label(entry) for entry in other_documents if _document_label(entry)]
     if other_labels:
         shown_labels = other_labels[:4]
-        lines.append(f"- {'Other files' if is_project_mode and has_explicit_paths else 'Other canvas documents'}: {', '.join(shown_labels)}")
+        lines.append(
+            f"- {'Other files' if is_project_mode and has_explicit_paths else 'Other canvas documents'}: {', '.join(shown_labels)}"
+        )
         if len(other_labels) > len(shown_labels):
             lines.append(f"- Additional documents omitted: {len(other_labels) - len(shown_labels)}")
     other_size_summaries = [
-        _document_size_summary(entry)
-        for entry in other_documents[:4]
-        if _document_size_summary(entry)
+        _document_size_summary(entry) for entry in other_documents[:4] if _document_size_summary(entry)
     ]
     if other_size_summaries:
         lines.append(
@@ -1678,11 +1699,14 @@ def _build_canvas_workspace_summary(canvas_payload: dict) -> list[str]:
             + "; ".join(other_size_summaries)
         )
 
-    ignored_documents = canvas_payload.get("ignored_documents") if isinstance(canvas_payload.get("ignored_documents"), list) else []
+    ignored_documents = (
+        canvas_payload.get("ignored_documents") if isinstance(canvas_payload.get("ignored_documents"), list) else []
+    )
     ignored_labels = [
         _document_label(entry)
         for entry in ignored_documents
-        if isinstance(entry, dict) and str(entry.get("id") or "").strip() != str(active_document.get("id") or "").strip()
+        if isinstance(entry, dict)
+        and str(entry.get("id") or "").strip() != str(active_document.get("id") or "").strip()
     ]
     if ignored_labels:
         shown_ignored_labels = ignored_labels[:4]
@@ -1695,7 +1719,8 @@ def _build_canvas_workspace_summary(canvas_payload: dict) -> list[str]:
     ignored_size_summaries = [
         _document_size_summary(entry)
         for entry in ignored_documents[:4]
-        if isinstance(entry, dict) and str(entry.get("id") or "").strip() != str(active_document.get("id") or "").strip()
+        if isinstance(entry, dict)
+        and str(entry.get("id") or "").strip() != str(active_document.get("id") or "").strip()
         if _document_size_summary(entry)
     ]
     if ignored_size_summaries:
@@ -1718,7 +1743,9 @@ def _format_canvas_metadata_values(values) -> str | None:
 
 
 def _build_ignored_canvas_documents_section(canvas_payload: dict) -> list[str]:
-    ignored_documents = canvas_payload.get("ignored_documents") if isinstance(canvas_payload.get("ignored_documents"), list) else []
+    ignored_documents = (
+        canvas_payload.get("ignored_documents") if isinstance(canvas_payload.get("ignored_documents"), list) else []
+    )
     if not ignored_documents:
         return []
 
@@ -1831,9 +1858,13 @@ def _build_canvas_parallel_read_guidance_line(active_tool_names: list[str]) -> s
 def _build_canvas_hidden_excerpt_guidance_line(active_tool_names: list[str]) -> str | None:
     flags = _canvas_inspection_tool_flags(active_tool_names)
     if flags["scroll"]:
-        return "- If the excerpt says [Excerpt: lines 1–N of M], use scroll_canvas_document before editing hidden lines."
+        return (
+            "- If the excerpt says [Excerpt: lines 1–N of M], use scroll_canvas_document before editing hidden lines."
+        )
     if flags["expand"]:
-        return "- If the excerpt says [Excerpt: lines 1–N of M], use expand_canvas_document before editing hidden lines."
+        return (
+            "- If the excerpt says [Excerpt: lines 1–N of M], use expand_canvas_document before editing hidden lines."
+        )
     return None
 
 
@@ -1849,9 +1880,7 @@ def _build_canvas_preview_compaction_note(active_tool_names: list[str], clipped_
         tool_guidance = "use scroll_canvas_document if exact full line text matters"
     else:
         tool_guidance = "exact full line text may require enabling a canvas read tool"
-    return (
-        f"- Preview compaction: {int(clipped_line_count)} long line(s) were clipped for token efficiency; {tool_guidance}."
-    )
+    return f"- Preview compaction: {int(clipped_line_count)} long line(s) were clipped for token efficiency; {tool_guidance}."
 
 
 def _build_canvas_truncated_excerpt_guidance(active_tool_names: list[str]) -> str:
@@ -1873,7 +1902,11 @@ def _build_canvas_truncated_excerpt_guidance(active_tool_names: list[str]) -> st
 
 
 def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload: dict | None = None) -> list[str]:
-    active_document = (canvas_payload or {}).get("active_document") if isinstance((canvas_payload or {}).get("active_document"), dict) else {}
+    active_document = (
+        (canvas_payload or {}).get("active_document")
+        if isinstance((canvas_payload or {}).get("active_document"), dict)
+        else {}
+    )
     if active_document and not get_canvas_document_capabilities(active_document)["editable"]:
         return [
             "## Canvas Editing Guidance",
@@ -1925,7 +1958,10 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
     ]
     if "create_canvas_document" in active_set:
         lines.insert(2, "- create_canvas_document always needs BOTH title and content.")
-        lines.insert(3, "- When creating a new canvas document, never omit title. If a project path is known, reuse its basename as the title; otherwise provide a short artifact name such as README.md, app.py, or Release Plan.")
+        lines.insert(
+            3,
+            "- When creating a new canvas document, never omit title. If a project path is known, reuse its basename as the title; otherwise provide a short artifact name such as README.md, app.py, or Release Plan.",
+        )
     if search_guidance_line:
         lines.insert(9, search_guidance_line)
     if inspect_first_line:
@@ -1935,7 +1971,9 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
     if hidden_excerpt_guidance_line:
         lines.append(hidden_excerpt_guidance_line)
     if (canvas_payload or {}).get("mode") == "project":
-        lines.append("- In project mode, prefer document_path for targeting, even when you do not know the document_id yet.")
+        lines.append(
+            "- In project mode, prefer document_path for targeting, even when you do not know the document_id yet."
+        )
     lines.append("")
     return lines
 
@@ -1954,7 +1992,9 @@ def _build_canvas_runtime_context_sections(
     if workspace_summary_lines:
         sections.append(_finalize_prompt_text(workspace_summary_lines))
 
-    active_document = canvas_payload.get("active_document") if isinstance(canvas_payload.get("active_document"), dict) else {}
+    active_document = (
+        canvas_payload.get("active_document") if isinstance(canvas_payload.get("active_document"), dict) else {}
+    )
     if not active_document:
         return sections
 
@@ -1973,9 +2013,7 @@ def _build_canvas_runtime_context_sections(
     if active_document.get("language"):
         active_lines.append(f"- Language: {active_document['language']}")
     active_lines.append(f"- Total lines: {canvas_payload['total_lines']}")
-    active_lines.append(
-        f"- Total tokens (estimated): ~{int(canvas_payload.get('active_document_token_count') or 0)}"
-    )
+    active_lines.append(f"- Total tokens (estimated): ~{int(canvas_payload.get('active_document_token_count') or 0)}")
     if int(active_document.get("page_count") or 0) > 1:
         active_lines.append(f"- Total pages: {int(active_document.get('page_count') or 0)}")
     if active_document_ignored:
@@ -1992,7 +2030,9 @@ def _build_canvas_runtime_context_sections(
             f"- Visible excerpt tokens (estimated): ~{int(canvas_payload.get('visible_excerpt_token_count') or 0)}"
         )
     else:
-        active_lines.append("- Visual preview: page images are available in the UI, but line excerpts are not injected for this document type.")
+        active_lines.append(
+            "- Visual preview: page images are available in the UI, but line excerpts are not injected for this document type."
+        )
     if not active_document_ignored:
         preview_compaction_note = _build_canvas_preview_compaction_note(
             active_tool_names,
@@ -2031,14 +2071,17 @@ def _build_canvas_runtime_context_sections(
         active_lines.append(
             "- Auto-update rule: If your response generates content that directly replaces or substantially transforms this document, call rewrite_canvas_document immediately — do not ask the user for permission to save."
         )
-    if not active_document_ignored and int(active_document.get("page_count") or 0) > 1 and get_canvas_document_capabilities(active_document)["line_addressable"]:
+    if (
+        not active_document_ignored
+        and int(active_document.get("page_count") or 0) > 1
+        and get_canvas_document_capabilities(active_document)["line_addressable"]
+    ):
         active_lines.append(
             "- Multi-page guidance: if the task refers to a specific PDF-style page, call focus_canvas_page only when the document already exposes explicit '## Page N' markers in its text content."
         )
     if canvas_payload["visible_lines"] and not active_document_ignored:
-        canvas_content_unchanged = (
-            previous_canvas_content_hash
-            and previous_canvas_content_hash == canvas_payload.get("content_hash")
+        canvas_content_unchanged = previous_canvas_content_hash and previous_canvas_content_hash == canvas_payload.get(
+            "content_hash"
         )
         if canvas_content_unchanged:
             active_lines.append(
@@ -2061,8 +2104,12 @@ def _build_canvas_runtime_context_sections(
             "- These pinned ranges are auto-injected from prior viewport selections. Reuse them before asking to scroll or expand the same region again.",
         ]
         for viewport in viewport_payloads[:6]:
-            target_label = str(viewport.get("document_path") or viewport.get("title") or viewport.get("document_id") or "Canvas").strip()
-            page_label = f" page {int(viewport.get('page_number') or 0)}" if int(viewport.get("page_number") or 0) > 0 else ""
+            target_label = str(
+                viewport.get("document_path") or viewport.get("title") or viewport.get("document_id") or "Canvas"
+            ).strip()
+            page_label = (
+                f" page {int(viewport.get('page_number') or 0)}" if int(viewport.get("page_number") or 0) > 0 else ""
+            )
             viewport_lines.append(
                 f"- {target_label}{page_label} lines {int(viewport.get('start_line') or 0)}-{int(viewport.get('end_line') or 0)}"
                 + (
@@ -2183,9 +2230,7 @@ def _build_active_tools_context(active_tool_names: list[str]) -> list[str]:
     if not normalized_tool_names:
         return []
 
-    parallel_safe_tool_names = [
-        name for name in normalized_tool_names if name in PARALLEL_SAFE_READ_ONLY_TOOL_NAMES
-    ]
+    parallel_safe_tool_names = [name for name in normalized_tool_names if name in PARALLEL_SAFE_READ_ONLY_TOOL_NAMES]
 
     lines = [
         "## Active Tools This Turn",
@@ -2194,7 +2239,9 @@ def _build_active_tools_context(active_tool_names: list[str]) -> list[str]:
     ]
     if parallel_safe_tool_names:
         lines.append(f"- Parallel-safe read tools: {_format_tool_name_list(parallel_safe_tool_names)}")
-        lines.append("- Default batching behavior: if several parallel-safe reads are independent, group them into the same assistant turn instead of calling them one by one.")
+        lines.append(
+            "- Default batching behavior: if several parallel-safe reads are independent, group them into the same assistant turn instead of calling them one by one."
+        )
     else:
         lines.append("- Parallel-safe read tools: none")
     lines.append("")
@@ -2302,7 +2349,8 @@ def _build_current_time_context(now: datetime) -> str:
 
 
 def build_current_time_context(now: datetime | None = None) -> str:
-    return _build_current_time_context((now or datetime.now().astimezone()).astimezone())
+    utc_now = datetime.now(timezone.utc)
+    return _build_current_time_context((now or utc_now).astimezone())
 
 
 def _count_summary_messages(messages: list[dict] | None) -> int:
@@ -2383,9 +2431,13 @@ def _build_runtime_volatile_parts(
         )
         volatile_parts.append("- Goal: perform a deliberate second-pass review instead of a normal first-pass answer.")
         if normalized_double_check_query:
-            volatile_parts.append(f"- Focus scope: verify this specific claim or request first: {normalized_double_check_query}")
+            volatile_parts.append(
+                f"- Focus scope: verify this specific claim or request first: {normalized_double_check_query}"
+            )
         else:
-            volatile_parts.append("- Focus scope: scan the conversation history for the important unresolved claims or recommendations that still need verification.")
+            volatile_parts.append(
+                "- Focus scope: scan the conversation history for the important unresolved claims or recommendations that still need verification."
+            )
         volatile_parts.append(
             "- Avoid re-checking claims that were already double-checked earlier in this conversation unless new evidence, new user instructions, or unresolved uncertainty justify another pass."
         )
@@ -2412,7 +2464,9 @@ def _build_runtime_volatile_parts(
             if isinstance(tool_memory_payload["auto_injected_context"], str):
                 volatile_parts.append(tool_memory_payload["auto_injected_context"])
             else:
-                volatile_parts.append(json.dumps(tool_memory_payload["auto_injected_context"], ensure_ascii=False, indent=2))
+                volatile_parts.append(
+                    json.dumps(tool_memory_payload["auto_injected_context"], ensure_ascii=False, indent=2)
+                )
         volatile_parts.append("")
 
     clarification_payload = _build_clarification_response_payload(
@@ -2500,8 +2554,7 @@ def _build_runtime_dynamic_state_parts(
     )
     non_empty_scratchpad_sections = _iter_non_empty_scratchpad_sections(normalized_scratchpad_sections)
     conversation_memory_tools_enabled = any(
-        name in {"save_to_conversation_memory", "delete_conversation_memory_entry"}
-        for name in runtime_tool_names
+        name in {"save_to_conversation_memory", "delete_conversation_memory_entry"} for name in runtime_tool_names
     )
 
     if normalized_user_profile_context:
@@ -2512,13 +2565,15 @@ def _build_runtime_dynamic_state_parts(
         parts.append(normalized_user_profile_context)
         parts.append("")
 
-    if non_empty_scratchpad_sections or any(name in {"append_scratchpad", "replace_scratchpad"} for name in runtime_tool_names):
+    if non_empty_scratchpad_sections or any(
+        name in {"append_scratchpad", "replace_scratchpad"} for name in runtime_tool_names
+    ):
         parts.append("## Scratchpad (AI Persistent Memory)")
-        scratchpad_intro = (
-            "*This is the live persistent scratchpad for rare cross-conversation general memory. Keep it sparse. It is already visible in the prompt, so read it directly here first."
-        )
+        scratchpad_intro = "*This is the live persistent scratchpad for rare cross-conversation general memory. Keep it sparse. It is already visible in the prompt, so read it directly here first."
         if "read_scratchpad" in runtime_tool_names:
-            scratchpad_intro += " Use read_scratchpad only if you want the structured stored memory as a tool result before editing it."
+            scratchpad_intro += (
+                " Use read_scratchpad only if you want the structured stored memory as a tool result before editing it."
+            )
         scratchpad_intro += "*\n"
         parts.append(scratchpad_intro)
         if non_empty_scratchpad_sections:
@@ -2569,12 +2624,10 @@ def _build_runtime_static_parts(
 ) -> list[str]:
     preferences_text = (user_preferences or "").strip()
     persona_memory_tools_enabled = any(
-        name in {"save_to_persona_memory", "delete_persona_memory_entry"}
-        for name in runtime_tool_names
+        name in {"save_to_persona_memory", "delete_persona_memory_entry"} for name in runtime_tool_names
     )
     conversation_memory_tools_enabled = any(
-        name in {"save_to_conversation_memory", "delete_conversation_memory_entry"}
-        for name in runtime_tool_names
+        name in {"save_to_conversation_memory", "delete_conversation_memory_entry"} for name in runtime_tool_names
     )
 
     parts = [
@@ -2663,7 +2716,9 @@ def _build_runtime_static_parts(
         parts.append("## Workspace Sandbox")
         parts.append(f"- Root: {normalized_workspace_root}")
         parts.append("- Scope: All workspace file tools must stay inside this root.")
-        parts.append("- Safety: If a batch write tool returns needs_confirmation, wait for explicit user approval before re-running with confirm=true.\n")
+        parts.append(
+            "- Safety: If a batch write tool returns needs_confirmation, wait for explicit user approval before re-running with confirm=true.\n"
+        )
 
     return parts
 
@@ -2810,7 +2865,7 @@ def build_runtime_system_message(
             code_line_max_chars=canvas_prompt_code_line_max_chars,
             text_line_max_chars=canvas_prompt_text_line_max_chars,
         )
-    
+
     parts = _build_runtime_static_parts(
         user_preferences=user_preferences,
         runtime_tool_names=runtime_tool_names,
@@ -2978,7 +3033,9 @@ def prepend_runtime_context(
                 canvas_viewports=canvas_viewports,
                 max_lines=canvas_prompt_max_lines or CANVAS_PROMPT_MAX_LINES,
                 max_chars=canvas_prompt_max_chars,
-                max_tokens=canvas_prompt_max_tokens if canvas_prompt_max_tokens is not None else CANVAS_PROMPT_MAX_TOKENS,
+                max_tokens=canvas_prompt_max_tokens
+                if canvas_prompt_max_tokens is not None
+                else CANVAS_PROMPT_MAX_TOKENS,
                 code_line_max_chars=canvas_prompt_code_line_max_chars,
                 text_line_max_chars=canvas_prompt_text_line_max_chars,
             )
@@ -3018,20 +3075,10 @@ def prepend_runtime_context(
     if not injection_content:
         return [runtime_message, *messages]
 
-    insertion_index = len(messages)
-    for index in range(len(messages) - 1, -1, -1):
-        if str(messages[index].get("role") or "").strip() == "user":
-            insertion_index = index + 1
-            break
-
+    merged_content = (runtime_message.get("content") or "") + "\n\n" + injection_content
     return [
-        runtime_message,
-        *messages[:insertion_index],
-        {
-            "role": "system",
-            "content": injection_content,
-        },
-        *messages[insertion_index:],
+        {**runtime_message, "content": merged_content},
+        *messages,
     ]
 
 

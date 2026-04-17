@@ -21,7 +21,12 @@ from messages import (
     refresh_canvas_sections_in_context_injection,
 )
 from tests.support.app_harness import BaseAppRoutesTestCase
-from tool_registry import PARALLEL_SAFE_READ_ONLY_TOOL_NAMES, TOOL_SPEC_BY_NAME, get_openai_tool_specs, get_parallel_safe_tool_names
+from tool_registry import (
+    PARALLEL_SAFE_READ_ONLY_TOOL_NAMES,
+    TOOL_SPEC_BY_NAME,
+    get_openai_tool_specs,
+    get_parallel_safe_tool_names,
+)
 
 
 class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
@@ -99,9 +104,17 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         message = build_runtime_system_message(active_tool_names=["search_web", "fetch_url"])
 
         content = message["content"]
-        self.assertIn("If you can answer definitively from the current context and the task does not require current, external, or source-specific verification, do not call a tool.", content)
-        self.assertIn("Use web-research tools only when the task genuinely needs current facts, external verification, or exact source text.", content)
-        self.assertIn("If the answer is already available from the current context, do not search or fetch anything.", content)
+        self.assertIn(
+            "If you can answer definitively from the current context and the task does not require current, external, or source-specific verification, do not call a tool.",
+            content,
+        )
+        self.assertIn(
+            "Use web-research tools only when the task genuinely needs current facts, external verification, or exact source text.",
+            content,
+        )
+        self.assertIn(
+            "If the answer is already available from the current context, do not search or fetch anything.", content
+        )
 
     def test_runtime_system_message_uses_canonical_role_heading_without_excess_blank_lines(self):
         message = build_runtime_system_message(
@@ -368,13 +381,15 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         self.assertNotIn("print(SECRET_VALUE)", content)
 
     def test_build_tool_call_contract_mentions_parallel_and_dependent_tools(self):
-        contract = build_tool_call_contract([
-            "search_web",
-            "fetch_url",
-            "image_explain",
-            "search_canvas_document",
-            "search_tool_memory",
-        ])
+        contract = build_tool_call_contract(
+            [
+                "search_web",
+                "fetch_url",
+                "image_explain",
+                "search_canvas_document",
+                "search_tool_memory",
+            ]
+        )
 
         rules_text = "\n".join(contract["rules"])
         batching_guidance = contract["batching_guidance"]
@@ -385,11 +400,14 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         self.assertIn("search_knowledge_base and search_tool_memory can be batched", batching_guidance)
 
     def test_build_tool_call_contract_mentions_parallel_limit(self):
-        contract = build_tool_call_contract([
-            "search_web",
-            "fetch_url",
-            "read_file",
-        ], max_parallel_tools=2)
+        contract = build_tool_call_contract(
+            [
+                "search_web",
+                "fetch_url",
+                "read_file",
+            ],
+            max_parallel_tools=2,
+        )
 
         batching_guidance = contract["batching_guidance"]
         self.assertIn("cap is 2 per turn", batching_guidance)
@@ -578,12 +596,7 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         self.assertLess(refreshed.index("## Current Date and Time"), refreshed.index("## Conversation Summaries"))
 
     def test_refresh_canvas_sections_in_context_injection_inserts_new_canvas_sections_before_summaries(self):
-        context_injection = (
-            "## Current Date and Time\n"
-            "- Time: 21:40\n\n"
-            "## Conversation Summaries\n"
-            "- Earlier summary"
-        )
+        context_injection = "## Current Date and Time\n- Time: 21:40\n\n## Conversation Summaries\n- Earlier summary"
 
         refreshed = refresh_canvas_sections_in_context_injection(
             context_injection,
@@ -807,7 +820,10 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         tool_names = [entry["function"]["name"] for entry in tools]
-        self.assertEqual(tool_names, ["expand_canvas_document", "create_canvas_document", "rewrite_canvas_document", "batch_canvas_edits"])
+        self.assertEqual(
+            tool_names,
+            ["expand_canvas_document", "create_canvas_document", "rewrite_canvas_document", "batch_canvas_edits"],
+        )
 
     def test_openai_tool_specs_hide_canvas_edit_tools_without_canvas_document(self):
         tools = get_openai_tool_specs(
@@ -831,24 +847,21 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
             scratchpad_sections={"notes": "Persistent note"},
         )
 
+        self.assertEqual(len(messages), 2)
         self.assertEqual(messages[0]["role"], "system")
         self.assertNotIn("id", messages[0])
-        self.assertEqual(messages[2]["role"], "system")
-        self.assertNotIn("id", messages[2])
-
-        stable_content = messages[0]["content"]
-        content = messages[2]["content"]
-        self.assertNotIn("Current Date and Time", stable_content)
-        self.assertNotIn("Persistent note", stable_content)
-        self.assertIn("## Assistant Role", stable_content)
-        self.assertIn("Persistent note", content)
-        self.assertIn("Current Date and Time", content)
-        self.assertLess(content.index("## Scratchpad (AI Persistent Memory)"), content.index("## Current Date and Time"))
-        self.assertIn("> **AUTHORITATIVE CURRENT TIME:**", content)
-        self.assertNotIn("User Preferences", content)
-        self.assertIn("Date: ", content)
-        self.assertIn("Time: ", content)
         self.assertEqual(messages[1]["role"], "user")
+
+        merged_content = messages[0]["content"]
+        self.assertIn("## Assistant Role", merged_content)
+        self.assertIn("## Scratchpad (AI Persistent Memory)", merged_content)
+        self.assertIn("Persistent note", merged_content)
+        self.assertIn("## Current Date and Time", merged_content)
+        self.assertIn("> **AUTHORITATIVE CURRENT TIME:**", merged_content)
+        self.assertLess(
+            merged_content.index("## Scratchpad (AI Persistent Memory)"),
+            merged_content.index("## Current Date and Time"),
+        )
 
     def test_prepend_runtime_context_moves_dynamic_state_into_bottom_system_message(self):
         messages = prepend_runtime_context(
@@ -868,24 +881,27 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
             scratchpad_sections={"notes": "Persistent note"},
         )
 
-        static_content = messages[0]["content"]
-        dynamic_content = messages[2]["content"]
-        self.assertIn("## Assistant Role", static_content)
-        self.assertIn("## Conversation Memory Write Policy", static_content)
-        self.assertNotIn("## User Profile", static_content)
-        self.assertNotIn("## Scratchpad (AI Persistent Memory)", static_content)
-        self.assertNotIn("## Conversation Memory\n", static_content)
-
-        self.assertIn("## User Profile", dynamic_content)
-        self.assertIn("The user prefers concise answers.", dynamic_content)
-        self.assertIn("## Scratchpad (AI Persistent Memory)", dynamic_content)
-        self.assertIn("Persistent note", dynamic_content)
-        self.assertIn("## Conversation Memory", dynamic_content)
-        self.assertIn("Goal: Keep stable rules cached.", dynamic_content)
-        self.assertIn("## Current Date and Time", dynamic_content)
-        self.assertLess(dynamic_content.index("## User Profile"), dynamic_content.index("## Current Date and Time"))
-        self.assertLess(dynamic_content.index("## Scratchpad (AI Persistent Memory)"), dynamic_content.index("## Current Date and Time"))
-        self.assertLess(dynamic_content.index("## Conversation Memory"), dynamic_content.index("## Current Date and Time"))
+        self.assertEqual(len(messages), 2)
+        merged_content = messages[0]["content"]
+        self.assertIn("## Assistant Role", merged_content)
+        self.assertIn("## Conversation Memory Write Policy", merged_content)
+        self.assertIn("## User Profile", merged_content)
+        self.assertIn("The user prefers concise answers.", merged_content)
+        self.assertIn("## Scratchpad (AI Persistent Memory)", merged_content)
+        self.assertIn("Persistent note", merged_content)
+        self.assertIn("## Conversation Memory", merged_content)
+        self.assertIn("Goal: Keep stable rules cached.", merged_content)
+        self.assertIn("## Current Date and Time", merged_content)
+        self.assertLess(merged_content.index("## User Profile"), merged_content.index("## Current Date and Time"))
+        self.assertLess(
+            merged_content.index("## Scratchpad (AI Persistent Memory)"),
+            merged_content.index("## Current Date and Time"),
+        )
+        self.assertLess(
+            merged_content.index("## Conversation Memory"), merged_content.index("## Current Date and Time")
+        )
+        self.assertEqual(messages[1]["role"], "user")
+        self.assertEqual(messages[1]["content"], "Hello")
 
     def test_prepend_runtime_context_places_datetime_before_conversation_summaries(self):
         messages = prepend_runtime_context(
@@ -897,15 +913,15 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
             active_tool_names=[],
         )
 
+        self.assertEqual(len(messages), 3)
         self.assertEqual(messages[0]["role"], "system")
-        self.assertEqual(messages[3]["role"], "system")
-        content = messages[3]["content"]
-        self.assertIn("## Conversation Summaries", content)
-        self.assertIn("authoritative compressed history for earlier deleted turns", content)
+        self.assertEqual(messages[1]["role"], "summary")
+        self.assertEqual(messages[2]["role"], "user")
+        content = messages[0]["content"]
         self.assertIn("## Current Date and Time", content)
-        self.assertTrue(content.startswith("## Current Date and Time"))
+        self.assertIn("## Conversation Summaries", content)
         self.assertLess(content.index("## Current Date and Time"), content.index("## Conversation Summaries"))
-        self.assertNotIn("id", messages[3])
+        self.assertNotIn("id", messages[0])
 
     def test_runtime_system_message_places_datetime_before_tool_history(self):
         message = build_runtime_system_message(
@@ -959,7 +975,10 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
             self.assertTrue(str(prompt.get("guidance") or "").strip())
 
         self.assertIn("current information, external verification", TOOL_SPEC_BY_NAME["search_web"]["description"])
-        self.assertIn("If the answer is already available from the current context", TOOL_SPEC_BY_NAME["search_web"]["prompt"]["guidance"])
+        self.assertIn(
+            "If the answer is already available from the current context",
+            TOOL_SPEC_BY_NAME["search_web"]["prompt"]["guidance"],
+        )
         self.assertFalse(TOOL_SPEC_BY_NAME["search_web"]["parameters"].get("additionalProperties", True))
         self.assertIn("Do not pass max_results", TOOL_SPEC_BY_NAME["search_web"]["prompt"]["guidance"])
         self.assertIn("current news coverage", TOOL_SPEC_BY_NAME["search_news_ddgs"]["description"])
