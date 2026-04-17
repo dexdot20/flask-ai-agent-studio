@@ -1569,6 +1569,10 @@ def _build_canvas_prompt_payload(
         if isinstance(viewport, dict) and str(viewport.get("document_id") or "").strip() not in ignored_document_ids
     ]
 
+    # If the active document has always_expanded set, bypass the line/char budget
+    # so the AI always receives the full content regardless of size limits.
+    active_document_always_expanded = active_document.get("always_expanded") is True
+
     content = str(active_document.get("content") or "")
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
     all_lines = content.split("\n") if content else []
@@ -1624,9 +1628,9 @@ def _build_canvas_prompt_payload(
 
     full_preview_lines = _build_full_canvas_preview_lines_if_fit(
         all_lines,
-        max_lines=max_lines,
-        max_chars=max_chars,
-        max_tokens=max_tokens,
+        max_lines=max_lines if not active_document_always_expanded else len(all_lines) + 1,
+        max_chars=max_chars if not active_document_always_expanded else 2_000_000_000,
+        max_tokens=max_tokens if not active_document_always_expanded else 0,
     )
     if full_preview_lines is not None:
         visible_lines = full_preview_lines
@@ -1635,14 +1639,14 @@ def _build_canvas_prompt_payload(
             preview_line, line_was_clipped = _clip_canvas_preview_line(
                 line,
                 format_name=line_format,
-                code_line_max_chars=code_line_max_chars,
-                text_line_max_chars=text_line_max_chars,
+                code_line_max_chars=code_line_max_chars if not active_document_always_expanded else None,
+                text_line_max_chars=text_line_max_chars if not active_document_always_expanded else None,
             )
             numbered_line = f"{index}: {preview_line}"
             extra_chars = len(numbered_line) + (1 if visible_lines else 0)
-            if visible_lines and (len(visible_lines) >= max_lines or visible_char_count + extra_chars > max_chars):
+            if not active_document_always_expanded and visible_lines and (len(visible_lines) >= max_lines or visible_char_count + extra_chars > max_chars):
                 break
-            if not visible_lines and extra_chars > max_chars:
+            if not active_document_always_expanded and not visible_lines and extra_chars > max_chars:
                 visible_lines.append(numbered_line[:max_chars])
                 visible_char_count = len(visible_lines[0])
                 if line_was_clipped:

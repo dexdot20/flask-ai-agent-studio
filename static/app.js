@@ -129,6 +129,9 @@ const canvasSubtitle = document.getElementById("canvas-subtitle");
 const canvasStatus = document.getElementById("canvas-status");
 const canvasHint = document.getElementById("canvas-hint");
 const canvasDiffEl = document.getElementById("canvas-diff");
+const canvasDiffModalEl = document.getElementById("canvas-diff-modal");
+const canvasDiffModalBefore = document.getElementById("canvas-diff-modal-before");
+const canvasDiffModalAfter = document.getElementById("canvas-diff-modal-after");
 const canvasEmptyState = document.getElementById("canvas-empty-state");
 const canvasEditorEl = document.getElementById("canvas-editor");
 const canvasDocumentEl = document.getElementById("canvas-document");
@@ -4506,6 +4509,35 @@ function buildCanvasDiff(previousContent, nextContent) {
   };
 }
 
+function openDiffFullscreen(diff) {
+  if (!canvasDiffModalEl || !canvasDiffModalBefore || !canvasDiffModalAfter || !diff) {
+    return;
+  }
+  // Reconstruct before/after full text from hunk lines
+  const beforeLines = [];
+  const afterLines = [];
+  for (const hunk of (diff.hunks || [])) {
+    for (const line of (hunk.lines || [])) {
+      if (line.kind === "removed" || line.kind === "context") {
+        beforeLines.push(line.text || "");
+      }
+      if (line.kind === "added" || line.kind === "context") {
+        afterLines.push(line.text || "");
+      }
+    }
+  }
+  canvasDiffModalBefore.textContent = beforeLines.join("\n");
+  canvasDiffModalAfter.textContent = afterLines.join("\n");
+  canvasDiffModalEl.hidden = false;
+  canvasDiffModalEl.focus?.();
+}
+
+function closeDiffFullscreen() {
+  if (canvasDiffModalEl) {
+    canvasDiffModalEl.hidden = true;
+  }
+}
+
 function renderCanvasDiffPreview(activeDocument) {
   if (!canvasDiffEl) {
     return;
@@ -4542,6 +4574,7 @@ function renderCanvasDiffPreview(activeDocument) {
         `<div class="canvas-diff__meta">${escHtml(metaParts.join(" · "))}</div>` +
       `</div>` +
       `<div class="canvas-diff__actions">` +
+        `<button class="canvas-diff__expand" type="button" data-action="fullscreen-canvas-diff" title="View side by side fullscreen">⤢ Side by side</button>` +
         `<button class="canvas-diff__close" type="button" data-action="dismiss-canvas-diff">Hide diff</button>` +
       `</div>` +
     `</div>` +
@@ -4583,6 +4616,10 @@ function renderCanvasDiffPreview(activeDocument) {
   canvasDiffEl.querySelector('[data-action="dismiss-canvas-diff"]')?.addEventListener("click", () => {
     pendingCanvasDiff = null;
     renderCanvasDiffPreview(getActiveCanvasDocument());
+  });
+
+  canvasDiffEl.querySelector('[data-action="fullscreen-canvas-diff"]')?.addEventListener("click", () => {
+    openDiffFullscreen(pendingCanvasDiff?.diff);
   });
 }
 
@@ -5859,6 +5896,27 @@ function setPendingDocumentCanvasOpen(files) {
   };
 }
 
+async function toggleCanvasAlwaysExpanded(activeDocument) {
+  if (!currentConvId || !activeDocument) return;
+  const next = !activeDocument.always_expanded;
+  try {
+    const response = await fetch(`/api/conversations/${currentConvId}/canvas`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document_id: activeDocument.id, always_expanded: next }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "Update failed.");
+    history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
+    activeCanvasDocumentId = String(payload.active_document_id || activeDocument.id || "").trim() || activeCanvasDocumentId;
+    renderConversationHistory({ preserveScroll: true });
+    renderCanvasPanel();
+    setCanvasStatus(next ? "Always expanded enabled — AI will receive the full document." : "Always expanded disabled.", "success");
+  } catch (err) {
+    setCanvasStatus(err.message || "Could not update always_expanded.", "danger");
+  }
+}
+
 function renderCanvasMetaBar(renderState) {
   if (!canvasMetaBar || !canvasMetaChips) {
     return;
@@ -5908,6 +5966,23 @@ function renderCanvasMetaBar(renderState) {
     const titleAttr = chip.title ? ` title="${escHtml(chip.title)}"` : "";
     return `<span class="${chip.className}"${titleAttr}>${escHtml(chip.label)}</span>`;
   }).join("");
+
+  // Always-expanded toggle
+  const isAlwaysExpanded = Boolean(activeDocument.always_expanded);
+  let expandToggleEl = canvasMetaBar.querySelector(".canvas-meta-expand-toggle");
+  if (!expandToggleEl) {
+    expandToggleEl = globalThis.document.createElement("button");
+    expandToggleEl.className = "canvas-meta-expand-toggle";
+    expandToggleEl.type = "button";
+    expandToggleEl.addEventListener("click", () => toggleCanvasAlwaysExpanded(activeDocument));
+    canvasMetaBar.appendChild(expandToggleEl);
+  }
+  expandToggleEl.textContent = isAlwaysExpanded ? "⊛ Always expanded" : "⊙ Always expanded";
+  expandToggleEl.title = isAlwaysExpanded
+    ? "AI always receives the full document. Click to disable."
+    : "Enable so the AI always receives the full document content without truncation.";
+  expandToggleEl.classList.toggle("canvas-meta-expand-toggle--on", isAlwaysExpanded);
+
   canvasMetaBar.hidden = false;
 
   if (canvasCopyRefBtn) {
@@ -10895,6 +10970,13 @@ if (canvasCancelBtn) {
 if (mobileCanvasBtn) {
   mobileCanvasBtn.addEventListener("click", () => openCanvas(mobileToolsBtn || mobileCanvasBtn, { deferPanelRender: false }));
 }
+document.getElementById("canvas-diff-modal-close")?.addEventListener("click", closeDiffFullscreen);
+canvasDiffModalEl?.addEventListener("click", (e) => {
+  if (e.target === canvasDiffModalEl) closeDiffFullscreen();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && canvasDiffModalEl && !canvasDiffModalEl.hidden) closeDiffFullscreen();
+});
 if (canvasToggleBtn) {
   canvasToggleBtn.addEventListener("click", () => {
     if (isCanvasOpen()) {

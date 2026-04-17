@@ -247,7 +247,7 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
 
         content = message["content"]
         self.assertIn("## Clarification Response", content)
-        self.assertIn("The clarification answers below capture the answered rounds", content)
+        self.assertIn("do NOT save them with save_to_conversation_memory", content)
         self.assertIn("Accept these answers at face value", content)
         self.assertIn("Round 1", content)
         self.assertIn("- Reklam butceniz ne kadar? → Gunluk 200-300 TL", content)

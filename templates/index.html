@@ -41,8 +41,9 @@
         <option value="">Default persona</option>
       </select>
     </div>
-    <button class="btn-ghost btn-parameters" id="params-toggle-btn" type="button" aria-controls="params-panel" aria-expanded="false" title="Set parameters for this conversation">
-      Set Parameters
+    <button class="btn-ghost btn-canvas-toggle" id="canvas-toggle-btn" type="button" aria-controls="canvas-panel" aria-expanded="false" title="Open Canvas panel">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+      Canvas
     </button>
     <button class="btn-ghost mobile-tools-toggle" id="mobile-tools-btn" type="button" aria-controls="mobile-tools-panel" aria-expanded="false" aria-haspopup="menu" aria-label="Open panels and tools" title="Open panels and tools">
       <span aria-hidden="true">⋯</span>
@@ -641,6 +642,24 @@
       </aside>
       <div class="canvas-workspace-main">
         <section id="canvas-diff" class="canvas-diff" hidden></section>
+        <div id="canvas-diff-modal" class="canvas-diff-modal" hidden role="dialog" aria-modal="true" aria-labelledby="canvas-diff-modal-title">
+          <div class="canvas-diff-modal__inner">
+            <div class="canvas-diff-modal__header">
+              <span id="canvas-diff-modal-title" class="canvas-diff-modal__title">Diff — side by side</span>
+              <button id="canvas-diff-modal-close" class="canvas-diff-modal__close" type="button" title="Close fullscreen diff">Close</button>
+            </div>
+            <div class="canvas-diff-modal__body">
+              <div class="canvas-diff-modal__pane canvas-diff-modal__pane--removed">
+                <div class="canvas-diff-modal__pane-header">Before</div>
+                <pre id="canvas-diff-modal-before" class="canvas-diff-modal__pane-content"></pre>
+              </div>
+              <div class="canvas-diff-modal__pane canvas-diff-modal__pane--added">
+                <div class="canvas-diff-modal__pane-header">After</div>
+                <pre id="canvas-diff-modal-after" class="canvas-diff-modal__pane-content"></pre>
+              </div>
+            </div>
+          </div>
+        </div>
         <div id="canvas-empty-state" class="canvas-empty-state">
           <h3>No canvas document yet</h3>
           <p>Ask the assistant to draft something substantial, then continue refining it with line-based edits.</p>

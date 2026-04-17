@@ -19,6 +19,7 @@ from canvas_service import (
     find_latest_canvas_state,
     get_canvas_runtime_active_document_id,
     get_canvas_runtime_documents,
+    normalize_canvas_document,
     rewrite_canvas_document,
 )
 from conversation_cleanup_service import (
@@ -1290,8 +1291,9 @@ def register_conversation_routes(app) -> None:
         title = data.get("title")
         format_name = data.get("format")
         language = data.get("language")
+        always_expanded = data.get("always_expanded")  # bool or None
 
-        if content is None and title is None and format_name is None and language is None:
+        if content is None and title is None and format_name is None and language is None and always_expanded is None:
             return jsonify({"error": "Provide at least one canvas field to update."}), 400
 
         conversation, messages = _load_conversation_payload(conv_id)
@@ -1311,23 +1313,50 @@ def register_conversation_routes(app) -> None:
             active_document = find_latest_canvas_document(messages, document_id=document_id, document_path=document_path)
             if not active_document:
                 return jsonify({"error": "Canvas document not found."}), 404
-            result = rewrite_canvas_document(
-                runtime_state,
-                content=active_document.get("content") if content is None else str(content),
-                document_id=document_id,
-                document_path=document_path,
-                title=title,
-                format_name=format_name,
-                language_name=language,
-            )
+
+            # always_expanded-only update: patch the document in-place without a full rewrite
+            if always_expanded is not None and content is None and title is None and format_name is None and language is None:
+                patched_doc = dict(active_document)
+                if always_expanded:
+                    patched_doc["always_expanded"] = True
+                else:
+                    patched_doc.pop("always_expanded", None)
+                patched_doc = normalize_canvas_document(patched_doc)
+                if not patched_doc:
+                    return jsonify({"error": "Canvas document normalisation failed."}), 400
+                next_documents = [patched_doc if d.get("id") == patched_doc["id"] else d for d in current_documents]
+                result = patched_doc
+            else:
+                result = rewrite_canvas_document(
+                    runtime_state,
+                    content=active_document.get("content") if content is None else str(content),
+                    document_id=document_id,
+                    document_path=document_path,
+                    title=title,
+                    format_name=format_name,
+                    language_name=language,
+                )
+                if always_expanded is not None:
+                    if always_expanded:
+                        result["always_expanded"] = True
+                    else:
+                        result.pop("always_expanded", None)
+                next_documents = get_canvas_runtime_documents(runtime_state)
+                # Propagate always_expanded change into the runtime documents list too
+                if always_expanded is not None:
+                    next_documents = [
+                        {**d, "always_expanded": True} if d.get("id") == result.get("id") and always_expanded
+                        else {k: v for k, v in d.items() if not (d.get("id") == result.get("id") and k == "always_expanded" and not always_expanded)}
+                        for d in next_documents
+                    ]
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
 
-        next_documents = get_canvas_runtime_documents(runtime_state)
+        active_document_id_out = result.get("id") or get_canvas_runtime_active_document_id(runtime_state) or latest_canvas_state.get("active_document_id")
         metadata = serialize_message_metadata(
             {
                 "canvas_documents": next_documents,
-                "active_document_id": get_canvas_runtime_active_document_id(runtime_state),
+                "active_document_id": active_document_id_out,
                 "canvas_viewports": runtime_state.get("viewports") if isinstance(runtime_state.get("viewports"), dict) else {},
                 "canvas_cleared": not next_documents,
             }
@@ -1354,7 +1383,7 @@ def register_conversation_routes(app) -> None:
             {
                 "document": result,
                 "documents": next_documents,
-                "active_document_id": result.get("id"),
+                "active_document_id": active_document_id_out,
                 "messages": updated_messages,
             }
         )

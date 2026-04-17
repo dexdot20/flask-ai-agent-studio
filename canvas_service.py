@@ -977,6 +977,7 @@ def normalize_canvas_document(value, *, fallback_title: str = "Canvas") -> dict 
     ignored_reason = _normalize_canvas_ignore_reason(value.get("ignored_reason"))
     if ignored_reason and not ignored and not ignored_explicit:
         ignored = True
+    always_expanded = _normalize_canvas_bool(value.get("always_expanded")) or False
     imports = _normalize_canvas_string_list(value.get("imports"))
     exports = _normalize_canvas_string_list(value.get("exports"))
     symbols = _normalize_canvas_string_list(value.get("symbols"))
@@ -1070,6 +1071,8 @@ def normalize_canvas_document(value, *, fallback_title: str = "Canvas") -> dict 
         cleaned["ignored"] = True
         if ignored_reason:
             cleaned["ignored_reason"] = ignored_reason
+    if always_expanded:
+        cleaned["always_expanded"] = True
 
     return cleaned
 
