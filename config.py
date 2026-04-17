@@ -81,31 +81,48 @@ def is_login_pin_configured() -> bool:
     return bool(get_login_pin_hash())
 
 
-def _parse_int_env(name: str, default: int) -> int:
-    raw_value = os.getenv(name)
-    if raw_value in (None, ""):
+def _coerce_bool(value, default: bool) -> bool:
+    if value in (None, ""):
         return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _coerce_int(value, default: int, minimum: int | None = None, maximum: int | None = None) -> int:
     try:
-        return int(raw_value)
+        normalized = int(value)
     except (TypeError, ValueError):
-        return default
+        normalized = int(default)
+    if minimum is not None:
+        normalized = max(int(minimum), normalized)
+    if maximum is not None:
+        normalized = min(int(maximum), normalized)
+    return normalized
+
+
+def _coerce_float(value, default: float, minimum: float | None = None, maximum: float | None = None) -> float:
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        normalized = float(default)
+    if minimum is not None:
+        normalized = max(float(minimum), normalized)
+    if maximum is not None:
+        normalized = min(float(maximum), normalized)
+    return normalized
+
+
+def _parse_int_env(name: str, default: int) -> int:
+    return _coerce_int(os.getenv(name), default)
 
 
 def _parse_bool_env(name: str, default: bool) -> bool:
-    raw_value = os.getenv(name)
-    if raw_value in (None, ""):
-        return default
-    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
+    return _coerce_bool(os.getenv(name), default)
 
 
 def _parse_float_env(name: str, default: float) -> float:
-    raw_value = os.getenv(name)
-    if raw_value in (None, ""):
-        return default
-    try:
-        return float(raw_value)
-    except (TypeError, ValueError):
-        return default
+    return _coerce_float(os.getenv(name), default)
 
 
 AGENT_TRACE_LOG_ENABLED = _parse_bool_env("AGENT_TRACE_LOG_ENABLED", True)
@@ -440,27 +457,15 @@ RAG_DEFAULT_CONTEXT_SIZE_PRESET = _nearest_preset_name(
 
 
 def _runtime_setting_bool(value, default: bool) -> bool:
-    if value in (None, ""):
-        return default
-    if isinstance(value, bool):
-        return value
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+    return _coerce_bool(value, default)
 
 
 def _runtime_setting_int(value, default: int, minimum: int, maximum: int) -> int:
-    try:
-        normalized = int(value)
-    except (TypeError, ValueError):
-        normalized = int(default)
-    return max(minimum, min(maximum, normalized))
+    return _coerce_int(value, default, minimum, maximum)
 
 
 def _runtime_setting_float(value, default: float, minimum: float, maximum: float) -> float:
-    try:
-        normalized = float(value)
-    except (TypeError, ValueError):
-        normalized = float(default)
-    return max(minimum, min(maximum, normalized))
+    return _coerce_float(value, default, minimum, maximum)
 
 DEFAULT_SETTINGS = {
     "user_preferences": "",

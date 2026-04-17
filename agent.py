@@ -15,10 +15,7 @@ import threading
 import time
 from typing import Any
 
-try:
-    from json_repair import repair_json as _repair_json
-except ImportError:  # pragma: no cover
-    _repair_json = None
+from json_repair import repair_json as _repair_json
 import re
 import string
 from logging.handlers import RotatingFileHandler
@@ -139,6 +136,11 @@ from messages import (
     refresh_canvas_sections_in_context_injection,
 )
 from image_service import answer_image_question
+from json_parsing_utils import (
+    close_unbalanced_json_like_fragment,
+    extract_first_balanced_json_like_fragment,
+    parse_json_like_text as parse_json_like_text_shared,
+)
 from model_registry import (
     DEEPSEEK_PROVIDER,
     apply_chat_parameter_overrides,
@@ -301,29 +303,13 @@ SYSTEM_BREAKDOWN_SECTION_KEY_BY_HEADING = {
 SYSTEM_BREAKDOWN_REDUCTION_ORDER = MESSAGE_USAGE_BREAKDOWN_REDUCTION_ORDER
 _AGENT_TRACE_LOGGER = None
 _AGENT_TRACE_LOGGER_LOCK = threading.Lock()
-_DEFAULT_PROVIDER_CLIENT = None
-_DEFAULT_PROVIDER_CLIENT_LOCK = threading.Lock()
 
 
 def _get_default_deepseek_client():
-    global _DEFAULT_PROVIDER_CLIENT
-    if _DEFAULT_PROVIDER_CLIENT is not None:
-        return _DEFAULT_PROVIDER_CLIENT
-
-    with _DEFAULT_PROVIDER_CLIENT_LOCK:
-        if _DEFAULT_PROVIDER_CLIENT is None:
-            _DEFAULT_PROVIDER_CLIENT = get_provider_client(DEEPSEEK_PROVIDER)
-    return _DEFAULT_PROVIDER_CLIENT
+    return get_provider_client(DEEPSEEK_PROVIDER)
 
 
-class _LazyClientProxy:
-    """Compatibility proxy that defers default client creation until first use."""
-
-    def __getattr__(self, name: str):
-        return getattr(_get_default_deepseek_client(), name)
-
-
-client = _LazyClientProxy()
+client = _get_default_deepseek_client()
 
 
 def _get_agent_trace_logger():
@@ -3424,29 +3410,11 @@ def _read_api_field(value, key: str, default=None):
 
 
 def _parse_json_like_text(text: str):
-    raw_text = str(text or "").strip()
-    if not raw_text:
-        return None
-
-    try:
-        return json.loads(raw_text)
-    except Exception:
-        pass
-
-    try:
-        return ast.literal_eval(raw_text)
-    except Exception:
-        pass
-
-    if _repair_json is not None and raw_text.lstrip().startswith("{"):
-        try:
-            repaired = _repair_json(raw_text, return_objects=True, ensure_ascii=False)
-            if isinstance(repaired, (dict, list)):
-                return repaired
-        except Exception:
-            pass
-
-    return None
+    return parse_json_like_text_shared(
+        text,
+        repair_json_func=_repair_json,
+        repair_objects_only=True,
+    )
 
 
 def _strip_tool_argument_code_fence(text: str) -> str | None:
@@ -3472,91 +3440,11 @@ def _strip_tool_argument_language_label(text: str) -> str | None:
 
 
 def _extract_first_balanced_json_like_object(text: str) -> str | None:
-    raw_text = str(text or "")
-    start_index = raw_text.find("{")
-    if start_index < 0:
-        return None
-
-    depth = 0
-    quote_char = ""
-    escape_next = False
-
-    for index in range(start_index, len(raw_text)):
-        char = raw_text[index]
-        if quote_char:
-            if escape_next:
-                escape_next = False
-                continue
-            if char == "\\":
-                escape_next = True
-                continue
-            if char == quote_char:
-                quote_char = ""
-            continue
-
-        if char in {'"', "'"}:
-            quote_char = char
-            continue
-        if char == "{":
-            depth += 1
-            continue
-        if char == "}":
-            depth -= 1
-            if depth == 0:
-                return raw_text[start_index : index + 1]
-
-    return None
+    return extract_first_balanced_json_like_fragment(text, allowed_openers="{")
 
 
 def _close_unbalanced_json_like_object(text: str) -> str | None:
-    raw_text = str(text or "").strip()
-    if not raw_text:
-        return None
-
-    object_text = raw_text
-    if not object_text.startswith("{"):
-        brace_index = object_text.find("{")
-        if brace_index < 0:
-            return None
-        object_text = object_text[brace_index:].strip()
-
-    stack: list[str] = []
-    quote_char = ""
-    escape_next = False
-
-    for char in object_text:
-        if quote_char:
-            if escape_next:
-                escape_next = False
-                continue
-            if char == "\\":
-                escape_next = True
-                continue
-            if char == quote_char:
-                quote_char = ""
-            continue
-
-        if char in {'"', "'"}:
-            quote_char = char
-            continue
-        if char in "[{":
-            stack.append(char)
-            continue
-        if char == "]":
-            if not stack or stack[-1] != "[":
-                return None
-            stack.pop()
-            continue
-        if char == "}":
-            if not stack or stack[-1] != "{":
-                return None
-            stack.pop()
-
-    if quote_char or escape_next or not stack:
-        return None
-
-    closing_suffix = "".join("}" if opener == "{" else "]" for opener in reversed(stack))
-    return f"{object_text}{closing_suffix}"
+    return close_unbalanced_json_like_fragment(text, allowed_openers="{")
 
 
 def _iter_tool_argument_text_candidates(arguments_text: str):

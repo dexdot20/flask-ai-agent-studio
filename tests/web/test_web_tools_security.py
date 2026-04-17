@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import socket
+from unittest.mock import Mock
 
 import pytest
 
@@ -66,11 +67,7 @@ def test_search_web_tool_uses_cached_results_without_hitting_provider(monkeypatc
     monkeypatch.setattr(web_tools, "cache_get", lambda key: cached_rows)
     monkeypatch.setattr(web_tools, "cache_set", lambda *args, **kwargs: None)
 
-    class ShouldNotBeCalled:
-        def __init__(self, *args, **kwargs):
-            raise AssertionError("DDGS should not be created on cache hit")
-
-    monkeypatch.setattr(web_tools, "DDGS", ShouldNotBeCalled)
+    monkeypatch.setattr(web_tools, "DDGS", Mock(side_effect=AssertionError("DDGS should not be created on cache hit")))
 
     results = web_tools.search_web_tool(["cached query"])
 
@@ -97,11 +94,7 @@ def test_search_web_tool_deduplicates_urls_across_cached_queries(monkeypatch):
     monkeypatch.setattr(web_tools, "cache_get", fake_cache_get)
     monkeypatch.setattr(web_tools, "cache_set", lambda *args, **kwargs: None)
 
-    class ShouldNotBeCalled:
-        def __init__(self, *args, **kwargs):
-            raise AssertionError("DDGS should not run")
-
-    monkeypatch.setattr(web_tools, "DDGS", ShouldNotBeCalled)
+    monkeypatch.setattr(web_tools, "DDGS", Mock(side_effect=AssertionError("DDGS should not run")))
 
     results = web_tools.search_web_tool(["first", "second"])
 

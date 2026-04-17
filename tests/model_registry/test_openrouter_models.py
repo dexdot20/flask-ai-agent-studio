@@ -10,6 +10,7 @@ from db import save_app_settings
 from model_registry import get_operation_model, get_operation_model_candidates, resolve_model_target
 from proxy_settings import PROXY_OPERATION_FETCH_URL
 from tests.support.app_harness import BaseAppRoutesTestCase
+from tests.support.mocks import CallbackHttpClient, CallbackOpenAI, StaticStream
 
 
 class TestOpenRouterModelRegistry(BaseAppRoutesTestCase):
@@ -305,7 +306,12 @@ class TestOpenRouterModelRegistry(BaseAppRoutesTestCase):
 
         merged = model_registry.apply_model_target_request_options(request_kwargs, target)
 
-        self.assertEqual(merged["messages"][0]["content"], request_kwargs["messages"][0]["content"])
+        first_content = merged["messages"][0]["content"]
+        if isinstance(first_content, list):
+            self.assertEqual(first_content[0].get("type"), "text")
+            self.assertIn("Reference context.", first_content[0].get("text", ""))
+        else:
+            self.assertEqual(first_content, request_kwargs["messages"][0]["content"])
         self.assertEqual(merged["extra_body"], {"provider": {"sort": "throughput"}})
 
     def test_apply_model_target_request_options_adds_anthropic_cache_breakpoint_for_long_prefix(self):
@@ -481,28 +487,18 @@ class TestOpenRouterModelRegistry(BaseAppRoutesTestCase):
     def test_openrouter_client_uses_proxy_candidates_before_direct_fallback(self):
         attempts = []
 
-        class FakeHttpClient:
-            def __init__(self, *args, **kwargs):
-                self.proxy = kwargs.get("proxy")
-                self.trust_env = kwargs.get("trust_env")
+        def openai_factory(**kwargs):
+            http_client = kwargs.get("http_client")
 
-            def close(self):
-                return None
-
-        class FakeOpenAI:
-            def __init__(self, **kwargs):
-                self.http_client = kwargs.get("http_client")
-                self.chat = SimpleNamespace(completions=self)
-
-            def create(self, *args, **kwargs):
-                proxy = self.http_client.proxy if self.http_client else None
+            def on_create(*args, **inner_kwargs):
+                del args, inner_kwargs
+                proxy = http_client.proxy if http_client else None
                 attempts.append(proxy)
                 if proxy:
                     raise RuntimeError("proxy failed")
                 return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))])
 
-            def close(self):
-                return None
+            return CallbackOpenAI(http_client=http_client, on_create=on_create)
 
         settings = {
             "custom_models": [
@@ -523,8 +519,8 @@ class TestOpenRouterModelRegistry(BaseAppRoutesTestCase):
         try:
             with patch("web_tools.get_proxy_candidates_for_operation", return_value=["http://proxy.example:8080", None]), patch(
                 "model_registry.httpx.Client",
-                side_effect=lambda *args, **kwargs: FakeHttpClient(*args, **kwargs),
-            ), patch("model_registry.OpenAI", side_effect=lambda **kwargs: FakeOpenAI(**kwargs)):
+                side_effect=lambda *args, **kwargs: CallbackHttpClient(*args, **kwargs),
+            ), patch("model_registry.OpenAI", side_effect=openai_factory):
                 target = resolve_model_target("openrouter:anthropic/claude-sonnet-4.5", settings)
                 response = target["client"].chat.completions.create(model=target["api_model"], messages=[])
         finally:
@@ -538,37 +534,26 @@ class TestOpenRouterModelRegistry(BaseAppRoutesTestCase):
 
         close_events = []
 
-        class FakeHttpClient:
-            def __init__(self, *args, **kwargs):
-                self.proxy = kwargs.get("proxy")
+        def http_client_factory(*args, **kwargs):
+            del args
+            return CallbackHttpClient(**kwargs, on_close=lambda: close_events.append("http"))
 
-            def close(self):
-                close_events.append("http")
-
-        class FakeStream:
-            def __iter__(self):
-                yield SimpleNamespace(choices=[])
-
-            def close(self):
-                close_events.append("stream")
-
-        class FakeOpenAI:
-            def __init__(self, **kwargs):
-                self.http_client = kwargs.get("http_client")
-                self.chat = SimpleNamespace(completions=self)
-
-            def create(self, *args, **kwargs):
-                return FakeStream()
-
-            def close(self):
-                close_events.append("client")
+        def openai_factory(**kwargs):
+            return CallbackOpenAI(
+                http_client=kwargs.get("http_client"),
+                on_create=lambda *args, **inner_kwargs: StaticStream(
+                    [SimpleNamespace(choices=[])],
+                    on_close=lambda: close_events.append("stream"),
+                ),
+                on_close=lambda: close_events.append("client"),
+            )
 
         model_registry.get_provider_client.cache_clear()
         try:
             with patch("web_tools.get_proxy_candidates_for_operation", return_value=[None]), patch(
                 "model_registry.httpx.Client",
-                side_effect=lambda *args, **kwargs: FakeHttpClient(*args, **kwargs),
-            ), patch("model_registry.OpenAI", side_effect=lambda **kwargs: FakeOpenAI(**kwargs)):
+                side_effect=http_client_factory,
+            ), patch("model_registry.OpenAI", side_effect=openai_factory):
                 client = model_registry.get_provider_client(model_registry.OPENROUTER_PROVIDER)
                 response = client.chat.completions.create(model="anthropic/claude-sonnet-4.5", messages=[], stream=True)
                 self.assertEqual(close_events, [])
@@ -585,13 +570,6 @@ class TestOpenRouterModelRegistry(BaseAppRoutesTestCase):
 
         attempts = []
         close_events = []
-
-        class FakeHttpClient:
-            def __init__(self, *args, **kwargs):
-                self.proxy = kwargs.get("proxy")
-
-            def close(self):
-                close_events.append(f"http:{self.proxy or 'direct'}")
 
         class BrokenStream:
             def __init__(self, label):
@@ -611,28 +589,40 @@ class TestOpenRouterModelRegistry(BaseAppRoutesTestCase):
             def close(self):
                 close_events.append("stream:direct")
 
-        class FakeOpenAI:
-            def __init__(self, **kwargs):
-                self.http_client = kwargs.get("http_client")
-                self.chat = SimpleNamespace(completions=self)
 
-            def create(self, *args, **kwargs):
-                proxy = self.http_client.proxy if self.http_client else None
+        def http_client_factory(*args, **kwargs):
+            del args
+            client = CallbackHttpClient(**kwargs)
+
+            def on_close():
+                close_events.append(f"http:{client.proxy or 'direct'}")
+
+            client._on_close = on_close
+            return client
+
+        def openai_factory(**kwargs):
+            http_client = kwargs.get("http_client")
+
+            def on_create(*args, **inner_kwargs):
+                del args, inner_kwargs
+                proxy = http_client.proxy if http_client else None
                 attempts.append(proxy)
                 if proxy:
                     return BrokenStream("proxy")
                 return WorkingStream()
 
-            def close(self):
-                label = self.http_client.proxy if self.http_client and self.http_client.proxy else "direct"
+            def on_close():
+                label = http_client.proxy if http_client and http_client.proxy else "direct"
                 close_events.append(f"client:{label}")
+
+            return CallbackOpenAI(http_client=http_client, on_create=on_create, on_close=on_close)
 
         model_registry.get_provider_client.cache_clear()
         try:
             with patch("web_tools.get_proxy_candidates_for_operation", return_value=["http://proxy.example:8080", None]), patch(
                 "model_registry.httpx.Client",
-                side_effect=lambda *args, **kwargs: FakeHttpClient(*args, **kwargs),
-            ), patch("model_registry.OpenAI", side_effect=lambda **kwargs: FakeOpenAI(**kwargs)):
+                side_effect=http_client_factory,
+            ), patch("model_registry.OpenAI", side_effect=openai_factory):
                 client = model_registry.get_provider_client(model_registry.OPENROUTER_PROVIDER)
                 response = client.chat.completions.create(model="anthropic/claude-sonnet-4.5", messages=[], stream=True)
                 chunks = list(response)
@@ -658,32 +648,23 @@ class TestOpenRouterModelRegistry(BaseAppRoutesTestCase):
     def test_openrouter_proxy_scope_disabled_forces_direct_connection(self):
         attempts = []
 
-        class FakeHttpClient:
-            def __init__(self, *args, **kwargs):
-                self.proxy = kwargs.get("proxy")
-
-            def close(self):
-                return None
-
-        class FakeOpenAI:
-            def __init__(self, **kwargs):
-                self.http_client = kwargs.get("http_client")
-                self.chat = SimpleNamespace(completions=self)
-
-            def create(self, *args, **kwargs):
-                attempts.append(self.http_client.proxy if self.http_client else None)
-                return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))])
-
-            def close(self):
-                return None
+        def openai_factory(**kwargs):
+            http_client = kwargs.get("http_client")
+            return CallbackOpenAI(
+                http_client=http_client,
+                on_create=lambda *args, **inner_kwargs: (
+                    attempts.append(http_client.proxy if http_client else None)
+                    or SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))])
+                ),
+            )
 
         save_app_settings({"proxy_enabled_operations": json.dumps([PROXY_OPERATION_FETCH_URL], ensure_ascii=False)})
         model_registry.get_provider_client.cache_clear()
         try:
             with patch("web_tools.get_proxy_candidates", return_value=["http://proxy.example:8080", None]), patch(
                 "model_registry.httpx.Client",
-                side_effect=lambda *args, **kwargs: FakeHttpClient(*args, **kwargs),
-            ), patch("model_registry.OpenAI", side_effect=lambda **kwargs: FakeOpenAI(**kwargs)):
+                side_effect=lambda *args, **kwargs: CallbackHttpClient(*args, **kwargs),
+            ), patch("model_registry.OpenAI", side_effect=openai_factory):
                 client = model_registry.get_provider_client(model_registry.OPENROUTER_PROVIDER)
                 response = client.chat.completions.create(model="anthropic/claude-sonnet-4.5", messages=[])
 
@@ -697,40 +678,36 @@ class TestOpenRouterModelRegistry(BaseAppRoutesTestCase):
 
         close_events = []
 
-        class FakeHttpClient:
-            def __init__(self, *args, **kwargs):
-                self.proxy = kwargs.get("proxy")
+        def http_client_factory(*args, **kwargs):
+            del args
 
-            def close(self):
+            def on_close():
                 close_events.append("http")
                 raise OSError(9, "Bad file descriptor")
 
-        class FakeStream:
-            def __iter__(self):
-                yield SimpleNamespace(choices=[])
+            return CallbackHttpClient(**kwargs, on_close=on_close)
 
-            def close(self):
+        def openai_factory(**kwargs):
+            def stream_close():
                 close_events.append("stream")
                 raise OSError(9, "Bad file descriptor")
 
-        class FakeOpenAI:
-            def __init__(self, **kwargs):
-                self.http_client = kwargs.get("http_client")
-                self.chat = SimpleNamespace(completions=self)
-
-            def create(self, *args, **kwargs):
-                return FakeStream()
-
-            def close(self):
+            def client_close():
                 close_events.append("client")
                 raise OSError(9, "Bad file descriptor")
+
+            return CallbackOpenAI(
+                http_client=kwargs.get("http_client"),
+                on_create=lambda *args, **inner_kwargs: StaticStream([SimpleNamespace(choices=[])], on_close=stream_close),
+                on_close=client_close,
+            )
 
         model_registry.get_provider_client.cache_clear()
         try:
             with patch("web_tools.get_proxy_candidates_for_operation", return_value=[None]), patch(
                 "model_registry.httpx.Client",
-                side_effect=lambda *args, **kwargs: FakeHttpClient(*args, **kwargs),
-            ), patch("model_registry.OpenAI", side_effect=lambda **kwargs: FakeOpenAI(**kwargs)):
+                side_effect=http_client_factory,
+            ), patch("model_registry.OpenAI", side_effect=openai_factory):
                 client = model_registry.get_provider_client(model_registry.OPENROUTER_PROVIDER)
                 response = client.chat.completions.create(model="anthropic/claude-sonnet-4.5", messages=[], stream=True)
                 list(response)

@@ -17,55 +17,6 @@ from config import (
 )
 from canvas_service import get_canvas_document_capabilities
 
-CANVAS_DOCUMENT_TOOL_NAMES = {
-    "expand_canvas_document",
-    "batch_read_canvas_documents",
-    "scroll_canvas_document",
-    "search_canvas_document",
-    "validate_canvas_document",
-    "rewrite_canvas_document",
-    "preview_canvas_changes",
-    "batch_canvas_edits",
-    "transform_canvas_lines",
-    "update_canvas_metadata",
-    "set_canvas_viewport",
-    "focus_canvas_page",
-    "clear_canvas_viewport",
-    "replace_canvas_lines",
-    "insert_canvas_lines",
-    "delete_canvas_lines",
-    "delete_canvas_document",
-    "clear_canvas",
-}
-
-CANVAS_TEXT_ADDRESSABLE_TOOL_NAMES = {
-    "expand_canvas_document",
-    "batch_read_canvas_documents",
-    "scroll_canvas_document",
-    "search_canvas_document",
-    "validate_canvas_document",
-    "rewrite_canvas_document",
-    "preview_canvas_changes",
-    "batch_canvas_edits",
-    "transform_canvas_lines",
-    "set_canvas_viewport",
-    "focus_canvas_page",
-    "replace_canvas_lines",
-    "insert_canvas_lines",
-    "delete_canvas_lines",
-}
-
-CANVAS_EDITABLE_TOOL_NAMES = {
-    "rewrite_canvas_document",
-    "preview_canvas_changes",
-    "batch_canvas_edits",
-    "transform_canvas_lines",
-    "update_canvas_metadata",
-    "replace_canvas_lines",
-    "insert_canvas_lines",
-    "delete_canvas_lines",
-}
-
 WORKSPACE_TOOL_NAMES = {
     "create_directory",
     "create_file",
@@ -2259,6 +2210,9 @@ _TOOL_RUNTIME_DEFAULTS = {
     "ui_hidden": False,
     "depends_on_tool_outputs": False,
     "state_domains": (),
+    "requires_canvas_document": False,
+    "requires_text_addressable_canvas": False,
+    "requires_editable_canvas": False,
 }
 
 _TOOL_RUNTIME_METADATA_OVERRIDES = {
@@ -2341,31 +2295,107 @@ _TOOL_RUNTIME_METADATA_OVERRIDES = {
         "read_only": True,
         "parallel_safe": True,
         "state_domains": ("canvas",),
+        "requires_canvas_document": True,
+        "requires_text_addressable_canvas": True,
     },
     "batch_read_canvas_documents": {
         "read_only": True,
         "parallel_safe": True,
         "state_domains": ("canvas",),
+        "requires_canvas_document": True,
+        "requires_text_addressable_canvas": True,
     },
     "scroll_canvas_document": {
         "read_only": True,
         "parallel_safe": True,
         "state_domains": ("canvas",),
+        "requires_canvas_document": True,
+        "requires_text_addressable_canvas": True,
     },
     "search_canvas_document": {
         "read_only": True,
         "parallel_safe": True,
         "state_domains": ("canvas",),
+        "requires_canvas_document": True,
+        "requires_text_addressable_canvas": True,
     },
     "validate_canvas_document": {
         "read_only": True,
         "parallel_safe": True,
         "state_domains": ("canvas",),
+        "requires_canvas_document": True,
+        "requires_text_addressable_canvas": True,
     },
     "preview_canvas_changes": {
         "read_only": True,
         "parallel_safe": True,
         "state_domains": ("canvas",),
+        "requires_canvas_document": True,
+        "requires_text_addressable_canvas": True,
+        "requires_editable_canvas": True,
+    },
+    "rewrite_canvas_document": {
+        "state_domains": ("canvas",),
+        "requires_canvas_document": True,
+        "requires_text_addressable_canvas": True,
+        "requires_editable_canvas": True,
+    },
+    "batch_canvas_edits": {
+        "state_domains": ("canvas",),
+        "requires_canvas_document": True,
+        "requires_text_addressable_canvas": True,
+        "requires_editable_canvas": True,
+    },
+    "transform_canvas_lines": {
+        "state_domains": ("canvas",),
+        "requires_canvas_document": True,
+        "requires_text_addressable_canvas": True,
+        "requires_editable_canvas": True,
+    },
+    "update_canvas_metadata": {
+        "state_domains": ("canvas",),
+        "requires_canvas_document": True,
+        "requires_editable_canvas": True,
+    },
+    "set_canvas_viewport": {
+        "state_domains": ("canvas",),
+        "requires_canvas_document": True,
+        "requires_text_addressable_canvas": True,
+    },
+    "focus_canvas_page": {
+        "state_domains": ("canvas",),
+        "requires_canvas_document": True,
+        "requires_text_addressable_canvas": True,
+    },
+    "clear_canvas_viewport": {
+        "state_domains": ("canvas",),
+        "requires_canvas_document": True,
+    },
+    "replace_canvas_lines": {
+        "state_domains": ("canvas",),
+        "requires_canvas_document": True,
+        "requires_text_addressable_canvas": True,
+        "requires_editable_canvas": True,
+    },
+    "insert_canvas_lines": {
+        "state_domains": ("canvas",),
+        "requires_canvas_document": True,
+        "requires_text_addressable_canvas": True,
+        "requires_editable_canvas": True,
+    },
+    "delete_canvas_lines": {
+        "state_domains": ("canvas",),
+        "requires_canvas_document": True,
+        "requires_text_addressable_canvas": True,
+        "requires_editable_canvas": True,
+    },
+    "delete_canvas_document": {
+        "state_domains": ("canvas",),
+        "requires_canvas_document": True,
+    },
+    "clear_canvas": {
+        "state_domains": ("canvas",),
+        "requires_canvas_document": True,
     },
     "read_scratchpad": {
         "read_only": True,
@@ -2674,11 +2704,12 @@ def resolve_runtime_tool_names(
     )
     runtime_names: list[str] = []
     for name in names:
-        if name in CANVAS_DOCUMENT_TOOL_NAMES and not has_canvas_documents:
+        metadata = TOOL_RUNTIME_METADATA.get(name) or _TOOL_RUNTIME_DEFAULTS
+        if metadata.get("requires_canvas_document") is True and not has_canvas_documents:
             continue
-        if name in CANVAS_TEXT_ADDRESSABLE_TOOL_NAMES and not has_text_addressable_canvas_documents:
+        if metadata.get("requires_text_addressable_canvas") is True and not has_text_addressable_canvas_documents:
             continue
-        if name in CANVAS_EDITABLE_TOOL_NAMES and not has_editable_canvas_documents:
+        if metadata.get("requires_editable_canvas") is True and not has_editable_canvas_documents:
             continue
         if name in WORKSPACE_TOOL_NAMES and not workspace_root:
             continue

@@ -8,15 +8,8 @@ import re
 from typing import Iterable
 from uuid import uuid4
 
-try:
-    import markdown as markdown_lib
-except ImportError:  # pragma: no cover - optional dependency fallback
-    markdown_lib = None
-
-try:
-    from json_repair import repair_json as _repair_json
-except ImportError:  # pragma: no cover - optional dependency fallback
-    _repair_json = None
+import markdown as markdown_lib
+from json_repair import repair_json as _repair_json
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -24,6 +17,11 @@ from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, Preformatted, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from export_styles import MONO_FONT, build_print_pdf_styles
+from json_parsing_utils import (
+    close_unbalanced_json_like_fragment,
+    extract_first_balanced_json_like_fragment,
+    parse_json_like_text,
+)
 from markdown_rendering import append_markdown_pdf_story
 
 CANVAS_MAX_DOCUMENTS = 50
@@ -1566,74 +1564,25 @@ def _coerce_batch_canvas_json_value(value):
             return value
 
     candidates = [raw_value]
-    if _repair_json is not None:
-        try:
-            repaired = _repair_json(raw_value)
-        except Exception:
-            repaired = None
-        if repaired and repaired not in candidates:
-            candidates.append(repaired)
+    try:
+        repaired = _repair_json(raw_value)
+    except Exception:
+        repaired = None
+    if repaired and repaired not in candidates:
+        candidates.append(repaired)
+    closed_fragment = close_unbalanced_json_like_fragment(raw_value, allowed_openers="[{")
+    if closed_fragment and closed_fragment not in candidates:
+        candidates.append(closed_fragment)
 
     for candidate in candidates:
-        try:
-            return json.loads(candidate)
-        except Exception:
-            try:
-                return ast.literal_eval(candidate)
-            except Exception:
-                continue
+        parsed_candidate = parse_json_like_text(candidate, repair_json_func=_repair_json, repair_objects_only=False)
+        if parsed_candidate is not None:
+            return parsed_candidate
     return value
 
 
 def _extract_batch_canvas_json_fragment(text: str) -> str | None:
-    if not text:
-        return None
-
-    open_indices = [index for index in (text.find("{"), text.find("[")) if index >= 0]
-    if not open_indices:
-        return None
-
-    start_index = min(open_indices)
-    stack = [text[start_index]]
-    in_string: str | None = None
-    escape_next = False
-
-    for index in range(start_index + 1, len(text)):
-        char = text[index]
-
-        if in_string:
-            if escape_next:
-                escape_next = False
-                continue
-            if char == "\\":
-                escape_next = True
-                continue
-            if char == in_string:
-                in_string = None
-            continue
-
-        if char in {'"', "'"}:
-            in_string = char
-            continue
-
-        if char in "[{":
-            stack.append(char)
-            continue
-
-        if char in "]}":
-            if not stack:
-                return None
-            top = stack[-1]
-            if top == "{" and char == "}":
-                stack.pop()
-            elif top == "[" and char == "]":
-                stack.pop()
-            else:
-                return None
-            if not stack:
-                return text[start_index : index + 1]
-
-    return None
+    return extract_first_balanced_json_like_fragment(text, allowed_openers="[{")
 
 
 def _normalize_batch_canvas_operations_input(operations):
@@ -2936,13 +2885,12 @@ def _validate_canvas_json_content(content: str) -> list[dict]:
         json.loads(content)
     except json.JSONDecodeError as exc:
         suggestion = None
-        if _repair_json is not None:
-            try:
-                repaired = _repair_json(content)
-                if repaired and repaired != content:
-                    suggestion = repaired[:500]
-            except Exception:
-                suggestion = None
+        try:
+            repaired = _repair_json(content)
+            if repaired and repaired != content:
+                suggestion = repaired[:500]
+        except Exception:
+            suggestion = None
         return [
             _build_canvas_validation_issue(
                 "error",
@@ -3395,13 +3343,11 @@ def build_html_download(document: dict) -> bytes:
     if normalized.get("format") == "code":
         language = escape(normalized.get("language") or "text")
         rendered = f'<pre><code class="language-{language}">{escape(content)}</code></pre>'
-    elif markdown_lib is not None:
+    else:
         rendered = markdown_lib.markdown(
             content,
             extensions=["extra", "fenced_code", "tables", "sane_lists"],
         )
-    else:
-        rendered = f"<pre>{escape(content)}</pre>"
 
     title = escape(normalized["title"])
     katex_cdn = f"https://cdn.jsdelivr.net/npm/katex@{KATEX_VERSION}/dist"

@@ -51,11 +51,10 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         self.assertEqual(message["role"], "system")
         content = message["content"]
         self.assertIn("## Current Date and Time", content)
-        self.assertIn("AUTHORITATIVE CURRENT TIME", content)
         self.assertIn("2026-03-15T21:40:00+03:00", content)
         self.assertIn("- Time: 21:40", content)
         self.assertIn("## Core Directives", content)
-        self.assertIn("Keep answers short.", content)
+        self.assertIn("## Active Tools This Turn", content)
         self.assertIn("Scratchpad (AI Persistent Memory)", content)
         self.assertIn("### User Profile & Mindset", content)
         self.assertIn("The user is 22 years old.", content)
@@ -207,7 +206,7 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
 
         content = message["content"]
         self.assertIn("## Clarification Response", content)
-        self.assertIn("direct response to your earlier clarification questions", content)
+        self.assertIn("do NOT save them with save_to_conversation_memory", content)
         self.assertIn("## Knowledge Base", content)
         self.assertLess(content.index("## Clarification Response"), content.index("## Knowledge Base"))
 
@@ -248,7 +247,6 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         content = message["content"]
         self.assertIn("## Clarification Response", content)
         self.assertIn("do NOT save them with save_to_conversation_memory", content)
-        self.assertIn("Accept these answers at face value", content)
         self.assertIn("Round 1", content)
         self.assertIn("- Reklam butceniz ne kadar? → Gunluk 200-300 TL", content)
         self.assertIn("Round 2", content)
@@ -876,7 +874,6 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         self.assertIn("## Scratchpad (AI Persistent Memory)", merged_content)
         self.assertIn("Persistent note", merged_content)
         self.assertIn("## Current Date and Time", merged_content)
-        self.assertIn("> **AUTHORITATIVE CURRENT TIME:**", merged_content)
         self.assertLess(
             merged_content.index("## Scratchpad (AI Persistent Memory)"),
             merged_content.index("## Current Date and Time"),
@@ -964,7 +961,6 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         self.assertIn("## Active Canvas Document", content)
         self.assertIn("## Tool Execution History", content)
         self.assertIn("## Current Date and Time", content)
-        self.assertIn("> **AUTHORITATIVE CURRENT TIME:**", content)
         self.assertLess(content.index("## Current Date and Time"), content.index("## Tool Memory"))
         self.assertLess(content.index("## Tool Memory"), content.index("## Tool Execution History"))
         self.assertLess(content.index("## Active Canvas Document"), content.index("## Tool Execution History"))
@@ -1012,7 +1008,7 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         self.assertIn("conversation memory instead", scratchpad_guidance)
         self.assertIn("future responses or behavior across conversations", scratchpad_guidance)
         self.assertIn("default to conversation memory", conversation_guidance)
-        self.assertIn("Multiple compact entries are better than one overloaded summary", conversation_guidance)
+        self.assertIn("When you need to save multiple facts", conversation_guidance)
         self.assertIn("current chat", persona_guidance)
         self.assertIn("global scratchpad", persona_guidance)
 

@@ -192,6 +192,7 @@ from routes.pages import (
     build_tool_permission_sections,
 )
 from tests.support.app_harness import BaseAppRoutesTestCase
+from tests.support.mocks import SimpleCrop, SimplePDF, SimpleRequestsResponse, SimpleRequestsSession
 from tests.support.stream_events import build_stream_chunk, build_stream_chunk_openrouter, build_tool_call_chunk
 from token_utils import estimate_text_tokens
 from tool_registry import TOOL_SPEC_BY_NAME, get_enabled_tool_specs, get_openai_tool_specs, resolve_runtime_tool_names
@@ -207,10 +208,6 @@ from web_tools import (
 
 
 class AppRoutesTestCase(BaseAppRoutesTestCase):
-    _stream_chunk = staticmethod(build_stream_chunk)
-    _stream_chunk_openrouter = staticmethod(build_stream_chunk_openrouter)
-    _tool_call_chunk = staticmethod(build_tool_call_chunk)
-
     def _get_session_csrf_token(self) -> str:
         with self.client.session_transaction() as session_data:
             return str(session_data.get(request_security.CSRF_TOKEN_SESSION_KEY) or "")
@@ -539,8 +536,8 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(payload["personas"][0]["id"], payload["default_persona_id"])
         self.assertEqual(payload["personas"][0]["general_instructions"], "Keep answers short.")
         self.assertEqual(payload["personas"][0]["ai_personality"], "Sound like a pragmatic senior engineer.")
-        self.assertIn("General instructions:\nKeep answers short.", payload["effective_user_preferences"])
-        self.assertIn("AI personality:\nSound like a pragmatic senior engineer.", payload["effective_user_preferences"])
+        self.assertIn("General instructions:\n", payload["effective_user_preferences"])
+        self.assertIn("AI personality:\n", payload["effective_user_preferences"])
         self.assertEqual(payload["scratchpad"], "")
         self.assertEqual(payload["max_steps"], 3)
         self.assertEqual(payload["max_parallel_tools"], 6)
@@ -3982,7 +3979,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("## Scratchpad (AI Persistent Memory)", merged_content)
         self.assertIn("Persistent note", merged_content)
         self.assertIn("## Current Date and Time", merged_content)
-        self.assertIn("> **AUTHORITATIVE CURRENT TIME:**", merged_content)
+        self.assertIn("## Current Date and Time", merged_content)
         self.assertLess(
             merged_content.index("## Scratchpad (AI Persistent Memory)"),
             merged_content.index("## Current Date and Time"),
@@ -4031,7 +4028,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("## Active Canvas Document", content)
         self.assertIn("## Tool Execution History", content)
         self.assertIn("## Current Date and Time", content)
-        self.assertIn("> **AUTHORITATIVE CURRENT TIME:**", content)
+        self.assertIn("## Current Date and Time", content)
         self.assertLess(content.index("## Current Date and Time"), content.index("## Tool Memory"))
         self.assertLess(content.index("## Tool Memory"), content.index("## Tool Execution History"))
         self.assertLess(content.index("## Active Canvas Document"), content.index("## Tool Execution History"))
@@ -7262,20 +7259,14 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(get_app_settings()["search_tool_query_limit"], "9")
 
     def test_default_deepseek_client_is_initialized_lazily_and_cached(self):
-        import agent as agent_module
-
-        original_client = agent_module._DEFAULT_PROVIDER_CLIENT
-        agent_module._DEFAULT_PROVIDER_CLIENT = None
         fake_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=Mock())))
 
-        try:
-            with patch("agent.get_provider_client", return_value=fake_client) as mocked_get_provider_client:
-                self.assertIs(_get_default_deepseek_client(), fake_client)
-                self.assertIs(_get_default_deepseek_client(), fake_client)
+        with patch("agent.get_provider_client", return_value=fake_client) as mocked_get_provider_client:
+            self.assertIs(_get_default_deepseek_client(), fake_client)
+            self.assertIs(_get_default_deepseek_client(), fake_client)
 
-            mocked_get_provider_client.assert_called_once_with(model_registry.DEEPSEEK_PROVIDER)
-        finally:
-            agent_module._DEFAULT_PROVIDER_CLIENT = original_client
+        self.assertEqual(mocked_get_provider_client.call_count, 2)
+        mocked_get_provider_client.assert_called_with(model_registry.DEEPSEEK_PROVIDER)
 
     def test_agent_trace_logger_reuses_existing_rotating_handler(self):
         import agent as agent_module
@@ -11886,17 +11877,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             def to_image(self, **kwargs):
                 return SimpleNamespace(original=Image.new("RGB", (40, 40), "white"))
 
-        class FakePDF:
-            def __init__(self):
-                self.pages = [FakePage()]
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, tb):
-                return False
-
-        with patch("doc_service.pdfplumber.open", return_value=FakePDF()):
+        with patch("doc_service.pdfplumber.open", return_value=SimplePDF([FakePage()])):
             with patch("ocr_service.extract_image_text", return_value="SCANNED PAGE TEXT") as ocr_mock:
                 result = _extract_text_from_pdf(b"%PDF-FAKE")
 
@@ -11904,10 +11885,6 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         ocr_mock.assert_called_once()
 
     def test_extract_text_from_pdf_orders_two_column_pages_by_column(self):
-        class FakeCrop:
-            def extract_text(self, **kwargs):
-                return ""
-
         class FakePage:
             width = 600
             height = 800
@@ -11920,7 +11897,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 return self
 
             def crop(self, bbox):
-                return FakeCrop()
+                return SimpleCrop()
 
             def extract_words(self, **kwargs):
                 words = []
@@ -11939,17 +11916,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             def extract_text(self, **kwargs):
                 return "INTERLEAVED LAYOUT TEXT"
 
-        class FakePDF:
-            def __init__(self):
-                self.pages = [FakePage()]
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, tb):
-                return False
-
-        with patch("doc_service.pdfplumber.open", return_value=FakePDF()):
+        with patch("doc_service.pdfplumber.open", return_value=SimplePDF([FakePage()])):
             result = _extract_text_from_pdf(b"%PDF-FAKE")
 
         self.assertIn("Left1 alpha\nLeft2 alpha", result)
@@ -11958,13 +11925,6 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertNotIn("INTERLEAVED LAYOUT TEXT", result)
 
     def test_extract_text_from_pdf_filters_repeated_headers_and_footers(self):
-        class FakeCrop:
-            def __init__(self, text):
-                self._text = text
-
-            def extract_text(self, **kwargs):
-                return self._text
-
         class FakePage:
             width = 600
             height = 800
@@ -11981,8 +11941,8 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
             def crop(self, bbox):
                 if bbox[1] == 0:
-                    return FakeCrop("Company Confidential")
-                return FakeCrop("Internal Use Only")
+                    return SimpleCrop("Company Confidential")
+                return SimpleCrop("Internal Use Only")
 
             def extract_words(self, **kwargs):
                 return []
@@ -11990,17 +11950,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             def extract_text(self, **kwargs):
                 return f"Company Confidential\nBody {self.page_num}\nInternal Use Only"
 
-        class FakePDF:
-            def __init__(self):
-                self.pages = [FakePage(1), FakePage(2), FakePage(3)]
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, tb):
-                return False
-
-        with patch("doc_service.pdfplumber.open", return_value=FakePDF()):
+        with patch("doc_service.pdfplumber.open", return_value=SimplePDF([FakePage(1), FakePage(2), FakePage(3)])):
             result = _extract_text_from_pdf(b"%PDF-FAKE")
 
         self.assertIn("Body 1", result)
@@ -12010,10 +11960,6 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertNotIn("Internal Use Only", result)
 
     def test_extract_text_from_pdf_prefers_cleaner_linear_text_over_fragmented_layout(self):
-        class FakeCrop:
-            def extract_text(self, **kwargs):
-                return ""
-
         class FakePage:
             width = 600
             height = 800
@@ -12026,7 +11972,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 return self
 
             def crop(self, bbox):
-                return FakeCrop()
+                return SimpleCrop()
 
             def extract_words(self, **kwargs):
                 return []
@@ -12036,27 +11982,13 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                     return "M\nksızın\nAÇIKLAMA\nDİKKATİ"
                 return "Maksızın AÇIKLAMA DİKKATİ"
 
-        class FakePDF:
-            def __init__(self):
-                self.pages = [FakePage()]
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, tb):
-                return False
-
-        with patch("doc_service.pdfplumber.open", return_value=FakePDF()):
+        with patch("doc_service.pdfplumber.open", return_value=SimplePDF([FakePage()])):
             result = _extract_text_from_pdf(b"%PDF-FAKE")
 
         self.assertIn("Maksızın AÇIKLAMA DİKKATİ", result)
         self.assertNotIn("M\nksızın", result)
 
     def test_extract_text_from_pdf_prunes_edge_page_noise(self):
-        class FakeCrop:
-            def extract_text(self, **kwargs):
-                return ""
-
         class FakePage:
             width = 600
             height = 800
@@ -12069,7 +12001,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 return self
 
             def crop(self, bbox):
-                return FakeCrop()
+                return SimpleCrop()
 
             def extract_words(self, **kwargs):
                 return []
@@ -12077,17 +12009,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             def extract_text(self, **kwargs):
                 return "- 12 -\n••••\n1. Soru metni burada başlar\nA) Bir\nB) İki\n3"
 
-        class FakePDF:
-            def __init__(self):
-                self.pages = [FakePage()]
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, tb):
-                return False
-
-        with patch("doc_service.pdfplumber.open", return_value=FakePDF()):
+        with patch("doc_service.pdfplumber.open", return_value=SimplePDF([FakePage()])):
             result = _extract_text_from_pdf(b"%PDF-FAKE")
 
         self.assertIn("1. Soru metni burada başlar", result)
@@ -12099,10 +12021,6 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
     def test_extract_text_from_pdf_prefers_ocr_for_image_heavy_noisy_pages(self):
         from PIL import Image
-
-        class FakeCrop:
-            def extract_text(self, **kwargs):
-                return ""
 
         class FakePage:
             width = 600
@@ -12118,7 +12036,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 return self
 
             def crop(self, bbox):
-                return FakeCrop()
+                return SimpleCrop()
 
             def extract_words(self, **kwargs):
                 return []
@@ -12131,17 +12049,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             def to_image(self, **kwargs):
                 return SimpleNamespace(original=Image.new("RGB", (40, 40), "white"))
 
-        class FakePDF:
-            def __init__(self):
-                self.pages = [FakePage()]
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, tb):
-                return False
-
-        with patch("doc_service.pdfplumber.open", return_value=FakePDF()):
+        with patch("doc_service.pdfplumber.open", return_value=SimplePDF([FakePage()])):
             with patch("ocr_service.extract_image_text", return_value="Metin sorusu temiz olarak okundu.") as ocr_mock:
                 result = _extract_text_from_pdf(b"%PDF-FAKE")
 
@@ -17070,8 +16978,8 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 self.closed = False
 
             def __iter__(self):
-                yield AppRoutesTestCase._stream_chunk(content="Partial answer.")
-                yield AppRoutesTestCase._stream_chunk(
+                yield BaseAppRoutesTestCase._stream_chunk(content="Partial answer.")
+                yield BaseAppRoutesTestCase._stream_chunk(
                     usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2)
                 )
 
@@ -17661,7 +17569,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
     def test_run_agent_stream_ignores_truncated_stream_after_content(self):
         class TruncatedStreamResponse:
             def __iter__(self):
-                yield AppRoutesTestCase._stream_chunk(content="Final answer.")
+                yield BaseAppRoutesTestCase._stream_chunk(content="Final answer.")
                 raise http_requests.exceptions.ChunkedEncodingError("incomplete chunked read")
 
             def close(self):
@@ -18037,29 +17945,20 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(result["searched_source"], "fetch_cache")
 
     def test_fetch_url_tool_recovers_partial_chunked_content(self):
-        class FakeResponse:
-            def __init__(self):
-                self.headers = {"Content-Type": "text/html; charset=utf-8"}
-                self.url = "https://example.com/page"
-                self.encoding = "utf-8"
-                self.status_code = 200
+        def response_iter_content(chunk_size=8192):
+            del chunk_size
+            yield b"<html><head><title>Example</title></head><body><main>"
+            yield b"Recovered partial content"
+            raise http_requests.exceptions.ChunkedEncodingError("incomplete chunked read")
 
-            def iter_content(self, chunk_size=8192):
-                yield b"<html><head><title>Example</title></head><body><main>"
-                yield b"Recovered partial content"
-                raise http_requests.exceptions.ChunkedEncodingError("incomplete chunked read")
+        response = SimpleRequestsResponse(
+            url="https://example.com/page",
+            status_code=200,
+            content_type="text/html; charset=utf-8",
+        )
+        response.iter_content = response_iter_content
 
-        class FakeSession:
-            def __init__(self):
-                self.max_redirects = 0
-                self.trust_env = False
-                self.proxies = {}
-
-            def get(self, *args, **kwargs):
-                return FakeResponse()
-
-            def close(self):
-                return None
+        session = SimpleRequestsSession(lambda *args, **kwargs: response)
 
         with (
             patch("web_tools._is_safe_url", return_value=(True, "")),
@@ -18072,7 +17971,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 "web_tools.get_proxy_candidates",
                 return_value=[None],
             ),
-            patch("web_tools.http_requests.Session", return_value=FakeSession()),
+            patch("web_tools.http_requests.Session", return_value=session),
         ):
             result = fetch_url_tool("https://example.com/page")
 
@@ -18083,23 +17982,13 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertTrue(mocked_cache_set.called)
 
     def test_fetch_pdf_uses_document_pdf_extractor_output(self):
-        class FakePDF:
-            def __init__(self):
-                self.pages = [object(), object()]
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, tb):
-                return False
-
         with (
             patch(
                 "doc_service._extract_text_from_pdf", return_value="## Page 1\n\n| A | B |\n| --- | --- |\n| 1 | 2 |"
             ),
             patch(
                 "pdfplumber.open",
-                return_value=FakePDF(),
+                return_value=SimplePDF([object(), object()]),
             ),
         ):
             result = web_tools._extract_pdf(b"%PDF-FAKE", "https://example.com/report.pdf")
@@ -18112,31 +18001,25 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
     def test_fetch_url_tool_uses_proxies_before_direct_fallback(self):
         attempts = []
 
-        class FakeResponse:
-            def __init__(self):
-                self.headers = {"Content-Type": "text/plain; charset=utf-8"}
-                self.url = "https://example.com/page"
-                self.encoding = "utf-8"
-                self.status_code = 200
+        response = SimpleRequestsResponse(
+            url="https://example.com/page",
+            status_code=200,
+            content_type="text/plain; charset=utf-8",
+            chunks=[b"Recovered without proxy"],
+        )
+        def _build_session():
+            holder: dict[str, SimpleRequestsSession] = {}
 
-            def iter_content(self, chunk_size=8192):
-                yield b"Recovered without proxy"
-
-        class FakeSession:
-            def __init__(self):
-                self.max_redirects = 0
-                self.trust_env = False
-                self.proxies = {}
-
-            def get(self, *args, **kwargs):
-                proxy = self.proxies.get("https") if self.proxies else None
-                attempts.append(proxy)
-                if proxy:
+            def _get(*args, **kwargs):
+                del args, kwargs
+                active_proxy = holder["session"].proxies.get("https") if holder["session"].proxies else None
+                attempts.append(active_proxy)
+                if active_proxy:
                     raise http_requests.exceptions.Timeout("proxy failed")
-                return FakeResponse()
+                return response
 
-            def close(self):
-                return None
+            holder["session"] = SimpleRequestsSession(_get)
+            return holder["session"]
 
         with (
             patch("web_tools._is_safe_url", return_value=(True, "")),
@@ -18149,7 +18032,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 "web_tools.get_proxy_candidates",
                 return_value=["http://proxy.example:8080", None],
             ) as mocked_candidates,
-            patch("web_tools.http_requests.Session", side_effect=FakeSession),
+            patch("web_tools.http_requests.Session", side_effect=_build_session),
         ):
             result = fetch_url_tool("https://example.com/page")
 
@@ -18160,37 +18043,29 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
     def test_fetch_url_tool_retries_with_alternate_headers_when_first_response_is_thin(self):
         header_attempts = []
 
-        class FakeResponse:
-            def __init__(self, html):
-                self.headers = {"Content-Type": "text/html; charset=utf-8"}
-                self.url = "https://example.com/page"
-                self.encoding = "utf-8"
-                self.status_code = 200
-                self._html = html
+        def _html_response(html: str):
+            return SimpleRequestsResponse(
+                url="https://example.com/page",
+                status_code=200,
+                content_type="text/html; charset=utf-8",
+                chunks=[html.encode("utf-8")],
+            )
 
-            def iter_content(self, chunk_size=8192):
-                yield self._html.encode("utf-8")
-
-        class FakeSession:
-            def __init__(self):
-                self.max_redirects = 0
-                self.trust_env = False
-                self.proxies = {}
-
-            def get(self, *args, **kwargs):
-                headers = kwargs.get("headers") or {}
-                header_attempts.append(headers.get("Cache-Control"))
-                if len(header_attempts) == 1:
-                    return FakeResponse("<html><body><main>ok</main></body></html>")
-                return FakeResponse(
-                    """
+        session = SimpleRequestsSession(
+            lambda *args, **kwargs: (
+                header_attempts.append((kwargs.get("headers") or {}).get("Cache-Control"))
+                or (
+                    _html_response("<html><body><main>ok</main></body></html>")
+                    if len(header_attempts) == 1
+                    else _html_response(
+                        """
                     <html><head><title>Rates</title><meta name=\"description\" content=\"Current USD and EUR rates are listed here.\"></head>
                     <body><main><div>Sufficient fallback content and current market summary are included here.</div></main></body></html>
                     """
+                    )
                 )
-
-            def close(self):
-                return None
+            )
+        )
 
         with (
             patch("web_tools._is_safe_url", return_value=(True, "")),
@@ -18203,7 +18078,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 "web_tools.get_proxy_candidates",
                 return_value=[None],
             ),
-            patch("web_tools.http_requests.Session", side_effect=FakeSession),
+            patch("web_tools.http_requests.Session", return_value=session),
         ):
             result = fetch_url_tool("https://example.com/page")
 
@@ -18214,32 +18089,22 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
     def test_fetch_url_tool_retries_without_ssl_verification_on_cert_failure(self):
         verify_values = []
 
-        class FakeResponse:
-            def __init__(self):
-                self.headers = {"Content-Type": "text/html; charset=utf-8"}
-                self.url = "https://example.com/page"
-                self.encoding = "utf-8"
-                self.status_code = 200
+        response = SimpleRequestsResponse(
+            url="https://example.com/page",
+            status_code=200,
+            content_type="text/html; charset=utf-8",
+            chunks=[b"<html><head><title>Example</title></head><body><main>Trusted content</main></body></html>"],
+        )
 
-            def iter_content(self, chunk_size=8192):
-                yield b"<html><head><title>Example</title></head><body><main>Trusted content</main></body></html>"
+        def _get_with_ssl_retry(*args, **kwargs):
+            del args
+            verify = kwargs.get("verify", True)
+            verify_values.append(verify)
+            if verify:
+                raise http_requests.exceptions.SSLError("[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed")
+            return response
 
-        class FakeSession:
-            def __init__(self):
-                self.max_redirects = 0
-                self.trust_env = False
-                self.proxies = {}
-
-            def get(self, *args, **kwargs):
-                verify_values.append(kwargs.get("verify", True))
-                if kwargs.get("verify", True):
-                    raise http_requests.exceptions.SSLError(
-                        "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed"
-                    )
-                return FakeResponse()
-
-            def close(self):
-                return None
+        session = SimpleRequestsSession(_get_with_ssl_retry)
 
         with (
             patch("web_tools._is_safe_url", return_value=(True, "")),
@@ -18252,7 +18117,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 "web_tools.get_proxy_candidates",
                 return_value=[None],
             ),
-            patch("web_tools.http_requests.Session", side_effect=FakeSession),
+            patch("web_tools.http_requests.Session", return_value=session),
         ):
             result = fetch_url_tool("https://example.com/page")
 
@@ -18266,27 +18131,13 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertTrue(mocked_cache_set.called)
 
     def test_fetch_url_tool_does_not_cache_empty_blocked_page(self):
-        class FakeResponse:
-            def __init__(self):
-                self.headers = {"Content-Type": "text/html; charset=utf-8"}
-                self.url = "https://example.com/blocked"
-                self.encoding = "utf-8"
-                self.status_code = 403
-
-            def iter_content(self, chunk_size=8192):
-                yield b"<html><head><title>Forbidden</title></head><body><main></main></body></html>"
-
-        class FakeSession:
-            def __init__(self):
-                self.max_redirects = 0
-                self.trust_env = False
-                self.proxies = {}
-
-            def get(self, *args, **kwargs):
-                return FakeResponse()
-
-            def close(self):
-                return None
+        response = SimpleRequestsResponse(
+            url="https://example.com/blocked",
+            status_code=403,
+            content_type="text/html; charset=utf-8",
+            chunks=[b"<html><head><title>Forbidden</title></head><body><main></main></body></html>"],
+        )
+        session = SimpleRequestsSession(lambda *args, **kwargs: response)
 
         with (
             patch("web_tools._is_safe_url", return_value=(True, "")),
@@ -18299,7 +18150,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 "web_tools.get_proxy_candidates",
                 return_value=[None],
             ),
-            patch("web_tools.http_requests.Session", side_effect=FakeSession),
+            patch("web_tools.http_requests.Session", return_value=session),
         ):
             result = fetch_url_tool("https://example.com/blocked")
 

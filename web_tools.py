@@ -25,17 +25,9 @@ warnings.filterwarnings(
 import requests as http_requests
 from bs4 import BeautifulSoup, NavigableString, Tag
 from ddgs import DDGS
+from defusedxml import ElementTree as ET
+from html_to_markdown import convert as html_to_markdown_convert
 from urllib3.exceptions import InsecureRequestWarning
-
-try:
-    from html_to_markdown import convert as html_to_markdown_convert
-except ImportError:  # pragma: no cover - optional dependency
-    html_to_markdown_convert = None
-
-try:
-    from defusedxml import ElementTree as ET
-except ImportError:  # pragma: no cover - compatibility fallback for older local envs
-    import xml.etree.ElementTree as ET
 
 from config import (
     CONTENT_MAX_CHARS,
@@ -879,8 +871,6 @@ def _extract_external_markdown_content(conversion_result) -> str:
 
 
 def _convert_html_to_markdown_external(content_root: Tag) -> str:
-    if not callable(html_to_markdown_convert):
-        return ""
     html_fragment = str(content_root or "").strip()
     if not html_fragment:
         return ""

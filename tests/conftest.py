@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import math
 import os
-import re
 import socket
 import sys
 import warnings
@@ -33,11 +31,15 @@ if project_root_str not in sys.path:
 class _FakeChromaCollection:
     def __init__(self):
         self._rows: dict[str, dict] = {}
+        self._ordered_ids: list[str] = []
 
     def upsert(self, ids, documents, embeddings, metadatas):
         for item_id, document, embedding, metadata in zip(ids, documents, embeddings, metadatas, strict=False):
-            self._rows[str(item_id)] = {
-                "id": str(item_id),
+            normalized_id = str(item_id)
+            if normalized_id not in self._rows:
+                self._ordered_ids.append(normalized_id)
+            self._rows[normalized_id] = {
+                "id": normalized_id,
                 "document": document,
                 "embedding": list(embedding or []),
                 "metadata": dict(metadata or {}),
@@ -53,22 +55,19 @@ class _FakeChromaCollection:
 
     def delete(self, ids=None):
         for item_id in ids or []:
-            self._rows.pop(str(item_id), None)
+            normalized_id = str(item_id)
+            self._rows.pop(normalized_id, None)
+            self._ordered_ids = [existing_id for existing_id in self._ordered_ids if existing_id != normalized_id]
 
     def query(self, query_embeddings, n_results, where=None, include=None):
-        query_vector = list((query_embeddings or [[[]]])[0] or [])
-        rows = [row for row in self._rows.values() if _matches_where(row["metadata"], where)]
-        scored = []
-        for row in rows:
-            similarity = _dot_product(query_vector, row["embedding"])
-            scored.append((1.0 - similarity, row))
-        scored.sort(key=lambda item: item[0])
-        limited = scored[: max(1, int(n_results or 1))]
+        del query_embeddings, include
+        rows = [self._rows[item_id] for item_id in self._ordered_ids if _matches_where(self._rows[item_id]["metadata"], where)]
+        limited = rows[: max(1, int(n_results or 1))]
         return {
-            "ids": [[row["id"] for _distance, row in limited]],
-            "documents": [[row["document"] for _distance, row in limited]],
-            "metadatas": [[row["metadata"] for _distance, row in limited]],
-            "distances": [[distance for distance, _row in limited]],
+            "ids": [[row["id"] for row in limited]],
+            "documents": [[row["document"] for row in limited]],
+            "metadatas": [[row["metadata"] for row in limited]],
+            "distances": [[0.0 for _row in limited]],
         }
 
 
@@ -93,26 +92,8 @@ def _matches_where(metadata: dict | None, where: dict | None) -> bool:
     return True
 
 
-def _dot_product(left: list[float], right: list[float]) -> float:
-    if not left or not right:
-        return 0.0
-    size = min(len(left), len(right))
-    return float(sum(float(left[index]) * float(right[index]) for index in range(size)))
-
-
 def _fake_embed_texts(texts: list[str]) -> list[list[float]]:
-    vectors: list[list[float]] = []
-    for text in texts:
-        tokens = re.findall(r"[a-z0-9_]+", str(text or "").lower())
-        values = [0.0] * 16
-        for token in tokens:
-            bucket = sum(token.encode("utf-8")) % len(values)
-            values[bucket] += 1.0
-        if not any(values):
-            values[0] = 1.0
-        norm = math.sqrt(sum(value * value for value in values)) or 1.0
-        vectors.append([value / norm for value in values])
-    return vectors
+    return [[float(index + 1)] for index, _text in enumerate(texts)]
 
 
 @pytest.fixture(autouse=True)

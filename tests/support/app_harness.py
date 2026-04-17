@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from app import create_app
 from db import get_db, insert_message, serialize_message_metadata
+from tests.support.stream_events import build_stream_chunk, build_stream_chunk_openrouter, build_tool_call_chunk
 
 
 class BaseAppRoutesTestCase(unittest.TestCase):
@@ -73,3 +74,15 @@ class BaseAppRoutesTestCase(unittest.TestCase):
                         }
                     ),
                 )
+
+    @staticmethod
+    def _stream_chunk(*args, **kwargs):
+        return build_stream_chunk(*args, **kwargs)
+
+    @staticmethod
+    def _stream_chunk_openrouter(*args, **kwargs):
+        return build_stream_chunk_openrouter(*args, **kwargs)
+
+    @staticmethod
+    def _tool_call_chunk(*args, **kwargs):
+        return build_tool_call_chunk(*args, **kwargs)
