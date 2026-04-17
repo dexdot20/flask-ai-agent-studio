@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Iterable
 from uuid import uuid4
 
-from flask import current_app, has_app_context
+from flask import current_app, g, has_app_context
 
 from canvas_service import extract_canvas_active_document_id, extract_canvas_documents, extract_canvas_viewports
 from config import (
@@ -132,6 +132,7 @@ from model_registry import get_all_models, normalize_chat_parameter_overrides
 from token_utils import estimate_text_tokens
 
 _db_path = DB_PATH
+_APP_CONTEXT_DB_CONNECTION_KEY = "_sqlite_connection"
 MESSAGE_USAGE_BREAKDOWN_KEYS = (
     "core_instructions",
     "tool_specs",
@@ -227,7 +228,35 @@ def get_configured_db_path() -> str:
 
 
 def get_db(database_path: str | None = None):
-    db_path = str(database_path or get_configured_db_path()).strip() or get_configured_db_path()
+    if database_path is not None:
+        db_path = str(database_path).strip() or get_configured_db_path()
+        return _open_sqlite_connection(db_path)
+
+    db_path = str(get_configured_db_path()).strip() or get_configured_db_path()
+    if has_app_context():
+        cached_conn = getattr(g, _APP_CONTEXT_DB_CONNECTION_KEY, None)
+        if cached_conn is not None:
+            return cached_conn
+        conn = _open_sqlite_connection(db_path)
+        setattr(g, _APP_CONTEXT_DB_CONNECTION_KEY, conn)
+        return conn
+
+    return _open_sqlite_connection(db_path)
+
+
+def close_db_connection() -> None:
+    if not has_app_context():
+        return
+    conn = g.pop(_APP_CONTEXT_DB_CONNECTION_KEY, None)
+    if conn is None:
+        return
+    try:
+        conn.close()
+    except Exception:
+        return
+
+
+def _open_sqlite_connection(db_path: str):
     db_dir = os.path.dirname(db_path)
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)

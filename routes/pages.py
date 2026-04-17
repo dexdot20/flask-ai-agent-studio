@@ -807,110 +807,113 @@ def register_page_routes(app) -> None:
         scratchpad = data.get("scratchpad")
         scratchpad_sections_raw = data.get("scratchpad_sections")
 
-        if (
-            user_preferences is None
-            and general_instructions is None
-            and ai_personality is None
-            and default_persona_id_raw is None
-            and scratchpad is None
-            and scratchpad_sections_raw is None
-            and max_steps_raw is None
-            and max_parallel_tools_raw is None
-            and temperature_raw is None
-            and clarification_max_questions_raw is None
-            and search_tool_query_limit_raw is None
-            and custom_models_raw is None
-            and visible_model_order_raw is None
-            and operation_model_preferences_raw is None
-            and operation_model_fallback_preferences_raw is None
-            and image_processing_method_raw is None
-            and active_tools_raw is None
-            and proxy_enabled_operations_raw is None
-            and rag_auto_inject is None
-            and rag_sensitivity is None
-            and rag_context_size is None
-            and rag_source_types is None
-            and rag_auto_inject_source_types is None
-            and tool_memory_auto_inject is None
-            and chat_summary_mode_raw is None
-            and chat_summary_detail_level_raw is None
-            and chat_summary_trigger_raw is None
-            and summary_skip_first_raw is None
-            and summary_skip_last_raw is None
-            and prompt_max_input_tokens_raw is None
-            and prompt_response_token_reserve_raw is None
-            and prompt_recent_history_max_tokens_raw is None
-            and prompt_summary_max_tokens_raw is None
-            and prompt_preflight_summary_token_count_raw is None
-            and prompt_rag_max_tokens_raw is None
-            and prompt_tool_memory_max_tokens_raw is None
-            and prompt_tool_trace_max_tokens_raw is None
-            and summary_source_target_tokens_raw is None
-            and summary_retry_min_source_tokens_raw is None
-            and context_compaction_threshold_raw is None
-            and context_compaction_keep_recent_rounds_raw is None
-            and context_selection_strategy_raw is None
-            and entropy_profile_raw is None
-            and entropy_rag_budget_ratio_raw is None
-            and entropy_protect_code_blocks_raw is None
-            and entropy_protect_tool_results_raw is None
-            and entropy_reference_boost_raw is None
-            and reasoning_auto_collapse_raw is None
-            and pruning_enabled_raw is None
-            and pruning_token_threshold_raw is None
-            and pruning_batch_size_raw is None
-            and pruning_target_reduction_ratio_raw is None
-            and pruning_min_target_tokens_raw is None
-            and fetch_url_token_threshold_raw is None
-            and fetch_url_clip_aggressiveness_raw is None
-            and fetch_html_converter_mode_raw is None
-            and fetch_url_summarized_max_input_chars_raw is None
-            and fetch_url_summarized_max_output_tokens_raw is None
-            and canvas_prompt_max_lines_raw is None
-            and canvas_prompt_max_tokens_raw is None
-            and canvas_prompt_max_chars_raw is None
-            and canvas_prompt_code_line_max_chars_raw is None
-            and canvas_prompt_text_line_max_chars_raw is None
-            and canvas_expand_max_lines_raw is None
-            and canvas_scroll_window_lines_raw is None
-            and sub_agent_max_steps_raw is None
-            and sub_agent_timeout_seconds_raw is None
-            and sub_agent_retry_attempts_raw is None
-            and sub_agent_retry_delay_seconds_raw is None
-            and sub_agent_max_parallel_tools_raw is None
-            and sub_agent_allowed_tool_names_raw is None
-            and sub_agent_canvas_auto_save_raw is None
-            and sub_agent_canvas_auto_open_raw is None
-            and web_cache_ttl_hours_raw is None
-            and openrouter_prompt_cache_enabled_raw is None
-            and openrouter_anthropic_cache_ttl_raw is None
-            and openrouter_http_referer_raw is None
-            and openrouter_app_title_raw is None
-            and login_session_timeout_minutes_raw is None
-            and login_max_failed_attempts_raw is None
-            and login_lockout_seconds_raw is None
-            and login_remember_session_days_raw is None
-            and conversation_memory_enabled_raw is None
-            and ocr_enabled_raw is None
-            and ocr_provider_raw is None
-            and rag_enabled_raw is None
-            and youtube_transcripts_enabled_raw is None
-            and youtube_transcript_language_raw is None
-            and youtube_transcript_model_size_raw is None
-            and chat_summary_model_raw is None
-            and rag_chunk_size_raw is None
-            and rag_chunk_overlap_raw is None
-            and rag_max_chunks_per_source_raw is None
-            and rag_search_top_k_raw is None
-            and rag_search_min_similarity_raw is None
-            and rag_query_expansion_enabled_raw is None
-            and rag_query_expansion_max_variants_raw is None
-            and tool_memory_ttl_default_seconds_raw is None
-            and tool_memory_ttl_web_seconds_raw is None
-            and tool_memory_ttl_news_seconds_raw is None
-            and fetch_raw_max_text_chars_raw is None
-            and fetch_summary_max_chars_raw is None
-        ):
+        provided_setting_values = (
+            user_preferences,
+            general_instructions,
+            ai_personality,
+            default_persona_id_raw,
+            scratchpad,
+            scratchpad_sections_raw,
+            max_steps_raw,
+            max_parallel_tools_raw,
+            temperature_raw,
+            clarification_max_questions_raw,
+            search_tool_query_limit_raw,
+            custom_models_raw,
+            visible_model_order_raw,
+            operation_model_preferences_raw,
+            operation_model_fallback_preferences_raw,
+            image_processing_method_raw,
+            image_helper_model_raw,
+            active_tools_raw,
+            proxy_enabled_operations_raw,
+            rag_auto_inject,
+            rag_sensitivity,
+            rag_context_size,
+            rag_source_types,
+            rag_auto_inject_source_types,
+            tool_memory_auto_inject,
+            chat_summary_mode_raw,
+            chat_summary_detail_level_raw,
+            chat_summary_trigger_raw,
+            summary_skip_first_raw,
+            summary_skip_last_raw,
+            context_selection_strategy_raw,
+            entropy_profile_raw,
+            entropy_rag_budget_ratio_raw,
+            entropy_protect_code_blocks_raw,
+            entropy_protect_tool_results_raw,
+            entropy_reference_boost_raw,
+            prompt_max_input_tokens_raw,
+            prompt_response_token_reserve_raw,
+            prompt_recent_history_max_tokens_raw,
+            prompt_summary_max_tokens_raw,
+            prompt_preflight_summary_token_count_raw,
+            prompt_rag_max_tokens_raw,
+            prompt_tool_memory_max_tokens_raw,
+            prompt_tool_trace_max_tokens_raw,
+            summary_source_target_tokens_raw,
+            summary_retry_min_source_tokens_raw,
+            context_compaction_threshold_raw,
+            context_compaction_keep_recent_rounds_raw,
+            reasoning_auto_collapse_raw,
+            pruning_enabled_raw,
+            pruning_token_threshold_raw,
+            pruning_batch_size_raw,
+            pruning_target_reduction_ratio_raw,
+            pruning_min_target_tokens_raw,
+            fetch_url_token_threshold_raw,
+            fetch_url_clip_aggressiveness_raw,
+            fetch_html_converter_mode_raw,
+            fetch_url_summarized_max_input_chars_raw,
+            fetch_url_summarized_max_output_tokens_raw,
+            canvas_prompt_max_lines_raw,
+            canvas_prompt_max_tokens_raw,
+            canvas_prompt_max_chars_raw,
+            canvas_prompt_code_line_max_chars_raw,
+            canvas_prompt_text_line_max_chars_raw,
+            canvas_expand_max_lines_raw,
+            canvas_scroll_window_lines_raw,
+            sub_agent_max_steps_raw,
+            sub_agent_timeout_seconds_raw,
+            sub_agent_retry_attempts_raw,
+            sub_agent_retry_delay_seconds_raw,
+            sub_agent_max_parallel_tools_raw,
+            sub_agent_allowed_tool_names_raw,
+            sub_agent_canvas_auto_save_raw,
+            sub_agent_canvas_auto_open_raw,
+            web_cache_ttl_hours_raw,
+            openrouter_prompt_cache_enabled_raw,
+            openrouter_anthropic_cache_ttl_raw,
+            openrouter_http_referer_raw,
+            openrouter_app_title_raw,
+            login_session_timeout_minutes_raw,
+            login_max_failed_attempts_raw,
+            login_lockout_seconds_raw,
+            login_remember_session_days_raw,
+            conversation_memory_enabled_raw,
+            ocr_enabled_raw,
+            ocr_provider_raw,
+            rag_enabled_raw,
+            youtube_transcripts_enabled_raw,
+            youtube_transcript_language_raw,
+            youtube_transcript_model_size_raw,
+            chat_summary_model_raw,
+            rag_chunk_size_raw,
+            rag_chunk_overlap_raw,
+            rag_max_chunks_per_source_raw,
+            rag_search_top_k_raw,
+            rag_search_min_similarity_raw,
+            rag_query_expansion_enabled_raw,
+            rag_query_expansion_max_variants_raw,
+            tool_memory_ttl_default_seconds_raw,
+            tool_memory_ttl_web_seconds_raw,
+            tool_memory_ttl_news_seconds_raw,
+            fetch_raw_max_text_chars_raw,
+            fetch_summary_max_chars_raw,
+        )
+
+        if not any(value is not None for value in provided_setting_values):
             return jsonify({"error": "No settings provided."}), 400
 
         settings = get_app_settings()

@@ -25,7 +25,7 @@ def create_app(database_path: str | None = None, *, load_persisted_runtime_setti
         config.apply_persisted_runtime_settings(resolved_database_path)
         config.propagate_runtime_settings_to_loaded_modules()
 
-    from db import configure_db_path, initialize_database
+    from db import close_db_connection, configure_db_path, initialize_database
     from routes import (
         register_activity_routes,
         install_auth_guard,
@@ -84,6 +84,11 @@ def create_app(database_path: str | None = None, *, load_persisted_runtime_setti
         _sync_rag_on_startup()
 
     initialize_database()
+
+    @app.teardown_appcontext
+    def _close_db_on_teardown(_exception=None):
+        close_db_connection()
+
     register_auth_routes(app)
     install_auth_guard(app)
     install_request_security(app)
