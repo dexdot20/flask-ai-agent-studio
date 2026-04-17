@@ -3861,26 +3861,21 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             scratchpad_sections={"notes": "Persistent note"},
         )
 
+        self.assertEqual(len(messages), 2)
         self.assertEqual(messages[0]["role"], "system")
         self.assertNotIn("id", messages[0])
-        self.assertEqual(messages[2]["role"], "system")
-        self.assertNotIn("id", messages[2])
-
-        stable_content = messages[0]["content"]
-        content = messages[2]["content"]
-        self.assertNotIn("Current Date and Time", stable_content)
-        self.assertNotIn("Persistent note", stable_content)
-        self.assertIn("## Assistant Role", stable_content)
-        self.assertIn("Persistent note", content)
-        self.assertIn("Current Date and Time", content)
-        self.assertLess(
-            content.index("## Scratchpad (AI Persistent Memory)"), content.index("## Current Date and Time")
-        )
-        self.assertIn("> **AUTHORITATIVE CURRENT TIME:**", content)
-        self.assertNotIn("User Preferences", content)
-        self.assertIn("Date: ", content)
-        self.assertIn("Time: ", content)
         self.assertEqual(messages[1]["role"], "user")
+
+        merged_content = messages[0]["content"]
+        self.assertIn("## Assistant Role", merged_content)
+        self.assertIn("## Scratchpad (AI Persistent Memory)", merged_content)
+        self.assertIn("Persistent note", merged_content)
+        self.assertIn("## Current Date and Time", merged_content)
+        self.assertIn("> **AUTHORITATIVE CURRENT TIME:**", merged_content)
+        self.assertLess(
+            merged_content.index("## Scratchpad (AI Persistent Memory)"),
+            merged_content.index("## Current Date and Time"),
+        )
 
     def test_prepend_runtime_context_places_datetime_before_conversation_summaries(self):
         messages = prepend_runtime_context(
@@ -3892,15 +3887,16 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             active_tool_names=[],
         )
 
+        self.assertEqual(len(messages), 3)
         self.assertEqual(messages[0]["role"], "system")
-        self.assertEqual(messages[3]["role"], "system")
-        content = messages[3]["content"]
+        self.assertEqual(messages[1]["role"], "summary")
+        self.assertEqual(messages[2]["role"], "user")
+        content = messages[0]["content"]
         self.assertIn("## Conversation Summaries", content)
         self.assertIn("authoritative compressed history for earlier deleted turns", content)
         self.assertIn("## Current Date and Time", content)
-        self.assertTrue(content.startswith("## Current Date and Time"))
         self.assertLess(content.index("## Current Date and Time"), content.index("## Conversation Summaries"))
-        self.assertNotIn("id", messages[3])
+        self.assertNotIn("id", messages[0])
 
     def test_runtime_system_message_places_datetime_before_tool_history(self):
         message = build_runtime_system_message(
@@ -4052,7 +4048,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         injected_context = next(
             (
                 message["content"]
-                for message in first_call_messages[1:]
+                for message in first_call_messages
                 if message.get("role") == "system"
                 and "The user prefers concise answers." in str(message.get("content") or "")
             ),
@@ -20849,29 +20845,24 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 conversation_memory=conversation_memory,
             )
 
-        self.assertEqual([message["role"] for message in api_messages], ["system", "user", "system"])
-        static_content = api_messages[0]["content"]
-        dynamic_content = api_messages[2]["content"]
-        self.assertIn("## Assistant Role", static_content)
-        self.assertIn("## Conversation Memory Write Policy", static_content)
-        self.assertNotIn("## User Profile", static_content)
-        self.assertNotIn("## Scratchpad (AI Persistent Memory)", static_content)
-        self.assertNotIn("## Conversation Memory\n", static_content)
-
-        self.assertIn("## User Profile", dynamic_content)
-        self.assertIn("The user prefers concise answers.", dynamic_content)
-        self.assertIn("## Scratchpad (AI Persistent Memory)", dynamic_content)
-        self.assertIn("Persistent note", dynamic_content)
-        self.assertIn("## Conversation Memory", dynamic_content)
-        self.assertIn("Goal: Keep stable rules cached.", dynamic_content)
-        self.assertIn("## Current Date and Time", dynamic_content)
-        self.assertLess(dynamic_content.index("## User Profile"), dynamic_content.index("## Current Date and Time"))
+        self.assertEqual([message["role"] for message in api_messages], ["system", "user"])
+        merged_content = api_messages[0]["content"]
+        self.assertIn("## Assistant Role", merged_content)
+        self.assertIn("## Conversation Memory Write Policy", merged_content)
+        self.assertIn("## User Profile", merged_content)
+        self.assertIn("The user prefers concise answers.", merged_content)
+        self.assertIn("## Scratchpad (AI Persistent Memory)", merged_content)
+        self.assertIn("Persistent note", merged_content)
+        self.assertIn("## Conversation Memory", merged_content)
+        self.assertIn("Goal: Keep stable rules cached.", merged_content)
+        self.assertIn("## Current Date and Time", merged_content)
+        self.assertLess(merged_content.index("## User Profile"), merged_content.index("## Current Date and Time"))
         self.assertLess(
-            dynamic_content.index("## Scratchpad (AI Persistent Memory)"),
-            dynamic_content.index("## Current Date and Time"),
+            merged_content.index("## Scratchpad (AI Persistent Memory)"),
+            merged_content.index("## Current Date and Time"),
         )
         self.assertLess(
-            dynamic_content.index("## Conversation Memory"), dynamic_content.index("## Current Date and Time")
+            merged_content.index("## Conversation Memory"), merged_content.index("## Current Date and Time")
         )
 
     def test_budgeted_prompt_messages_keep_prefix_anchor_before_summaries(self):

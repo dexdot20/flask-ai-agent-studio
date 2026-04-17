@@ -56,16 +56,25 @@ def _get_category_collection(category: str | None):
 def _iter_query_collections(
     category: str | None = None,
     source_type_hint: str | None = None,
+    metadata_filters: dict[str, Any] | None = None,
 ) -> list[tuple[Any, dict[str, Any] | None]]:
     collections: list[tuple[Any, dict[str, Any] | None]] = []
     seen_names: set[str] = set()
+
+    def _merge_where(base_where: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        merged: dict[str, Any] = {}
+        if isinstance(base_where, dict):
+            merged.update(base_where)
+        if isinstance(metadata_filters, dict):
+            merged.update({key: value for key, value in metadata_filters.items() if value not in (None, "")})
+        return merged or None
 
     def add_collection(name: str, where: dict[str, Any] | None = None) -> None:
         normalized_name = str(name or "").strip()
         if not normalized_name or normalized_name in seen_names:
             return
         seen_names.add(normalized_name)
-        collections.append((get_collection(normalized_name), where))
+        collections.append((get_collection(normalized_name), _merge_where(where)))
 
     if category:
         normalized_category = normalize_category(category)
@@ -203,6 +212,7 @@ def query_chunks(
     top_k: int = 5,
     category: str | None = None,
     source_type_hint: str | None = None,
+    metadata_filters: dict[str, Any] | None = None,
 ) -> list[dict]:
     query = str(query or "").strip()
     if not query:
@@ -214,7 +224,11 @@ def query_chunks(
 
     rows: list[dict] = []
     seen_ids: set[str] = set()
-    for collection, where in _iter_query_collections(category, source_type_hint=source_type_hint):
+    for collection, where in _iter_query_collections(
+        category,
+        source_type_hint=source_type_hint,
+        metadata_filters=metadata_filters,
+    ):
         for row in _query_collection_rows(collection, query_embedding, top_k=top_k, where=where):
             row_id = str(row.get("id") or "").strip()
             if row_id and row_id in seen_ids:

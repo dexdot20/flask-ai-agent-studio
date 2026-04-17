@@ -238,8 +238,9 @@ class TestRagRuntime(BaseAppRoutesTestCase):
     def test_search_knowledge_base_tool_uses_query_expansion_and_dedupes_hits(self):
         original_query = "python liste sıralama nasıl yapılır"
 
-        def fake_query(query, top_k=5, category=None, source_type_hint=None):
+        def fake_query(query, top_k=5, category=None, source_type_hint=None, metadata_filters=None):
             del source_type_hint
+            del metadata_filters
             if query == original_query:
                 return [
                     {
@@ -628,6 +629,23 @@ class TestRagRuntime(BaseAppRoutesTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(mocked_search.call_args.kwargs["min_similarity"], 0.75)
+
+    def test_rag_search_route_passes_hierarchical_metadata_filters(self):
+        with patch("routes.conversations.search_knowledge_base_tool", return_value={"query": "memory", "count": 0, "matches": []}) as mocked_search:
+            response = self.client.get(
+                "/api/rag/search?q=memory&workspace_id=conversation:12&project_id=chat-history&document_path=conversations/12&section_id=intro"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            mocked_search.call_args.kwargs["metadata_filters"],
+            {
+                "workspace_id": "conversation:12",
+                "project_id": "chat-history",
+                "document_path": "conversations/12",
+                "section_id": "intro",
+            },
+        )
 
     def test_rag_search_route_rejects_invalid_min_similarity(self):
         response = self.client.get("/api/rag/search?q=memory&min_similarity=abc")

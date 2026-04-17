@@ -1394,6 +1394,13 @@ def build_api_messages(
             api_message["tool_call_id"] = tool_call_id
 
         api_messages.append(api_message)
+        if role == "user" and context_injection:
+            api_messages.append(
+                {
+                    "role": "system",
+                    "content": context_injection,
+                }
+            )
     return _sanitize_tool_call_chain(api_messages)
 
 

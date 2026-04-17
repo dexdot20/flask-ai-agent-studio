@@ -877,6 +877,7 @@ def _query_rag_hits(
     category: str | None = None,
     *,
     allowed_source_types: set[str] | list[str] | tuple[str, ...] | None = None,
+    metadata_filters: dict[str, str] | None = None,
     expand_query: bool = True,
 ) -> list[dict]:
     if _is_query_poisoned(query):
@@ -900,6 +901,7 @@ def _query_rag_hits(
                 top_k=candidate_top_k,
                 category=category,
                 source_type_hint=source_type_hint,
+                metadata_filters=metadata_filters,
             )
         )
         deduped_hits = _dedupe_rag_hits(collected_hits)
@@ -1026,6 +1028,7 @@ def search_knowledge_base_tool(
     top_k: int | None = None,
     allowed_source_types: set[str] | list[str] | tuple[str, ...] | None = None,
     min_similarity: float | int | str | None = None,
+    metadata_filters: dict[str, str] | None = None,
 ) -> dict:
     _require_rag_enabled()
     query = str(query or "").strip()
@@ -1042,6 +1045,7 @@ def search_knowledge_base_tool(
         top_k=top_k,
         category=normalized_category,
         allowed_source_types=allowed_source_types,
+        metadata_filters=metadata_filters,
     )
     matches = _normalize_rag_hits(
         query,

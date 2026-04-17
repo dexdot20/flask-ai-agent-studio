@@ -368,6 +368,28 @@ def _parse_rag_source_type_filter(raw_value):
     return normalized, invalid
 
 
+def _parse_rag_metadata_filter_value(raw_values) -> list[str]:
+    if raw_values is None:
+        return []
+    if isinstance(raw_values, list):
+        values = raw_values
+    elif isinstance(raw_values, str):
+        values = [raw_values]
+    else:
+        values = [str(raw_values)]
+
+    parsed: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        if "," in text:
+            parsed.extend(part.strip() for part in text.split(",") if part.strip())
+        else:
+            parsed.append(text)
+    return parsed
+
+
 def _normalize_upload_metadata_title(raw_title: str) -> str:
     text = re.sub(r"\s+", " ", str(raw_title or "").replace("\n", " ")).strip()
     if not text:
@@ -1751,6 +1773,19 @@ def register_conversation_routes(app) -> None:
         query = (request.args.get("q") or "").strip()
         category = (request.args.get("category") or "").strip() or None
         raw_source_types = request.args.getlist("source_type") or request.args.get("source_types")
+        metadata_filter_keys = (
+            "workspace_id",
+            "project_id",
+            "document_id",
+            "document_path",
+            "section_id",
+            "section_title",
+        )
+        metadata_filters: dict[str, str] = {}
+        for key in metadata_filter_keys:
+            values = _parse_rag_metadata_filter_value(request.args.getlist(key) or request.args.get(key))
+            if values:
+                metadata_filters[key] = values[0]
         try:
             top_k = int(request.args.get("top_k") or RAG_SEARCH_DEFAULT_TOP_K)
         except (TypeError, ValueError):
@@ -1780,6 +1815,7 @@ def register_conversation_routes(app) -> None:
                     top_k=top_k,
                     allowed_source_types=allowed_source_types,
                     min_similarity=min_similarity,
+                    metadata_filters=metadata_filters or None,
                 )
             )
         except Exception:

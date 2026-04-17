@@ -803,6 +803,10 @@
                             <input type="checkbox" name="rag-source-type" value="conversation" />
                             <span>Search</span>
                           </label>
+                          <label class="rag-source-mode-toggle">
+                            <input type="checkbox" name="rag-auto-inject-source-type" value="conversation" />
+                            <span>Auto inject</span>
+                          </label>
                         </div>
                       </div>
 
@@ -818,6 +822,10 @@
                             <input type="checkbox" name="rag-source-type" value="tool_result" />
                             <span>Search</span>
                           </label>
+                          <label class="rag-source-mode-toggle">
+                            <input type="checkbox" name="rag-auto-inject-source-type" value="tool_result" />
+                            <span>Auto inject</span>
+                          </label>
                         </div>
                       </div>
 
@@ -830,6 +838,10 @@
                           <label class="rag-source-mode-toggle">
                             <input type="checkbox" name="rag-source-type" value="tool_memory" />
                             <span>Search</span>
+                          </label>
+                          <label class="rag-source-mode-toggle">
+                            <input type="checkbox" name="rag-auto-inject-source-type" value="tool_memory" />
+                            <span>Auto inject</span>
                           </label>
                         </div>
                       </div>
@@ -844,11 +856,24 @@
                             <input type="checkbox" name="rag-source-type" value="uploaded_document" />
                             <span>Search</span>
                           </label>
+                          <label class="rag-source-mode-toggle">
+                            <input type="checkbox" name="rag-auto-inject-source-type" value="uploaded_document" />
+                            <span>Auto inject</span>
+                          </label>
                         </div>
                       </div>
                     </div>
-                    <p class="settings-copy">Search controls which pools are available to retrieval/search surfaces. Unselected pools do not participate in generic RAG retrieval.</p>
+                    <p class="settings-copy">In practice, Search controls which pools are available to retrieval/search surfaces, while Auto inject controls which pools may be inserted automatically into prompts. These checklists are independent on purpose.</p>
                     <p id="rag-source-summary" class="settings-copy">Search is enabled for the selected pools only; unselected pools will not participate in generic RAG retrieval.</p>
+                    <p id="rag-auto-inject-source-summary" class="settings-copy">Auto inject applies only to the selected pools.</p>
+                  </div>
+                  <div id="tool-memory-lane-panel" class="settings-toggle-panel settings-toggle-panel--accent settings-form-cluster settings-form-cluster--split settings-block-start">
+                    <div class="settings-label">Dedicated saved web/fetch memory</div>
+                    <label class="tool-toggle" for="tool-memory-auto-inject-toggle">
+                      <input type="checkbox" id="tool-memory-auto-inject-toggle" />
+                      <span>Auto inject saved web/fetch memory through the dedicated tool-memory lane</span>
+                    </label>
+                    <p class="settings-copy">When enabled, saved web/fetch memory gets its own prompt budget and is removed from the generic RAG auto-inject pool so retrieved context stays cleaner and easier to control.</p>
                   </div>
                 </div>
               </div>
@@ -1290,7 +1315,7 @@
                   <div class="settings-subsection__header">
                     <span class="settings-subsection__eyebrow">Read-only boundaries</span>
                     <h4 class="settings-subsection__title">Read-only tool access</h4>
-                    <p class="settings-subsection__copy">Choose exactly which read-only tools the delegated helper may use. Write-capable tools remain unavailable to the helper.</p>
+                    <p class="settings-subsection__copy">Research boundaries now cover a broader read-only runtime tool set. Choose which web-only tools the delegated helper may use during research. Write-capable tools remain unavailable to the helper.</p>
                   </div>
                   <div class="tool-permission-sections" id="sub-agent-tool-toggles">
                     {% for section in sub_agent_tool_sections %}
