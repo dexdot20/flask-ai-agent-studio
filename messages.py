@@ -626,6 +626,7 @@ def _build_clarification_response_payload(
             "The following answers were provided by the user in response to your clarification questions. "
             "Proceed directly to the task using these answers — do NOT save them with save_to_conversation_memory "
             "(the clarification system already persists and auto-injects them). "
+            "Do not re-list the original clarification questions in your answer unless the user explicitly asks for them. "
             "Saving them again wastes tool steps and creates duplicate context."
         ),
         "formatted_answers": "\n".join(rendered_rounds).strip(),
@@ -3164,9 +3165,14 @@ def prepend_runtime_context(
     if not injection_content:
         return [runtime_message, *messages]
 
-    merged_content = (runtime_message.get("content") or "") + "\n\n" + injection_content
+    # Keep static runtime instructions and dynamic per-turn context in separate
+    # system messages so the leading static prefix remains cache-friendly.
     return [
-        {**runtime_message, "content": merged_content},
+        runtime_message,
+        {
+            "role": "system",
+            "content": injection_content,
+        },
         *messages,
     ]
 

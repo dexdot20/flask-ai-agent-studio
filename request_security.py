@@ -98,6 +98,9 @@ def _get_rate_limit_rule() -> tuple[str, int, int] | None:
 
 
 def _get_request_client_identifier() -> str:
+    if not bool(getattr(config, "TRUST_PROXY_HEADERS", False)):
+        return str(request.remote_addr or "unknown").strip() or "unknown"
+
     access_route = getattr(request, "access_route", None) or []
     for entry in access_route:
         normalized = str(entry or "").strip()

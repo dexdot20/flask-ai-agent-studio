@@ -3396,12 +3396,6 @@ def _parse_tool_call_arguments(arguments_text: str, label: str) -> tuple[dict | 
     if raw_arguments.startswith("<"):
         return None, f"Invalid tool arguments JSON for {label}: {json_error or 'Could not parse arguments'}"
 
-    repaired_arguments = _close_unbalanced_json_like_object(raw_arguments)
-    if repaired_arguments is not None:
-        parsed_arguments = _parse_json_like_text(repaired_arguments)
-        if isinstance(parsed_arguments, dict):
-            return parsed_arguments, None
-
     if raw_arguments.lstrip().startswith("{"):
         return None, f"Invalid tool arguments JSON for {label}: {json_error or 'Could not parse arguments'}"
     return None, f"Invalid tool arguments JSON for {label}: {json_error or 'Could not parse arguments'}"
@@ -4195,7 +4189,6 @@ def _merge_tool_execution_result_message(messages: list[dict], tool_execution_re
         for message in messages
         if not (
             isinstance(message, dict)
-            and str(message.get("role") or "").strip() == "system"
             and str(message.get("content") or "").startswith(TOOL_EXECUTION_RESULTS_MARKER)
         )
     ]
