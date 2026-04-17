@@ -192,7 +192,16 @@ from routes.pages import (
     build_tool_permission_sections,
 )
 from tests.support.app_harness import BaseAppRoutesTestCase
-from tests.support.mocks import SimpleCrop, SimplePDF, SimpleRequestsResponse, SimpleRequestsSession
+from tests.support.mocks import (
+    ExceptionAfterChunksStream,
+    ImmediateExecutor,
+    ProxyAwareDDGSStub,
+    SimpleCrop,
+    SimplePDF,
+    SimpleRequestsResponse,
+    SimpleRequestsSession,
+    StaticStream,
+)
 from tests.support.stream_events import build_stream_chunk, build_stream_chunk_openrouter, build_tool_call_chunk
 from token_utils import estimate_text_tokens
 from tool_registry import TOOL_SPEC_BY_NAME, get_enabled_tool_specs, get_openai_tool_specs, resolve_runtime_tool_names
@@ -7594,26 +7603,6 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         ]
         executor_limits = []
 
-        class FakeFuture:
-            def __init__(self, value):
-                self._value = value
-
-            def result(self):
-                return self._value
-
-        class FakeExecutor:
-            def __init__(self, max_workers):
-                executor_limits.append(max_workers)
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, tb):
-                return False
-
-            def submit(self, fn, slot):
-                return FakeFuture(fn(slot))
-
         def fake_execute(tool_name, tool_args, runtime_state=None):
             del tool_args, runtime_state
             return {"status": "ok", "tool": tool_name}, f"{tool_name} ok"
@@ -7622,7 +7611,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             patch("agent.client.chat.completions.create", side_effect=responses),
             patch(
                 "agent.ThreadPoolExecutor",
-                side_effect=lambda max_workers: FakeExecutor(max_workers),
+                side_effect=lambda max_workers: ImmediateExecutor(max_workers, on_init=executor_limits.append),
             ),
             patch("agent._validate_tool_arguments", return_value=None),
             patch(
@@ -11861,7 +11850,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
     def test_extract_text_from_pdf_uses_ocr_for_image_only_pages(self):
         from PIL import Image
 
-        class FakePage:
+        class PageStub:
             def __init__(self):
                 self.images = [{"x0": 0, "top": 0, "x1": 100, "bottom": 100}]
 
@@ -11877,7 +11866,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             def to_image(self, **kwargs):
                 return SimpleNamespace(original=Image.new("RGB", (40, 40), "white"))
 
-        with patch("doc_service.pdfplumber.open", return_value=SimplePDF([FakePage()])):
+        with patch("doc_service.pdfplumber.open", return_value=SimplePDF([PageStub()])):
             with patch("ocr_service.extract_image_text", return_value="SCANNED PAGE TEXT") as ocr_mock:
                 result = _extract_text_from_pdf(b"%PDF-FAKE")
 
@@ -11885,7 +11874,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         ocr_mock.assert_called_once()
 
     def test_extract_text_from_pdf_orders_two_column_pages_by_column(self):
-        class FakePage:
+        class PageStub:
             width = 600
             height = 800
             images = []
@@ -11916,7 +11905,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             def extract_text(self, **kwargs):
                 return "INTERLEAVED LAYOUT TEXT"
 
-        with patch("doc_service.pdfplumber.open", return_value=SimplePDF([FakePage()])):
+        with patch("doc_service.pdfplumber.open", return_value=SimplePDF([PageStub()])):
             result = _extract_text_from_pdf(b"%PDF-FAKE")
 
         self.assertIn("Left1 alpha\nLeft2 alpha", result)
@@ -11925,7 +11914,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertNotIn("INTERLEAVED LAYOUT TEXT", result)
 
     def test_extract_text_from_pdf_filters_repeated_headers_and_footers(self):
-        class FakePage:
+        class PageStub:
             width = 600
             height = 800
             images = []
@@ -11950,7 +11939,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             def extract_text(self, **kwargs):
                 return f"Company Confidential\nBody {self.page_num}\nInternal Use Only"
 
-        with patch("doc_service.pdfplumber.open", return_value=SimplePDF([FakePage(1), FakePage(2), FakePage(3)])):
+        with patch("doc_service.pdfplumber.open", return_value=SimplePDF([PageStub(1), PageStub(2), PageStub(3)])):
             result = _extract_text_from_pdf(b"%PDF-FAKE")
 
         self.assertIn("Body 1", result)
@@ -11960,7 +11949,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertNotIn("Internal Use Only", result)
 
     def test_extract_text_from_pdf_prefers_cleaner_linear_text_over_fragmented_layout(self):
-        class FakePage:
+        class PageStub:
             width = 600
             height = 800
             images = []
@@ -11982,14 +11971,14 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                     return "M\nksızın\nAÇIKLAMA\nDİKKATİ"
                 return "Maksızın AÇIKLAMA DİKKATİ"
 
-        with patch("doc_service.pdfplumber.open", return_value=SimplePDF([FakePage()])):
+        with patch("doc_service.pdfplumber.open", return_value=SimplePDF([PageStub()])):
             result = _extract_text_from_pdf(b"%PDF-FAKE")
 
         self.assertIn("Maksızın AÇIKLAMA DİKKATİ", result)
         self.assertNotIn("M\nksızın", result)
 
     def test_extract_text_from_pdf_prunes_edge_page_noise(self):
-        class FakePage:
+        class PageStub:
             width = 600
             height = 800
             images = []
@@ -12009,7 +11998,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             def extract_text(self, **kwargs):
                 return "- 12 -\n••••\n1. Soru metni burada başlar\nA) Bir\nB) İki\n3"
 
-        with patch("doc_service.pdfplumber.open", return_value=SimplePDF([FakePage()])):
+        with patch("doc_service.pdfplumber.open", return_value=SimplePDF([PageStub()])):
             result = _extract_text_from_pdf(b"%PDF-FAKE")
 
         self.assertIn("1. Soru metni burada başlar", result)
@@ -12022,7 +12011,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
     def test_extract_text_from_pdf_prefers_ocr_for_image_heavy_noisy_pages(self):
         from PIL import Image
 
-        class FakePage:
+        class PageStub:
             width = 600
             height = 800
 
@@ -12049,7 +12038,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             def to_image(self, **kwargs):
                 return SimpleNamespace(original=Image.new("RGB", (40, 40), "white"))
 
-        with patch("doc_service.pdfplumber.open", return_value=SimplePDF([FakePage()])):
+        with patch("doc_service.pdfplumber.open", return_value=SimplePDF([PageStub()])):
             with patch("ocr_service.extract_image_text", return_value="Metin sorusu temiz olarak okundu.") as ocr_mock:
                 result = _extract_text_from_pdf(b"%PDF-FAKE")
 
@@ -12068,9 +12057,6 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
     def test_borderless_table_parser_extracts_columns_from_word_positions(self):
         """Simulates a borderless tabular PDF page with 4 columns of aligned words."""
-
-        class FakeWord(dict):
-            pass
 
         def word(text, x0, x1, top):
             return {"text": text, "x0": x0, "x1": x1, "top": top, "bottom": top + 10}
@@ -12102,7 +12088,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             word("2025", 345, 370, 55),
         ]
 
-        class FakePage:
+        class PageStub:
             width = 400
 
             def find_tables(self, **kwargs):
@@ -12111,7 +12097,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             def extract_words(self, **kwargs):
                 return words
 
-        result = _try_extract_borderless_table(FakePage())
+        result = _try_extract_borderless_table(PageStub())
 
         self.assertIn("| Name |", result)
         self.assertIn("| --- |", result)
@@ -12159,7 +12145,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             word("Apr 2025", 320, 388, 75),
         ]
 
-        class FakePage:
+        class PageStub:
             width = 400
 
             def find_tables(self, **kwargs):
@@ -12168,7 +12154,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             def extract_words(self, **kwargs):
                 return words
 
-        result = _try_extract_borderless_table(FakePage())
+        result = _try_extract_borderless_table(PageStub())
         rows = [l for l in result.split("\n") if l.startswith("| ") and "---" not in l]
         dates = [r.split(" | ")[-1].strip().rstrip("|").strip() for r in rows]
 
@@ -12191,7 +12177,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         words = [word(f"word{i}", 10, 50, i * 15) for i in range(25)]
 
-        class FakePage:
+        class PageStub:
             width = 400
 
             def find_tables(self, **kwargs):
@@ -12200,7 +12186,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             def extract_words(self, **kwargs):
                 return words
 
-        result = _try_extract_borderless_table(FakePage())
+        result = _try_extract_borderless_table(PageStub())
 
         self.assertEqual(result, "")
 
@@ -16973,20 +16959,16 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(reasoning_deltas, ["First reasoning block.", "\n\n", "Second reasoning block."])
 
     def test_run_agent_stream_closes_provider_stream_when_generator_closes(self):
-        class FakeResponse:
-            def __init__(self):
-                self.closed = False
-
-            def __iter__(self):
-                yield BaseAppRoutesTestCase._stream_chunk(content="Partial answer.")
-                yield BaseAppRoutesTestCase._stream_chunk(
+        close_state = {"closed": False}
+        fake_response = StaticStream(
+            [
+                BaseAppRoutesTestCase._stream_chunk(content="Partial answer."),
+                BaseAppRoutesTestCase._stream_chunk(
                     usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2)
-                )
-
-            def close(self):
-                self.closed = True
-
-        fake_response = FakeResponse()
+                ),
+            ],
+            on_close=lambda: close_state.__setitem__("closed", True),
+        )
         fake_create = Mock(return_value=fake_response)
         fake_target = {
             "record": {"provider": model_registry.DEEPSEEK_PROVIDER},
@@ -17001,7 +16983,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             self.assertEqual(next(stream)["type"], "answer_start")
             stream.close()
 
-        self.assertTrue(fake_response.closed)
+        self.assertTrue(close_state["closed"])
 
     def test_run_agent_stream_replays_reasoning_into_next_tool_step(self):
         responses = [
@@ -17567,15 +17549,12 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn({"type": "answer_delta", "text": FINAL_ANSWER_ERROR_TEXT}, events)
 
     def test_run_agent_stream_ignores_truncated_stream_after_content(self):
-        class TruncatedStreamResponse:
-            def __iter__(self):
-                yield BaseAppRoutesTestCase._stream_chunk(content="Final answer.")
-                raise http_requests.exceptions.ChunkedEncodingError("incomplete chunked read")
+        stream = ExceptionAfterChunksStream(
+            [BaseAppRoutesTestCase._stream_chunk(content="Final answer.")],
+            http_requests.exceptions.ChunkedEncodingError("incomplete chunked read"),
+        )
 
-            def close(self):
-                return None
-
-        with patch("agent.client.chat.completions.create", return_value=TruncatedStreamResponse()):
+        with patch("agent.client.chat.completions.create", return_value=stream):
             events = list(run_agent_stream([{"role": "user", "content": "Test"}], "deepseek-chat", 1, []))
 
         self.assertIn({"type": "answer_delta", "text": "Final answer."}, events)
@@ -18159,23 +18138,9 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(result["content"], "")
 
     def test_search_web_uses_proxies_before_direct_fallback(self):
-        attempts = []
-
-        class FakeDDGS:
-            def __init__(self, proxy=None):
-                self.proxy = proxy
-
-            def __enter__(self):
-                attempts.append(self.proxy)
-                if self.proxy:
-                    raise RuntimeError("proxy failed")
-                return self
-
-            def __exit__(self, exc_type, exc, tb):
-                return False
-
-            def text(self, query, max_results=5):
-                return [{"title": "Result", "href": "https://example.com", "body": "Snippet"}]
+        ProxyAwareDDGSStub.attempts = []
+        ProxyAwareDDGSStub.fail_on_proxy = True
+        ProxyAwareDDGSStub.text_results = [{"title": "Result", "href": "https://example.com", "body": "Snippet"}]
 
         with (
             patch("web_tools.cache_get", return_value=None),
@@ -18184,32 +18149,20 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 "web_tools.get_proxy_candidates",
                 return_value=["http://proxy.example:8080", None],
             ) as mocked_candidates,
-            patch("web_tools.DDGS", FakeDDGS),
+            patch("web_tools.DDGS", ProxyAwareDDGSStub),
         ):
             result = search_web_tool(["example"])
 
         mocked_candidates.assert_called_once_with(include_direct_fallback=True)
-        self.assertEqual(attempts, ["http://proxy.example:8080", None])
+        self.assertEqual(ProxyAwareDDGSStub.attempts, ["http://proxy.example:8080", None])
         self.assertEqual(result[0]["url"], "https://example.com")
 
     def test_search_news_ddgs_uses_proxies_before_direct_fallback(self):
-        attempts = []
-
-        class FakeDDGS:
-            def __init__(self, proxy=None):
-                self.proxy = proxy
-
-            def __enter__(self):
-                attempts.append(self.proxy)
-                if self.proxy:
-                    raise RuntimeError("proxy failed")
-                return self
-
-            def __exit__(self, exc_type, exc, tb):
-                return False
-
-            def news(self, query, region=None, safesearch=None, timelimit=None, max_results=5):
-                return [{"title": "News", "url": "https://example.com/news", "date": "today", "source": "Example"}]
+        ProxyAwareDDGSStub.attempts = []
+        ProxyAwareDDGSStub.fail_on_proxy = True
+        ProxyAwareDDGSStub.news_results = [
+            {"title": "News", "url": "https://example.com/news", "date": "today", "source": "Example"}
+        ]
 
         with (
             patch("web_tools.cache_get", return_value=None),
@@ -18218,29 +18171,27 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
                 "web_tools.get_proxy_candidates",
                 return_value=["http://proxy.example:8080", None],
             ) as mocked_candidates,
-            patch("web_tools.DDGS", FakeDDGS),
+            patch("web_tools.DDGS", ProxyAwareDDGSStub),
         ):
             result = search_news_ddgs_tool(["example"])
 
         mocked_candidates.assert_called_once_with(include_direct_fallback=True)
-        self.assertEqual(attempts, ["http://proxy.example:8080", None])
+        self.assertEqual(ProxyAwareDDGSStub.attempts, ["http://proxy.example:8080", None])
         self.assertEqual(result[0]["link"], "https://example.com/news")
 
     def test_search_news_google_uses_proxies_before_direct_fallback(self):
         attempts = []
-
-        class FakeResponse:
-            content = b"""<?xml version=\"1.0\"?><rss><channel><item><title>News - Example</title><link>https://example.com/news</link><pubDate>today</pubDate><source>Example</source></item></channel></rss>"""
-
-            def raise_for_status(self):
-                return None
+        fake_response = SimpleNamespace(
+            content=b"""<?xml version=\"1.0\"?><rss><channel><item><title>News - Example</title><link>https://example.com/news</link><pubDate>today</pubDate><source>Example</source></item></channel></rss>""",
+            raise_for_status=lambda: None,
+        )
 
         def fake_get(url, headers=None, timeout=None, proxies=None):
             proxy = (proxies or {}).get("https") if proxies else None
             attempts.append(proxy)
             if proxy:
                 raise RuntimeError("proxy failed")
-            return FakeResponse()
+            return fake_response
 
         with (
             patch("web_tools.cache_get", return_value=None),
