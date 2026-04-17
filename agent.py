@@ -4821,13 +4821,39 @@ def _run_save_to_conversation_memory(tool_args: dict, runtime_state: dict):
 
     source_message_id = agent_context.get("source_message_id")
     message_id = int(source_message_id) if source_message_id not in (None, "") else None
+    mutation_context = {"source_message_id": message_id}
+
+    # Batch path: entries array
+    raw_entries = tool_args.get("entries")
+    if isinstance(raw_entries, list) and raw_entries:
+        results = []
+        summaries = []
+        for item in raw_entries:
+            if not isinstance(item, dict):
+                continue
+            entry = insert_conversation_memory_entry(
+                conversation_id,
+                item.get("entry_type", ""),
+                item.get("key", ""),
+                item.get("value", ""),
+                message_id=message_id,
+                mutation_context=mutation_context,
+            )
+            updated = entry.get("updated_existing") is True
+            results.append({"key": entry.get("key") or item.get("key", ""), "updated_existing": updated})
+            summaries.append(
+                f"{'updated' if updated else 'saved'}: {entry.get('key') or item.get('key', '')}"
+            )
+        return {"status": "ok", "saved": results}, "Conversation memory batch — " + ", ".join(summaries)
+
+    # Single-entry fallback (original behaviour)
     entry = insert_conversation_memory_entry(
         conversation_id,
         tool_args.get("entry_type", ""),
         tool_args.get("key", ""),
         tool_args.get("value", ""),
         message_id=message_id,
-        mutation_context={"source_message_id": message_id},
+        mutation_context=mutation_context,
     )
     updated = entry.get("updated_existing") is True
     return {

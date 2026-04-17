@@ -23,7 +23,6 @@ from agent import (
     USER_CANCELLED_ERROR_TEXT,
     collect_agent_response,
     run_agent_stream,
-    trace_agent_stream_payload,
 )
 from canvas_service import (
     create_canvas_document,
@@ -281,6 +280,17 @@ PROMPT_CONTINUITY_REPLY_TERM_RE = re.compile(
 )
 PROMPT_CONTINUITY_SELECTION_KEYWORD_RE = re.compile(
     r"\b(?:option|seçenek|secenek|select|choose|pick|tercih|first|second|ilk|ikinci)\b",
+    re.IGNORECASE,
+)
+CLARIFICATION_REASK_REQUEST_RE = re.compile(
+    r"\b(?:"
+    r"ilk(?:\s+olarak)?\s+bana\s+soru(?:lar)?\s+sor"
+    r"|bana\s+yeni(?:den)?\s+soru(?:lar)?\s+sor"
+    r"|yeniden\s+soru(?:lar)?\s+sor"
+    r"|ask(?:\s+me)?\s+(?:clarifying\s+)?questions?"
+    r"|ask\s+questions?\s+first"
+    r"|soru(?:lar)?\s+sormaya\s+başla"
+    r")\b",
     re.IGNORECASE,
 )
 PROMPT_CONTINUITY_GRATITUDE_REPLIES = {
@@ -2606,6 +2616,13 @@ def _normalize_prompt_continuity_reply_text(message: dict) -> str:
     return re.sub(r"\s+", " ", content).strip()
 
 
+def _user_explicitly_requests_new_clarification_round(content: str) -> bool:
+    normalized_content = re.sub(r"\s+", " ", str(content or "")).strip()
+    if not normalized_content:
+        return False
+    return bool(CLARIFICATION_REASK_REQUEST_RE.search(normalized_content))
+
+
 def _is_short_follow_up_user_message(message: dict) -> bool:
     if _get_message_role(message) != "user":
         return False
@@ -3358,6 +3375,92 @@ def _find_latest_active_pending_clarification(messages: list[dict]) -> dict | No
         }
 
     return latest_pending
+
+
+def _normalize_clarification_label_key(value: str) -> str:
+    normalized = re.sub(r"\s+", " ", str(value or "")).strip().casefold()
+    return normalized.rstrip("?:： ")
+
+
+def _infer_clarification_response_from_user_text(
+    user_text: str,
+    latest_pending: dict | None,
+) -> dict | None:
+    if not isinstance(latest_pending, dict):
+        return None
+
+    pending_clarification = latest_pending.get("pending_clarification")
+    questions = pending_clarification.get("questions") if isinstance(pending_clarification, dict) else []
+    if not isinstance(questions, list) or not questions:
+        return None
+
+    assistant_message_id = str(latest_pending.get("assistant_message_id") or "").strip()
+    if not assistant_message_id:
+        return None
+
+    normalized_lines = [str(line or "").strip() for line in str(user_text or "").splitlines() if str(line or "").strip()]
+    if not normalized_lines:
+        return None
+
+    arrow_answers: dict[str, dict[str, str]] = {}
+    pending_question_label = ""
+    qa_answers: dict[str, dict[str, str]] = {}
+    saw_answer_syntax = False
+
+    for line in normalized_lines:
+        arrow_match = re.match(r"^[-*]\s*(?P<label>.+?)\s*→\s*(?P<answer>.+?)\s*$", line)
+        if arrow_match:
+            label = str(arrow_match.group("label") or "").strip()
+            answer = str(arrow_match.group("answer") or "").strip()
+            if label and answer:
+                arrow_answers[_normalize_clarification_label_key(label)] = {"display": answer}
+                saw_answer_syntax = True
+            continue
+
+        question_match = re.match(r"^Q\s*[:：]\s*(?P<label>.+?)\s*$", line, re.IGNORECASE)
+        if question_match:
+            pending_question_label = str(question_match.group("label") or "").strip()
+            continue
+
+        answer_match = re.match(r"^A\s*[:：]\s*(?P<answer>.+?)\s*$", line, re.IGNORECASE)
+        if answer_match and pending_question_label:
+            answer = str(answer_match.group("answer") or "").strip()
+            if answer:
+                qa_answers[_normalize_clarification_label_key(pending_question_label)] = {"display": answer}
+                saw_answer_syntax = True
+            pending_question_label = ""
+
+    if not saw_answer_syntax:
+        return None
+
+    collected_answers = {**qa_answers, **arrow_answers}
+    if not collected_answers:
+        return None
+
+    answers_by_question_id: dict[str, dict[str, str]] = {}
+    for question in questions:
+        if not isinstance(question, dict):
+            continue
+        question_id = str(question.get("id") or "").strip()
+        question_label = str(question.get("label") or question_id).strip()
+        if not question_id or not question_label:
+            continue
+        answer = collected_answers.get(_normalize_clarification_label_key(question_label))
+        if not isinstance(answer, dict):
+            continue
+        display = str(answer.get("display") or "").strip()
+        if not display:
+            continue
+        answers_by_question_id[question_id] = {"display": display}
+
+    if not answers_by_question_id:
+        return None
+
+    return {
+        "assistant_message_id": int(assistant_message_id),
+        "questions": questions,
+        "answers": answers_by_question_id,
+    }
 
 
 def _validate_clarification_response_against_messages(
@@ -4559,10 +4662,29 @@ def register_chat_routes(app) -> None:
         latest_user_message = messages[-1] if messages and messages[-1]["role"] == "user" else None
 
         if latest_user_message is not None:
+            conversation_messages = get_conversation_messages(conv_id) if conv_id is not None else []
             raw_clarification_response = extract_clarification_response(latest_user_message.get("metadata"))
             raw_clarification_answers = (
                 raw_clarification_response.get("answers") if isinstance(raw_clarification_response, dict) else {}
             )
+            if conv_id is not None and not (isinstance(raw_clarification_answers, dict) and raw_clarification_answers):
+                inferred_clarification_response = _infer_clarification_response_from_user_text(
+                    latest_user_message.get("content"),
+                    _find_latest_active_pending_clarification(conversation_messages),
+                )
+                if isinstance(inferred_clarification_response, dict):
+                    user_metadata = (
+                        latest_user_message.get("metadata")
+                        if isinstance(latest_user_message.get("metadata"), dict)
+                        else {}
+                    )
+                    latest_user_message["metadata"] = {
+                        **user_metadata,
+                        "clarification_response": inferred_clarification_response,
+                    }
+                    raw_clarification_response = inferred_clarification_response
+                    raw_clarification_answers = inferred_clarification_response.get("answers") or {}
+
             if isinstance(raw_clarification_answers, dict) and raw_clarification_answers:
                 if conv_id is None:
                     return jsonify(
@@ -4572,7 +4694,6 @@ def register_chat_routes(app) -> None:
                         }
                     ), 409
 
-                conversation_messages = get_conversation_messages(conv_id)
                 validated_clarification_response, clarification_error = (
                     _validate_clarification_response_against_messages(
                         raw_clarification_response,
@@ -4942,8 +5063,32 @@ def register_chat_routes(app) -> None:
                 freeform_clarification_content = extract_freeform_clarification_user_content(
                     latest_user_message["content"]
                 )
-                if not freeform_clarification_content:
+                if not _user_explicitly_requests_new_clarification_round(freeform_clarification_content):
                     active_tool_names = [name for name in active_tool_names if name != "ask_clarifying_question"]
+            elif "ask_clarifying_question" in active_tool_names and conv_id is not None:
+                # Fallback: check conversation history for the pattern
+                # "clarification was issued → user responded". If found, the
+                # metadata-based path missed the answers (e.g. retry without
+                # metadata), but the tool must still be disabled so the model
+                # cannot ask the same questions again.
+                _conv_msgs_clar = get_conversation_messages(conv_id)
+                _saw_clar_tool = False
+                _saw_user_after_clar = False
+                for _clar_msg in (_conv_msgs_clar or []):
+                    if _saw_clar_tool:
+                        if str(_clar_msg.get("role") or "") == "user":
+                            _saw_user_after_clar = True
+                            break
+                    elif str(_clar_msg.get("role") or "") == "tool":
+                        _clar_content = str(_clar_msg.get("content") or "")
+                        if '"needs_user_input"' in _clar_content and '"clarification"' in _clar_content:
+                            _saw_clar_tool = True
+                if _saw_user_after_clar:
+                    _fb_freeform = extract_freeform_clarification_user_content(
+                        latest_user_message.get("content", "") if latest_user_message else ""
+                    )
+                    if not _user_explicitly_requests_new_clarification_round(_fb_freeform):
+                        active_tool_names = [name for name in active_tool_names if name != "ask_clarifying_question"]
             rag_query_text = _build_clarification_rag_query(
                 latest_user_message["content"],
                 clarification_response,
@@ -5739,6 +5884,73 @@ def register_chat_routes(app) -> None:
                 finalize_edited_replay_snapshot()
                 raise
             except Exception as exc:
+                cancel_event = chat_run_state.get("cancel_event")
+                cancel_requested = isinstance(cancel_event, Event) and cancel_event.is_set()
+                if cancel_requested:
+                    interruption_message = current_cancel_reason()
+                    finalize_interrupted_progress(interruption_message)
+                    with app_obj.app_context():
+                        cancelled_assistant_message_id = _persist_streaming_assistant_message(
+                            conv_id,
+                            persisted_assistant_message_id,
+                            content=full_response,
+                            reasoning=full_reasoning,
+                            usage_data=usage_data,
+                            tool_results=stored_tool_results,
+                            sub_agent_traces=stored_sub_agent_traces,
+                            canvas_documents=canvas_documents,
+                            active_document_id=active_document_id,
+                            canvas_viewports=canvas_viewports,
+                            canvas_cleared=canvas_cleared,
+                            tool_trace_entries=tool_trace_entries,
+                            pending_clarification=pending_clarification,
+                        )
+                        persist_model_invocations(cancelled_assistant_message_id)
+                    yield (
+                        json.dumps(
+                            {
+                                "type": "tool_error",
+                                "step": max(
+                                    1,
+                                    int((tool_trace_entries[-1].get("step") if tool_trace_entries else 1) or 1),
+                                ),
+                                "tool": "chat",
+                                "error": interruption_message,
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n"
+                    )
+                    if cancelled_assistant_message_id is not None or persisted_user_message_id is not None:
+                        yield (
+                            json.dumps(
+                                {
+                                    "type": "message_ids",
+                                    "user_message_id": persisted_user_message_id,
+                                    "assistant_message_id": cancelled_assistant_message_id,
+                                },
+                                ensure_ascii=False,
+                            )
+                            + "\n"
+                        )
+                    if conv_id:
+                        yield (
+                            json.dumps(
+                                {
+                                    "type": "history_sync",
+                                    "messages": get_conversation_messages(conv_id),
+                                },
+                                ensure_ascii=False,
+                            )
+                            + "\n"
+                        )
+                    yield json.dumps({"type": "done"}, ensure_ascii=False) + "\n"
+                    finalize_edited_replay_snapshot()
+                    LOGGER.info(
+                        "Chat stream interrupted after cancel; partial state preserved for conversation=%s", conv_id
+                    )
+                    return
+
                 rollback_edited_replay_state("stream_error")
                 if isinstance(edit_replay_snapshot, dict):
                     yield (
@@ -5990,25 +6202,9 @@ def register_chat_routes(app) -> None:
             "X-Accel-Buffering": "no",
         }
 
-        def _trace_generated_chunk(chunk: str) -> str:
-            normalized_chunk = str(chunk or "")
-            stripped_chunk = normalized_chunk.strip()
-            if stripped_chunk:
-                try:
-                    payload = json.loads(stripped_chunk)
-                except Exception:
-                    payload = {"raw_chunk": stripped_chunk}
-                trace_agent_stream_payload(
-                    "chat_stream_chunk",
-                    payload=payload,
-                    conversation_id=conv_id,
-                    stream_request_id=stream_request_id,
-                )
-            return normalized_chunk
-
         if current_app.testing:
             try:
-                chunks = [_trace_generated_chunk(chunk) for chunk in generate()]
+                chunks = list(generate())
             finally:
                 _unregister_chat_run(stream_request_id)
 
@@ -6037,9 +6233,8 @@ def register_chat_routes(app) -> None:
             try:
                 with app_obj.app_context():
                     for chunk in generate():
-                        normalized_chunk = _trace_generated_chunk(chunk)
                         if chat_run_state.get("attached"):
-                            event_queue.put(normalized_chunk)
+                            event_queue.put(chunk)
             except Exception:
                 LOGGER.exception(
                     "Background chat stream failed for conversation=%s stream_request_id=%s",

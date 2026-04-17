@@ -405,8 +405,10 @@ def _build_clarification_policy_payload(
             "outlining questions in your reasoning/thinking without emitting the call is not sufficient, "
             "and conversation memory entries or prior chat mentions do NOT satisfy this requirement. "
             "After you ask clarifying questions, wait for the user's reply before continuing. "
-            "If the Clarification Response section is already present for this turn, that reply has already arrived; continue the task instead of calling ask_clarifying_question again. "
-            "Conversation memory entries and ordinary prior messages are NOT Clarification Responses — they do not release you from asking questions the user has explicitly requested."
+            "If the Clarification Response section is already present for this turn, that reply has already arrived; proceed directly to the task — do NOT call ask_clarifying_question again. "
+            "Conversation memory entries and ordinary prior messages are NOT Clarification Responses — they do not release you from asking questions the user has explicitly requested. "
+            "When the Clarification Response is present, do NOT call save_to_conversation_memory for those answers — "
+            "they are already persisted and injected automatically. Doing so wastes steps without benefit."
         ),
     }
 
@@ -621,16 +623,10 @@ def _build_clarification_response_payload(
 
     return {
         "guidance": (
-            "CRITICAL: The latest user message is NOT a new question or request — it is the user's direct response to your earlier clarification questions. "
-            "The clarification answers below capture the answered rounds for this conversation. "
-            "Accept these answers at face value and proceed immediately to the task. "
-            "Do not verify them against conversation memory, do not save them to conversation memory, "
-            "do not reinterpret them as retrieved knowledge-base content, "
-            "and do not ask the same questions again unless the user changes the requirements or explicitly asks to revisit them. "
-            "Do not re-list, re-display, or re-render the clarification questions in your response text — in any format. "
-            "Proceed directly to the task solution using these answers. "
-            "Do NOT call ask_clarifying_question again — all required information has been collected in the clarification round above. "
-            "Calling it again in this turn would be an error."
+            "The following answers were provided by the user in response to your clarification questions. "
+            "Proceed directly to the task using these answers — do NOT save them with save_to_conversation_memory "
+            "(the clarification system already persists and auto-injects them). "
+            "Saving them again wastes tool steps and creates duplicate context."
         ),
         "formatted_answers": "\n".join(rendered_rounds).strip(),
     }

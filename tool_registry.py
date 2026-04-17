@@ -379,44 +379,73 @@ TOOL_SPECS = [
         {
             "name": "save_to_conversation_memory",
             "description": (
-                "Save one compact conversation-scoped memory entry for this chat only. "
+                "Save one or more compact conversation-scoped memory entries for this chat only. "
                 "Use this as the default place to store important chat-specific details, active constraints, decisions, discovered repo or environment facts, or critical tool outcomes that should not be lost later in the same conversation. "
+                "Pass multiple entries in the 'entries' array to save them all in one call instead of calling this tool repeatedly. "
                 "If the same key already exists, the entry is refreshed instead of duplicated."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "entries": {
+                        "type": "array",
+                        "description": (
+                            "List of memory entries to save in one call. "
+                            "Use this instead of calling the tool multiple times. "
+                            "Each item must have entry_type, key, and value."
+                        ),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "entry_type": {
+                                    "type": "string",
+                                    "enum": ["user_info", "task_context", "tool_result", "decision"],
+                                    "description": "Classification for the memory entry.",
+                                },
+                                "key": {
+                                    "type": "string",
+                                    "description": "Short label for the fact or result. Keep it compact and specific.",
+                                },
+                                "value": {
+                                    "type": "string",
+                                    "description": "Single-line micro-summary of the information to remember for later turns in this same chat.",
+                                },
+                            },
+                            "required": ["entry_type", "key", "value"],
+                        },
+                        "minItems": 1,
+                    },
                     "entry_type": {
                         "type": "string",
                         "enum": ["user_info", "task_context", "tool_result", "decision"],
-                        "description": "Classification for the memory entry.",
+                        "description": "Classification for a single memory entry (use 'entries' array instead when saving multiple).",
                     },
                     "key": {
                         "type": "string",
-                        "description": "Short label for the fact or result. Keep it compact and specific.",
+                        "description": "Short label for a single memory entry (use 'entries' array instead when saving multiple).",
                     },
                     "value": {
                         "type": "string",
-                        "description": "Single-line micro-summary of the information to remember for later turns in this same chat.",
+                        "description": "Single-line micro-summary for a single memory entry (use 'entries' array instead when saving multiple).",
                     },
                 },
-                "required": ["entry_type", "key", "value"],
             },
             "prompt": {
-                "purpose": "Writes one short conversation-specific memory entry that will be auto-injected in later turns of this same chat.",
+                "purpose": "Writes one or more short conversation-specific memory entries that will be auto-injected in later turns of this same chat.",
                 "inputs": {
-                    "entry_type": "user_info, task_context, tool_result, or decision",
-                    "key": "short label",
-                    "value": "one compact factual line",
+                    "entries": "[{entry_type, key, value}, ...] — preferred when saving multiple facts at once",
+                    "entry_type": "user_info, task_context, tool_result, or decision (single-entry fallback)",
+                    "key": "short label (single-entry fallback)",
+                    "value": "one compact factual line (single-entry fallback)",
                 },
                 "guidance": (
+                    "When you need to save multiple facts, pass them all as an array in the 'entries' field in a SINGLE call — never call this tool repeatedly one entry at a time. "
                     "Use this whenever the information is important within this conversation but not clearly durable general memory for the cross-conversation scratchpad. "
                     "When choosing between scratchpad and conversation memory, default to conversation memory unless the fact is durable, general, and likely useful across future chats. "
-                    "Prefer concise micro-summaries over raw outputs. Save incrementally after important clarifications, tool results, decisions, and constraints instead of waiting for a later summary. "
-                    "Multiple compact entries are better than one overloaded summary. Be proactive in long or tool-heavy conversations, especially before details may be summarized, pruned, or pushed out of the visible context window. "
+                    "Prefer concise micro-summaries over raw outputs. "
                     "Reuse the same key when updating the same fact so memory stays compact. "
                     "Do NOT save raw clarification question answers here — the clarification system already persists and injects them automatically. "
-                    "Saving clarification answers to memory creates confusion in later turns."
+                    "Saving clarification answers to memory wastes steps and creates confusion in later turns."
                 ),
             },
         },

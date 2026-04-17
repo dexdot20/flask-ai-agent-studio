@@ -175,6 +175,7 @@ from routes.chat import (
     _count_prunable_message_tokens,
     _estimate_prompt_tokens,
     _get_effective_summary_trigger_token_count,
+    _infer_clarification_response_from_user_text,
     _is_failed_tool_summary,
     _persist_streaming_assistant_message,
     _register_chat_run,
@@ -4077,7 +4078,7 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertIn("conversation memory instead", scratchpad_guidance)
         self.assertIn("future responses or behavior across conversations", scratchpad_guidance)
         self.assertIn("default to conversation memory", conversation_guidance)
-        self.assertIn("Multiple compact entries are better than one overloaded summary", conversation_guidance)
+        self.assertIn("never call this tool repeatedly one entry at a time", conversation_guidance)
 
     def test_search_tool_specs_allow_optional_conversation_memory_promotion(self):
         knowledge_base_spec = TOOL_SPEC_BY_NAME["search_knowledge_base"]
@@ -4393,6 +4394,111 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         self.assertEqual(validated["assistant_message_id"], assistant_message_id)
         self.assertEqual(validated["questions"][0]["id"], "budget")
         self.assertEqual(validated["answers"], {"budget": {"display": "200-300 TL"}})
+
+    def test_infer_clarification_response_from_user_text_maps_arrow_answers(self):
+        latest_pending = {
+            "assistant_message_id": 123,
+            "pending_clarification": {
+                "questions": [
+                    {
+                        "id": "budget",
+                        "label": "Budget?",
+                        "input_type": "text",
+                        "required": True,
+                    },
+                    {
+                        "id": "goal",
+                        "label": "Goal?",
+                        "input_type": "text",
+                        "required": False,
+                    },
+                ]
+            },
+        }
+
+        inferred = _infer_clarification_response_from_user_text(
+            "- Budget? → 200-300 TL\n- Goal? → Sleep better",
+            latest_pending,
+        )
+
+        self.assertEqual(
+            inferred,
+            {
+                "assistant_message_id": 123,
+                "questions": latest_pending["pending_clarification"]["questions"],
+                "answers": {
+                    "budget": {"display": "200-300 TL"},
+                    "goal": {"display": "Sleep better"},
+                },
+            },
+        )
+
+    def test_chat_infers_missing_clarification_metadata_from_arrow_answers(self):
+        conversation_id = self._create_conversation()
+        assistant_message_id = self._insert_pending_clarification_assistant(
+            conversation_id,
+            questions=[
+                {
+                    "id": "budget",
+                    "label": "Budget?",
+                    "input_type": "text",
+                    "required": True,
+                }
+            ],
+        )
+        save_app_settings(
+            {
+                "user_preferences": "",
+                "scratchpad": "",
+                "max_steps": "2",
+                "active_tools": json.dumps(["ask_clarifying_question"], ensure_ascii=False),
+                "rag_auto_inject": "false",
+            }
+        )
+
+        fake_events = iter([
+            {"type": "done"},
+        ])
+
+        with patch("routes.chat.run_agent_stream", return_value=fake_events) as mocked_stream:
+            response = self.client.post(
+                "/chat",
+                json={
+                    "conversation_id": conversation_id,
+                    "model": "deepseek-chat",
+                    "user_content": "- Budget? → 200-300 TL",
+                    "messages": [
+                        {
+                            "role": "assistant",
+                            "content": "",
+                            "metadata": {
+                                "pending_clarification": {
+                                    "questions": [
+                                        {
+                                            "id": "budget",
+                                            "label": "Budget?",
+                                            "input_type": "text",
+                                            "required": True,
+                                        }
+                                    ]
+                                }
+                            },
+                        },
+                        {
+                            "role": "user",
+                            "content": "- Budget? → 200-300 TL",
+                            "metadata": {},
+                        },
+                    ],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("ask_clarifying_question", mocked_stream.call_args.args[3])
+        request_api_messages = mocked_stream.call_args.args[0]
+        self.assertTrue(any(message["role"] == "system" and "## Clarification Response" in (message.get("content") or "") for message in request_api_messages))
+        self.assertTrue(any(message["role"] == "user" and "200-300 TL" in (message.get("content") or "") for message in request_api_messages))
+        self.assertIsInstance(assistant_message_id, int)
 
     def test_collect_answered_clarification_rounds_skips_orphaned_responses(self):
         conversation_id = self._create_conversation()
@@ -10408,6 +10514,45 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             assistant_messages[0]["metadata"]["canvas_documents"][0]["id"],
             "canvas-empty-answer",
         )
+
+    def test_chat_preserves_partial_answer_when_cancelled_stream_raises_unexpected_error(self):
+        conversation_id = self._create_conversation()
+        stream_request_id = "cancel-preserve-run"
+
+        def interrupted_events():
+            yield {"type": "answer_start"}
+            yield {"type": "answer_delta", "text": "Kısmi cevap"}
+            _cancel_chat_run(stream_request_id, reason="Cancelled by user.")
+            raise RuntimeError("forced interruption after cancel")
+
+        with patch("routes.chat.run_agent_stream", return_value=interrupted_events()):
+            response = self.client.post(
+                "/chat",
+                json={
+                    "conversation_id": conversation_id,
+                    "stream_request_id": stream_request_id,
+                    "model": "deepseek-chat",
+                    "user_content": "Yarımda kes ve kaydet",
+                    "messages": [{"role": "user", "content": "Yarımda kes ve kaydet"}],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        events = [json.loads(line) for line in response.get_data(as_text=True).strip().splitlines() if line.strip()]
+        self.assertTrue(any(event.get("type") == "done" for event in events))
+        self.assertTrue(
+            any(
+                event.get("type") == "tool_error"
+                and "Cancelled by user." in str(event.get("error") or "")
+                for event in events
+            )
+        )
+
+        conversation_response = self.client.get(f"/api/conversations/{conversation_id}")
+        persisted_messages = conversation_response.get_json()["messages"]
+        assistant_messages = [message for message in persisted_messages if message.get("role") == "assistant"]
+        self.assertTrue(assistant_messages)
+        self.assertEqual(assistant_messages[-1]["content"], "Kısmi cevap")
 
     def test_chat_persists_cleared_canvas_without_documents(self):
         conversation_id = self._create_conversation()
