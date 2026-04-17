@@ -108,6 +108,10 @@ def _parse_float_env(name: str, default: float) -> float:
         return default
 
 
+AGENT_TRACE_LOG_ENABLED = _parse_bool_env("AGENT_TRACE_LOG_ENABLED", True)
+AGENT_TRACE_LOG_INCLUDE_RAW = _parse_bool_env("AGENT_TRACE_LOG_INCLUDE_RAW", True)
+
+
 LOGIN_SESSION_TIMEOUT_MINUTES = max(1, _parse_int_env("LOGIN_SESSION_TIMEOUT_MINUTES", 30))
 LOGIN_MAX_FAILED_ATTEMPTS = max(1, _parse_int_env("LOGIN_MAX_FAILED_ATTEMPTS", 3))
 LOGIN_LOCKOUT_SECONDS = max(1, _parse_int_env("LOGIN_LOCKOUT_SECONDS", 300))

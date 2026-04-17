@@ -165,6 +165,7 @@ from rag_service import (
 )
 from routes.auth import AUTH_LAST_SEEN_KEY, AUTH_REMEMBER_KEY, AUTH_SESSION_KEY
 from routes.chat import (
+    AgentRunCancelledError,
     OMITTED_TOOL_OUTPUT_TEXT,
     _cancel_chat_run,
     _build_budgeted_prompt_messages,
@@ -2571,6 +2572,105 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
 
         with open(workspace_file, "r", encoding="utf-8") as fh:
             self.assertEqual(fh.read(), "after")
+
+    def test_chat_edit_keeps_mutable_state_when_replay_is_cancelled(self):
+        conversation_id = self._create_conversation()
+        workspace_root = os.path.join(self.temp_dir.name, "edit-replay-workspace-cancelled")
+        os.makedirs(workspace_root, exist_ok=True)
+        workspace_file = os.path.join(workspace_root, "notes.txt")
+        with open(workspace_file, "w", encoding="utf-8") as fh:
+            fh.write("baseline workspace")
+
+        append_to_scratchpad("Baseline scratchpad")
+        upsert_user_profile_entry("fact:preferred-tone", "baseline profile", confidence=0.9, source="test")
+
+        with get_db() as conn:
+            insert_message(conn, conversation_id, "user", "First prompt")
+            insert_message(conn, conversation_id, "assistant", "First answer")
+            edited_message_id = insert_message(conn, conversation_id, "user", "Original editable prompt")
+            insert_message(conn, conversation_id, "assistant", "Later assistant answer")
+
+        insert_conversation_memory_entry(
+            conversation_id,
+            "task_context",
+            "critical-plan",
+            "baseline memory",
+            message_id=edited_message_id,
+        )
+
+        def cancelled_events():
+            append_to_scratchpad("Mutated scratchpad")
+            upsert_user_profile_entry("fact:preferred-tone", "mutated profile", confidence=0.2, source="test")
+            insert_conversation_memory_entry(
+                conversation_id,
+                "task_context",
+                "critical-plan",
+                "mutated memory",
+                message_id=edited_message_id,
+            )
+            with open(workspace_file, "w", encoding="utf-8") as fh:
+                fh.write("mutated workspace")
+            yield {"type": "answer_delta", "text": "Partial output"}
+            raise AgentRunCancelledError("cancelled by user")
+
+        with (
+            patch(
+                "routes.chat.create_workspace_runtime_state",
+                side_effect=lambda _conversation_id=None, _root_path=None: create_workspace_runtime_state(
+                    root_path=workspace_root
+                ),
+            ),
+            patch("routes.chat.run_agent_stream", return_value=cancelled_events()),
+            patch("routes.chat.sync_conversations_to_rag_safe"),
+        ):
+            response = self.client.post(
+                "/chat",
+                json={
+                    "conversation_id": conversation_id,
+                    "model": "deepseek-chat",
+                    "edited_message_id": edited_message_id,
+                    "user_content": "Edited prompt that should persist",
+                    "messages": [{"role": "user", "content": "Edited prompt that should persist"}],
+                },
+            )
+            payload_text = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("Previous state restored", payload_text)
+        self.assertIn("cancelled by user", payload_text)
+
+        with get_db() as conn:
+            edited_row = conn.execute(
+                "SELECT content, deleted_at FROM messages WHERE id = ? AND conversation_id = ?",
+                (edited_message_id, conversation_id),
+            ).fetchone()
+            latest_assistant = conn.execute(
+                """SELECT content
+                   FROM messages
+                   WHERE conversation_id = ? AND role = 'assistant'
+                   ORDER BY id DESC
+                   LIMIT 1""",
+                (conversation_id,),
+            ).fetchone()
+
+        self.assertEqual(edited_row["content"], "Edited prompt that should persist")
+        self.assertIsNone(edited_row["deleted_at"])
+        self.assertIsNotNone(latest_assistant)
+        self.assertIn("Partial output", str(latest_assistant["content"] or ""))
+
+        scratchpad_sections = get_all_scratchpad_sections(get_app_settings())
+        self.assertIn("Mutated scratchpad", scratchpad_sections.get("notes", ""))
+
+        profile_entries = {entry["key"]: entry for entry in get_user_profile_entries()}
+        self.assertEqual(profile_entries["fact:preferred-tone"]["value"], "mutated profile")
+
+        memory_entries = get_conversation_memory(conversation_id)
+        latest_plan_entry = next((entry for entry in reversed(memory_entries) if entry.get("key") == "critical-plan"), None)
+        self.assertIsNotNone(latest_plan_entry)
+        self.assertEqual(latest_plan_entry["value"], "mutated memory")
+
+        with open(workspace_file, "r", encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "mutated workspace")
 
     def test_chat_route_separates_prompt_tools_from_execution_whitelist(self):
         captured = {}

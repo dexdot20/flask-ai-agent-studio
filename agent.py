@@ -74,6 +74,8 @@ from project_workspace_service import (
 from config import (
     AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS,
     AGENT_CONTEXT_COMPACTION_THRESHOLD,
+    AGENT_TRACE_LOG_ENABLED,
+    AGENT_TRACE_LOG_INCLUDE_RAW,
     AGENT_TOOL_RESULT_TRANSCRIPT_MAX_CHARS,
     AGENT_TRACE_LOG_PATH,
     CONVERSATION_MEMORY_ENABLED,
@@ -319,6 +321,9 @@ client = _LazyClientProxy()
 
 
 def _get_agent_trace_logger():
+    if not AGENT_TRACE_LOG_ENABLED:
+        return None
+
     global _AGENT_TRACE_LOGGER
     if _AGENT_TRACE_LOGGER is not None:
         return _AGENT_TRACE_LOGGER
@@ -2041,6 +2046,36 @@ def _serialize_for_log(value, depth: int = 0):
     return _clean_tool_text(str(value), limit=800)
 
 
+def _serialize_for_raw_log(value, depth: int = 0):
+    if depth >= 8:
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return str(value)
+
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, dict):
+        return {str(key): _serialize_for_raw_log(item, depth + 1) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_serialize_for_raw_log(item, depth + 1) for item in value]
+
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        try:
+            return _serialize_for_raw_log(model_dump(), depth + 1)
+        except Exception:
+            return str(value)
+
+    dict_method = getattr(value, "dict", None)
+    if callable(dict_method):
+        try:
+            return _serialize_for_raw_log(dict_method(), depth + 1)
+        except Exception:
+            return str(value)
+
+    return str(value)
+
+
 def _summarize_messages_for_log(messages_to_send: list[dict]) -> list[dict]:
     summary = []
     for message in messages_to_send[:20]:
@@ -2064,14 +2099,46 @@ def _summarize_messages_for_log(messages_to_send: list[dict]) -> list[dict]:
     return summary
 
 
-def _trace_agent_event(event: str, **fields):
+def _trace_agent_event(event: str, *, raw_fields: dict | None = None, **fields):
+    if not AGENT_TRACE_LOG_ENABLED:
+        return
+
     payload = {"event": event}
     for key, value in fields.items():
         payload[key] = _serialize_for_log(value)
+    if AGENT_TRACE_LOG_INCLUDE_RAW and isinstance(raw_fields, dict) and raw_fields:
+        payload["raw"] = {
+            str(key): _serialize_for_raw_log(value)
+            for key, value in raw_fields.items()
+        }
     try:
-        _get_agent_trace_logger().info(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        logger = _get_agent_trace_logger()
+        if logger is None:
+            return
+        logger.info(json.dumps(payload, ensure_ascii=False, sort_keys=True))
     except Exception:
         return
+
+
+def trace_agent_stream_payload(
+    event_name: str,
+    *,
+    payload,
+    conversation_id: int | None = None,
+    stream_request_id: str | None = None,
+    step: int | None = None,
+) -> None:
+    event_type = ""
+    if isinstance(payload, dict):
+        event_type = str(payload.get("type") or "").strip()
+    _trace_agent_event(
+        event_name,
+        conversation_id=conversation_id,
+        stream_request_id=stream_request_id,
+        step=step,
+        event_type=event_type or None,
+        raw_fields={"payload": payload},
+    )
 
 
 def _normalize_fetch_token_threshold(value) -> int:
@@ -2625,36 +2692,52 @@ def _append_model_invocation_log(
     error_type: str | None = None,
     error_message: str | None = None,
 ) -> None:
-    if not isinstance(invocation_log_sink, list):
-        return
     context = agent_context if isinstance(agent_context, dict) else {}
     record = model_target.get("record") if isinstance(model_target, dict) else {}
-    invocation_log_sink.append(
-        {
-            "source_message_id": _coerce_int_range(context.get("source_message_id"), 0, 0, 2_147_483_647),
-            "step": max(0, int(step or 0)),
-            "call_type": str(call_type or "agent_step").strip() or "agent_step",
-            "is_retry": bool(retry_reason),
-            "retry_reason": str(retry_reason or "").strip() or None,
-            "sub_agent_depth": _coerce_int_range(context.get("sub_agent_depth"), 0, 0, 8),
-            "provider": str((record or {}).get("provider") or "").strip(),
-            "api_model": str(model_target.get("api_model") or "").strip(),
-            "operation": str(operation or call_type or "").strip() or None,
-            "request_payload": _snapshot_model_invocation_value(request_payload),
-            "response_summary": _snapshot_model_invocation_value(response_summary),
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": total_tokens,
-            "estimated_input_tokens": estimated_input_tokens,
-            "cache_hit_tokens": cache_hit_tokens,
-            "cache_miss_tokens": cache_miss_tokens,
-            "cache_write_tokens": cache_write_tokens,
-            "cost": cost,
-            "latency_ms": latency_ms,
-            "response_status": response_status,
-            "error_type": error_type,
-            "error_message": error_message,
-        }
+    log_record = {
+        "source_message_id": _coerce_int_range(context.get("source_message_id"), 0, 0, 2_147_483_647),
+        "step": max(0, int(step or 0)),
+        "call_type": str(call_type or "agent_step").strip() or "agent_step",
+        "is_retry": bool(retry_reason),
+        "retry_reason": str(retry_reason or "").strip() or None,
+        "sub_agent_depth": _coerce_int_range(context.get("sub_agent_depth"), 0, 0, 8),
+        "provider": str((record or {}).get("provider") or "").strip(),
+        "api_model": str(model_target.get("api_model") or "").strip(),
+        "operation": str(operation or call_type or "").strip() or None,
+        "request_payload": _snapshot_model_invocation_value(request_payload),
+        "response_summary": _snapshot_model_invocation_value(response_summary),
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+        "estimated_input_tokens": estimated_input_tokens,
+        "cache_hit_tokens": cache_hit_tokens,
+        "cache_miss_tokens": cache_miss_tokens,
+        "cache_write_tokens": cache_write_tokens,
+        "cost": cost,
+        "latency_ms": latency_ms,
+        "response_status": response_status,
+        "error_type": error_type,
+        "error_message": error_message,
+    }
+    if isinstance(invocation_log_sink, list):
+        invocation_log_sink.append(log_record)
+
+    _trace_agent_event(
+        "model_invocation_recorded",
+        step=log_record["step"],
+        call_type=log_record["call_type"],
+        operation=log_record["operation"],
+        provider=log_record["provider"],
+        api_model=log_record["api_model"],
+        response_status=log_record["response_status"],
+        error_type=log_record["error_type"],
+        error_message=log_record["error_message"],
+        raw_fields={
+            "agent_context": context,
+            "request_payload": request_payload,
+            "response_summary": response_summary,
+            "record": log_record,
+        },
     )
 
 
@@ -7608,6 +7691,11 @@ def run_agent_stream(
         max_parallel_tools=normalized_parallel_tool_limit,
         api_messages=_summarize_messages_for_log(messages),
         log_path=AGENT_TRACE_LOG_PATH,
+        raw_fields={
+            "messages": messages,
+            "enabled_tool_names": normalized_enabled_tool_names,
+            "prompt_tool_names": normalized_prompt_tool_names,
+        },
     )
 
     def add_usage(usage):
@@ -7910,6 +7998,19 @@ def run_agent_stream(
             request_kwargs.get("messages"),
             model_target.get("record") if isinstance(model_target, dict) else None,
             model_settings,
+        )
+        _trace_agent_event(
+            "model_request_started",
+            trace_id=trace_id,
+            step=step,
+            call_type=call_type,
+            retry_reason=retry_reason,
+            model=model_target.get("api_model"),
+            raw_fields={
+                "request_payload": request_kwargs,
+                "messages_to_send": messages_to_send,
+                "turn_tools": turn_tools,
+            },
         )
 
         def append_turn_invocation(response_summary, *, request_payload=None):
@@ -8501,6 +8602,7 @@ def run_agent_stream(
                 tool_args=tool_args,
                 preview=preview,
                 cache_key=cache_key,
+                raw_fields={"tool_args": tool_args},
             )
             _append_working_state_attempt(working_state, tool_name, preview)
             slot["has_step_update"] = True
@@ -8921,6 +9023,12 @@ def run_agent_stream(
                         summary=summary,
                         result=result,
                         transcript_result=transcript_result,
+                        raw_fields={
+                            "tool_args": tool_args,
+                            "result": result,
+                            "transcript_result": transcript_result,
+                            "storage_entry": storage_entry,
+                        },
                     )
                     if tool_name not in ui_hidden_tool_names:
                         yield {
@@ -8983,6 +9091,7 @@ def run_agent_stream(
                             trace_id=trace_id,
                             step=step,
                             clarification=clarification_event.get("clarification"),
+                            raw_fields={"clarification_event": clarification_event, "tool_result": result},
                         )
                         public_history_messages = _build_public_tool_history_messages(assistant_tool_call_message, tool_messages)
                         if public_history_messages:
@@ -9007,6 +9116,7 @@ def run_agent_stream(
                         tool_name=tool_name,
                         tool_args=tool_args,
                         error=error,
+                        raw_fields={"tool_args": tool_args, "error": error},
                     )
                     if tool_name not in ui_hidden_tool_names:
                         yield {"type": "tool_error", "step": step, "tool": tool_name, "error": error, "call_id": call_id}
@@ -9058,6 +9168,7 @@ def run_agent_stream(
             trace_id=trace_id,
             step=step,
             transcript_results=transcript_results,
+            raw_fields={"transcript_results": transcript_results, "tool_messages": tool_messages},
         )
         public_history_messages = _build_public_tool_history_messages(assistant_tool_call_message, tool_messages)
         if public_history_messages:

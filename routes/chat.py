@@ -23,6 +23,7 @@ from agent import (
     USER_CANCELLED_ERROR_TEXT,
     collect_agent_response,
     run_agent_stream,
+    trace_agent_stream_payload,
 )
 from canvas_service import (
     create_canvas_document,
@@ -5676,35 +5677,6 @@ def register_chat_routes(app) -> None:
             except AgentRunCancelledError as exc:
                 interruption_message = str(exc or current_cancel_reason()).strip() or current_cancel_reason()
                 finalize_interrupted_progress(interruption_message)
-                rollback_edited_replay_state("stream_cancelled")
-                if isinstance(edit_replay_snapshot, dict):
-                    yield (
-                        json.dumps(
-                            {
-                                "type": "tool_error",
-                                "step": 1,
-                                "tool": "chat",
-                                "error": "Edited replay was cancelled. Previous state restored.",
-                            },
-                            ensure_ascii=False,
-                        )
-                        + "\n"
-                    )
-                    if conv_id:
-                        yield (
-                            json.dumps(
-                                {
-                                    "type": "history_sync",
-                                    "messages": get_conversation_messages(conv_id),
-                                },
-                                ensure_ascii=False,
-                            )
-                            + "\n"
-                        )
-                    yield json.dumps({"type": "done"}, ensure_ascii=False) + "\n"
-                    finalize_edited_replay_snapshot()
-                    LOGGER.info("Edited replay cancelled for conversation=%s", conv_id)
-                    return
                 with app_obj.app_context():
                     cancelled_assistant_message_id = _persist_streaming_assistant_message(
                         conv_id,
@@ -5763,7 +5735,7 @@ def register_chat_routes(app) -> None:
                 return
             except GeneratorExit:
                 stream_aborted = True
-                rollback_edited_replay_state("stream_aborted")
+                finalize_interrupted_progress(current_cancel_reason())
                 finalize_edited_replay_snapshot()
                 raise
             except Exception as exc:
@@ -5799,7 +5771,7 @@ def register_chat_routes(app) -> None:
                 finalize_edited_replay_snapshot()
                 raise
             finally:
-                if stream_aborted and not isinstance(edit_replay_snapshot, dict):
+                if stream_aborted:
                     with app_obj.app_context():
                         aborted_assistant_message_id = _persist_streaming_assistant_message(
                             conv_id,
@@ -6018,9 +5990,25 @@ def register_chat_routes(app) -> None:
             "X-Accel-Buffering": "no",
         }
 
+        def _trace_generated_chunk(chunk: str) -> str:
+            normalized_chunk = str(chunk or "")
+            stripped_chunk = normalized_chunk.strip()
+            if stripped_chunk:
+                try:
+                    payload = json.loads(stripped_chunk)
+                except Exception:
+                    payload = {"raw_chunk": stripped_chunk}
+                trace_agent_stream_payload(
+                    "chat_stream_chunk",
+                    payload=payload,
+                    conversation_id=conv_id,
+                    stream_request_id=stream_request_id,
+                )
+            return normalized_chunk
+
         if current_app.testing:
             try:
-                chunks = list(generate())
+                chunks = [_trace_generated_chunk(chunk) for chunk in generate()]
             finally:
                 _unregister_chat_run(stream_request_id)
 
@@ -6049,8 +6037,9 @@ def register_chat_routes(app) -> None:
             try:
                 with app_obj.app_context():
                     for chunk in generate():
+                        normalized_chunk = _trace_generated_chunk(chunk)
                         if chat_run_state.get("attached"):
-                            event_queue.put(chunk)
+                            event_queue.put(normalized_chunk)
             except Exception:
                 LOGGER.exception(
                     "Background chat stream failed for conversation=%s stream_request_id=%s",

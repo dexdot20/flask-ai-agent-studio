@@ -1003,6 +1003,7 @@ let currentConversationParameterOverrides = null;
 let activeAbortController = null;
 let activeChatRunId = null;
 let activeUserCancelRequested = false;
+let activeChatCancellationFallbackTimer = null;
 let activeAssistantStreamingBubble = null;
 let activeAssistantStreamingHasVisibleAnswer = false;
 let selectedImageFiles = [];
@@ -12144,14 +12145,43 @@ inputEl.addEventListener("keydown", (event) => {
 
 async function requestActiveChatCancellation() {
   activeUserCancelRequested = true;
+
+  if (activeChatCancellationFallbackTimer !== null) {
+    window.clearTimeout(activeChatCancellationFallbackTimer);
+    activeChatCancellationFallbackTimer = null;
+  }
+
   const runId = String(activeChatRunId || "").trim();
   if (runId) {
-    fetch(`/api/chat-runs/${encodeURIComponent(runId)}/cancel`, {
-      method: "POST",
-      keepalive: true,
-    }).catch(() => {});
-  }
-  if (activeAbortController) {
+    activeChatCancellationFallbackTimer = window.setTimeout(() => {
+      activeChatCancellationFallbackTimer = null;
+      if (activeAbortController) {
+        activeAbortController.abort();
+      }
+    }, 4000);
+
+    try {
+      const response = await fetch(`/api/chat-runs/${encodeURIComponent(runId)}/cancel`, {
+        method: "POST",
+        keepalive: true,
+      });
+      if (!response.ok && activeAbortController) {
+        if (activeChatCancellationFallbackTimer !== null) {
+          window.clearTimeout(activeChatCancellationFallbackTimer);
+          activeChatCancellationFallbackTimer = null;
+        }
+        activeAbortController.abort();
+      }
+    } catch (_error) {
+      if (activeChatCancellationFallbackTimer !== null) {
+        window.clearTimeout(activeChatCancellationFallbackTimer);
+        activeChatCancellationFallbackTimer = null;
+      }
+      if (activeAbortController) {
+        activeAbortController.abort();
+      }
+    }
+  } else if (activeAbortController) {
     activeAbortController.abort();
   }
   clearEmptyAssistantStreamingBubble();
@@ -14988,6 +15018,10 @@ async function sendMessage(options = {}) {
       }
     }
   } finally {
+    if (activeChatCancellationFallbackTimer !== null) {
+      window.clearTimeout(activeChatCancellationFallbackTimer);
+      activeChatCancellationFallbackTimer = null;
+    }
     if (activeChatRunId === streamRequestId) {
       activeChatRunId = null;
     }
