@@ -20,7 +20,6 @@ from messages import (
     prepend_runtime_context,
     refresh_canvas_sections_in_context_injection,
 )
-from tests.support.app_harness import BaseAppRoutesTestCase
 from tool_registry import (
     PARALLEL_SAFE_READ_ONLY_TOOL_NAMES,
     TOOL_SPEC_BY_NAME,
@@ -29,7 +28,7 @@ from tool_registry import (
 )
 
 
-class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
+class TestRuntimeSystemMessage:
     def test_runtime_system_message_includes_explicit_current_date_and_time(self):
         now = datetime(2026, 3, 15, 21, 42, 5, tzinfo=timezone(timedelta(hours=3)))
 
@@ -48,29 +47,29 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
             now=now,
         )
 
-        self.assertEqual(message["role"], "system")
+        assert message["role"] == "system"
         content = message["content"]
-        self.assertIn("## Current Date and Time", content)
-        self.assertIn("2026-03-15T21:40:00+03:00", content)
-        self.assertIn("- Time: 21:40", content)
-        self.assertIn("## Core Directives", content)
-        self.assertIn("## Active Tools This Turn", content)
-        self.assertIn("Scratchpad (AI Persistent Memory)", content)
-        self.assertIn("### User Profile & Mindset", content)
-        self.assertIn("The user is 22 years old.", content)
-        self.assertIn("Only minimal durable general facts", content)
-        self.assertIn("Default away from scratchpad", content)
-        self.assertIn("Web findings", content)
-        self.assertIn("important enough to deserve long-term storage", content)
-        self.assertIn("Never save them just because they were requested.", content)
-        self.assertNotIn("Err on the side of saving if in doubt.", content)
-        self.assertIn("Clarification**: If a good answer depends", content)
-        self.assertIn("Image Follow-up**: Use for follow-up questions", content)
-        self.assertIn("Tool Memory", content)
-        self.assertIn("Remembered web result", content)
-        self.assertIn("Knowledge Base", content)
-        self.assertIn("Context block", content)
-        self.assertNotIn("You are an advanced, capable, and helpful AI assistant.", content)
+        assert "## Current Date and Time" in content
+        assert "2026-03-15T21:40:00+03:00" in content
+        assert "- Time: 21:40" in content
+        assert "## Core Directives" in content
+        assert "## Active Tools This Turn" in content
+        assert "Scratchpad (AI Persistent Memory)" in content
+        assert "### User Profile & Mindset" in content
+        assert "The user is 22 years old." in content
+        assert "Only minimal durable general facts" in content
+        assert "Default away from scratchpad" in content
+        assert "Web findings" in content
+        assert "important enough to deserve long-term storage" in content
+        assert "Never save them just because they were requested." in content
+        assert "Err on the side of saving if in doubt." not in content
+        assert "Clarification**: If a good answer depends" in content
+        assert "Image Follow-up**: Use for follow-up questions" in content
+        assert "Tool Memory" in content
+        assert "Remembered web result" in content
+        assert "Knowledge Base" in content
+        assert "Context block" in content
+        assert "You are an advanced, capable, and helpful AI assistant." not in content
 
     def test_build_effective_user_preferences_combines_general_and_personality(self):
         combined = build_effective_user_preferences(
@@ -80,10 +79,7 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
             }
         )
 
-        self.assertEqual(
-            combined,
-            "General instructions:\nKeep answers short.\n\nAI personality:\nSound calm, direct, and rigorous.",
-        )
+        assert combined == "General instructions:\nKeep answers short.\n\nAI personality:\nSound calm, direct, and rigorous."
 
     def test_runtime_system_message_places_volatile_context_after_tool_calling(self):
         message = build_runtime_system_message(
@@ -94,26 +90,18 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         content = message["content"]
-        self.assertLess(content.index("## Tool Calling"), content.index("## Tool Execution History"))
-        self.assertLess(content.index("## Tool Calling"), content.index("## Active Tools This Turn"))
-        self.assertLess(content.index("## Tool Calling"), content.index("## Tool Memory"))
-        self.assertLess(content.index("## Tool Calling"), content.index("## Knowledge Base"))
+        assert content.index("## Tool Calling") < content.index("## Tool Execution History")
+        assert content.index("## Tool Calling") < content.index("## Active Tools This Turn")
+        assert content.index("## Tool Calling") < content.index("## Tool Memory")
+        assert content.index("## Tool Calling") < content.index("## Knowledge Base")
 
     def test_runtime_system_message_discourages_unnecessary_web_search(self):
         message = build_runtime_system_message(active_tool_names=["search_web", "fetch_url"])
 
         content = message["content"]
-        self.assertIn(
-            "If you can answer definitively from the current context and the task does not require current, external, or source-specific verification, do not call a tool.",
-            content,
-        )
-        self.assertIn(
-            "Use web-research tools only when the task genuinely needs current facts, external verification, or exact source text.",
-            content,
-        )
-        self.assertIn(
-            "If the answer is already available from the current context, do not search or fetch anything.", content
-        )
+        assert "If you can answer definitively from the current context and the task does not require current, external, or source-specific verification, do not call a tool." in content
+        assert "Use web-research tools only when the task genuinely needs current facts, external verification, or exact source text." in content
+        assert "If the answer is already available from the current context, do not search or fetch anything." in content
 
     def test_runtime_system_message_uses_canonical_role_heading_without_excess_blank_lines(self):
         message = build_runtime_system_message(
@@ -123,9 +111,9 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         content = message["content"]
-        self.assertIn("## Assistant Role", content)
-        self.assertIn("- You are a tool-using assistant.", content)
-        self.assertNotIn("\n\n\n", content)
+        assert "## Assistant Role" in content
+        assert "- You are a tool-using assistant." in content
+        assert "\n\n\n" not in content
 
     def test_runtime_system_message_includes_user_profile_context(self):
         upsert_user_profile_entry("pref:concise", "The user prefers concise answers.", confidence=0.95, source="manual")
@@ -136,8 +124,8 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         content = message["content"]
-        self.assertIn("## User Profile", content)
-        self.assertIn("The user prefers concise answers.", content)
+        assert "## User Profile" in content
+        assert "The user prefers concise answers." in content
 
     def test_runtime_system_message_omits_instructional_user_profile_entries(self):
         upsert_user_profile_entry(
@@ -154,9 +142,9 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         content = message["content"]
-        self.assertIn("The user prefers concise answers.", content)
-        self.assertNotIn("Task completion reports must use exact format", content)
-        self.assertNotIn("Yapılan işlemler", content)
+        assert "The user prefers concise answers." in content
+        assert "Task completion reports must use exact format" not in content
+        assert "Yapılan işlemler" not in content
 
     def test_build_runtime_system_message_formats_compact_auto_injected_rag_context(self):
         message = build_runtime_system_message(
@@ -175,11 +163,11 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
             },
         )
 
-        self.assertIn("Auto-injected query: release notes", message["content"])
-        self.assertIn("Source: Product changelog", message["content"])
-        self.assertIn("The April release adds export support", message["content"])
-        self.assertNotIn("secret-source-key", message["content"])
-        self.assertNotIn('"source_name"', message["content"])
+        assert "Auto-injected query: release notes" in message["content"]
+        assert "Source: Product changelog" in message["content"]
+        assert "The April release adds export support" in message["content"]
+        assert "secret-source-key" not in message["content"]
+        assert '"source_name"' not in message["content"]
 
     def test_build_runtime_system_message_marks_clarification_responses_before_knowledge_base(self):
         message = build_runtime_system_message(
@@ -205,10 +193,10 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         content = message["content"]
-        self.assertIn("## Clarification Response", content)
-        self.assertIn("do NOT save them with save_to_conversation_memory", content)
-        self.assertIn("## Knowledge Base", content)
-        self.assertLess(content.index("## Clarification Response"), content.index("## Knowledge Base"))
+        assert "## Clarification Response" in content
+        assert "do NOT save them with save_to_conversation_memory" in content
+        assert "## Knowledge Base" in content
+        assert content.index("## Clarification Response") < content.index("## Knowledge Base")
 
     def test_build_runtime_system_message_includes_all_clarification_rounds(self):
         message = build_runtime_system_message(
@@ -245,12 +233,12 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         content = message["content"]
-        self.assertIn("## Clarification Response", content)
-        self.assertIn("do NOT save them with save_to_conversation_memory", content)
-        self.assertIn("Round 1", content)
-        self.assertIn("- Reklam butceniz ne kadar? → Gunluk 200-300 TL", content)
-        self.assertIn("Round 2", content)
-        self.assertIn("- Urunun fiyat araligi nedir? → 199 TL - 3990 TL", content)
+        assert "## Clarification Response" in content
+        assert "do NOT save them with save_to_conversation_memory" in content
+        assert "Round 1" in content
+        assert "- Reklam butceniz ne kadar? → Gunluk 200-300 TL" in content
+        assert "Round 2" in content
+        assert "- Urunun fiyat araligi nedir? → 199 TL - 3990 TL" in content
 
     def test_build_runtime_system_message_includes_double_check_protocol(self):
         message = build_runtime_system_message(
@@ -260,15 +248,12 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         content = message["content"]
-        self.assertIn("## Double-Check Protocol", content)
-        self.assertIn("Treat this turn as a verification pass", content)
-        self.assertIn(
-            "verify this specific claim or request first: Verify whether the deployment command is still correct.",
-            content,
-        )
-        self.assertIn("strongest counterargument", content)
-        self.assertIn("Do not present uncertain claims as certain", content)
-        self.assertLess(content.index("## Current Date and Time"), content.index("## Double-Check Protocol"))
+        assert "## Double-Check Protocol" in content
+        assert "Treat this turn as a verification pass" in content
+        assert "verify this specific claim or request first: Verify whether the deployment command is still correct." in content
+        assert "strongest counterargument" in content
+        assert "Do not present uncertain claims as certain" in content
+        assert content.index("## Current Date and Time") < content.index("## Double-Check Protocol")
 
     def test_runtime_system_message_hides_canvas_edit_tools_without_canvas_document(self):
         message = build_runtime_system_message(
@@ -291,30 +276,30 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         content = message["content"]
-        self.assertIn("## Canvas Editing Guidance", content)
-        self.assertIn("Do not rewrite the whole document when only part needs to change", content)
-        self.assertIn("obsolete, superseded, or just a scratch draft", content)
-        self.assertIn("use clear_canvas instead of leaving dead documents behind", content)
-        self.assertIn("If you do not know the document_id, use the document_path", content)
-        self.assertIn("## Tool Calling", content)
-        self.assertIn("## Active Tools This Turn", content)
-        self.assertIn("Native function calling is enabled for this turn.", content)
+        assert "## Canvas Editing Guidance" in content
+        assert "Do not rewrite the whole document when only part needs to change" in content
+        assert "obsolete, superseded, or just a scratch draft" in content
+        assert "use clear_canvas instead of leaving dead documents behind" in content
+        assert "If you do not know the document_id, use the document_path" in content
+        assert "## Tool Calling" in content
+        assert "## Active Tools This Turn" in content
+        assert "Native function calling is enabled for this turn." in content
         active_tools_start = content.index("## Active Tools This Turn")
         active_tools_block = content[active_tools_start:]
-        self.assertIn("Callable tools: `create_canvas_document`", active_tools_block)
-        self.assertNotIn("replace_canvas_lines", active_tools_block)
-        self.assertNotIn("rewrite_canvas_document", active_tools_block)
-        self.assertNotIn("## Active Canvas Document", content)
-        self.assertNotIn("Available Tools", content)
+        assert "Callable tools: `create_canvas_document`" in active_tools_block
+        assert "replace_canvas_lines" not in active_tools_block
+        assert "rewrite_canvas_document" not in active_tools_block
+        assert "## Active Canvas Document" not in content
+        assert "Available Tools" not in content
 
     def test_canvas_cleanup_tool_guidance_mentions_obsolete_documents(self):
         delete_guidance = TOOL_SPEC_BY_NAME["delete_canvas_document"]["prompt"]["guidance"]
         clear_guidance = TOOL_SPEC_BY_NAME["clear_canvas"]["prompt"]["guidance"]
 
-        self.assertIn("obsolete", delete_guidance)
-        self.assertIn("superseded", delete_guidance)
-        self.assertIn("obsolete", clear_guidance)
-        self.assertIn("reset", clear_guidance)
+        assert "obsolete" in delete_guidance
+        assert "superseded" in delete_guidance
+        assert "obsolete" in clear_guidance
+        assert "reset" in clear_guidance
 
     def test_runtime_system_message_includes_active_canvas_document_context(self):
         message = build_runtime_system_message(
@@ -337,22 +322,22 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         content = message["content"]
-        self.assertIn("## Active Canvas Document", content)
-        self.assertIn("- Language: python", content)
-        self.assertIn("- Total tokens (estimated): ~", content)
-        self.assertIn("- Visible excerpt tokens (estimated): ~", content)
-        self.assertIn("1: print('hello')", content)
-        self.assertIn("2: print('world')", content)
-        self.assertIn("## Canvas Editing Guidance", content)
-        self.assertIn("Multiple canvas tool calls in one answer are fine", content)
-        self.assertIn("If you do not know the document_id, use the document_path", content)
-        self.assertIn("## Active Tools This Turn", content)
-        self.assertNotIn("## Canvas File Set Summary", content)
-        self.assertNotIn("## Canvas Decision Matrix", content)
-        self.assertIn("create_canvas_document", content)
-        self.assertNotIn("## Canvas Workflow", content)
-        self.assertIn("## Tool Calling", content)
-        self.assertIn("Use only the tools listed in the Active Tools section for this turn", content)
+        assert "## Active Canvas Document" in content
+        assert "- Language: python" in content
+        assert "- Total tokens (estimated): ~" in content
+        assert "- Visible excerpt tokens (estimated): ~" in content
+        assert "1: print('hello')" in content
+        assert "2: print('world')" in content
+        assert "## Canvas Editing Guidance" in content
+        assert "Multiple canvas tool calls in one answer are fine" in content
+        assert "If you do not know the document_id, use the document_path" in content
+        assert "## Active Tools This Turn" in content
+        assert "## Canvas File Set Summary" not in content
+        assert "## Canvas Decision Matrix" not in content
+        assert "create_canvas_document" in content
+        assert "## Canvas Workflow" not in content
+        assert "## Tool Calling" in content
+        assert "Use only the tools listed in the Active Tools section for this turn" in content
 
     def test_runtime_system_message_represents_ignored_canvas_documents_as_metadata_only(self):
         message = build_runtime_system_message(
@@ -388,14 +373,14 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         content = message["content"]
-        self.assertIn("- Ignored in prompt: true", content)
-        self.assertIn("- Ignore reason: Superseded by src/app.py", content)
-        self.assertIn("## Ignored Canvas Documents", content)
-        self.assertIn("- src/legacy.py", content)
-        self.assertIn("  - Symbols: legacy_main", content)
-        self.assertIn("ignored=false", content)
-        self.assertNotIn("SECRET_VALUE = 'hidden'", content)
-        self.assertNotIn("print(SECRET_VALUE)", content)
+        assert "- Ignored in prompt: true" in content
+        assert "- Ignore reason: Superseded by src/app.py" in content
+        assert "## Ignored Canvas Documents" in content
+        assert "- src/legacy.py" in content
+        assert "  - Symbols: legacy_main" in content
+        assert "ignored=false" in content
+        assert "SECRET_VALUE = 'hidden'" not in content
+        assert "print(SECRET_VALUE)" not in content
 
     def test_build_tool_call_contract_mentions_parallel_and_dependent_tools(self):
         contract = build_tool_call_contract(
@@ -410,11 +395,11 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
 
         rules_text = "\n".join(contract["rules"])
         batching_guidance = contract["batching_guidance"]
-        self.assertIn("Use only the tools listed in the Active Tools section", rules_text)
-        self.assertIn("search_web accepts only the queries array", rules_text)
-        self.assertIn("Batch independent tool calls into one assistant turn", batching_guidance)
-        self.assertIn("GATHER", batching_guidance)
-        self.assertIn("search_knowledge_base and search_tool_memory can be batched", batching_guidance)
+        assert "Use only the tools listed in the Active Tools section" in rules_text
+        assert "search_web accepts only the queries array" in rules_text
+        assert "Batch independent tool calls into one assistant turn" in batching_guidance
+        assert "GATHER" in batching_guidance
+        assert "search_knowledge_base and search_tool_memory can be batched" in batching_guidance
 
     def test_build_tool_call_contract_mentions_parallel_limit(self):
         contract = build_tool_call_contract(
@@ -427,7 +412,7 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         batching_guidance = contract["batching_guidance"]
-        self.assertIn("cap is 2 per turn", batching_guidance)
+        assert "cap is 2 per turn" in batching_guidance
 
     def test_parallel_safe_read_only_tool_metadata_stays_in_sync(self):
         expected_recent_tools = {
@@ -441,18 +426,18 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
 
         runtime_parallel_safe = set(get_parallel_safe_tool_names(read_only_only=True))
 
-        self.assertEqual(set(PARALLEL_SAFE_READ_ONLY_TOOL_NAMES), runtime_parallel_safe)
-        self.assertTrue(expected_recent_tools.issubset(runtime_parallel_safe))
+        assert set(PARALLEL_SAFE_READ_ONLY_TOOL_NAMES) == runtime_parallel_safe
+        assert expected_recent_tools.issubset(runtime_parallel_safe)
 
     def test_build_tool_call_contract_mentions_clarification_limit(self):
         contract = build_tool_call_contract(["ask_clarifying_question"], clarification_max_questions=3)
 
         rules_text = "\n".join(contract["rules"])
-        self.assertIn("Ask at most 3 question(s) per call", rules_text)
-        self.assertIn("Put the actual questions only in the tool arguments", rules_text)
-        self.assertIn("Do not say that you prepared questions", rules_text)
-        self.assertIn("plain UI text only", rules_text)
-        self.assertIn("assistant-visible reply short and brief", rules_text)
+        assert "Ask at most 3 question(s) per call" in rules_text
+        assert "Put the actual questions only in the tool arguments" in rules_text
+        assert "Do not say that you prepared questions" in rules_text
+        assert "plain UI text only" in rules_text
+        assert "assistant-visible reply short and brief" in rules_text
 
     def test_runtime_system_message_includes_canvas_workspace_summary(self):
         message = build_runtime_system_message(
@@ -492,29 +477,29 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         content = message["content"]
-        self.assertIn("## Canvas File Set Summary", content)
-        self.assertIn("- Working mode: project", content)
-        self.assertIn("- Project label: demo-app", content)
-        self.assertIn("- Active file: src/app.py", content)
-        self.assertIn("- Active file size: src/app.py — 3 lines", content)
-        self.assertIn("- Other files: src/config.py", content)
-        self.assertIn("- Other file sizes: src/config.py — 1 line", content)
-        self.assertNotIn("- Path: src/app.py", content)
-        self.assertIn("- Role: source", content)
-        self.assertIn("- Active document id: canvas-1", content)
-        self.assertIn("- Canvas view status: full document visible (3/3 lines)", content)
-        self.assertIn("- Total lines: 3", content)
-        self.assertIn("Canvas is already fully visible", content)
-        self.assertIn("In project mode, prefer document_path for targeting", content)
-        self.assertIn("## Active Tools This Turn", content)
-        self.assertIn("document_path", content)
-        self.assertNotIn("- Validation status:", content)
-        self.assertNotIn("- Files in scope:", content)
-        self.assertNotIn("- Shared imports:", content)
-        self.assertNotIn("## Canvas Decision Matrix", content)
-        self.assertNotIn("## Canvas Project Manifest", content)
-        self.assertNotIn("## Canvas Relationship Map", content)
-        self.assertNotIn("## Other Canvas Documents", content)
+        assert "## Canvas File Set Summary" in content
+        assert "- Working mode: project" in content
+        assert "- Project label: demo-app" in content
+        assert "- Active file: src/app.py" in content
+        assert "- Active file size: src/app.py — 3 lines" in content
+        assert "- Other files: src/config.py" in content
+        assert "- Other file sizes: src/config.py — 1 line" in content
+        assert "- Path: src/app.py" not in content
+        assert "- Role: source" in content
+        assert "- Active document id: canvas-1" in content
+        assert "- Canvas view status: full document visible (3/3 lines)" in content
+        assert "- Total lines: 3" in content
+        assert "Canvas is already fully visible" in content
+        assert "In project mode, prefer document_path for targeting" in content
+        assert "## Active Tools This Turn" in content
+        assert "document_path" in content
+        assert "- Validation status:" not in content
+        assert "- Files in scope:" not in content
+        assert "- Shared imports:" not in content
+        assert "## Canvas Decision Matrix" not in content
+        assert "## Canvas Project Manifest" not in content
+        assert "## Canvas Relationship Map" not in content
+        assert "## Other Canvas Documents" not in content
 
     def test_runtime_system_message_includes_remaining_context_budget_status(self):
         message = build_runtime_system_message(
@@ -523,8 +508,8 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         content = message["content"]
-        self.assertIn("## Prompt Budget Status", content)
-        self.assertIn("Remaining context budget ≈ 3210 tokens", content)
+        assert "## Prompt Budget Status" in content
+        assert "Remaining context budget ≈ 3210 tokens" in content
 
     def test_runtime_system_message_uses_document_titles_when_canvas_paths_are_missing(self):
         message = build_runtime_system_message(
@@ -551,10 +536,10 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         content = message["content"]
-        self.assertIn("- Active document: Research Notes", content)
-        self.assertIn("- Other canvas documents: Ricky - Career Profile and Preferences", content)
-        self.assertIn("use document_path only when an explicit project path is shown", content)
-        self.assertIn("otherwise do not invent a path", content)
+        assert "- Active document: Research Notes" in content
+        assert "- Other canvas documents: Ricky - Career Profile and Preferences" in content
+        assert "use document_path only when an explicit project path is shown" in content
+        assert "otherwise do not invent a path" in content
 
     def test_runtime_system_message_includes_pinned_canvas_viewports(self):
         runtime_state = create_canvas_runtime_state(
@@ -579,10 +564,10 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         content = message["content"]
-        self.assertIn("## Pinned Canvas Viewports", content)
-        self.assertIn("src/app.py lines 2-3", content)
-        self.assertIn("2: line 2", content)
-        self.assertIn("3: line 3", content)
+        assert "## Pinned Canvas Viewports" in content
+        assert "src/app.py lines 2-3" in content
+        assert "2: line 2" in content
+        assert "3: line 3" in content
 
     def test_refresh_canvas_sections_in_context_injection_removes_deleted_canvas_sections(self):
         context_injection = (
@@ -605,12 +590,12 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
             canvas_documents=[],
         )
 
-        self.assertIn("## Current Date and Time", refreshed)
-        self.assertIn("## Conversation Summaries", refreshed)
-        self.assertNotIn("## Active Canvas Document", refreshed)
-        self.assertNotIn("## Pinned Canvas Viewports", refreshed)
-        self.assertNotIn("old line", refreshed)
-        self.assertLess(refreshed.index("## Current Date and Time"), refreshed.index("## Conversation Summaries"))
+        assert "## Current Date and Time" in refreshed
+        assert "## Conversation Summaries" in refreshed
+        assert "## Active Canvas Document" not in refreshed
+        assert "## Pinned Canvas Viewports" not in refreshed
+        assert "old line" not in refreshed
+        assert refreshed.index("## Current Date and Time") < refreshed.index("## Conversation Summaries")
 
     def test_refresh_canvas_sections_in_context_injection_inserts_new_canvas_sections_before_summaries(self):
         context_injection = "## Current Date and Time\n- Time: 21:40\n\n## Conversation Summaries\n- Earlier summary"
@@ -630,10 +615,10 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
             canvas_active_document_id="canvas-1",
         )
 
-        self.assertIn("## Active Canvas Document", refreshed)
-        self.assertIn("1: alpha", refreshed)
-        self.assertIn("2: beta", refreshed)
-        self.assertLess(refreshed.index("## Active Canvas Document"), refreshed.index("## Conversation Summaries"))
+        assert "## Active Canvas Document" in refreshed
+        assert "1: alpha" in refreshed
+        assert "2: beta" in refreshed
+        assert refreshed.index("## Active Canvas Document") < refreshed.index("## Conversation Summaries")
 
     def test_runtime_system_message_mentions_canvas_preview_compaction(self):
         message = build_runtime_system_message(
@@ -657,8 +642,8 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         content = message["content"]
-        self.assertIn("Preview compaction: 1 long line(s) were clipped for token efficiency", content)
-        self.assertIn("scroll_canvas_document or expand_canvas_document", content)
+        assert "Preview compaction: 1 long line(s) were clipped for token efficiency" in content
+        assert "scroll_canvas_document or expand_canvas_document" in content
 
     def test_runtime_system_message_does_not_compact_small_canvas_document_that_fits_budget(self):
         message = build_runtime_system_message(
@@ -681,8 +666,8 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         content = message["content"]
-        self.assertNotIn("Preview compaction:", content)
-        self.assertIn(f"1: {'A' * 220}", content)
+        assert "Preview compaction:" not in content
+        assert f"1: {'A' * 220}" in content
 
     def test_runtime_system_message_explains_canvas_ui_vs_prompt_excerpt_when_truncated(self):
         message = build_runtime_system_message(
@@ -706,11 +691,11 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         content = message["content"]
-        self.assertIn("This canvas excerpt is truncated", content)
-        self.assertIn("The Canvas UI may show more content than the model currently has in context", content)
-        self.assertIn("only the excerpt below and any pinned viewports are visible to you right now", content)
-        self.assertIn("expand_canvas_document", content)
-        self.assertIn("scroll_canvas_document", content)
+        assert "This canvas excerpt is truncated" in content
+        assert "The Canvas UI may show more content than the model currently has in context" in content
+        assert "only the excerpt below and any pinned viewports are visible to you right now" in content
+        assert "expand_canvas_document" in content
+        assert "scroll_canvas_document" in content
 
     def test_canvas_tool_specs_prefer_smallest_valid_edit(self):
         batch_guidance = TOOL_SPEC_BY_NAME["batch_canvas_edits"]["prompt"]["guidance"]
@@ -722,29 +707,29 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         scroll_description = TOOL_SPEC_BY_NAME["scroll_canvas_document"]["description"]
         search_guidance = TOOL_SPEC_BY_NAME["search_canvas_document"]["prompt"]["guidance"]
 
-        self.assertIn("Prefer one batch_canvas_edits call", batch_guidance)
-        self.assertIn("plain JSON object with an action field", batch_guidance)
-        self.assertIn("For replace use start_line, end_line, and lines", batch_guidance)
-        self.assertIn("Always include title", create_guidance)
-        self.assertIn("src/app.py -> app.py", create_guidance)
-        self.assertIn("Do not default to this when only part of the file needs to change", rewrite_guidance)
-        self.assertIn("Multiple localized replace_canvas_lines calls are fine", replace_guidance)
-        self.assertIn("document_id is optional", expand_description)
-        self.assertIn("call-time snapshot", expand_description)
-        self.assertIn("use document_path from the workspace summary or manifest", expand_guidance)
-        self.assertIn("call expand_canvas_document again", expand_guidance)
-        self.assertIn("before line-level edits", scroll_description)
-        self.assertIn("Use this first when the user asks you to find something inside a large canvas", search_guidance)
+        assert "Prefer one batch_canvas_edits call" in batch_guidance
+        assert "plain JSON object with an action field" in batch_guidance
+        assert "For replace use start_line, end_line, and lines" in batch_guidance
+        assert "Always include title" in create_guidance
+        assert "src/app.py -> app.py" in create_guidance
+        assert "Do not default to this when only part of the file needs to change" in rewrite_guidance
+        assert "Multiple localized replace_canvas_lines calls are fine" in replace_guidance
+        assert "document_id is optional" in expand_description
+        assert "call-time snapshot" in expand_description
+        assert "use document_path from the workspace summary or manifest" in expand_guidance
+        assert "call expand_canvas_document again" in expand_guidance
+        assert "before line-level edits" in scroll_description
+        assert "Use this first when the user asks you to find something inside a large canvas" in search_guidance
 
     def test_update_canvas_metadata_tool_spec_supports_ignored_documents(self):
         metadata_spec = TOOL_SPEC_BY_NAME["update_canvas_metadata"]
         metadata_properties = metadata_spec["parameters"]["properties"]
         guidance = metadata_spec["prompt"]["guidance"]
 
-        self.assertIn("ignored", metadata_properties)
-        self.assertIn("ignored_reason", metadata_properties)
-        self.assertIn("ignored=true", guidance)
-        self.assertIn("ignored=false", guidance)
+        assert "ignored" in metadata_properties
+        assert "ignored_reason" in metadata_properties
+        assert "ignored=true" in guidance
+        assert "ignored=false" in guidance
 
     def test_runtime_system_message_mentions_expand_snapshot_rule(self):
         message = build_runtime_system_message(
@@ -766,16 +751,16 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         content = message["content"]
-        self.assertIn("Snapshot rule", content)
-        self.assertIn("expand_canvas_document returns a call-time snapshot", content)
-        self.assertIn("call it again before relying on that older view", content)
+        assert "Snapshot rule" in content
+        assert "expand_canvas_document returns a call-time snapshot" in content
+        assert "call it again before relying on that older view" in content
 
     def test_runtime_system_message_mentions_title_requirement_for_create_canvas_document(self):
         message = build_runtime_system_message(active_tool_names=["create_canvas_document"])
 
         content = message["content"]
-        self.assertIn("create_canvas_document always needs BOTH title and content", content)
-        self.assertIn("never omit title", content)
+        assert "create_canvas_document always needs BOTH title and content" in content
+        assert "never omit title" in content
 
     def test_runtime_system_message_mentions_batch_operation_shape(self):
         message = build_runtime_system_message(
@@ -791,8 +776,8 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         content = message["content"]
-        self.assertIn("Every batch_canvas_edits operation must be a plain object", content)
-        self.assertIn("For batch_canvas_edits, replace needs start_line, end_line, and lines", content)
+        assert "Every batch_canvas_edits operation must be a plain object" in content
+        assert "For batch_canvas_edits, replace needs start_line, end_line, and lines" in content
 
     def test_runtime_system_message_omits_disabled_scroll_guidance(self):
         message = build_runtime_system_message(
@@ -814,8 +799,8 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         content = message["content"]
-        self.assertIn("expand_canvas_document", content)
-        self.assertNotIn("scroll_canvas_document", content)
+        assert "expand_canvas_document" in content
+        assert "scroll_canvas_document" not in content
 
     def test_openai_tool_specs_include_expand_canvas_document_with_canvas_documents(self):
         tools = get_openai_tool_specs(
@@ -837,10 +822,7 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         tool_names = [entry["function"]["name"] for entry in tools]
-        self.assertEqual(
-            tool_names,
-            ["expand_canvas_document", "create_canvas_document", "rewrite_canvas_document", "batch_canvas_edits"],
-        )
+        assert tool_names == ["expand_canvas_document", "create_canvas_document", "rewrite_canvas_document", "batch_canvas_edits"]
 
     def test_openai_tool_specs_hide_canvas_edit_tools_without_canvas_document(self):
         tools = get_openai_tool_specs(
@@ -854,7 +836,7 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         tool_names = [entry["function"]["name"] for entry in tools]
-        self.assertEqual(tool_names, ["create_canvas_document"])
+        assert tool_names == ["create_canvas_document"]
 
     def test_prepend_runtime_context_places_datetime_system_message_first(self):
         messages = prepend_runtime_context(
@@ -864,22 +846,19 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
             scratchpad_sections={"notes": "Persistent note"},
         )
 
-        self.assertEqual(len(messages), 3)
-        self.assertEqual(messages[0]["role"], "system")
-        self.assertEqual(messages[1]["role"], "system")
-        self.assertNotIn("id", messages[0])
-        self.assertEqual(messages[2]["role"], "user")
+        assert len(messages) == 3
+        assert messages[0]["role"] == "system"
+        assert messages[1]["role"] == "system"
+        assert "id" not in messages[0]
+        assert messages[2]["role"] == "user"
 
         static_content = messages[0]["content"]
         dynamic_content = messages[1]["content"]
-        self.assertIn("## Assistant Role", static_content)
-        self.assertIn("## Scratchpad (AI Persistent Memory)", dynamic_content)
-        self.assertIn("Persistent note", dynamic_content)
-        self.assertIn("## Current Date and Time", dynamic_content)
-        self.assertLess(
-            dynamic_content.index("## Scratchpad (AI Persistent Memory)"),
-            dynamic_content.index("## Current Date and Time"),
-        )
+        assert "## Assistant Role" in static_content
+        assert "## Scratchpad (AI Persistent Memory)" in dynamic_content
+        assert "Persistent note" in dynamic_content
+        assert "## Current Date and Time" in dynamic_content
+        assert dynamic_content.index("## Scratchpad (AI Persistent Memory)") < dynamic_content.index("## Current Date and Time")
 
     def test_prepend_runtime_context_moves_dynamic_state_into_bottom_system_message(self):
         messages = prepend_runtime_context(
@@ -899,28 +878,23 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
             scratchpad_sections={"notes": "Persistent note"},
         )
 
-        self.assertEqual(len(messages), 3)
+        assert len(messages) == 3
         static_content = messages[0]["content"]
         dynamic_content = messages[1]["content"]
-        self.assertIn("## Assistant Role", static_content)
-        self.assertIn("## Conversation Memory Write Policy", static_content)
-        self.assertIn("## User Profile", dynamic_content)
-        self.assertIn("The user prefers concise answers.", dynamic_content)
-        self.assertIn("## Scratchpad (AI Persistent Memory)", dynamic_content)
-        self.assertIn("Persistent note", dynamic_content)
-        self.assertIn("## Conversation Memory", dynamic_content)
-        self.assertIn("Goal: Keep stable rules cached.", dynamic_content)
-        self.assertIn("## Current Date and Time", dynamic_content)
-        self.assertLess(dynamic_content.index("## User Profile"), dynamic_content.index("## Current Date and Time"))
-        self.assertLess(
-            dynamic_content.index("## Scratchpad (AI Persistent Memory)"),
-            dynamic_content.index("## Current Date and Time"),
-        )
-        self.assertLess(
-            dynamic_content.index("## Conversation Memory"), dynamic_content.index("## Current Date and Time")
-        )
-        self.assertEqual(messages[2]["role"], "user")
-        self.assertEqual(messages[2]["content"], "Hello")
+        assert "## Assistant Role" in static_content
+        assert "## Conversation Memory Write Policy" in static_content
+        assert "## User Profile" in dynamic_content
+        assert "The user prefers concise answers." in dynamic_content
+        assert "## Scratchpad (AI Persistent Memory)" in dynamic_content
+        assert "Persistent note" in dynamic_content
+        assert "## Conversation Memory" in dynamic_content
+        assert "Goal: Keep stable rules cached." in dynamic_content
+        assert "## Current Date and Time" in dynamic_content
+        assert dynamic_content.index("## User Profile") < dynamic_content.index("## Current Date and Time")
+        assert dynamic_content.index("## Scratchpad (AI Persistent Memory)") < dynamic_content.index("## Current Date and Time")
+        assert dynamic_content.index("## Conversation Memory") < dynamic_content.index("## Current Date and Time")
+        assert messages[2]["role"] == "user"
+        assert messages[2]["content"] == "Hello"
 
     def test_prepend_runtime_context_places_datetime_before_conversation_summaries(self):
         messages = prepend_runtime_context(
@@ -932,16 +906,16 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
             active_tool_names=[],
         )
 
-        self.assertEqual(len(messages), 4)
-        self.assertEqual(messages[0]["role"], "system")
-        self.assertEqual(messages[1]["role"], "system")
-        self.assertEqual(messages[2]["role"], "summary")
-        self.assertEqual(messages[3]["role"], "user")
+        assert len(messages) == 4
+        assert messages[0]["role"] == "system"
+        assert messages[1]["role"] == "system"
+        assert messages[2]["role"] == "summary"
+        assert messages[3]["role"] == "user"
         content = messages[1]["content"]
-        self.assertIn("## Current Date and Time", content)
-        self.assertIn("## Conversation Summaries", content)
-        self.assertLess(content.index("## Current Date and Time"), content.index("## Conversation Summaries"))
-        self.assertNotIn("id", messages[0])
+        assert "## Current Date and Time" in content
+        assert "## Conversation Summaries" in content
+        assert content.index("## Current Date and Time") < content.index("## Conversation Summaries")
+        assert "id" not in messages[0]
 
     def test_runtime_system_message_places_datetime_before_tool_history(self):
         message = build_runtime_system_message(
@@ -961,14 +935,14 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         content = message["content"]
-        self.assertIn("## Tool Memory", content)
-        self.assertIn("## Active Canvas Document", content)
-        self.assertIn("## Tool Execution History", content)
-        self.assertIn("## Current Date and Time", content)
-        self.assertLess(content.index("## Current Date and Time"), content.index("## Tool Memory"))
-        self.assertLess(content.index("## Tool Memory"), content.index("## Tool Execution History"))
-        self.assertLess(content.index("## Active Canvas Document"), content.index("## Tool Execution History"))
-        self.assertLess(content.index("## Current Date and Time"), content.index("## Tool Execution History"))
+        assert "## Tool Memory" in content
+        assert "## Active Canvas Document" in content
+        assert "## Tool Execution History" in content
+        assert "## Current Date and Time" in content
+        assert content.index("## Current Date and Time") < content.index("## Tool Memory")
+        assert content.index("## Tool Memory") < content.index("## Tool Execution History")
+        assert content.index("## Active Canvas Document") < content.index("## Tool Execution History")
+        assert content.index("## Current Date and Time") < content.index("## Tool Execution History")
 
     def test_runtime_system_message_includes_workspace_sandbox(self):
         message = build_runtime_system_message(
@@ -977,9 +951,9 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         content = message["content"]
-        self.assertIn("## Workspace Sandbox", content)
-        self.assertIn("- Root: /tmp/workspace-root", content)
-        self.assertIn("needs_confirmation", content)
+        assert "## Workspace Sandbox" in content
+        assert "- Root: /tmp/workspace-root" in content
+        assert "needs_confirmation" in content
 
     def test_tool_specs_include_guidance_for_workspace_and_news_tools(self):
         for tool_name in [
@@ -991,41 +965,38 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
             "validate_project_workspace",
         ]:
             prompt = TOOL_SPEC_BY_NAME[tool_name]["prompt"]
-            self.assertTrue(str(prompt.get("guidance") or "").strip())
+            assert str(prompt.get("guidance") or "").strip()
 
-        self.assertIn("current information, external verification", TOOL_SPEC_BY_NAME["search_web"]["description"])
-        self.assertIn(
-            "If the answer is already available from the current context",
-            TOOL_SPEC_BY_NAME["search_web"]["prompt"]["guidance"],
-        )
-        self.assertFalse(TOOL_SPEC_BY_NAME["search_web"]["parameters"].get("additionalProperties", True))
-        self.assertIn("Do not pass max_results", TOOL_SPEC_BY_NAME["search_web"]["prompt"]["guidance"])
-        self.assertIn("current news coverage", TOOL_SPEC_BY_NAME["search_news_ddgs"]["description"])
-        self.assertIn("current news verification", TOOL_SPEC_BY_NAME["search_news_google"]["description"])
-        self.assertEqual(TOOL_SPEC_BY_NAME["read_scratchpad"]["parameters"]["required"], [])
+        assert "current information, external verification" in TOOL_SPEC_BY_NAME["search_web"]["description"]
+        assert "If the answer is already available from the current context" in TOOL_SPEC_BY_NAME["search_web"]["prompt"]["guidance"]
+        assert not TOOL_SPEC_BY_NAME["search_web"]["parameters"].get("additionalProperties", True)
+        assert "Do not pass max_results" in TOOL_SPEC_BY_NAME["search_web"]["prompt"]["guidance"]
+        assert "current news coverage" in TOOL_SPEC_BY_NAME["search_news_ddgs"]["description"]
+        assert "current news verification" in TOOL_SPEC_BY_NAME["search_news_google"]["description"]
+        assert TOOL_SPEC_BY_NAME["read_scratchpad"]["parameters"]["required"] == []
 
     def test_memory_tool_specs_separate_scratchpad_and_conversation_memory(self):
         scratchpad_guidance = TOOL_SPEC_BY_NAME["append_scratchpad"]["prompt"]["guidance"]
         conversation_guidance = TOOL_SPEC_BY_NAME["save_to_conversation_memory"]["prompt"]["guidance"]
         persona_guidance = TOOL_SPEC_BY_NAME["save_to_persona_memory"]["prompt"]["guidance"]
 
-        self.assertIn("conversation memory instead", scratchpad_guidance)
-        self.assertIn("future responses or behavior across conversations", scratchpad_guidance)
-        self.assertIn("default to conversation memory", conversation_guidance)
-        self.assertIn("When you need to save multiple facts", conversation_guidance)
-        self.assertIn("current chat", persona_guidance)
-        self.assertIn("global scratchpad", persona_guidance)
+        assert "conversation memory instead" in scratchpad_guidance
+        assert "future responses or behavior across conversations" in scratchpad_guidance
+        assert "default to conversation memory" in conversation_guidance
+        assert "When you need to save multiple facts" in conversation_guidance
+        assert "current chat" in persona_guidance
+        assert "global scratchpad" in persona_guidance
 
     def test_search_tool_specs_allow_optional_conversation_memory_promotion(self):
         knowledge_base_spec = TOOL_SPEC_BY_NAME["search_knowledge_base"]
         tool_memory_spec = TOOL_SPEC_BY_NAME["search_tool_memory"]
 
-        self.assertIn("save_to_conversation_memory", knowledge_base_spec["parameters"]["properties"])
-        self.assertIn("memory_key", knowledge_base_spec["parameters"]["properties"])
-        self.assertIn("save_to_conversation_memory", tool_memory_spec["parameters"]["properties"])
-        self.assertIn("memory_key", tool_memory_spec["parameters"]["properties"])
-        self.assertIn("survive later turns in this chat", knowledge_base_spec["prompt"]["guidance"])
-        self.assertIn("survive later turns in this chat", tool_memory_spec["prompt"]["guidance"])
+        assert "save_to_conversation_memory" in knowledge_base_spec["parameters"]["properties"]
+        assert "memory_key" in knowledge_base_spec["parameters"]["properties"]
+        assert "save_to_conversation_memory" in tool_memory_spec["parameters"]["properties"]
+        assert "memory_key" in tool_memory_spec["parameters"]["properties"]
+        assert "survive later turns in this chat" in knowledge_base_spec["prompt"]["guidance"]
+        assert "survive later turns in this chat" in tool_memory_spec["prompt"]["guidance"]
 
     def test_runtime_system_message_renders_persona_memory_and_policy(self):
         message = build_runtime_system_message(
@@ -1041,9 +1012,9 @@ class TestRuntimeSystemMessage(BaseAppRoutesTestCase):
         )
 
         content = message["content"]
-        self.assertIn("## Persona Memory", content)
-        self.assertIn("#5 09:15 - Repo style: Prefer concise progress updates.", content)
-        self.assertIn("Shared durable memory for the currently active persona", content)
-        self.assertIn("## Persona Memory Write Policy", content)
-        self.assertIn("save_to_persona_memory", content)
-        self.assertIn("conversation memory instead", content)
+        assert "## Persona Memory" in content
+        assert "#5 09:15 - Repo style: Prefer concise progress updates." in content
+        assert "Shared durable memory for the currently active persona" in content
+        assert "## Persona Memory Write Policy" in content
+        assert "save_to_persona_memory" in content
+        assert "conversation memory instead" in content

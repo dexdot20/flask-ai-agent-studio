@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import unittest
+import pytest
 
 from agent import (
     _build_streaming_canvas_tool_preview,
@@ -34,7 +34,7 @@ from db import (
 from messages import _build_canvas_prompt_payload, build_runtime_system_message
 
 
-class TestCanvasRuntime(unittest.TestCase):
+class TestCanvasRuntime:
     def test_canvas_limit_getters_clamp_values(self):
         settings = {}
         settings["canvas_prompt_max_lines"] = "50000"
@@ -45,13 +45,13 @@ class TestCanvasRuntime(unittest.TestCase):
         settings["canvas_expand_max_lines"] = "-1"
         settings["canvas_scroll_window_lines"] = "nope"
 
-        self.assertEqual(get_canvas_prompt_max_lines(settings), 3000)
-        self.assertEqual(get_canvas_prompt_max_tokens(settings), 50000)
-        self.assertEqual(get_canvas_prompt_max_chars(settings), 200000)
-        self.assertEqual(get_canvas_prompt_code_line_max_chars(settings), 40)
-        self.assertEqual(get_canvas_prompt_text_line_max_chars(settings), 1000)
-        self.assertEqual(get_canvas_expand_max_lines(settings), 100)
-        self.assertEqual(get_canvas_scroll_window_lines(settings), 200)
+        assert get_canvas_prompt_max_lines(settings) == 3000
+        assert get_canvas_prompt_max_tokens(settings) == 50000
+        assert get_canvas_prompt_max_chars(settings) == 200000
+        assert get_canvas_prompt_code_line_max_chars(settings) == 40
+        assert get_canvas_prompt_text_line_max_chars(settings) == 1000
+        assert get_canvas_expand_max_lines(settings) == 100
+        assert get_canvas_scroll_window_lines(settings) == 200
 
     def test_build_canvas_prompt_payload_respects_max_lines(self):
         content = "\n".join(f"line {index}" for index in range(1, 51))
@@ -67,10 +67,10 @@ class TestCanvasRuntime(unittest.TestCase):
 
         payload = _build_canvas_prompt_payload([document], max_lines=10)
 
-        self.assertIsNotNone(payload)
-        self.assertEqual(len(payload["visible_lines"]), 10)
-        self.assertEqual(payload["visible_line_end"], 10)
-        self.assertTrue(payload["is_truncated"])
+        assert payload is not None
+        assert len(payload["visible_lines"]) == 10
+        assert payload["visible_line_end"] == 10
+        assert payload["is_truncated"]
 
         small_document = normalize_canvas_document(
             {
@@ -84,10 +84,10 @@ class TestCanvasRuntime(unittest.TestCase):
 
         full_payload = _build_canvas_prompt_payload([small_document], max_lines=10)
 
-        self.assertIsNotNone(full_payload)
-        self.assertEqual(len(full_payload["visible_lines"]), 3)
-        self.assertEqual(full_payload["visible_line_end"], 3)
-        self.assertFalse(full_payload["is_truncated"])
+        assert full_payload is not None
+        assert len(full_payload["visible_lines"]) == 3
+        assert full_payload["visible_line_end"] == 3
+        assert not full_payload["is_truncated"]
 
     def test_build_canvas_prompt_payload_hides_ignored_active_document_content(self):
         payload = _build_canvas_prompt_payload(
@@ -122,14 +122,14 @@ class TestCanvasRuntime(unittest.TestCase):
             max_lines=10,
         )
 
-        self.assertIsNotNone(payload)
-        self.assertTrue(payload["active_document_ignored"])
-        self.assertEqual(payload["visible_lines"], [])
-        self.assertEqual(payload["visible_line_end"], 0)
-        self.assertEqual([entry["id"] for entry in payload["ignored_documents"]], ["canvas-1"])
-        self.assertEqual(payload["ignored_documents"][0]["ignored_reason"], "Superseded by src/app.py")
-        self.assertEqual([entry["id"] for entry in payload["other_documents"]], ["canvas-2"])
-        self.assertEqual([viewport["document_id"] for viewport in payload["viewports"]], ["canvas-2"])
+        assert payload is not None
+        assert payload["active_document_ignored"]
+        assert payload["visible_lines"] == []
+        assert payload["visible_line_end"] == 0
+        assert [entry["id"] for entry in payload["ignored_documents"]] == ["canvas-1"]
+        assert payload["ignored_documents"][0]["ignored_reason"] == "Superseded by src/app.py"
+        assert [entry["id"] for entry in payload["other_documents"]] == ["canvas-2"]
+        assert [viewport["document_id"] for viewport in payload["viewports"]] == ["canvas-2"]
 
     def test_build_canvas_prompt_payload_keeps_full_long_markdown_lines_when_document_fits_budget(self):
         long_line = "A" * 220
@@ -145,10 +145,10 @@ class TestCanvasRuntime(unittest.TestCase):
 
         payload = _build_canvas_prompt_payload([document], max_lines=10)
 
-        self.assertIsNotNone(payload)
-        self.assertEqual(payload["clipped_line_count"], 0)
-        self.assertEqual(payload["visible_lines"][0], f"1: {long_line}")
-        self.assertEqual(payload["visible_lines"][1], "2: short line")
+        assert payload is not None
+        assert payload["clipped_line_count"] == 0
+        assert payload["visible_lines"][0] == f"1: {long_line}"
+        assert payload["visible_lines"][1] == "2: short line"
 
     def test_build_canvas_prompt_payload_clips_long_markdown_lines_when_needed_to_fit_budget(self):
         long_line = "A" * 220
@@ -164,11 +164,11 @@ class TestCanvasRuntime(unittest.TestCase):
 
         payload = _build_canvas_prompt_payload([document], max_lines=10, max_chars=120)
 
-        self.assertIsNotNone(payload)
-        self.assertEqual(payload["clipped_line_count"], 1)
-        self.assertTrue(payload["visible_lines"][0].startswith("1: "))
-        self.assertTrue(payload["visible_lines"][0].endswith(".."))
-        self.assertLess(len(payload["visible_lines"][0]), len(f"1: {long_line}"))
+        assert payload is not None
+        assert payload["clipped_line_count"] == 1
+        assert payload["visible_lines"][0].startswith("1: ")
+        assert payload["visible_lines"][0].endswith("..")
+        assert len(payload["visible_lines"][0]) < len(f"1: {long_line}")
 
     def test_build_canvas_prompt_payload_uses_custom_line_clip_limits(self):
         code_line = "x" * 220
@@ -205,12 +205,12 @@ class TestCanvasRuntime(unittest.TestCase):
             text_line_max_chars=55,
         )
 
-        self.assertIsNotNone(code_payload)
-        self.assertIsNotNone(markdown_payload)
-        self.assertTrue(code_payload["visible_lines"][0].endswith(".."))
-        self.assertTrue(markdown_payload["visible_lines"][0].endswith(".."))
-        self.assertLessEqual(len(code_payload["visible_lines"][0]), len("1: ") + 60)
-        self.assertLessEqual(len(markdown_payload["visible_lines"][0]), len("1: ") + 55)
+        assert code_payload is not None
+        assert markdown_payload is not None
+        assert code_payload["visible_lines"][0].endswith("..")
+        assert markdown_payload["visible_lines"][0].endswith("..")
+        assert len(code_payload["visible_lines"][0]) <= len("1: ") + 60
+        assert len(markdown_payload["visible_lines"][0]) <= len("1: ") + 55
 
     def test_normalize_canvas_document_detects_page_count_from_markers(self):
         document = normalize_canvas_document(
@@ -222,7 +222,7 @@ class TestCanvasRuntime(unittest.TestCase):
             }
         )
 
-        self.assertEqual(document["page_count"], 2)
+        assert document["page_count"] == 2
 
     def test_normalize_canvas_document_ignores_page_markers_in_code_documents(self):
         document = normalize_canvas_document(
@@ -234,7 +234,7 @@ class TestCanvasRuntime(unittest.TestCase):
             }
         )
 
-        self.assertNotIn("page_count", document)
+        assert "page_count" not in document
 
     def test_scroll_canvas_document_returns_window_flags(self):
         content = "\n".join(f"line {index}" for index in range(1, 101))
@@ -252,11 +252,11 @@ class TestCanvasRuntime(unittest.TestCase):
 
         result = scroll_canvas_document(runtime_state, 20, 60, max_window_lines=15)
 
-        self.assertEqual(result["start_line"], 20)
-        self.assertEqual(result["end_line_actual"], 34)
-        self.assertEqual(len(result["visible_lines"]), 15)
-        self.assertTrue(result["has_more_above"])
-        self.assertTrue(result["has_more_below"])
+        assert result["start_line"] == 20
+        assert result["end_line_actual"] == 34
+        assert len(result["visible_lines"]) == 15
+        assert result["has_more_above"]
+        assert result["has_more_below"]
 
     def test_scroll_canvas_document_visual_mode_error_includes_guidance(self):
         runtime_state = create_canvas_runtime_state(
@@ -274,7 +274,7 @@ class TestCanvasRuntime(unittest.TestCase):
             active_document_id="doc-visual",
         )
 
-        with self.assertRaisesRegex(ValueError, "image-backed"):
+        with pytest.raises(ValueError, match="image-backed"):
             scroll_canvas_document(runtime_state, 1, 3)
 
     def test_search_canvas_document_defaults_to_active_document(self):
@@ -300,9 +300,9 @@ class TestCanvasRuntime(unittest.TestCase):
 
         result = search_canvas_document(runtime_state, "beta")
 
-        self.assertEqual(result["match_count"], 1)
-        self.assertEqual(result["matches"][0]["document_id"], "doc-1")
-        self.assertEqual(result["matches"][0]["line"], 2)
+        assert result["match_count"] == 1
+        assert result["matches"][0]["document_id"] == "doc-1"
+        assert result["matches"][0]["line"] == 2
 
     def test_search_canvas_document_can_search_all_documents(self):
         runtime_state = create_canvas_runtime_state(
@@ -327,8 +327,8 @@ class TestCanvasRuntime(unittest.TestCase):
 
         result = search_canvas_document(runtime_state, "beta", all_documents=True)
 
-        self.assertEqual(result["match_count"], 2)
-        self.assertEqual([match["document_id"] for match in result["matches"]], ["doc-1", "doc-2"])
+        assert result["match_count"] == 2
+        assert [match["document_id"] for match in result["matches"]] == ["doc-1", "doc-2"]
 
     def test_search_canvas_document_supports_context_lines_and_offset(self):
         runtime_state = create_canvas_runtime_state(
@@ -346,12 +346,12 @@ class TestCanvasRuntime(unittest.TestCase):
 
         result = search_canvas_document(runtime_state, "beta", context_lines=1, offset=1, max_results=1)
 
-        self.assertEqual(result["match_count"], 2)
-        self.assertEqual(result["returned_count"], 1)
-        self.assertFalse(result["has_more"])
-        self.assertEqual(result["matches"][0]["line"], 5)
-        self.assertEqual(result["matches"][0]["context_before"], ["4: gamma"])
-        self.assertEqual(result["matches"][0]["context_after"], ["6: delta"])
+        assert result["match_count"] == 2
+        assert result["returned_count"] == 1
+        assert not result["has_more"]
+        assert result["matches"][0]["line"] == 5
+        assert result["matches"][0]["context_before"] == ["4: gamma"]
+        assert result["matches"][0]["context_after"] == ["6: delta"]
 
     def test_batch_read_canvas_documents_combines_expand_and_scroll_requests(self):
         runtime_state = create_canvas_runtime_state(
@@ -383,12 +383,12 @@ class TestCanvasRuntime(unittest.TestCase):
             ],
         )
 
-        self.assertEqual(result["requested_count"], 3)
-        self.assertEqual(result["success_count"], 2)
-        self.assertEqual(result["results"][0]["action"], "scrolled")
-        self.assertEqual(result["results"][0]["visible_lines"], ["2: two", "3: three"])
-        self.assertEqual(result["results"][1]["action"], "expanded")
-        self.assertEqual(result["results"][2]["status"], "error")
+        assert result["requested_count"] == 3
+        assert result["success_count"] == 2
+        assert result["results"][0]["action"] == "scrolled"
+        assert result["results"][0]["visible_lines"] == ["2: two", "3: three"]
+        assert result["results"][1]["action"] == "expanded"
+        assert result["results"][2]["status"] == "error"
 
     def test_set_canvas_viewport_permanent_disables_auto_unpin(self):
         runtime_state = create_canvas_runtime_state(
@@ -412,9 +412,9 @@ class TestCanvasRuntime(unittest.TestCase):
             auto_unpin_on_edit=True,
         )
 
-        self.assertTrue(result["pinned"]["permanent"])
-        self.assertFalse(result["pinned"]["auto_unpin_on_edit"])
-        self.assertEqual(result["pinned"]["ttl_turns"], 0)
+        assert result["pinned"]["permanent"]
+        assert not result["pinned"]["auto_unpin_on_edit"]
+        assert result["pinned"]["ttl_turns"] == 0
 
     def test_set_canvas_viewport_ttl_zero_is_treated_as_permanent(self):
         runtime_state = create_canvas_runtime_state(
@@ -438,10 +438,10 @@ class TestCanvasRuntime(unittest.TestCase):
             auto_unpin_on_edit=True,
         )
 
-        self.assertTrue(result["pinned"]["permanent"])
-        self.assertFalse(result["pinned"]["auto_unpin_on_edit"])
-        self.assertEqual(result["pinned"]["ttl_turns"], 0)
-        self.assertEqual(result["pinned"]["remaining_turns"], 0)
+        assert result["pinned"]["permanent"]
+        assert not result["pinned"]["auto_unpin_on_edit"]
+        assert result["pinned"]["ttl_turns"] == 0
+        assert result["pinned"]["remaining_turns"] == 0
 
     def test_set_canvas_viewport_rejects_visual_canvas_documents(self):
         runtime_state = create_canvas_runtime_state(
@@ -459,7 +459,7 @@ class TestCanvasRuntime(unittest.TestCase):
             ]
         )
 
-        with self.assertRaisesRegex(ValueError, "text-addressable lines"):
+        with pytest.raises(ValueError, match="text-addressable lines"):
             set_canvas_viewport(runtime_state, document_path="docs/scan.pdf", start_line=1, end_line=2)
 
     def test_validate_canvas_document_detects_python_and_markdown_issues(self):
@@ -487,11 +487,11 @@ class TestCanvasRuntime(unittest.TestCase):
         python_result = validate_canvas_document(runtime_state, document_path="broken.py")
         markdown_result = validate_canvas_document(runtime_state, document_path="README.md")
 
-        self.assertFalse(python_result["is_valid"])
-        self.assertEqual(python_result["validator_used"], "python")
-        self.assertEqual(python_result["issues"][0]["severity"], "error")
-        self.assertEqual(markdown_result["validator_used"], "markdown")
-        self.assertTrue(any(issue["message"] == "Unclosed fenced code block." for issue in markdown_result["issues"]))
+        assert not python_result["is_valid"]
+        assert python_result["validator_used"] == "python"
+        assert python_result["issues"][0]["severity"] == "error"
+        assert markdown_result["validator_used"] == "markdown"
+        assert any(issue["message"] == "Unclosed fenced code block." for issue in markdown_result["issues"])
 
     def test_validate_canvas_document_marks_visual_canvas_documents_invalid_for_text_validation(self):
         runtime_state = create_canvas_runtime_state(
@@ -511,9 +511,9 @@ class TestCanvasRuntime(unittest.TestCase):
 
         result = validate_canvas_document(runtime_state, document_path="docs/scan.pdf")
 
-        self.assertFalse(result["is_valid"])
-        self.assertEqual(result["validator_used"], "none")
-        self.assertIn("image-backed previews", result["issues"][0]["message"])
+        assert not result["is_valid"]
+        assert result["validator_used"] == "none"
+        assert "image-backed previews" in result["issues"][0]["message"]
 
     def test_focus_canvas_page_pins_detected_page_range(self):
         runtime_state = create_canvas_runtime_state(
@@ -531,13 +531,13 @@ class TestCanvasRuntime(unittest.TestCase):
         result = focus_canvas_page(runtime_state, document_path="docs/report.pdf", page_number=2, ttl_turns=2)
         payloads = get_canvas_viewport_payloads(runtime_state)
 
-        self.assertEqual(result["action"], "page_focused")
-        self.assertEqual(result["page_number"], 2)
-        self.assertEqual(result["start_line"], 7)
-        self.assertEqual(result["end_line"], 9)
-        self.assertEqual(payloads[0]["page_number"], 2)
-        self.assertEqual(payloads[0]["start_line"], 7)
-        self.assertEqual(payloads[0]["end_line"], 9)
+        assert result["action"] == "page_focused"
+        assert result["page_number"] == 2
+        assert result["start_line"] == 7
+        assert result["end_line"] == 9
+        assert payloads[0]["page_number"] == 2
+        assert payloads[0]["start_line"] == 7
+        assert payloads[0]["end_line"] == 9
 
     def test_execute_tool_scroll_canvas_document_uses_runtime_window_limit(self):
         content = "\n".join(f"line {index}" for index in range(1, 101))
@@ -562,10 +562,10 @@ class TestCanvasRuntime(unittest.TestCase):
             runtime_state=runtime_state,
         )
 
-        self.assertEqual(result["action"], "scrolled")
-        self.assertEqual(result["start_line"], 5)
-        self.assertEqual(result["end_line_actual"], 16)
-        self.assertIn("Canvas scrolled", summary)
+        assert result["action"] == "scrolled"
+        assert result["start_line"] == 5
+        assert result["end_line_actual"] == 16
+        assert "Canvas scrolled" in summary
 
     def test_execute_tool_search_canvas_document_supports_all_documents(self):
         runtime_state = {
@@ -596,9 +596,9 @@ class TestCanvasRuntime(unittest.TestCase):
             runtime_state=runtime_state,
         )
 
-        self.assertEqual(result["action"], "searched")
-        self.assertEqual(result["match_count"], 2)
-        self.assertIn("canvas matches found", summary)
+        assert result["action"] == "searched"
+        assert result["match_count"] == 2
+        assert "canvas matches found" in summary
 
     def test_runtime_system_message_mentions_canvas_scroll_for_truncated_excerpt(self):
         content = "\n".join(f"line {index}" for index in range(1, 51))
@@ -617,10 +617,10 @@ class TestCanvasRuntime(unittest.TestCase):
             canvas_prompt_max_lines=10,
         )
 
-        self.assertIn("This canvas excerpt is truncated", message["content"])
-        self.assertIn("when no canvas read tool is enabled", message["content"])
-        self.assertNotIn("scroll_canvas_document", message["content"])
-        self.assertNotIn("expand_canvas_document", message["content"])
+        assert "This canvas excerpt is truncated" in message["content"]
+        assert "when no canvas read tool is enabled" in message["content"]
+        assert "scroll_canvas_document" not in message["content"]
+        assert "expand_canvas_document" not in message["content"]
 
     def test_runtime_system_message_does_not_ask_expand_scroll_for_full_canvas(self):
         content = "\n".join(f"line {index}" for index in range(1, 11))
@@ -639,16 +639,16 @@ class TestCanvasRuntime(unittest.TestCase):
             canvas_prompt_max_lines=20,
         )
 
-        self.assertIn("fully visible in the current excerpt", message["content"])
-        self.assertIn("Canvas is already fully visible", message["content"])
-        self.assertNotIn("If this excerpt is truncated", message["content"])
+        assert "fully visible in the current excerpt" in message["content"]
+        assert "Canvas is already fully visible" in message["content"]
+        assert "If this excerpt is truncated" not in message["content"]
 
     def test_extract_partial_json_string_value_handles_partial_escapes(self):
         arguments_text = "{\"title\":\"Plan\",\"content\":\"Line 1\\nLine 2\\u00e7 ve \\\"quote\\\""
 
         extracted = _extract_partial_json_string_value(arguments_text, "content")
 
-        self.assertEqual(extracted, 'Line 1\nLine 2ç ve "quote"')
+        assert extracted == 'Line 1\nLine 2ç ve "quote"'
 
     def test_parse_tool_call_arguments_accepts_markdown_fenced_json(self):
         tool_args, parse_error = _parse_tool_call_arguments(
@@ -656,15 +656,12 @@ class TestCanvasRuntime(unittest.TestCase):
             "replace_canvas_lines",
         )
 
-        self.assertIsNone(parse_error)
-        self.assertEqual(
-            tool_args,
-            {
-                "start_line": 12,
-                "end_line": 14,
-                "lines": ["socket_client = None"],
-            },
-        )
+        assert parse_error is None
+        assert tool_args == {
+            "start_line": 12,
+            "end_line": 14,
+            "lines": ["socket_client = None"],
+        }
 
     def test_parse_tool_call_arguments_repairs_truncated_json_object(self):
         tool_args, parse_error = _parse_tool_call_arguments(
@@ -672,8 +669,8 @@ class TestCanvasRuntime(unittest.TestCase):
             "replace_canvas_lines",
         )
 
-        self.assertIsNone(tool_args)
-        self.assertIsNotNone(parse_error)
+        assert tool_args is None
+        assert parse_error is not None
 
     def test_build_streaming_canvas_tool_preview_reads_partial_canvas_args(self):
         tool_call_parts = [
@@ -687,12 +684,12 @@ class TestCanvasRuntime(unittest.TestCase):
 
         preview = _build_streaming_canvas_tool_preview(tool_call_parts)
 
-        self.assertEqual(preview["tool"], "create_canvas_document")
-        self.assertEqual(preview["preview_key"], "canvas-call-0")
-        self.assertEqual(preview["snapshot"]["title"], "Spec")
-        self.assertEqual(preview["snapshot"]["format"], "code")
-        self.assertEqual(preview["snapshot"]["language"], "python")
-        self.assertEqual(preview["content"], "print(1)\nprint(2)")
+        assert preview["tool"] == "create_canvas_document"
+        assert preview["preview_key"] == "canvas-call-0"
+        assert preview["snapshot"]["title"] == "Spec"
+        assert preview["snapshot"]["format"] == "code"
+        assert preview["snapshot"]["language"] == "python"
+        assert preview["content"] == "print(1)\nprint(2)"
 
     def test_build_streaming_canvas_tool_preview_uses_latest_canvas_call(self):
         tool_call_parts = [
@@ -712,10 +709,10 @@ class TestCanvasRuntime(unittest.TestCase):
 
         preview = _build_streaming_canvas_tool_preview(tool_call_parts)
 
-        self.assertEqual(preview["tool"], "create_canvas_document")
-        self.assertEqual(preview["preview_key"], "canvas-call-1")
-        self.assertEqual(preview["snapshot"]["title"], "second.py")
-        self.assertEqual(preview["content"], "print(2)")
+        assert preview["tool"] == "create_canvas_document"
+        assert preview["preview_key"] == "canvas-call-1"
+        assert preview["snapshot"]["title"] == "second.py"
+        assert preview["content"] == "print(2)"
 
     def test_build_streaming_canvas_tool_preview_synthesizes_replace_canvas_preview_content(self):
         canvas_state = create_canvas_runtime_state(
@@ -741,11 +738,11 @@ class TestCanvasRuntime(unittest.TestCase):
 
         preview = _build_streaming_canvas_tool_preview(tool_call_parts, canvas_state)
 
-        self.assertEqual(preview["tool"], "replace_canvas_lines")
-        self.assertEqual(preview["snapshot"]["document_id"], "doc-1")
-        self.assertEqual(preview["snapshot"]["path"], "docs/notes.md")
-        self.assertEqual(preview["content_mode"], "append")
-        self.assertIsNone(preview["content"])
+        assert preview["tool"] == "replace_canvas_lines"
+        assert preview["snapshot"]["document_id"] == "doc-1"
+        assert preview["snapshot"]["path"] == "docs/notes.md"
+        assert preview["content_mode"] == "append"
+        assert preview["content"] is None
 
     def test_build_streaming_canvas_tool_preview_synthesizes_insert_canvas_preview_content(self):
         canvas_state = create_canvas_runtime_state(
@@ -772,11 +769,11 @@ class TestCanvasRuntime(unittest.TestCase):
 
         preview = _build_streaming_canvas_tool_preview(tool_call_parts, canvas_state)
 
-        self.assertEqual(preview["tool"], "insert_canvas_lines")
-        self.assertEqual(preview["snapshot"]["document_path"], "src/script.py")
-        self.assertEqual(preview["snapshot"]["language"], "python")
-        self.assertEqual(preview["content_mode"], "append")
-        self.assertIsNone(preview["content"])
+        assert preview["tool"] == "insert_canvas_lines"
+        assert preview["snapshot"]["document_path"] == "src/script.py"
+        assert preview["snapshot"]["language"] == "python"
+        assert preview["content_mode"] == "append"
+        assert preview["content"] is None
 
     def test_build_streaming_canvas_tool_preview_synthesizes_batch_canvas_preview_content(self):
         canvas_state = create_canvas_runtime_state(
@@ -802,9 +799,9 @@ class TestCanvasRuntime(unittest.TestCase):
 
         preview = _build_streaming_canvas_tool_preview(tool_call_parts, canvas_state)
 
-        self.assertEqual(preview["tool"], "batch_canvas_edits")
-        self.assertEqual(preview["content_mode"], "append")
-        self.assertIsNone(preview["content"])
+        assert preview["tool"] == "batch_canvas_edits"
+        assert preview["content_mode"] == "append"
+        assert preview["content"] is None
 
     def test_build_streaming_canvas_tool_preview_synthesizes_transform_canvas_preview_content(self):
         canvas_state = create_canvas_runtime_state(
@@ -831,9 +828,9 @@ class TestCanvasRuntime(unittest.TestCase):
 
         preview = _build_streaming_canvas_tool_preview(tool_call_parts, canvas_state)
 
-        self.assertEqual(preview["tool"], "transform_canvas_lines")
-        self.assertEqual(preview["content_mode"], "replace")
-        self.assertEqual(preview["content"], "DEBUG = True\nprint('done')")
+        assert preview["tool"] == "transform_canvas_lines"
+        assert preview["content_mode"] == "replace"
+        assert preview["content"] == "DEBUG = True\nprint('done')"
 
     def test_canvas_self_read_guard_skips_path_target_after_same_turn_mutation(self):
         canvas_state = create_canvas_runtime_state(
@@ -858,8 +855,8 @@ class TestCanvasRuntime(unittest.TestCase):
             mutated_doc_paths={"src/app.py"},
         )
 
-        self.assertTrue(should_skip)
-        self.assertIn("src/app.py", guard_message)
+        assert should_skip
+        assert "src/app.py" in guard_message
 
     def test_canvas_self_read_guard_skips_default_active_document_after_mutation(self):
         canvas_state = create_canvas_runtime_state(
@@ -883,8 +880,8 @@ class TestCanvasRuntime(unittest.TestCase):
             mutated_doc_paths=set(),
         )
 
-        self.assertTrue(should_skip)
-        self.assertIn("README.md", guard_message)
+        assert should_skip
+        assert "README.md" in guard_message
 
     def test_canvas_self_read_guard_does_not_skip_all_documents_search(self):
         canvas_state = create_canvas_runtime_state(
@@ -915,8 +912,8 @@ class TestCanvasRuntime(unittest.TestCase):
             mutated_doc_paths={"src/a.py"},
         )
 
-        self.assertFalse(should_skip)
-        self.assertEqual(guard_message, "")
+        assert not should_skip
+        assert guard_message == ""
 
     def test_collect_canvas_mutation_locators_includes_paths_from_targets_and_result(self):
         tracked_ids, tracked_paths = _collect_canvas_mutation_locators(
@@ -937,7 +934,7 @@ class TestCanvasRuntime(unittest.TestCase):
             },
         )
 
-        self.assertIn("doc-1", tracked_ids)
-        self.assertIn("doc-2", tracked_ids)
-        self.assertIn("src/app.py", tracked_paths)
-        self.assertIn("src/lib/util.py", tracked_paths)
+        assert "doc-1" in tracked_ids
+        assert "doc-2" in tracked_ids
+        assert "src/app.py" in tracked_paths
+        assert "src/lib/util.py" in tracked_paths

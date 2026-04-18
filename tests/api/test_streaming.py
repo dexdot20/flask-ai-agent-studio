@@ -1,17 +1,12 @@
 from __future__ import annotations
 
-import json
 from unittest.mock import patch
 
 from db import get_db
+from tests.support.api_helpers import parse_ndjson
 
 
-def _parse_ndjson(response) -> list[dict]:
-    lines = [line for line in response.get_data(as_text=True).splitlines() if line.strip()]
-    return [json.loads(line) for line in lines]
-
-
-def test_chat_stream_answer_delta_and_done_are_json_events(app_harness, client, create_conversation):
+def test_chat_stream_answer_delta_and_done_are_json_events(client, create_conversation):
     conversation_id = create_conversation()
     fake_events = iter(
         [
@@ -35,7 +30,7 @@ def test_chat_stream_answer_delta_and_done_are_json_events(app_harness, client, 
         )
 
     assert response.status_code == 200
-    events = _parse_ndjson(response)
+    events = parse_ndjson(response)
     event_types = [event["type"] for event in events]
     assert "answer_delta" in event_types
     assert "done" in event_types
@@ -91,7 +86,7 @@ def test_chat_stream_tool_history_emits_tool_call_and_persists_rows(client, crea
         )
 
     assert response.status_code == 200
-    events = _parse_ndjson(response)
+    events = parse_ndjson(response)
     tool_history_event = next((event for event in events if event["type"] == "assistant_tool_history"), None)
     assert tool_history_event is not None
     assert len(tool_history_event["messages"]) == 2

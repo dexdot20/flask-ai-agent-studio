@@ -86,12 +86,11 @@ def test_login_pin_blocks_api_with_401(client):
     assert response.get_json()["error"] == "Login PIN required."
 
 
-def test_csrf_guard_blocks_mutation_without_token(app_harness, app, client):
+def test_csrf_guard_blocks_mutation_without_token(app, client, session_csrf_token):
     previous_testing = app.config.get("TESTING", False)
     app.config["TESTING"] = False
     try:
-        client.get("/")
-        csrf_token = app_harness.get_session_csrf_token()
+        csrf_token = session_csrf_token
         assert csrf_token
 
         blocked = client.post(
@@ -111,15 +110,14 @@ def test_csrf_guard_blocks_mutation_without_token(app_harness, app, client):
         app.config["TESTING"] = previous_testing
 
 
-def test_rate_limit_returns_429_even_with_spoofed_forwarded_for(app_harness, app, client):
+def test_rate_limit_returns_429_even_with_spoofed_forwarded_for(app, client, session_csrf_token):
     previous_testing = app.config.get("TESTING", False)
     previous_request_count = request_security._RATE_LIMIT_REQUEST_COUNT
     app.config["TESTING"] = False
     request_security._RATE_LIMIT_STATE.clear()
     request_security._RATE_LIMIT_REQUEST_COUNT = 0
     try:
-        client.get("/")
-        csrf_token = app_harness.get_session_csrf_token()
+        csrf_token = session_csrf_token
         assert csrf_token
 
         with patch("request_security._get_rate_limit_rule", return_value=("api-write", 1, 60)):

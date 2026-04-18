@@ -5,6 +5,75 @@ from types import SimpleNamespace
 from typing import Any, Callable, Iterable
 
 
+def _matches_where(metadata: dict | None, where: dict | None) -> bool:
+    if not where:
+        return True
+    source = metadata if isinstance(metadata, dict) else {}
+    for key, value in where.items():
+        if source.get(key) != value:
+            return False
+    return True
+
+
+class FakeChromaCollection:
+    def __init__(self):
+        self._rows: dict[str, dict] = {}
+        self._ordered_ids: list[str] = []
+
+    def upsert(self, ids, documents, embeddings, metadatas):
+        for item_id, document, embedding, metadata in zip(ids, documents, embeddings, metadatas, strict=False):
+            normalized_id = str(item_id)
+            if normalized_id not in self._rows:
+                self._ordered_ids.append(normalized_id)
+            self._rows[normalized_id] = {
+                "id": normalized_id,
+                "document": document,
+                "embedding": list(embedding or []),
+                "metadata": dict(metadata or {}),
+            }
+
+    def get(self, where=None, include=None):
+        del include
+        rows = [row for row in self._rows.values() if _matches_where(row["metadata"], where)]
+        return {
+            "ids": [row["id"] for row in rows],
+            "documents": [row["document"] for row in rows],
+            "metadatas": [row["metadata"] for row in rows],
+        }
+
+    def delete(self, ids=None):
+        for item_id in ids or []:
+            normalized_id = str(item_id)
+            self._rows.pop(normalized_id, None)
+            self._ordered_ids = [existing_id for existing_id in self._ordered_ids if existing_id != normalized_id]
+
+    def query(self, query_embeddings, n_results, where=None, include=None):
+        del query_embeddings, include
+        rows = [self._rows[item_id] for item_id in self._ordered_ids if _matches_where(self._rows[item_id]["metadata"], where)]
+        limited = rows[: max(1, int(n_results or 1))]
+        return {
+            "ids": [[row["id"] for row in limited]],
+            "documents": [[row["document"] for row in limited]],
+            "metadatas": [[row["metadata"] for row in limited]],
+            "distances": [[0.0 for _row in limited]],
+        }
+
+
+class FakeChromaClient:
+    def __init__(self):
+        self._collections: dict[str, FakeChromaCollection] = {}
+
+    def get_or_create_collection(self, name, metadata=None):
+        del metadata
+        if name not in self._collections:
+            self._collections[name] = FakeChromaCollection()
+        return self._collections[name]
+
+
+def fake_embed_texts(texts: list[str]) -> list[list[float]]:
+    return [[float(index + 1)] for index, _text in enumerate(texts)]
+
+
 class CallbackHttpClient:
     def __init__(self, *args, **kwargs):
         self.proxy = kwargs.get("proxy")
