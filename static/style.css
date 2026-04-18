@@ -4991,9 +4991,9 @@ kbd {
   z-index: 1200;
   background: rgba(0, 0, 0, 0.82);
   display: flex;
-  align-items: stretch;
-  justify-content: stretch;
-  padding: 0;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(8px, 1.8vw, 20px);
 }
 
 .canvas-diff-modal[hidden] {
@@ -5005,11 +5005,13 @@ kbd {
   flex-direction: column;
   background: var(--bg-primary, #0e121e);
   border: 1px solid var(--canvas-panel-border);
-  border-radius: 20px;
-  margin: 20px;
-  flex: 1;
+  border-radius: clamp(12px, 1.4vw, 20px);
+  width: min(1400px, 100%);
+  height: min(900px, 100%);
+  flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
+  box-shadow: 0 24px 58px rgba(0, 0, 0, 0.44);
 }
 
 .canvas-diff-modal__header {
@@ -5044,18 +5046,22 @@ kbd {
 
 .canvas-diff-modal__body {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   flex: 1;
   min-height: 0;
-  gap: 0;
+  gap: 1px;
+  background: var(--canvas-panel-border);
+  overflow: hidden;
 }
 
 .canvas-diff-modal__pane {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
-  border-right: 1px solid var(--canvas-panel-border);
+  border-right: 0;
+  background: var(--bg-primary, #0e121e);
 }
 
 .canvas-diff-modal__pane:last-child {
@@ -5090,10 +5096,12 @@ kbd {
   padding: 14px 16px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.8rem;
-  line-height: 1.65;
+  line-height: 1.55;
   white-space: pre;
   color: var(--text-primary);
   min-height: 0;
+  tab-size: 2;
+  scrollbar-gutter: stable;
 }
 
 .canvas-diff-modal__pane--removed .canvas-diff-modal__pane-content {
@@ -5102,6 +5110,42 @@ kbd {
 
 .canvas-diff-modal__pane--added .canvas-diff-modal__pane-content {
   background: rgba(93, 217, 164, 0.04);
+}
+
+@media (max-width: 980px) {
+  .canvas-diff-modal {
+    padding: 0;
+  }
+
+  .canvas-diff-modal__inner {
+    width: 100%;
+    height: 100%;
+    border-radius: 0;
+    border: none;
+  }
+
+  .canvas-diff-modal__header {
+    padding: 10px 12px;
+  }
+
+  .canvas-diff-modal__body {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 1px;
+  }
+
+  .canvas-diff-modal__pane {
+    border-right: none;
+  }
+
+  .canvas-diff-modal__pane-header {
+    padding: 7px 12px;
+  }
+
+  .canvas-diff-modal__pane-content {
+    padding: 10px 12px 14px;
+    font-size: 0.76rem;
+  }
 }
 
 .canvas-diff__line--added {

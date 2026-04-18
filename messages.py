@@ -2032,6 +2032,7 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
         "- For batch_canvas_edits, replace needs start_line, end_line, and lines; insert needs after_line and lines; delete needs start_line and end_line.",
         "- Use preview_canvas_changes before a large or risky batch when you need a non-mutating diff preview first.",
         "- Use transform_canvas_lines for bulk find-replace work; use count_only first when the replacement scope is uncertain.",
+        "- After mutating a canvas document, it is recommended to verify the affected region with an available read-only canvas inspection tool before finalizing your answer.",
         "- Use update_canvas_metadata for title, summary, role, dependency, or symbol metadata changes that do not change document content.",
         "- Use update_canvas_metadata with ignored=true and ignored_reason to hide a canvas document's content from future prompts without deleting it; set ignored=false later to re-enable it.",
         "- Do not use line-based read, search, validate, or edit tools on an ignored canvas document until it has been re-enabled.",
@@ -2352,6 +2353,7 @@ def build_tool_call_contract(
         "Use only the tools listed in the Active Tools section for this turn. Do not invent unavailable tools.",
         "If you do need a tool, call it via native function calling. Never write tool JSON or schema representations in your regular text response.",
         "Unnecessary tool calls waste compute and context. Do not use tools for trivial checks, repetition, or mere curiosity.",
+        "Before repeating a tool call, check Tool Execution History and Conversation Memory first. Repeat only when there is a concrete new reason (new user input, changed state, or unresolved missing evidence).",
     ]
 
     web_research_tool_names = {
@@ -2615,6 +2617,9 @@ def _build_runtime_volatile_parts(
         volatile_parts.append("## Tool Execution History")
         volatile_parts.append(
             "*Use this as recent operational memory about which tools were already tried, what they returned, and which paths should not be repeated without a concrete reason.*\n"
+        )
+        volatile_parts.append(
+            "- Before calling any tool again, confirm there is concrete new evidence to gather; otherwise reuse the existing result and continue."
         )
         volatile_parts.append(normalized_tool_trace_context)
         volatile_parts.append("")
