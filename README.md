@@ -1,6 +1,6 @@
 # Flask ChatBot: Multi-Provider + Tools + RAG + OCR + Multimodal + Canvas + Memory + Workspace
 
-This is a single-page Flask chat application built around DeepSeek plus optional OpenRouter models, multi-step tool use, registry-driven composer slash commands, local RAG, dedicated local OCR, configurable helper/direct image analysis, conversation summarization, pruning, user-configurable entropy-aware context selection, persistent conversation memory, persona-scoped memory, editable canvas documents, page-aware canvas navigation, per-conversation parameter overrides, activity/audit logging, and a per-conversation workspace sandbox.
+This is a single-page Flask chat application built around DeepSeek plus optional OpenRouter and MiniMax models, multi-step tool use, registry-driven composer slash commands, local RAG, dedicated local OCR, configurable helper/direct image analysis, conversation summarization, pruning, user-configurable entropy-aware context selection, persistent conversation memory, persona-scoped memory, editable canvas documents, page-aware canvas navigation, per-conversation parameter overrides, activity/audit logging, and a per-conversation workspace sandbox.
 
 It is not a minimal prompt/response demo. The app keeps conversation history in SQLite, restores assistant metadata when a conversation is reopened, supports editing earlier user messages, streams tool progress and reasoning, can enrich a user turn with local OCR or extracted document text before the model sees it, exposes persona and conversation memory APIs, logs outbound model activity for auditing, and can compact older content with summaries and pruning.
 
@@ -62,9 +62,9 @@ It is not a minimal prompt/response demo. The app keeps conversation history in 
 
 ### Model and agent behavior
 
-- Ships with built-in DeepSeek chat and reasoner models
+- Ships with built-in DeepSeek chat and reasoner models and MiniMax models (M2.7, M2.7-highspeed, M2.5, M2.5-highspeed, M2.1, M2.1-highspeed, M2)
 - Supports user-defined OpenRouter models from Settings, including tool-capable, vision-capable, provider-scoped, and reasoning-configured models
-- Uses OpenAI-compatible clients for both DeepSeek and OpenRouter providers
+- Uses OpenAI-compatible clients for DeepSeek, OpenRouter, and MiniMax providers
 - Routes OpenRouter requests through configured proxy candidates before falling back to a direct connection
 - Validates tool names and tool argument schemas before execution
 - Supports native function calls from the model
@@ -319,6 +319,8 @@ Minimum required:
 DEEPSEEK_API_KEY=your-deepseek-api-key
 # or
 OPENROUTER_API_KEY=your-openrouter-api-key
+# or
+MINIMAX_API_KEY=your-minimax-api-key
 ```
 
 ### 5) Optional proxy setup
@@ -358,6 +360,7 @@ Some settings come from environment variables, and some are stored in SQLite thr
 | --- | --- |
 | `DEEPSEEK_API_KEY` | Optional DeepSeek API key used by the built-in DeepSeek models |
 | `OPENROUTER_API_KEY` | Optional OpenRouter API key used by custom OpenRouter models |
+| `MINIMAX_API_KEY` | Optional MiniMax API key used by the built-in MiniMax models (Anthropic SDK format, temperature range (0.0, 1.0], no vision/document input support) |
 
 At least one provider key is required.
 
