@@ -407,11 +407,17 @@ At least one provider key is required.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `RAG_ENABLED` | `true` | Enables RAG endpoints, sync, and retrieval |
-| `BGE_M3_MODEL_PATH` | `BAAI/bge-m3` | Embedding model name or local path |
+| `LOW_RESOURCE_MODE` | `false` | Reduces default query expansion variants (2→1) and auto-inject top-k (3→2) for constrained systems; individual env vars still take priority |
+| `RAG_EMBED_MODEL` | `BAAI/bge-m3` | Embedding model name or local path; takes priority over `BGE_M3_MODEL_PATH` |
+| `RAG_EMBED_BATCH_SIZE` | `32` | Embedding batch size; takes priority over `BGE_M3_BATCH_SIZE` |
+| `RAG_EMBED_CACHE_ENABLED` | `true` | Enables persistent SQLite embedding cache; avoids re-embedding identical queries across restarts |
+| `RAG_EMBED_CACHE_MAX_ENTRIES` | `2000` | Maximum number of cached embeddings before LRU eviction |
+| `RAG_QUERY_PARALLEL_COLLECTIONS` | `true` | Queries multiple ChromaDB collections in parallel (up to 4 threads); set to `false` for strict serial mode |
+| `BGE_M3_MODEL_PATH` | `BAAI/bge-m3` | Legacy alias for `RAG_EMBED_MODEL`; ignored when `RAG_EMBED_MODEL` is set |
 | `BGE_M3_DEVICE` | `auto` | Device used by the embedder in this codebase; `cpu` and `cpu:0` force CPU-only mode, while auto prefers CUDA when available and explicit CUDA requests fall back to CPU if the CUDA stack is unavailable |
 | `BGE_M3_LOCAL_FILES_ONLY` | `false` | Load the embedding model only from local files |
 | `BGE_M3_TRUST_REMOTE_CODE` | `false` | Allow Sentence Transformers remote code |
-| `BGE_M3_BATCH_SIZE` | `32` | Embedding batch size |
+| `BGE_M3_BATCH_SIZE` | `32` | Legacy alias for `RAG_EMBED_BATCH_SIZE`; ignored when `RAG_EMBED_BATCH_SIZE` is set |
 | `BGE_M3_PRELOAD` | `true` | Preload the embedder on startup |
 | `RAG_AUTO_INJECT_TOP_K` | `3` | Seed value used to derive the default context-size preset |
 | `RAG_SEARCH_DEFAULT_TOP_K` | `5` | Default knowledge-base search size |
@@ -421,7 +427,7 @@ At least one provider key is required.
 | `RAG_CHUNK_OVERLAP` | `250` | Overlap between consecutive RAG chunks |
 | `RAG_MAX_CHUNKS_PER_SOURCE` | `2` | Maximum number of chunks kept per source |
 | `RAG_QUERY_EXPANSION_ENABLED` | `true` | Expands some search queries before retrieval |
-| `RAG_QUERY_EXPANSION_MAX_VARIANTS` | `2` | Maximum query expansion variants |
+| `RAG_QUERY_EXPANSION_MAX_VARIANTS` | `2` | Maximum query expansion variants (default lowered to 1 when `LOW_RESOURCE_MODE=true`) |
 | `RAG_TEMPORAL_DECAY_ALPHA` | `0.15` | Score decay factor for recency weighting |
 | `RAG_TEMPORAL_DECAY_LAMBDA` | `0.05` | Score decay factor for time-based weighting |
 

@@ -6,6 +6,8 @@ import threading
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 
+from config import RAG_EMBED_BATCH_SIZE, RAG_EMBED_MODEL
+
 _embedder = None
 _embedder_lock = threading.Lock()
 
@@ -63,7 +65,7 @@ def get_embedder():
         if _embedder is not None:
             return _embedder
 
-        model_name = (os.getenv("BGE_M3_MODEL_PATH") or "BAAI/bge-m3").strip()
+        model_name = RAG_EMBED_MODEL
         trust_remote_code = _parse_bool_env("BGE_M3_TRUST_REMOTE_CODE", False)
         local_files_only = _parse_bool_env("BGE_M3_LOCAL_FILES_ONLY", False) or os.path.isdir(model_name)
         device = _resolve_device()
@@ -92,7 +94,7 @@ def get_embedder():
         _embedder = {
             "model": model,
             "device": device,
-            "batch_size": max(1, int(os.getenv("BGE_M3_BATCH_SIZE", "32"))),
+            "batch_size": RAG_EMBED_BATCH_SIZE,
             "model_name": model_name,
             "local_files_only": local_files_only,
         }
@@ -116,6 +118,27 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
         return []
 
     engine = get_embedder()
+
+    # For single-text queries: try cache first to avoid redundant inference
+    if len(prepared) == 1:
+        from .embed_cache import get_cached_embedding, set_cached_embedding
+
+        cached = get_cached_embedding(prepared[0], engine["model_name"])
+        if cached is not None:
+            return [cached]
+
+        vectors = engine["model"].encode(
+            prepared,
+            batch_size=engine["batch_size"],
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+            show_progress_bar=False,
+        )
+        result = vectors.tolist()
+        set_cached_embedding(prepared[0], engine["model_name"], result[0])
+        return result
+
+    # Batch ingest path — bypass cache
     vectors = engine["model"].encode(
         prepared,
         batch_size=engine["batch_size"],

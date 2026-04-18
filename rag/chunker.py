@@ -142,9 +142,11 @@ def split_text_into_chunks(
         chunks.append(current.strip())
 
     deduped: list[str] = []
+    seen: set[str] = set()
     for chunk in chunks:
         cleaned = _normalize_whitespace(chunk)
-        if cleaned and cleaned not in deduped:
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
             deduped.append(cleaned)
     return deduped
 

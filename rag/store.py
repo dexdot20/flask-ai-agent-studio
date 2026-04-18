@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-from config import RAG_SUPPORTED_CATEGORIES
+from config import RAG_QUERY_PARALLEL_COLLECTIONS, RAG_SUPPORTED_CATEGORIES
 from .chunker import Chunk, normalize_category
 from .embedder import embed_texts
 
@@ -278,21 +280,46 @@ def query_chunks(
     if not query_embedding:
         return []
 
-    rows: list[dict] = []
-    seen_ids: set[str] = set()
-    for collection, where in _iter_query_collections(
+    collections = _iter_query_collections(
         category,
         source_type_hint=source_type_hint,
         metadata_filters=metadata_filters,
         metadata_filter_mode=metadata_filter_mode,
-    ):
-        for row in _query_collection_rows(collection, query_embedding, top_k=top_k, where=where):
-            row_id = str(row.get("id") or "").strip()
-            if row_id and row_id in seen_ids:
-                continue
-            if row_id:
-                seen_ids.add(row_id)
-            rows.append(row)
+    )
+
+    rows: list[dict] = []
+    seen_ids: set[str] = set()
+
+    if RAG_QUERY_PARALLEL_COLLECTIONS and len(collections) > 1:
+        max_workers = min(len(collections), 4)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(_query_collection_rows, col, query_embedding, top_k, where): (col, where)
+                for col, where in collections
+            }
+            for future in as_completed(futures):
+                try:
+                    batch = future.result()
+                except Exception:
+                    logging.exception("Parallel ChromaDB collection query failed")
+                    continue
+                for row in batch:
+                    row_id = str(row.get("id") or "").strip()
+                    if row_id and row_id in seen_ids:
+                        continue
+                    if row_id:
+                        seen_ids.add(row_id)
+                    rows.append(row)
+    else:
+        for collection, where in collections:
+            for row in _query_collection_rows(collection, query_embedding, top_k=top_k, where=where):
+                row_id = str(row.get("id") or "").strip()
+                if row_id and row_id in seen_ids:
+                    continue
+                if row_id:
+                    seen_ids.add(row_id)
+                rows.append(row)
+
     rows.sort(key=lambda item: float(item.get("distance") if item.get("distance") is not None else 999999), reverse=False)
     return rows
 
