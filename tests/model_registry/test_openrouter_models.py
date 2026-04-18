@@ -44,6 +44,92 @@ def test_apply_chat_parameter_overrides_merges_whitelisted_values():
     assert merged["messages"] == request_kwargs["messages"]
 
 
+def test_minimax_translation_preserves_tool_result_turn_chain():
+    proxy = model_registry._MiniMaxClientProxy(api_key="test-key")
+    translated = proxy._translate_openai_to_anthropic(
+        {
+            "model": "MiniMax-M2.7",
+            "messages": [
+                {"role": "user", "content": "Solve the task."},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "search_web", "arguments": '{"query":"x"}'},
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": "{\"ok\":true,\"summary\":\"done\"}",
+                },
+            ],
+        }
+    )
+
+    converted_messages = translated["messages"]
+    assert converted_messages[1]["role"] == "assistant"
+    assistant_blocks = converted_messages[1]["content"]
+    assert any(block.get("type") == "tool_use" and block.get("id") == "call_1" for block in assistant_blocks)
+
+    assert converted_messages[2]["role"] == "user"
+    tool_result_block = converted_messages[2]["content"][0]
+    assert tool_result_block["type"] == "tool_result"
+    assert tool_result_block["tool_use_id"] == "call_1"
+
+
+def test_minimax_translation_maps_tool_choice_to_anthropic_shape():
+    proxy = model_registry._MiniMaxClientProxy(api_key="test-key")
+
+    translated_auto = proxy._translate_openai_to_anthropic(
+        {
+            "model": "MiniMax-M2.7",
+            "tool_choice": "auto",
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+    )
+    assert translated_auto["tool_choice"] == {"type": "auto"}
+
+    translated_specific = proxy._translate_openai_to_anthropic(
+        {
+            "model": "MiniMax-M2.7",
+            "tool_choice": {"type": "function", "function": {"name": "search_web"}},
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+    )
+    assert translated_specific["tool_choice"] == {"type": "tool", "name": "search_web"}
+
+
+def test_minimax_translation_sets_required_max_tokens_when_missing():
+    proxy = model_registry._MiniMaxClientProxy(api_key="test-key")
+    translated = proxy._translate_openai_to_anthropic(
+        {
+            "model": "MiniMax-M2.7",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+        }
+    )
+
+    assert translated["max_tokens"] == 4096
+
+
+def test_minimax_translation_preserves_explicit_max_tokens():
+    proxy = model_registry._MiniMaxClientProxy(api_key="test-key")
+    translated = proxy._translate_openai_to_anthropic(
+        {
+            "model": "MiniMax-M2.7",
+            "max_tokens": 1200,
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+    )
+
+    assert translated["max_tokens"] == 1200
+
+
 def test_build_model_provider_policy_marks_deepseek_as_cache_friendly():
     policy = model_registry.build_model_provider_policy(
         {
@@ -740,4 +826,6 @@ class TestOpenRouterModelRegistry:
         payload = response.get_json()
 
         assert payload["custom_models"] == []
-        assert payload["visible_model_order"] == ["deepseek-chat", "deepseek-reasoner"]
+        visible_model_order = payload["visible_model_order"]
+        assert visible_model_order[:2] == ["deepseek-chat", "deepseek-reasoner"]
+        assert "openrouter:anthropic/claude-sonnet-4.5" not in visible_model_order

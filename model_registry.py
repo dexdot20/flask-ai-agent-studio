@@ -91,6 +91,7 @@ _OPENROUTER_ANTHROPIC_VOLATILE_RUNTIME_MARKERS = (
     "## tool execution history",
     "## active tools this turn",
 )
+_MINIMAX_REQUIRED_MAX_TOKENS_DEFAULT = 4_096
 
 
 def _openrouter_anthropic_cache_min_tokens(api_model: str) -> int:
@@ -467,12 +468,20 @@ class _MiniMaxClientProxy:
         """Translate OpenAI-style kwargs to Anthropic API format."""
         translated: dict[str, Any] = {}
 
+        def _coerce_positive_int(value, default: int) -> int:
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError):
+                return default
+            return parsed if parsed > 0 else default
+
         # Model - direct mapping
         translated["model"] = kwargs.get("model", "")
 
-        # Max tokens
-        if "max_tokens" in kwargs:
-            translated["max_tokens"] = kwargs["max_tokens"]
+        # Max tokens (required by Anthropic messages.create)
+        translated["max_tokens"] = _coerce_positive_int(
+            kwargs.get("max_tokens"), _MINIMAX_REQUIRED_MAX_TOKENS_DEFAULT
+        )
 
         # Temperature - MiniMax requires (0.0, 1.0]
         if "temperature" in kwargs:
@@ -481,9 +490,8 @@ class _MiniMaxClientProxy:
             temp = max(0.001, min(1.0, temp))
             translated["temperature"] = temp
 
-        # Top p
-        if "top_p" in kwargs:
-            translated["top_p"] = kwargs["top_p"]
+        # Top p - not supported by Anthropic API, strip it
+        # (Anthropic uses temperature only for randomness control)
 
         # System prompt
         system_message = None
@@ -509,31 +517,93 @@ class _MiniMaxClientProxy:
 
             role = str(msg.get("role") or "").strip().lower()
             content = msg.get("content", "")
+            tool_call_id = str(msg.get("tool_call_id") or "").strip()
 
-            # Handle content that might be a string or list
-            if isinstance(content, list):
-                # OpenAI multi-modal content - MiniMax only supports text and tool_use
-                translated_content = []
-                for block in content:
-                    if not isinstance(block, dict):
+            def _normalize_text_blocks(raw_content) -> list[dict[str, Any]]:
+                if isinstance(raw_content, list):
+                    blocks = []
+                    for block in raw_content:
+                        if not isinstance(block, dict):
+                            continue
+                        block_type = str(block.get("type") or "").strip()
+                        if block_type == "text":
+                            text = str(block.get("text") or "")
+                            if text:
+                                blocks.append({"type": "text", "text": text})
+                    return blocks
+                if isinstance(raw_content, str) and raw_content:
+                    return [{"type": "text", "text": raw_content}]
+                return []
+
+            if role == "tool":
+                tool_result_blocks = []
+                if isinstance(content, list):
+                    for block in content:
+                        if not isinstance(block, dict):
+                            continue
+                        if str(block.get("type") or "").strip() == "tool_result":
+                            copied_block = dict(block)
+                            if tool_call_id and not copied_block.get("tool_use_id"):
+                                copied_block["tool_use_id"] = tool_call_id
+                            tool_result_blocks.append(copied_block)
+
+                if not tool_result_blocks:
+                    result_content = content if content not in (None, "") else ""
+                    tool_result_block: dict[str, Any] = {
+                        "type": "tool_result",
+                        "tool_use_id": tool_call_id or "tool_call",
+                        "content": result_content,
+                    }
+                    tool_result_blocks.append(tool_result_block)
+
+                translated_messages.append(
+                    {
+                        "role": "user",
+                        "content": tool_result_blocks,
+                    }
+                )
+                continue
+
+            if role == "assistant":
+                translated_content = _normalize_text_blocks(content)
+                tool_calls = msg.get("tool_calls") if isinstance(msg.get("tool_calls"), list) else []
+                for tool_call in tool_calls:
+                    if not isinstance(tool_call, dict):
                         continue
-                    block_type = str(block.get("type") or "").strip()
-                    if block_type == "text":
-                        text = block.get("text", "")
-                        if text:
-                            translated_content.append({"type": "text", "text": text})
-                    elif block_type == "tool_use":
-                        # Extract tool use info
-                        tool_use_block = {
+                    function = tool_call.get("function") if isinstance(tool_call.get("function"), dict) else {}
+                    tool_name = str(function.get("name") or tool_call.get("name") or "").strip()
+                    if not tool_name:
+                        continue
+                    raw_arguments = function.get("arguments")
+                    if isinstance(raw_arguments, str):
+                        try:
+                            input_payload = json.loads(raw_arguments)
+                        except Exception:
+                            input_payload = {}
+                    elif isinstance(raw_arguments, dict):
+                        input_payload = raw_arguments
+                    else:
+                        input_payload = {}
+                    translated_content.append(
+                        {
                             "type": "tool_use",
-                            "id": block.get("id", ""),
-                            "name": block.get("name", ""),
+                            "id": str(tool_call.get("id") or "").strip() or f"tool_{tool_name}",
+                            "name": tool_name,
+                            "input": input_payload,
                         }
-                        translated_content.append(tool_use_block)
-                    # Skip image/document blocks as MiniMax doesn't support them
-            elif isinstance(content, str) and content:
-                translated_content = [{"type": "text", "text": content}]
-            else:
+                    )
+
+                if translated_content:
+                    translated_messages.append(
+                        {
+                            "role": "assistant",
+                            "content": translated_content,
+                        }
+                    )
+                continue
+
+            translated_content = _normalize_text_blocks(content)
+            if not translated_content and role in ("user", "assistant"):
                 translated_content = [{"type": "text", "text": ""}]
 
             if translated_content or role in ("user", "assistant"):
@@ -571,20 +641,25 @@ class _MiniMaxClientProxy:
                     translated["tools"] = anthropic_tools
 
         # Tool choice
-        if "tool_choice" in kwargs:
-            tool_choice = kwargs["tool_choice"]
-            if tool_choice == "auto":
-                translated["tool_choice"] = "auto"
-            elif isinstance(tool_choice, dict):
-                # Specific tool choice
-                tool_name = tool_choice.get("function", {}).get("name", "")
-                if tool_name:
-                    translated["tool_choice"] = {"type": "tool", "name": tool_name}
-            elif isinstance(tool_choice, str):
-                translated["tool_choice"] = tool_choice
+        tool_choice = kwargs.get("tool_choice")
+        if isinstance(tool_choice, dict):
+            function = tool_choice.get("function") if isinstance(tool_choice.get("function"), dict) else {}
+            tool_name = str(function.get("name") or "").strip()
+            if tool_name:
+                translated["tool_choice"] = {"type": "tool", "name": tool_name}
+        elif isinstance(tool_choice, str):
+            normalized_tool_choice = tool_choice.strip().lower()
+            if normalized_tool_choice == "auto":
+                translated["tool_choice"] = {"type": "auto"}
+            elif normalized_tool_choice in {"required", "any"}:
+                translated["tool_choice"] = {"type": "any"}
 
         # Stream
         translated["stream"] = kwargs.get("stream", False)
+
+        # Strip OpenAI-specific parameters not supported by Anthropic API
+        for openai_only_param in ("stream_options",):
+            translated.pop(openai_only_param, None)
 
         return translated
 
@@ -608,14 +683,13 @@ class _MiniMaxClientProxy:
         is_streaming = anthropic_kwargs.get("stream", False)
 
         if is_streaming:
-            # Non-streaming call
-            response = client.messages.create(**anthropic_kwargs)
-            # For non-streaming, convert to a non-iterator response
-            return _MiniMaxNonStreamResponse(response, anthropic_kwargs.get("model", ""))
-        else:
             # Streaming call
             stream = client.messages.create(**anthropic_kwargs)
             return _MiniMaxStreamIterator(stream)
+        else:
+            # Non-streaming call
+            response = client.messages.create(**anthropic_kwargs)
+            return _MiniMaxNonStreamResponse(response, anthropic_kwargs.get("model", ""))
 
 
 class _MiniMaxNonStreamResponse:
@@ -625,15 +699,18 @@ class _MiniMaxNonStreamResponse:
         self.message = message
         self.model = model
         self.choices = [_MiniMaxNonStreamChoice(message)]
+        # Anthropic Usage uses attributes directly, not dict-like .get()
+        usage = getattr(message, "usage", None)
+        if usage is not None:
+            prompt_tokens = getattr(usage, "input_tokens", 0) or 0
+            output_tokens = getattr(usage, "output_tokens", 0) or 0
+        else:
+            prompt_tokens = 0
+            output_tokens = 0
         self.usage = _MiniMaxUsage(
-            prompt_tokens=getattr(message, "usage", {}).get("input_tokens", 0) if hasattr(message, "usage") else 0,
-            completion_tokens=getattr(message, "usage", {}).get("output_tokens", 0) if hasattr(message, "usage") else 0,
-            total_tokens=(
-                getattr(message, "usage", {}).get("input_tokens", 0)
-                + getattr(message, "usage", {}).get("output_tokens", 0)
-                if hasattr(message, "usage")
-                else 0
-            ),
+            prompt_tokens=prompt_tokens,
+            completion_tokens=output_tokens,
+            total_tokens=prompt_tokens + output_tokens,
         )
 
     def __iter__(self):

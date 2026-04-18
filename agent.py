@@ -692,7 +692,8 @@ def _is_context_overflow_error(error_str) -> bool:
     normalized = _extract_error_signal_text(error_str)
     if not normalized:
         return False
-    if "rate_limit" in normalized or re.search(r"\b429\b", normalized):
+    normalized_lower = normalized.lower()
+    if "rate_limit" in normalized_lower or re.search(r"\b429\b", normalized_lower):
         return False
 
     known_phrases = (
@@ -705,15 +706,23 @@ def _is_context_overflow_error(error_str) -> bool:
         "too many tokens",
         "context window",
         "context is full",
-        "max_tokens",
         "context overflow",
         "input tokens exceed",
         "prompt has too many tokens",
         "prompt tokens exceed",
+        "exceeds maximum context",
+        "context limit",
+        "input too long",
     )
-    if any(phrase in normalized for phrase in known_phrases):
+    if any(phrase in normalized_lower for phrase in known_phrases):
         return True
-    return "token" in normalized and ("exceed" in normalized or "too long" in normalized)
+    # Check for generic "invalid params" error - only treat as context overflow if
+    # combined with other context-related indicators
+    if "invalid params" in normalized_lower and "context" in normalized_lower:
+        return True
+    if "token" in normalized_lower and ("exceed" in normalized_lower or "too long" in normalized_lower):
+        return any(term in normalized_lower for term in ("context", "prompt", "input"))
+    return False
 
 
 def _is_truncated_stream_disconnect_error(error_str) -> bool:
@@ -4188,8 +4197,7 @@ def _merge_tool_execution_result_message(messages: list[dict], tool_execution_re
         message
         for message in messages
         if not (
-            isinstance(message, dict)
-            and str(message.get("content") or "").startswith(TOOL_EXECUTION_RESULTS_MARKER)
+            isinstance(message, dict) and str(message.get("content") or "").startswith(TOOL_EXECUTION_RESULTS_MARKER)
         )
     ]
     messages.append(tool_execution_result_message)
@@ -8330,7 +8338,7 @@ def run_agent_stream(
                     error=fatal_api_error,
                     message_count=len(turn_messages),
                 )
-                fatal_api_error = CONTEXT_OVERFLOW_RECOVERY_ERROR_TEXT
+                fatal_api_error = _build_context_overflow_recovery_error(turn_messages)
             _trace_agent_event("agent_api_error", trace_id=trace_id, step=step, error=fatal_api_error)
             yield {"type": "tool_error", "step": step, "tool": "api", "error": fatal_api_error}
             break
@@ -8412,7 +8420,7 @@ def run_agent_stream(
                         error=stream_error,
                         message_count=len(turn_messages),
                     )
-                    fatal_api_error = CONTEXT_OVERFLOW_RECOVERY_ERROR_TEXT
+                    fatal_api_error = _build_context_overflow_recovery_error(turn_messages)
                 else:
                     fatal_api_error = stream_error
                 _trace_agent_event("agent_api_error", trace_id=trace_id, step=step, error=fatal_api_error)
@@ -9194,7 +9202,7 @@ def run_agent_stream(
                     error=stream_error,
                     message_count=len(final_messages),
                 )
-                stream_error = CONTEXT_OVERFLOW_RECOVERY_ERROR_TEXT
+                stream_error = _build_context_overflow_recovery_error(final_messages)
             if tool_calls:
                 if content_text:
                     final_text = content_text
@@ -9260,7 +9268,7 @@ def run_agent_stream(
                     error=error,
                     message_count=len([*messages, *final_extra_messages]),
                 )
-                error = CONTEXT_OVERFLOW_RECOVERY_ERROR_TEXT
+                error = _build_context_overflow_recovery_error([*messages, *final_extra_messages])
             yield {"type": "tool_error", "step": step, "tool": "final_answer", "error": error}
             for event in emit_answer(FINAL_ANSWER_ERROR_TEXT):
                 yield event
