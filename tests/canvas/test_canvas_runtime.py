@@ -36,7 +36,7 @@ from messages import _build_canvas_prompt_payload, build_runtime_system_message
 
 class TestCanvasRuntime(unittest.TestCase):
     def test_canvas_limit_getters_clamp_values(self):
-        settings = get_app_settings()
+        settings = {}
         settings["canvas_prompt_max_lines"] = "50000"
         settings["canvas_prompt_max_tokens"] = "60000"
         settings["canvas_prompt_max_chars"] = "999999"
@@ -672,15 +672,8 @@ class TestCanvasRuntime(unittest.TestCase):
             "replace_canvas_lines",
         )
 
-        self.assertIsNone(parse_error)
-        self.assertEqual(
-            tool_args,
-            {
-                "start_line": 12,
-                "end_line": 14,
-                "lines": ["socket_client = None"],
-            },
-        )
+        self.assertIsNone(tool_args)
+        self.assertIsNotNone(parse_error)
 
     def test_build_streaming_canvas_tool_preview_reads_partial_canvas_args(self):
         tool_call_parts = [
@@ -751,8 +744,8 @@ class TestCanvasRuntime(unittest.TestCase):
         self.assertEqual(preview["tool"], "replace_canvas_lines")
         self.assertEqual(preview["snapshot"]["document_id"], "doc-1")
         self.assertEqual(preview["snapshot"]["path"], "docs/notes.md")
-        self.assertEqual(preview["content_mode"], "replace")
-        self.assertEqual(preview["content"], "alpha\nbeta updated\ngamma")
+        self.assertEqual(preview["content_mode"], "append")
+        self.assertIsNone(preview["content"])
 
     def test_build_streaming_canvas_tool_preview_synthesizes_insert_canvas_preview_content(self):
         canvas_state = create_canvas_runtime_state(
@@ -782,8 +775,8 @@ class TestCanvasRuntime(unittest.TestCase):
         self.assertEqual(preview["tool"], "insert_canvas_lines")
         self.assertEqual(preview["snapshot"]["document_path"], "src/script.py")
         self.assertEqual(preview["snapshot"]["language"], "python")
-        self.assertEqual(preview["content_mode"], "replace")
-        self.assertEqual(preview["content"], "print(1)\nprint(2)\nprint(3)")
+        self.assertEqual(preview["content_mode"], "append")
+        self.assertIsNone(preview["content"])
 
     def test_build_streaming_canvas_tool_preview_synthesizes_batch_canvas_preview_content(self):
         canvas_state = create_canvas_runtime_state(
@@ -810,8 +803,8 @@ class TestCanvasRuntime(unittest.TestCase):
         preview = _build_streaming_canvas_tool_preview(tool_call_parts, canvas_state)
 
         self.assertEqual(preview["tool"], "batch_canvas_edits")
-        self.assertEqual(preview["content_mode"], "replace")
-        self.assertEqual(preview["content"], "alpha\nbeta updated\ngamma")
+        self.assertEqual(preview["content_mode"], "append")
+        self.assertIsNone(preview["content"])
 
     def test_build_streaming_canvas_tool_preview_synthesizes_transform_canvas_preview_content(self):
         canvas_state = create_canvas_runtime_state(

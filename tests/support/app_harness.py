@@ -4,6 +4,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import request_security
+
 from app import create_app
 from db import get_db, insert_message, serialize_message_metadata
 from tests.support.stream_events import build_stream_chunk, build_stream_chunk_openrouter, build_tool_call_chunk
@@ -31,6 +33,16 @@ class BaseAppRoutesTestCase(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 201)
         return response.get_json()["id"]
+
+    def assert_json_ok(self, response, status_code: int = 200) -> dict:
+        self.assertEqual(response.status_code, status_code)
+        payload = response.get_json()
+        self.assertIsInstance(payload, dict)
+        return payload
+
+    def get_session_csrf_token(self) -> str:
+        with self.client.session_transaction() as session_data:
+            return str(session_data.get(request_security.CSRF_TOKEN_SESSION_KEY) or "")
 
     def assert_mapping_subset(self, actual: dict, expected: dict) -> None:
         self.assertIsInstance(actual, dict)

@@ -161,13 +161,18 @@ def test_enforce_rate_limit_keeps_bucket_names_isolated_for_same_client(security
 
 
 def test_request_client_identifier_prefers_access_route(security_app):
-    with security_app.test_request_context(
-        "/chat",
-        method="POST",
-        environ_base={"REMOTE_ADDR": "203.0.113.44"},
-        headers={"X-Forwarded-For": "198.51.100.5, 203.0.113.44"},
-    ):
-        identifier = request_security._get_request_client_identifier()
+    previous_trust_proxy = request_security.config.TRUST_PROXY_HEADERS
+    request_security.config.TRUST_PROXY_HEADERS = True
+    try:
+        with security_app.test_request_context(
+            "/chat",
+            method="POST",
+            environ_base={"REMOTE_ADDR": "203.0.113.44"},
+            headers={"X-Forwarded-For": "198.51.100.5, 203.0.113.44"},
+        ):
+            identifier = request_security._get_request_client_identifier()
+    finally:
+        request_security.config.TRUST_PROXY_HEADERS = previous_trust_proxy
 
     assert identifier == "198.51.100.5"
 
