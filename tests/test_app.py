@@ -1,6 +1,7 @@
 # ruff: noqa: I001
 from __future__ import annotations
 
+import importlib
 import io
 import json
 import logging
@@ -359,6 +360,36 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
             ["conversation", "tool_result", "tool_memory", "uploaded_document"]
             if payload["features"]["rag_enabled"]
             else [],
+        )
+
+    def test_settings_patch_updates_activity_settings(self):
+        response = self.client.patch(
+            "/api/settings",
+            json={
+                "activity_enabled": False,
+                "activity_retention_days": 45,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertFalse(payload["activity_enabled"])
+        self.assertEqual(payload["activity_retention_days"], 45)
+
+        settings = get_app_settings()
+        self.assertEqual(settings["activity_enabled"], "false")
+        self.assertEqual(settings["activity_retention_days"], "45")
+
+    def test_settings_patch_rejects_invalid_activity_retention_days(self):
+        response = self.client.patch(
+            "/api/settings",
+            json={"activity_retention_days": 0},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.get_json()["error"],
+            "activity_retention_days must be between 1 and 3650.",
         )
 
     def test_settings_patch_roundtrips_runtime_managed_fields(self):
@@ -1800,6 +1831,23 @@ class AppRoutesTestCase(BaseAppRoutesTestCase):
         second_app = create_app(database_path=self.db_path)
 
         self.assertEqual(second_app.config["PERMANENT_SESSION_LIFETIME"], timedelta(days=14))
+
+    def test_module_level_app_applies_persisted_login_lifetime_setting(self):
+        bootstrap_app = create_app(database_path=self.db_path)
+        with bootstrap_app.app_context():
+            save_app_settings({"login_remember_session_days": "21"})
+
+        import app as app_module
+
+        with patch("config.DB_PATH", self.db_path):
+            reloaded_app_module = importlib.reload(app_module)
+            try:
+                self.assertEqual(
+                    reloaded_app_module.app.config["PERMANENT_SESSION_LIFETIME"],
+                    timedelta(days=21),
+                )
+            finally:
+                importlib.reload(reloaded_app_module)
 
     def test_database_initialization_adds_rag_document_expiration_column(self):
         with get_db() as conn:

@@ -494,6 +494,8 @@ DEFAULT_SETTINGS = {
     "sub_agent_canvas_auto_save": "true",
     "sub_agent_canvas_auto_open": "false",
     "web_cache_ttl_hours": str(DEFAULT_WEB_CACHE_TTL_HOURS),
+    "activity_enabled": "true",
+    "activity_retention_days": "30",
     "openrouter_prompt_cache_enabled": "true" if OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED else "false",
     "openrouter_anthropic_cache_ttl": OPENROUTER_ANTHROPIC_CACHE_TTL_DEFAULT,
     "openrouter_http_referer": OPENROUTER_HTTP_REFERER,

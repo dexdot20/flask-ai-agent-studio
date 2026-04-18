@@ -1,5 +1,6 @@
-## Optional OCR stack using PaddleOCR for local OCR processing.
-## Install a matching paddlepaddle or paddlepaddle-gpu wheel manually if you manage CUDA-specific builds.
+## Optional PaddleOCR stack layered on top of requirements.txt for local OCR processing.
+## This file pins the default CPU-friendly PaddlePaddle build. If you manage a CUDA-specific wheel manually,
+## replace or skip the paddlepaddle line below to match your local GPU runtime.
 numpy>=1.26
 paddlepaddle==3.2.2
 paddleocr==3.4.0

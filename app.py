@@ -100,7 +100,7 @@ def create_app(database_path: str | None = None, *, load_persisted_runtime_setti
     return app
 
 
-app = create_app(load_persisted_runtime_settings=False)
+app = create_app()
 
 
 if __name__ == "__main__":

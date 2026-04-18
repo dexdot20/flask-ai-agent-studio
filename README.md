@@ -1,8 +1,8 @@
 # Flask ChatBot: Multi-Provider + Tools + RAG + OCR + Multimodal + Canvas + Memory + Workspace
 
-This is a single-page Flask chat application built around DeepSeek plus optional OpenRouter models, multi-step tool use, registry-driven composer slash commands, local RAG, dedicated local OCR, configurable helper/direct image analysis, conversation summarization, pruning, user-configurable entropy-aware context selection, persistent conversation memory, editable canvas documents, page-aware canvas navigation, and a per-conversation workspace sandbox.
+This is a single-page Flask chat application built around DeepSeek plus optional OpenRouter models, multi-step tool use, registry-driven composer slash commands, local RAG, dedicated local OCR, configurable helper/direct image analysis, conversation summarization, pruning, user-configurable entropy-aware context selection, persistent conversation memory, persona-scoped memory, editable canvas documents, page-aware canvas navigation, per-conversation parameter overrides, activity/audit logging, and a per-conversation workspace sandbox.
 
-It is not a minimal prompt/response demo. The app keeps conversation history in SQLite, restores assistant metadata when a conversation is reopened, supports editing earlier user messages, streams tool progress and reasoning, can enrich a user turn with local OCR or extracted document text before the model sees it, and can compact older content with summaries and pruning.
+It is not a minimal prompt/response demo. The app keeps conversation history in SQLite, restores assistant metadata when a conversation is reopened, supports editing earlier user messages, streams tool progress and reasoning, can enrich a user turn with local OCR or extracted document text before the model sees it, exposes persona and conversation memory APIs, logs outbound model activity for auditing, and can compact older content with summaries and pruning.
 
 ## Screenshots
 
@@ -48,13 +48,16 @@ It is not a minimal prompt/response demo. The app keeps conversation history in 
 - Stream assistant output to the browser as NDJSON events
 - Persist messages, usage metadata, tool traces, reasoning content, and canvas state in SQLite
 - Cancel an active response mid-stream
+- Persist partial assistant output during graceful cancellation through the chat-run cancel API
 - Clear the current chat view without deleting stored conversations
 - Automatically set a concise title on the first turn through an internal tool call (`set_conversation_title`) and support manual title refresh on demand
 - Edit a previous user message, delete later turns, and regenerate from that branch
 - Restore assistant metadata, reasoning, tool results, and canvas state when reopening a conversation
 - Show a slash-command picker in the composer when the user types `/`, with registry-backed command insertion and keyboard navigation
 - Show a separate Fix action that rewrites the current draft before sending
+- Set per-conversation generation overrides (`temperature`, `top_p`, `max_tokens`) from the in-chat **Set Parameters** panel
 - Manually summarize a conversation, undo an inserted summary, and prune older visible messages
+- Preview a summary before applying it, inspect prune scores, and prune selected messages explicitly
 - Switch the context-selection strategy between classic history, entropy-only, and entropy + RAG hybrid modes from Settings
 
 ### Model and agent behavior
@@ -94,6 +97,7 @@ It is not a minimal prompt/response demo. The app keeps conversation history in 
 ### Memory and retrieval
 
 - Conversation-scoped memory for important user details, decisions, task context, and critical tool outcomes from the current chat
+- Persona-scoped memory shared across conversations that use the same persona
 - Persistent scratchpad for durable user-specific facts and preferences
 - Persistent user profile memory extracted from structured conversation summaries
 - Tool memory for successful web/news/URL results from earlier sessions
@@ -110,12 +114,12 @@ It is not a minimal prompt/response demo. The app keeps conversation history in 
 - The model can create and edit canvas documents (Markdown or code) attached to the current conversation
 - The model can also create code-format canvas documents with language metadata, path/role metadata, and project summaries when working in project mode
 - The UI can display multiple canvas documents, search within them, filter them, and export them
-- Canvas documents support line-level edits, batch edits, bulk find-replace transforms, batch reads, validation checks, and non-mutating diff previews
+- Canvas documents support line-level edits, batch edits, bulk find-replace transforms, batch reads, validation checks, viewport/page pinning, GitHub import preview/import, and non-mutating diff previews
 - `search_canvas_document` locates text or patterns inside a large canvas before editing; `batch_read_canvas_documents` can load several canvas regions at once; `set_canvas_viewport` and `focus_canvas_page` pin regions for automatic reuse in later turns; `validate_canvas_document` checks syntax or structure after edits
 - Project-mode canvas sessions include a file tree with active-file highlighting
 - Canvas documents can be downloaded as Markdown, HTML, or PDF
 
-Manual smoke test checklist for the Canvas UI is available in [docs/canvas-ui-smoke-test.md](docs/canvas-ui-smoke-test.md)
+Canvas behavior is covered by regression tests under `tests/canvas/`, `tests/services/`, and `tests/test_app.py`.
 
 ### Observability
 
@@ -123,6 +127,7 @@ Manual smoke test checklist for the Canvas UI is available in [docs/canvas-ui-sm
 - Panel shows provider session totals, latest-turn totals, peak prompt size, configured per-call caps, and per-turn cost alongside non-zero input-source chips
 - Stored assistant metadata is used to rebuild the panel after reload
 - Summary inspector surfaces trigger thresholds, token gaps, source-message counts, and recent summary status
+- Activity APIs expose paginated model invocation records, per-call request/response summaries, retention cleanup, and provider/cache token diagnostics
 
 ## Architecture overview
 
@@ -196,9 +201,11 @@ Operationally, compare repeated same-prefix turns and confirm that hit tokens tr
 ├── tool_registry.py        # Tool definitions and schemas exposed to the model
 ├── web_tools.py            # Web search, news search, safe URL fetch, proxy rotation, and fetch summarization
 ├── routes/
-│   ├── chat.py             # /chat, /api/fix-text, title generation, summarization, pruning helpers
-│   ├── conversations.py    # Conversation CRUD, export, RAG maintenance, canvas maintenance
-│   ├── pages.py            # Main page, settings page, settings API
+│   ├── activity.py         # Activity/audit API for model invocation logs
+│   ├── auth.py             # PIN login/logout and session protection
+│   ├── chat.py             # /chat, /api/fix-text, title generation, summarization, preview, and cancellation
+│   ├── conversations.py    # Conversation/persona CRUD, memory APIs, export, RAG maintenance, canvas maintenance
+│   ├── pages.py            # Main page, settings page, settings API, tool catalog
 │   └── request_utils.py    # Request parsing helpers
 ├── rag/
 │   ├── chunker.py          # Chunk splitting and chunk metadata
@@ -211,8 +218,7 @@ Operationally, compare repeated same-prefix turns and confirm that hit tokens tr
 ├── templates/
 │   ├── index.html          # Chat UI, including the slash-command menu shell inside the composer
 │   └── settings.html       # Dedicated settings page
-├── tests/
-│   └── test_app.py         # Backend, streaming, tool, RAG, fetched-content browsing, pruning, and UI bootstrap tests
+├── tests/                  # Integration and focused unit tests across canvas, security, services, rag, web, and workspace flows
 ├── proxies.example.txt     # Sample proxy file
 ├── models/                 # Downloaded local model caches created by install.sh
 ├── requirements.txt        # Core runtime dependencies
@@ -260,11 +266,10 @@ pip install -r requirements-youtube-transcript.txt
 If you want PaddleOCR instead of EasyOCR:
 
 ```bash
-pip install paddlepaddle==3.2.2
 pip install -r requirements-ocr-paddle.txt
 ```
 
-The OCR stack in this project is currently validated with PaddlePaddle 3.2.2 and PaddleOCR 3.4.0. Newer PaddlePaddle 3.3.1 builds can hit an onednn/PIR runtime error during OCR inference in this codebase.
+The OCR stack in this project is currently validated with PaddlePaddle 3.2.2 and PaddleOCR 3.4.0. Newer PaddlePaddle 3.3.1 builds can hit an onednn/PIR runtime error during OCR inference in this codebase. `requirements-ocr-paddle.txt` already includes the default `paddlepaddle==3.2.2` pin; only override it manually if you maintain a CUDA-specific wheel yourself.
 
 Development:
 
@@ -362,6 +367,8 @@ At least one provider key is required.
 | --- | --- | --- |
 | `OPENROUTER_HTTP_REFERER` | empty | Optional OpenRouter attribution header; also accepts `OPENROUTER_SITE_URL` |
 | `OPENROUTER_APP_TITLE` | empty | Optional OpenRouter attribution title; also accepts `OPENROUTER_X_TITLE` |
+| `AGENT_TRACE_LOG_ENABLED` | `true` | Master switch for JSON-lines trace logging |
+| `AGENT_TRACE_LOG_INCLUDE_RAW` | `true` | Include full raw payloads under the trace `raw` field |
 | `AGENT_TRACE_LOG_PATH` | `logs/agent-trace.log` | Rotating agent trace log file |
 | `IMAGE_STORAGE_DIR` | `./data/images` | Directory used for uploaded image assets |
 | `DOCUMENT_STORAGE_DIR` | `./data/documents` | Directory used for uploaded document assets |
@@ -392,6 +399,8 @@ At least one provider key is required.
 | `SECURITY_HSTS_MAX_AGE` | `31536000` | HSTS max-age in seconds |
 | `SECURITY_HSTS_INCLUDE_SUBDOMAINS` | `true` | Adds HSTS `includeSubDomains` directive |
 | `SECURITY_HSTS_PRELOAD` | `false` | Adds HSTS `preload` directive |
+| `SECURITY_RATE_LIMIT_REDIS_ENABLED` | `false` | Use Redis-backed shared request rate limiting instead of process-local memory only |
+| `SECURITY_RATE_LIMIT_REDIS_URL` | empty | Redis URL used when shared request rate limiting is enabled |
 
 ### RAG and embedding
 
@@ -461,6 +470,7 @@ Remote helper/direct image modes rely on at least one configured provider key pl
 | `CHAT_SUMMARY_TRIGGER_TOKEN_COUNT` | `80000` | Visible-token count that triggers automatic summarization |
 | `CHAT_SUMMARY_MODE` | `auto` | `auto`, `never`, or `aggressive` |
 | `CHAT_SUMMARY_MODEL` | `deepseek-chat` | Fallback model used for summarization when no summary preference is stored in Settings |
+| `SUMMARY_RETRY_REDUCTION_FACTOR` | `0.80` | How aggressively summary retries shrink oversized source material |
 | `PROMPT_MAX_INPUT_TOKENS` | `100000` | Upper bound for prompt budgeting |
 | `PROMPT_RESPONSE_TOKEN_RESERVE` | `8000` | Reserve for model output when budgeting input |
 | `PROMPT_RECENT_HISTORY_MAX_TOKENS` | `70000` | Max recent-history budget |
@@ -482,10 +492,24 @@ Remote helper/direct image modes rely on at least one configured provider key pl
 | `SUMMARY_RETRY_MIN_SOURCE_TOKENS` | `1500` | Minimum source size before retrying summary |
 | `PRUNING_TARGET_REDUCTION_RATIO` | `0.65` | Fraction of prunable content targeted for each pruning pass |
 | `PRUNING_MIN_TARGET_TOKENS` | `160` | Smallest prunable-token target before pruning is considered |
+| `PRUNE_WEIGHT_ENTROPY` | `0.35` | Weight of entropy/information density in pruning score |
+| `PRUNE_WEIGHT_RAG` | `0.30` | Weight of RAG coverage in pruning score |
+| `PRUNE_WEIGHT_STALENESS` | `0.25` | Weight of recency decay in pruning score |
+| `PRUNE_WEIGHT_TOKEN` | `0.10` | Weight of raw token cost in pruning score |
 
 ### Scratchpad and memory
 
 The scratchpad is organized into named sections: `lessons`, `profile`, `notes`, `problems`, `tasks`, `preferences`, and `domain`. `SCRATCHPAD_ADMIN_EDITING_ENABLED` reveals per-section editing controls in the UI. User preferences are clipped to 2000 characters before storage.
+
+### Conversation parameter overrides
+
+Each conversation can also persist a lightweight `parameter_overrides` object in the `conversations` table. The current validated fields are:
+
+- `temperature`
+- `top_p`
+- `max_tokens`
+
+These overrides are normalized in `model_registry.py`, exposed by the conversation APIs, and applied to the active chat model at request time.
 
 ### Built-in runtime limits from code
 
@@ -510,77 +534,51 @@ The scratchpad is organized into named sections: `lessons`, `profile`, `notes`, 
 
 ### Settings stored in SQLite via the UI
 
-The Settings page persists these values in `app_settings`:
+The Settings page persists a large runtime surface in `app_settings`. The most important groups are:
 
-- `user_preferences`
-- `general_instructions`
-- `ai_personality`
-- `scratchpad`
-- `max_steps`
-- `max_parallel_tools`
-- `temperature`
-- `clarification_max_questions`
-- `sub_agent_max_steps`
-- `sub_agent_timeout_seconds`
-- `sub_agent_allowed_tool_names`
-- `sub_agent_retry_attempts`
-- `sub_agent_retry_delay_seconds`
-- `web_cache_ttl_hours`
-- `openrouter_prompt_cache_enabled`
-- `chat_summary_detail_level`
-- `custom_models`
-- `default_persona_id`
-- `visible_model_order`
-- `operation_model_preferences`
-- `image_processing_method`
-- `image_helper_model`
-- `active_tools`
-- `rag_auto_inject`
-- `rag_sensitivity`
-- `rag_context_size`
-- `rag_source_types`
-- `tool_memory_auto_inject`
-- `canvas_prompt_max_lines`
-- `canvas_prompt_max_tokens`
-- `canvas_prompt_max_chars`
-- `canvas_prompt_code_line_max_chars`
-- `canvas_prompt_text_line_max_chars`
-- `canvas_expand_max_lines`
-- `canvas_scroll_window_lines`
-- `chat_summary_mode`
-- `chat_summary_trigger_token_count`
-- `summary_skip_first`
-- `summary_skip_last`
-- `context_selection_strategy`
-- `entropy_profile`
-- `entropy_rag_budget_ratio`
-- `entropy_protect_code_blocks`
-- `entropy_protect_tool_results`
-- `entropy_reference_boost`
-- `context_compaction_threshold`
-- `context_compaction_keep_recent_rounds`
-- `prompt_max_input_tokens`
-- `prompt_response_token_reserve`
-- `prompt_recent_history_max_tokens`
-- `prompt_summary_max_tokens`
-- `prompt_rag_max_tokens`
-- `prompt_tool_memory_max_tokens`
-- `prompt_tool_trace_max_tokens`
-- `pruning_enabled`
-- `pruning_token_threshold`
-- `pruning_batch_size`
-- `pruning_target_reduction_ratio`
-- `pruning_min_target_tokens`
-- `fetch_url_token_threshold`
-- `fetch_url_clip_aggressiveness`
-- `fetch_html_converter_mode`
-- `fetch_url_summarized_max_input_chars`
-- `fetch_url_summarized_max_output_tokens`
-- `rag_auto_inject_source_types`
-- `operation_model_fallback_preferences`
-- `proxy_enabled_operations`
-- `sub_agent_max_parallel_tools`
-- `reasoning_auto_collapse`
+- Assistant behavior and routing:
+  - `general_instructions`, `user_preferences`, `ai_personality`, `default_persona_id`
+  - `visible_model_order`, `custom_models`, `operation_model_preferences`, `operation_model_fallback_preferences`
+  - `temperature`, `max_steps`, `max_parallel_tools`, `reasoning_auto_collapse`
+- Memory and retrieval:
+  - `conversation_memory_enabled`, `rag_enabled`, `rag_auto_inject`, `rag_source_types`, `rag_auto_inject_source_types`
+  - `rag_sensitivity`, `rag_context_size`, `tool_memory_auto_inject`
+  - `tool_memory_ttl_default_seconds`, `tool_memory_ttl_web_seconds`, `tool_memory_ttl_news_seconds`
+- Sub-agent runtime:
+  - `sub_agent_max_steps`, `sub_agent_timeout_seconds`, `sub_agent_retry_attempts`, `sub_agent_retry_delay_seconds`
+  - `sub_agent_max_parallel_tools`, `sub_agent_allowed_tool_names`
+  - `sub_agent_canvas_auto_save`, `sub_agent_canvas_auto_open`
+- Fetch and web behavior:
+  - `search_tool_query_limit`, `web_cache_ttl_hours`, `fetch_html_converter_mode`
+  - `fetch_url_token_threshold`, `fetch_url_clip_aggressiveness`
+  - `fetch_url_summarized_max_input_chars`, `fetch_url_summarized_max_output_tokens`
+  - `fetch_raw_max_text_chars`, `fetch_summary_max_chars`
+  - `openrouter_prompt_cache_enabled`, `openrouter_anthropic_cache_ttl`
+  - `openrouter_http_referer`, `openrouter_app_title`, `proxy_enabled_operations`
+- Canvas controls:
+  - `canvas_prompt_max_lines`, `canvas_prompt_max_tokens`, `canvas_prompt_max_chars`
+  - `canvas_prompt_code_line_max_chars`, `canvas_prompt_text_line_max_chars`
+  - `canvas_expand_max_lines`, `canvas_scroll_window_lines`
+- Summaries, compaction, and pruning:
+  - `chat_summary_model`, `chat_summary_mode`, `chat_summary_detail_level`, `chat_summary_trigger_token_count`
+  - `summary_skip_first`, `summary_skip_last`, `summary_source_target_tokens`, `summary_retry_min_source_tokens`
+  - `context_compaction_threshold`, `context_compaction_keep_recent_rounds`
+  - `context_selection_strategy`, `entropy_profile`, `entropy_rag_budget_ratio`
+  - `entropy_protect_code_blocks`, `entropy_protect_tool_results`, `entropy_reference_boost`
+  - `pruning_enabled`, `pruning_token_threshold`, `pruning_batch_size`, `pruning_target_reduction_ratio`, `pruning_min_target_tokens`
+- Prompt budgets:
+  - `prompt_max_input_tokens`, `prompt_response_token_reserve`, `prompt_recent_history_max_tokens`
+  - `prompt_summary_max_tokens`, `prompt_preflight_summary_token_count`, `prompt_rag_max_tokens`
+  - `prompt_tool_memory_max_tokens`, `prompt_tool_trace_max_tokens`
+- Feature flags and runtime feature tuning:
+  - `ocr_enabled`, `ocr_provider`, `image_processing_method`, `image_helper_model`
+  - `youtube_transcripts_enabled`, `youtube_transcript_model_size`, `youtube_transcript_language`
+  - `rag_chunk_size`, `rag_chunk_overlap`, `rag_max_chunks_per_source`, `rag_search_top_k`, `rag_search_min_similarity`
+  - `rag_query_expansion_enabled`, `rag_query_expansion_max_variants`
+  - `login_session_timeout_minutes`, `login_max_failed_attempts`, `login_lockout_seconds`, `login_remember_session_days`
+  - `activity_enabled`, `activity_retention_days`
+- Tool and scratchpad state:
+  - `active_tools`, `scratchpad`, and the named `scratchpad_*` section keys
 
 `general_instructions` is the canonical stored field for assistant-behavior text; `user_preferences` remains as a compatibility alias for the same value.
 
@@ -638,9 +636,9 @@ Implementation note for future commands:
 
 The app includes a dedicated `/settings` page.
 
-- Assistant tab: general instructions, AI personality, OpenRouter model management, visible chat-model ordering, task-specific model preferences and fallback chains, temperature, image-processing method, helper image model, tool-step budget, clarification limits, sub-agent timeout/retry controls, fetch clipping/summarization budgets, canvas limits, summarization, pruning, proxy scopes, reasoning auto-collapse, and context-selection strategy controls
-- Memory tab: conversation memory, scratchpad, tool-memory auto-injection, RAG auto-injection, RAG source pools, and user profile memory behavior
-- Tools tab: active tool permissions, including canvas and project-workspace tools
+- Assistant tab: general instructions, AI personality, OpenRouter model management, visible chat-model ordering, task-specific model preferences and fallback chains, temperature, image-processing method, helper image model, tool-step budget, clarification limits, sub-agent timeout/retry controls, fetch clipping/summarization budgets, canvas limits, summarization, pruning, proxy scopes, activity retention, reasoning auto-collapse, and context-selection strategy controls
+- Memory tab: conversation memory, persona memory, scratchpad, tool-memory auto-injection, RAG auto-injection, RAG source pools, and user profile memory behavior
+- Tools tab: active tool permissions, including canvas and project-workspace tools, plus the read-only sub-agent allowlist
 - Knowledge tab: knowledge-base uploads, RAG maintenance, and sync controls
 
 Use the settings page when you want to change global behavior without opening layered panels on the chat screen.
@@ -767,6 +765,12 @@ PDFs can also be submitted in visual mode. In that path, the backend renders onl
 - `create_directory`, `create_file`, `update_file`, `read_file`, `list_dir`, and `search_files` operate inside the workspace sandbox.
 - `validate_project_workspace` runs lightweight checks.
 
+### GitHub import workflow
+
+- `preview_github_import_to_canvas` fetches repository metadata and shows which files would be imported without mutating Canvas.
+- `import_github_repository_to_canvas` performs the actual import after the preview has been shown and the user has explicitly confirmed.
+- The REST API mirrors this with `POST /api/conversations/<id>/canvas/import-github` for direct imports and Canvas state updates.
+
 ### Exporting conversations
 
 You can export a conversation in four formats:
@@ -813,6 +817,8 @@ Supported behavior:
 
 The Settings page can scope retrieval to conversation, tool result, tool memory, and uploaded-document source pools.
 
+At the API level, `/api/rag/search` also supports hierarchical metadata filters such as `workspace_id`, `project_id`, `document_id`, `document_path`, `section_id`, `section_title`, and `metadata_filter_mode` for targeted retrieval inside imported project/document structures.
+
 ## Available tools
 
 Only tools enabled in Settings are exposed to the model. If RAG is disabled, `search_knowledge_base` is removed from the tool list even if it is enabled in settings.
@@ -835,9 +841,10 @@ Save one short conversation-scoped memory entry for the current chat only.
 - Prefer this over the scratchpad for chat-specific information. If the same key already exists in the current conversation, it is refreshed instead of duplicated.
 
 - Arguments:
-  - `entry_type` (string, required) - one of `user_info`, `task_context`, `tool_result`, or `decision`
-  - `key` (string, required) - short label for the fact or result
-  - `value` (string, required) - one compact factual line to remember later in this chat
+  - `entries` (array, preferred) - one or more `{entry_type, key, value}` objects saved in a single call
+  - `entry_type` (string, single-entry fallback) - one of `user_info`, `task_context`, `tool_result`, or `decision`
+  - `key` (string, single-entry fallback) - short label for the fact or result
+  - `value` (string, single-entry fallback) - one compact factual line to remember later in this chat
 
 #### `delete_conversation_memory_entry`
 
@@ -845,6 +852,21 @@ Delete one outdated conversation memory entry by id.
 
 - Arguments:
   - `entry_id` (integer, required) - the memory entry id to remove
+
+#### `save_to_persona_memory`
+
+Save one compact persona-scoped memory entry shared across conversations that use the same persona.
+
+- Arguments:
+  - `key` (string, required) - short label for the durable persona fact
+  - `value` (string, required) - single-line micro-summary to reuse in later conversations
+
+#### `delete_persona_memory_entry`
+
+Delete one outdated persona-scoped memory entry by id.
+
+- Arguments:
+  - `entry_id` (integer, required) - the persona memory entry id to remove
 
 #### `append_scratchpad`
 
@@ -903,7 +925,7 @@ Delegate a bounded web-research or inspection task to a helper sub-agent. The he
   - `task` (string, required) - delegated task rewritten as clear English instructions; include only research-relevant details
   - `max_steps` (integer, optional, 1-12) - legacy field; the runtime uses the user-configured Settings value instead
 
-The helper receives only read-only web tools from the user-configured allowlist. The model controls neither the helper's tool budget nor its tool set; both are configured from the Settings page.
+The helper receives only read-only tools from the user-configured allowlist. Web research tools remain the default starting point, but read-only canvas/workspace inspection tools can also be exposed from Settings. The model controls neither the helper's tool budget nor its tool set; both are configured from the Settings page.
 
 ### Knowledge base and tool memory
 
@@ -917,7 +939,7 @@ Semantic search over synced conversations, stored tool results, remembered web r
   - `top_k` (integer, optional, 1-12) - maximum number of chunks to retrieve
   - `min_similarity` (number, optional, 0.0-1.0) - minimum similarity threshold; higher values trade recall for precision
 
-The current code accepts `conversation`, `tool_result`, `tool_memory`, and `uploaded_document` as category values.
+The current runtime expects `conversation`, `tool_result`, or `uploaded_document` as category values for this tool. Use `search_tool_memory` for remembered cross-conversation web research.
 
 #### `search_tool_memory`
 
@@ -1234,21 +1256,38 @@ Workspace tools let the assistant validate and edit files in the conversation sa
 | `PATCH` | `/api/settings` | Update persisted settings |
 | `POST` | `/api/fix-text` | Rewrite the current draft before sending |
 | `POST` | `/chat` | Main streamed chat endpoint; accepts JSON or multipart uploads |
+| `POST` | `/api/chat-runs/<run_id>/cancel` | Gracefully cancel an in-flight streamed assistant run |
 | `POST` | `/api/conversations/<id>/generate-title` | Generate or refresh a title from conversation content |
 | `POST` | `/api/conversations/<id>/summarize` | Manually summarize a conversation |
+| `POST` | `/api/conversations/<id>/summarize/preview` | Preview a summary without writing it |
 | `POST` | `/api/conversations/<id>/summaries/<summary_id>/undo` | Undo a summary message |
 | `POST` | `/api/messages/<id>/prune` | Prune a visible user or assistant message |
 | `POST` | `/api/conversations/<id>/prune-batch` | Batch-prune a conversation |
+| `POST` | `/api/conversations/<id>/prune-scores` | Score prunable messages before manual selection |
+| `POST` | `/api/conversations/<id>/prune-selected` | Prune an explicit set of selected messages |
 | `GET` | `/api/conversations` | List conversations |
 | `POST` | `/api/conversations` | Create a conversation |
 | `GET` | `/api/conversations/<id>` | Load one conversation and all messages |
 | `PATCH` | `/api/conversations/<id>` | Rename a conversation |
 | `DELETE` | `/api/conversations/<id>` | Delete a conversation |
+| `POST` | `/api/conversations/<id>/memory` | Create a conversation-memory entry |
+| `PATCH` | `/api/conversations/<id>/memory/<entry_id>` | Update a conversation-memory entry |
+| `DELETE` | `/api/conversations/<id>/memory/<entry_id>` | Delete a conversation-memory entry |
+| `GET` | `/api/personas` | List personas and default persona selection |
+| `POST` | `/api/personas` | Create a persona |
+| `PATCH` | `/api/personas/<id>` | Update a persona |
+| `DELETE` | `/api/personas/<id>` | Delete a persona |
+| `GET` | `/api/personas/<id>/memory` | List persona memory entries |
+| `POST` | `/api/personas/<id>/memory` | Create a persona memory entry |
+| `PATCH` | `/api/personas/<id>/memory/<entry_id>` | Update a persona memory entry |
+| `DELETE` | `/api/personas/<id>/memory/<entry_id>` | Delete a persona memory entry |
 | `GET` | `/api/conversations/<id>/export` | Export a conversation as Markdown, DOCX, or PDF |
 | `GET` | `/api/conversations/<id>/canvas/export` | Export a canvas document as Markdown, HTML, or PDF |
+| `GET` | `/api/conversations/<id>/images/<image_id>` | Stream a stored uploaded image asset |
 | `POST` | `/api/conversations/<id>/canvas` | Save a sub-agent research result as a new canvas document |
 | `PATCH` | `/api/conversations/<id>/canvas` | Update metadata for an existing canvas document |
 | `DELETE` | `/api/conversations/<id>/canvas` | Delete one canvas document or clear all canvas documents |
+| `POST` | `/api/conversations/<id>/canvas/import-github` | Import a GitHub repository into Canvas |
 | `PATCH` | `/api/messages/<id>` | Update a stored message |
 | `DELETE` | `/api/messages/<id>` | Delete a stored message |
 | `GET` | `/api/rag/documents` | List indexed RAG sources |
@@ -1257,6 +1296,9 @@ Workspace tools let the assistant validate and edit files in the conversation sa
 | `POST` | `/api/rag/sync-conversations` | Sync one conversation or all conversations into RAG |
 | `POST` | `/api/rag/upload-metadata` | Suggest a title and description for an uploaded knowledge-base file |
 | `POST` | `/api/rag/ingest` | Upload text or a file into RAG as an `uploaded_document` source |
+| `GET` | `/api/activity` | List model invocation activity logs with filtering/pagination |
+| `GET` | `/api/activity/<id>` | Fetch one activity record with detailed metadata |
+| `POST` | `/api/activity/purge-expired` | Purge activity records older than the configured retention window |
 
 ## Data storage
 
@@ -1267,11 +1309,17 @@ The app creates and uses these tables:
 - `conversations`
 - `messages`
 - `app_settings`
+- `personas`
+- `conversation_memory`
+- `persona_memory`
 - `user_profile`
 - `image_assets`
 - `file_assets`
+- `video_assets`
 - `web_cache`
 - `rag_documents`
+- `model_invocations`
+- `conversation_state_mutations`
 
 `messages.metadata` can contain:
 
@@ -1312,7 +1360,7 @@ RAG data is stored in a persistent Chroma collection under `CHROMA_DB_PATH`.
 ### Run tests
 
 ```bash
-python -m pytest tests/test_app.py
+python -m pytest tests/
 ```
 
 ### Lint
@@ -1350,7 +1398,7 @@ When adding a new command:
 3. Define how the command turns raw input into normalized chat content plus any metadata or request payload fields inside `parse()`.
 4. Define how stored message metadata is recognized again inside `extractMetadata()` so badges, edit flows, and re-rendered history stay consistent.
 5. If the command needs backend behavior, teach `/chat` or message edit routes to read the new request fields and persist any related metadata.
-6. Update this README and `AGENTS.MD` project context so the new command becomes part of the documented architecture.
+6. Update this README and `memory/PROJECT_CONTEXT.md` so the new command becomes part of the documented architecture.
 
 ### Pre-commit hooks (optional)
 
@@ -1367,6 +1415,7 @@ A sample `.pre-commit-config.yaml` is not included in the repository.
 - to prevent ISP or LAN observers from reading user messages in transit, run the app behind HTTPS (reverse proxy) and enable `FORCE_HTTPS=true` plus `SESSION_COOKIE_SECURE=true`
 - if you terminate TLS at a reverse proxy, set `TRUST_PROXY_HEADERS=true` so Flask correctly treats proxied HTTPS requests as secure
 - enable HSTS with `SECURITY_HSTS_ENABLED=true` only after HTTPS is working end-to-end
+- enable `SECURITY_RATE_LIMIT_REDIS_ENABLED=true` with a valid `SECURITY_RATE_LIMIT_REDIS_URL` when you need shared rate-limit state across multiple workers
 - `fetch_url` rejects localhost and private-network targets
 - only enabled tools are exposed to the model
 - tool arguments are schema-validated before execution
@@ -1437,7 +1486,7 @@ Check `OCR_ENABLED`, `OCR_PROVIDER`, and the provider-specific runtime. EasyOCR 
 
 **How do I enable debug logging?**
 
-Set `AGENT_TRACE_LOG_PATH` to a writable file path and inspect the rotating log file.
+Set `AGENT_TRACE_LOG_PATH` to a writable file path and inspect the rotating log file. Use `AGENT_TRACE_LOG_ENABLED=false` to disable trace logging entirely, or `AGENT_TRACE_LOG_INCLUDE_RAW=false` to keep structured logs without full raw payload capture.
 
 **How can I disable a specific tool?**
 

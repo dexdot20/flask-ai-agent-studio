@@ -1,4 +1,4 @@
-## Optional RAG stack (embeddings, chunking, retrieval sync, and ChromaDB persistence).
+## Optional RAG stack layered on top of requirements.txt (embeddings, chunking, retrieval sync, and ChromaDB persistence).
 chromadb>=0.5
 sentence-transformers>=3.0
 torch>=2.3

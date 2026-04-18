@@ -776,6 +776,8 @@ def register_page_routes(app) -> None:
         sub_agent_canvas_auto_save_raw = data.get("sub_agent_canvas_auto_save")
         sub_agent_canvas_auto_open_raw = data.get("sub_agent_canvas_auto_open")
         web_cache_ttl_hours_raw = data.get("web_cache_ttl_hours")
+        activity_enabled_raw = data.get("activity_enabled")
+        activity_retention_days_raw = data.get("activity_retention_days")
         openrouter_prompt_cache_enabled_raw = data.get("openrouter_prompt_cache_enabled")
         openrouter_anthropic_cache_ttl_raw = data.get("openrouter_anthropic_cache_ttl")
         openrouter_http_referer_raw = data.get("openrouter_http_referer")
@@ -883,6 +885,8 @@ def register_page_routes(app) -> None:
             sub_agent_canvas_auto_save_raw,
             sub_agent_canvas_auto_open_raw,
             web_cache_ttl_hours_raw,
+            activity_enabled_raw,
+            activity_retention_days_raw,
             openrouter_prompt_cache_enabled_raw,
             openrouter_anthropic_cache_ttl_raw,
             openrouter_http_referer_raw,
@@ -1933,6 +1937,18 @@ def register_page_routes(app) -> None:
             if not (WEB_CACHE_TTL_HOURS_MIN <= web_cache_ttl_hours <= WEB_CACHE_TTL_HOURS_MAX):
                 return jsonify({"error": f"web_cache_ttl_hours must be between {WEB_CACHE_TTL_HOURS_MIN} and {WEB_CACHE_TTL_HOURS_MAX}."}), 400
             settings["web_cache_ttl_hours"] = str(web_cache_ttl_hours)
+
+        if activity_enabled_raw is not None:
+            settings["activity_enabled"] = _normalize_bool_setting_value(activity_enabled_raw)
+
+        if activity_retention_days_raw is not None:
+            try:
+                activity_retention_days = int(activity_retention_days_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "activity_retention_days must be an integer."}), 400
+            if not (1 <= activity_retention_days <= 3650):
+                return jsonify({"error": "activity_retention_days must be between 1 and 3650."}), 400
+            settings["activity_retention_days"] = str(activity_retention_days)
 
         if openrouter_prompt_cache_enabled_raw is not None:
             if isinstance(openrouter_prompt_cache_enabled_raw, bool):
