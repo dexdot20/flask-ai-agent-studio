@@ -17,6 +17,7 @@ load_dotenv()
 
 DEEPSEEK_PROVIDER = "deepseek"
 OPENROUTER_PROVIDER = "openrouter"
+MINIMAX_PROVIDER = "minimax"
 OPENROUTER_MODEL_PREFIX = "openrouter:"
 OPENROUTER_REASONING_MODE_DEFAULT = "default"
 OPENROUTER_REASONING_MODE_ENABLED = "enabled"
@@ -256,6 +257,402 @@ class _OpenRouterClientProxy:
             raise last_error
         raise RuntimeError("OpenRouter request failed without a recorded error.")
 
+
+class _MiniMaxDelta:
+    """Mimics OpenAI chat.completion.delta for MiniMax streaming responses."""
+
+    def __init__(
+        self,
+        content: str = "",
+        reasoning_content: str = "",
+        tool_calls: list | None = None,
+    ):
+        self.content = content
+        self.reasoning_content = reasoning_content
+        self.tool_calls = tool_calls or []
+
+
+class _MiniMaxChoiceDelta:
+    """Mimics OpenAI chat.completion.chunk.choice[0].delta for MiniMax."""
+
+    def __init__(
+        self,
+        content: str = "",
+        reasoning_content: str = "",
+        tool_calls: list | None = None,
+    ):
+        self.delta = _MiniMaxDelta(
+            content=content,
+            reasoning_content=reasoning_content,
+            tool_calls=tool_calls,
+        )
+
+
+class _MiniMaxChunk:
+    """Mimics OpenAI chat.completion.chunk for MiniMax streaming responses.
+
+    Translates Anthropic SDK streaming events to OpenAI-compatible format.
+    """
+
+    def __init__(
+        self,
+        content: str = "",
+        reasoning_content: str = "",
+        index: int = 0,
+        tool_calls: list | None = None,
+    ):
+        self.choices = [
+            _MiniMaxChoiceDelta(
+                content=content,
+                reasoning_content=reasoning_content,
+                tool_calls=tool_calls,
+            )
+        ]
+        self.index = index
+
+
+class _MiniMaxStreamIterator:
+    """Iterator that translates Anthropic streaming events to OpenAI-compatible chunks."""
+
+    def __init__(self, anthropic_stream):
+        self._anthropic_stream = anthropic_stream
+        self._closed = False
+        # Track tool use state across streaming events
+        self._tool_use_state: dict[int, dict] = {}
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        while True:
+            chunk = next(self._anthropic_stream)
+            self._closed = False  # will be set to True on close
+
+            if chunk.type == "content_block_start":
+                content_block = getattr(chunk, "content_block", None) or {}
+                block_type = (
+                    content_block.get("type", "")
+                    if isinstance(content_block, dict)
+                    else getattr(content_block, "type", "")
+                )
+                index = chunk.index or 0
+                if block_type == "text":
+                    # Initial text block - yield empty delta to set up the structure
+                    return _MiniMaxChunk(content="", reasoning_content="", index=index)
+                elif block_type == "thinking":
+                    # Initial thinking block - yield empty reasoning_content
+                    return _MiniMaxChunk(content="", reasoning_content="", index=index)
+                elif block_type == "tool_use":
+                    # Tool use block - extract tool id and name
+                    tool_name = ""
+                    tool_id = ""
+                    if isinstance(content_block, dict):
+                        tool_name = content_block.get("name", "")
+                        tool_id = content_block.get("id", "")
+                    else:
+                        tool_name = getattr(content_block, "name", "")
+                        tool_id = getattr(content_block, "id", "")
+                    self._tool_use_state[index] = {"name": tool_name, "id": tool_id, "arguments": ""}
+                    # Emit initial tool_use structure
+                    return _MiniMaxChunk(
+                        content="",
+                        reasoning_content="",
+                        index=index,
+                        tool_calls=[
+                            {
+                                "index": index,
+                                "id": tool_id,
+                                "function": {
+                                    "name": tool_name,
+                                    "arguments": "",
+                                },
+                            }
+                        ],
+                    )
+
+            elif chunk.type == "content_block_delta":
+                delta = getattr(chunk, "delta", None)
+                if delta is None:
+                    continue
+                delta_type = getattr(delta, "type", "")
+                index = chunk.index or 0
+
+                if delta_type == "thinking_delta":
+                    thinking_text = getattr(delta, "thinking", "") or ""
+                    return _MiniMaxChunk(content="", reasoning_content=thinking_text, index=index)
+                elif delta_type == "text_delta":
+                    text = getattr(delta, "text", "") or ""
+                    return _MiniMaxChunk(content=text, reasoning_content="", index=index)
+                elif delta_type == "input_json_delta":
+                    # Tool use JSON delta - accumulate partial JSON
+                    partial_json = getattr(delta, "partial_json", "") or ""
+                    if index in self._tool_use_state:
+                        self._tool_use_state[index]["arguments"] += partial_json
+                    # Emit tool_calls with accumulated arguments
+                    tool_call = {
+                        "index": index,
+                        "function": {
+                            "name": "",
+                            "arguments": partial_json,
+                        },
+                    }
+                    if index in self._tool_use_state:
+                        tool_call["id"] = self._tool_use_state[index].get("id", "")
+                        tool_call["function"]["name"] = self._tool_use_state[index].get("name", "")
+                    return _MiniMaxChunk(
+                        content="",
+                        reasoning_content="",
+                        index=index,
+                        tool_calls=[tool_call],
+                    )
+
+            elif chunk.type == "message_delta":
+                # Final message metadata (e.g., usage)
+                # Could emit a final chunk with usage info if needed
+                continue
+
+            elif chunk.type == "message_stop":
+                raise StopIteration
+
+        raise StopIteration
+
+    def close(self):
+        self._closed = True
+        close_method = getattr(self._anthropic_stream, "close", None)
+        if callable(close_method):
+            try:
+                close_method()
+            except Exception:
+                pass
+
+
+class _MiniMaxChatCompletionsProxy:
+    """Exposes OpenAI-style chat.completions.create() interface for MiniMax."""
+
+    def __init__(self, owner: "_MiniMaxClientProxy"):
+        self._owner = owner
+
+    def create(self, *args, **kwargs):
+        return self._owner._create_chat_completion(*args, **kwargs)
+
+
+class _MiniMaxChatProxy:
+    def __init__(self, owner: "_MiniMaxClientProxy"):
+        self.completions = _MiniMaxChatCompletionsProxy(owner)
+
+
+class _MiniMaxClientProxy:
+    """Wraps Anthropic SDK to expose OpenAI-compatible chat.completions interface.
+
+    Translates OpenAI-format requests to Anthropic API calls and converts
+    streaming responses back to OpenAI-compatible format.
+    """
+
+    def __init__(self, api_key: str):
+        self._api_key = api_key
+        self.chat = _MiniMaxChatProxy(self)
+        self._anthropic_client = None
+
+    def _get_anthropic_client(self):
+        if self._anthropic_client is None:
+            import anthropic
+
+            self._anthropic_client = anthropic.Anthropic(
+                api_key=self._api_key,
+                base_url="https://api.minimax.io/anthropic",
+            )
+        return self._anthropic_client
+
+    def _translate_openai_to_anthropic(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Translate OpenAI-style kwargs to Anthropic API format."""
+        translated: dict[str, Any] = {}
+
+        # Model - direct mapping
+        translated["model"] = kwargs.get("model", "")
+
+        # Max tokens
+        if "max_tokens" in kwargs:
+            translated["max_tokens"] = kwargs["max_tokens"]
+
+        # Temperature - MiniMax requires (0.0, 1.0]
+        if "temperature" in kwargs:
+            temp = float(kwargs["temperature"])
+            # Clamp to MiniMax's valid range (0.0, 1.0]
+            temp = max(0.001, min(1.0, temp))
+            translated["temperature"] = temp
+
+        # Top p
+        if "top_p" in kwargs:
+            translated["top_p"] = kwargs["top_p"]
+
+        # System prompt
+        system_message = None
+        messages = kwargs.get("messages", [])
+        if messages and isinstance(messages, list):
+            # Check if first message is a system message
+            first_msg = messages[0] if messages else None
+            if first_msg and isinstance(first_msg, dict):
+                role = str(first_msg.get("role") or "").strip().lower()
+                if role == "system":
+                    system_message = first_msg.get("content", "")
+                    # Remove system message from messages list
+                    messages = messages[1:]
+
+        if system_message:
+            translated["system"] = system_message
+
+        # Translate messages
+        translated_messages = []
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+
+            role = str(msg.get("role") or "").strip().lower()
+            content = msg.get("content", "")
+
+            # Handle content that might be a string or list
+            if isinstance(content, list):
+                # OpenAI multi-modal content - MiniMax only supports text and tool_use
+                translated_content = []
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    block_type = str(block.get("type") or "").strip()
+                    if block_type == "text":
+                        text = block.get("text", "")
+                        if text:
+                            translated_content.append({"type": "text", "text": text})
+                    elif block_type == "tool_use":
+                        # Extract tool use info
+                        tool_use_block = {
+                            "type": "tool_use",
+                            "id": block.get("id", ""),
+                            "name": block.get("name", ""),
+                        }
+                        translated_content.append(tool_use_block)
+                    # Skip image/document blocks as MiniMax doesn't support them
+            elif isinstance(content, str) and content:
+                translated_content = [{"type": "text", "text": content}]
+            else:
+                translated_content = [{"type": "text", "text": ""}]
+
+            if translated_content or role in ("user", "assistant"):
+                translated_messages.append(
+                    {
+                        "role": role,
+                        "content": translated_content,
+                    }
+                )
+
+        translated["messages"] = translated_messages
+
+        # Tools
+        if "tools" in kwargs:
+            tools = kwargs["tools"]
+            if isinstance(tools, list):
+                anthropic_tools = []
+                for tool in tools:
+                    if not isinstance(tool, dict):
+                        continue
+                    tool_type = str(tool.get("type") or "").strip()
+                    if tool_type == "function":
+                        func = tool.get("function", {})
+                        anthropic_tools.append(
+                            {
+                                "name": func.get("name", ""),
+                                "description": func.get("description", ""),
+                                "input_schema": func.get("parameters", {}),
+                            }
+                        )
+                    elif tool_type == "code":
+                        # Code tool - skip for now
+                        pass
+                if anthropic_tools:
+                    translated["tools"] = anthropic_tools
+
+        # Tool choice
+        if "tool_choice" in kwargs:
+            tool_choice = kwargs["tool_choice"]
+            if tool_choice == "auto":
+                translated["tool_choice"] = "auto"
+            elif isinstance(tool_choice, dict):
+                # Specific tool choice
+                tool_name = tool_choice.get("function", {}).get("name", "")
+                if tool_name:
+                    translated["tool_choice"] = {"type": "tool", "name": tool_name}
+            elif isinstance(tool_choice, str):
+                translated["tool_choice"] = tool_choice
+
+        # Stream
+        translated["stream"] = kwargs.get("stream", False)
+
+        return translated
+
+    def _create_chat_completion(self, *args, **kwargs):
+        """Handle chat.completions.create() call, translating to Anthropic API."""
+        # Merge args and kwargs
+        if args:
+            # positional arg for model (uncommon but handle it)
+            if len(args) >= 1:
+                kwargs["model"] = args[0]
+            if len(args) >= 2:
+                kwargs["messages"] = args[1]
+
+        # Translate to Anthropic format
+        anthropic_kwargs = self._translate_openai_to_anthropic(kwargs)
+
+        # Get the client
+        client = self._get_anthropic_client()
+
+        # Check if streaming
+        is_streaming = anthropic_kwargs.get("stream", False)
+
+        if is_streaming:
+            # Non-streaming call
+            response = client.messages.create(**anthropic_kwargs)
+            # For non-streaming, convert to a non-iterator response
+            return _MiniMaxNonStreamResponse(response, anthropic_kwargs.get("model", ""))
+        else:
+            # Streaming call
+            stream = client.messages.create(**anthropic_kwargs)
+            return _MiniMaxStreamIterator(stream)
+
+
+class _MiniMaxNonStreamResponse:
+    """Wraps a non-streaming Anthropic response to look like OpenAI non-streaming response."""
+
+    def __init__(self, message, model: str):
+        self.message = message
+        self.model = model
+        self.choices = [_MiniMaxNonStreamChoice(message)]
+        self.usage = _MiniMaxUsage(
+            prompt_tokens=getattr(message, "usage", {}).get("input_tokens", 0) if hasattr(message, "usage") else 0,
+            completion_tokens=getattr(message, "usage", {}).get("output_tokens", 0) if hasattr(message, "usage") else 0,
+            total_tokens=(
+                getattr(message, "usage", {}).get("input_tokens", 0)
+                + getattr(message, "usage", {}).get("output_tokens", 0)
+                if hasattr(message, "usage")
+                else 0
+            ),
+        )
+
+    def __iter__(self):
+        return iter([self])
+
+
+class _MiniMaxNonStreamChoice:
+    def __init__(self, message):
+        self.message = message
+        self.finish_reason = getattr(message, "stop_reason", None) or "stop"
+
+
+class _MiniMaxUsage:
+    def __init__(self, prompt_tokens: int, completion_tokens: int, total_tokens: int):
+        self.prompt_tokens = prompt_tokens
+        self.completion_tokens = completion_tokens
+        self.total_tokens = total_tokens
+
+
 BUILTIN_MODELS = [
     {
         "id": "deepseek-chat",
@@ -279,11 +676,86 @@ BUILTIN_MODELS = [
         "is_custom": False,
         "pricing": {"input": 0.28, "input_cache_hit": 0.028, "output": 0.42},
     },
+    {
+        "id": "MiniMax-M2.7",
+        "name": "MiniMax M2.7",
+        "provider": MINIMAX_PROVIDER,
+        "api_model": "MiniMax-M2.7",
+        "supports_tools": True,
+        "supports_vision": False,
+        "supports_structured_outputs": False,
+        "is_custom": False,
+        "pricing": {"input": 0.0, "input_cache_hit": 0.0, "input_cache_write": 0.0, "output": 0.0},
+    },
+    {
+        "id": "MiniMax-M2.7-highspeed",
+        "name": "MiniMax M2.7 HighSpeed",
+        "provider": MINIMAX_PROVIDER,
+        "api_model": "MiniMax-M2.7-highspeed",
+        "supports_tools": True,
+        "supports_vision": False,
+        "supports_structured_outputs": False,
+        "is_custom": False,
+        "pricing": {"input": 0.0, "input_cache_hit": 0.0, "input_cache_write": 0.0, "output": 0.0},
+    },
+    {
+        "id": "MiniMax-M2.5",
+        "name": "MiniMax M2.5",
+        "provider": MINIMAX_PROVIDER,
+        "api_model": "MiniMax-M2.5",
+        "supports_tools": True,
+        "supports_vision": False,
+        "supports_structured_outputs": False,
+        "is_custom": False,
+        "pricing": {"input": 0.0, "input_cache_hit": 0.0, "input_cache_write": 0.0, "output": 0.0},
+    },
+    {
+        "id": "MiniMax-M2.5-highspeed",
+        "name": "MiniMax M2.5 HighSpeed",
+        "provider": MINIMAX_PROVIDER,
+        "api_model": "MiniMax-M2.5-highspeed",
+        "supports_tools": True,
+        "supports_vision": False,
+        "supports_structured_outputs": False,
+        "is_custom": False,
+        "pricing": {"input": 0.0, "input_cache_hit": 0.0, "input_cache_write": 0.0, "output": 0.0},
+    },
+    {
+        "id": "MiniMax-M2.1",
+        "name": "MiniMax M2.1",
+        "provider": MINIMAX_PROVIDER,
+        "api_model": "MiniMax-M2.1",
+        "supports_tools": True,
+        "supports_vision": False,
+        "supports_structured_outputs": False,
+        "is_custom": False,
+        "pricing": {"input": 0.0, "input_cache_hit": 0.0, "input_cache_write": 0.0, "output": 0.0},
+    },
+    {
+        "id": "MiniMax-M2.1-highspeed",
+        "name": "MiniMax M2.1 HighSpeed",
+        "provider": MINIMAX_PROVIDER,
+        "api_model": "MiniMax-M2.1-highspeed",
+        "supports_tools": True,
+        "supports_vision": False,
+        "supports_structured_outputs": False,
+        "is_custom": False,
+        "pricing": {"input": 0.0, "input_cache_hit": 0.0, "input_cache_write": 0.0, "output": 0.0},
+    },
+    {
+        "id": "MiniMax-M2",
+        "name": "MiniMax M2",
+        "provider": MINIMAX_PROVIDER,
+        "api_model": "MiniMax-M2",
+        "supports_tools": True,
+        "supports_vision": False,
+        "supports_structured_outputs": False,
+        "is_custom": False,
+        "pricing": {"input": 0.0, "input_cache_hit": 0.0, "input_cache_write": 0.0, "output": 0.0},
+    },
 ]
 BUILTIN_MODEL_IDS = {model["id"] for model in BUILTIN_MODELS}
-DEFAULT_VISIBLE_CHAT_MODEL_ORDER = [
-    model["id"] for model in BUILTIN_MODELS if model.get("supports_tools")
-]
+DEFAULT_VISIBLE_CHAT_MODEL_ORDER = [model["id"] for model in BUILTIN_MODELS if model.get("supports_tools")]
 
 
 def _copy_model_record(record: dict[str, Any]) -> dict[str, Any]:
@@ -646,7 +1118,9 @@ def _extract_openrouter_breakpoint_prefix(messages: Any) -> str:
     return ""
 
 
-def build_openrouter_cache_estimate_context(messages: Any, record: dict[str, Any] | None, settings: dict[str, Any] | None = None) -> dict[str, Any] | None:
+def build_openrouter_cache_estimate_context(
+    messages: Any, record: dict[str, Any] | None, settings: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
     if not isinstance(record, dict):
         return None
     if str(record.get("provider") or "").strip() != OPENROUTER_PROVIDER:
@@ -696,7 +1170,9 @@ def _summarize_model_cache_context(cache_context: dict[str, Any] | None) -> dict
     }
 
 
-def build_model_provider_policy(record: dict[str, Any] | None, settings: dict[str, Any] | None = None) -> dict[str, Any]:
+def build_model_provider_policy(
+    record: dict[str, Any] | None, settings: dict[str, Any] | None = None
+) -> dict[str, Any]:
     provider = str(record.get("provider") or "").strip() if isinstance(record, dict) else ""
     cache_context: dict[str, Any] | None = None
     tool_choice_fallback_value: str | None = None
@@ -709,9 +1185,7 @@ def build_model_provider_policy(record: dict[str, Any] | None, settings: dict[st
             "strategy": "implicit",
         }
     elif provider == OPENROUTER_PROVIDER and isinstance(record, dict):
-        cache_context = _summarize_model_cache_context(
-            build_openrouter_cache_estimate_context([], record, settings)
-        )
+        cache_context = _summarize_model_cache_context(build_openrouter_cache_estimate_context([], record, settings))
         supports_native_reasoning_continuation = True
         tool_choice_fallback_value = "auto"
         tool_choice_error_signatures = (
@@ -721,6 +1195,13 @@ def build_model_provider_policy(record: dict[str, Any] | None, settings: dict[st
                 "support the provided",
             ),
         )
+    elif provider == MINIMAX_PROVIDER:
+        # MiniMax uses Anthropic SDK format with thinking support
+        supports_native_reasoning_continuation = True
+        cache_context = {
+            "supports_prompt_cache": False,
+            "strategy": "none",
+        }
 
     supports_prompt_cache = bool(isinstance(cache_context, dict) and cache_context.get("supports_prompt_cache") is True)
     return {
@@ -798,7 +1279,9 @@ def build_model_target_tool_choice_fallback_request(
     return fallback_request_kwargs
 
 
-def _prepare_model_request_messages(messages: Any, record: dict[str, Any] | None, settings: dict[str, Any] | None = None) -> Any:
+def _prepare_model_request_messages(
+    messages: Any, record: dict[str, Any] | None, settings: dict[str, Any] | None = None
+) -> Any:
     if not isinstance(messages, list) or not isinstance(record, dict):
         return messages
     if str(record.get("provider") or "").strip() != OPENROUTER_PROVIDER:
@@ -836,7 +1319,9 @@ def _prepare_model_request_messages(messages: Any, record: dict[str, Any] | None
             break
         if supports_top_level_cache and _is_openrouter_anthropic_volatile_runtime_content(message.get("content")):
             continue
-        updated_content, applied = _with_openrouter_cache_breakpoint(message.get("content"), min_tokens=cache_min_tokens, ttl=cache_ttl)
+        updated_content, applied = _with_openrouter_cache_breakpoint(
+            message.get("content"), min_tokens=cache_min_tokens, ttl=cache_ttl
+        )
         if applied:
             prepared_messages[index] = {**prepared_messages[index], "content": updated_content}
             breakpoints_placed += 1
@@ -1087,7 +1572,9 @@ def _normalize_operation_model_fallback_list(raw_value: Any, settings: dict | No
     return normalized
 
 
-def normalize_operation_model_fallback_preferences(raw_value: Any, settings: dict | None = None) -> dict[str, list[str]]:
+def normalize_operation_model_fallback_preferences(
+    raw_value: Any, settings: dict | None = None
+) -> dict[str, list[str]]:
     raw_preferences = _parse_json_dict(raw_value)
     normalized: dict[str, list[str]] = {key: [] for key in MODEL_OPERATION_KEYS}
     for operation in MODEL_OPERATION_KEYS:
@@ -1104,7 +1591,9 @@ def get_operation_model_preferences(settings: dict | None = None) -> dict[str, s
 def get_operation_model_fallback_preferences(settings: dict | None = None) -> dict[str, list[str]]:
     if not isinstance(settings, dict):
         return _copy_operation_model_fallback_preferences(DEFAULT_OPERATION_MODEL_FALLBACK_PREFERENCES)
-    return normalize_operation_model_fallback_preferences(settings.get("operation_model_fallback_preferences"), settings)
+    return normalize_operation_model_fallback_preferences(
+        settings.get("operation_model_fallback_preferences"), settings
+    )
 
 
 def get_operation_model(
@@ -1132,11 +1621,19 @@ def get_operation_model_candidates(
 
     fallback_preferences = get_operation_model_fallback_preferences(settings)
     for configured_fallback_model in fallback_preferences.get(operation, []):
-        if configured_fallback_model and is_valid_model_id(configured_fallback_model, settings) and configured_fallback_model not in candidates:
+        if (
+            configured_fallback_model
+            and is_valid_model_id(configured_fallback_model, settings)
+            and configured_fallback_model not in candidates
+        ):
             candidates.append(configured_fallback_model)
 
     normalized_fallback = canonicalize_model_id(fallback_model_id)
-    if normalized_fallback and is_valid_model_id(normalized_fallback, settings) and normalized_fallback not in candidates:
+    if (
+        normalized_fallback
+        and is_valid_model_id(normalized_fallback, settings)
+        and normalized_fallback not in candidates
+    ):
         candidates.append(normalized_fallback)
 
     default_chat_model = get_default_chat_model_id(settings)
@@ -1185,8 +1682,8 @@ def can_model_use_structured_outputs(model_id: str, settings: dict | None = None
     return bool(record and record.get("supports_structured_outputs"))
 
 
-@lru_cache(maxsize=2)
-def get_provider_client(provider: str) -> OpenAI:
+@lru_cache(maxsize=3)
+def get_provider_client(provider: str) -> OpenAI | _OpenRouterClientProxy | _MiniMaxClientProxy:
     import config
 
     if provider == DEEPSEEK_PROVIDER:
@@ -1210,6 +1707,8 @@ def get_provider_client(provider: str) -> OpenAI:
         if default_headers:
             kwargs["default_headers"] = default_headers
         return _OpenRouterClientProxy(kwargs)
+    if provider == MINIMAX_PROVIDER:
+        return _MiniMaxClientProxy(api_key=(config.MINIMAX_API_KEY or "").strip())
     raise ValueError(f"Unsupported provider: {provider}")
 
 
@@ -1228,7 +1727,9 @@ def resolve_model_target(model_id: str, settings: dict | None = None) -> dict[st
     }
 
 
-def build_model_request_extra_body(record: dict[str, Any] | None, settings: dict[str, Any] | None = None) -> dict[str, Any]:
+def build_model_request_extra_body(
+    record: dict[str, Any] | None, settings: dict[str, Any] | None = None
+) -> dict[str, Any]:
     if not isinstance(record, dict):
         return {}
     if str(record.get("provider") or "").strip() != OPENROUTER_PROVIDER:

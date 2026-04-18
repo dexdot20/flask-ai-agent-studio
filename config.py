@@ -62,6 +62,7 @@ LOGIN_PIN = None
 del _login_pin_env
 DEEPSEEK_API_KEY = (os.getenv("DEEPSEEK_API_KEY") or "").strip()
 OPENROUTER_API_KEY = (os.getenv("OPENROUTER_API_KEY") or "").strip()
+MINIMAX_API_KEY = (os.getenv("MINIMAX_API_KEY") or "").strip()
 OPENROUTER_HTTP_REFERER = (os.getenv("OPENROUTER_HTTP_REFERER") or os.getenv("OPENROUTER_SITE_URL") or "").strip()
 OPENROUTER_APP_TITLE = (os.getenv("OPENROUTER_APP_TITLE") or os.getenv("OPENROUTER_X_TITLE") or "").strip()
 
@@ -227,7 +228,9 @@ SEARCH_MAX_RESULTS = 5
 CONTENT_MAX_CHARS = 100_000
 FETCH_SUMMARY_TOKEN_THRESHOLD = max(400, _parse_int_env("FETCH_SUMMARY_TOKEN_THRESHOLD", 3500))
 FETCH_SUMMARY_MAX_CHARS = max(2000, min(CONTENT_MAX_CHARS, _parse_int_env("FETCH_SUMMARY_MAX_CHARS", 8000)))
-FETCH_SUMMARIZE_MAX_INPUT_CHARS = max(4_000, min(CONTENT_MAX_CHARS, _parse_int_env("FETCH_SUMMARIZE_MAX_INPUT_CHARS", 80_000)))
+FETCH_SUMMARIZE_MAX_INPUT_CHARS = max(
+    4_000, min(CONTENT_MAX_CHARS, _parse_int_env("FETCH_SUMMARIZE_MAX_INPUT_CHARS", 80_000))
+)
 FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS = max(200, min(4_000, _parse_int_env("FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS", 2400)))
 FETCH_SUMMARY_GENERAL_TOP_K = max(1, min(6, _parse_int_env("FETCH_SUMMARY_GENERAL_TOP_K", 3)))
 FETCH_SUMMARY_QUERY_TOP_K = max(1, min(8, _parse_int_env("FETCH_SUMMARY_QUERY_TOP_K", 4)))
@@ -239,7 +242,9 @@ CHAT_SUMMARY_ALLOWED_MODES = {"auto", "conservative", "never", "aggressive"}
 SUMMARY_RETRY_REDUCTION_FACTOR = max(0.5, min(0.95, _parse_float_env("SUMMARY_RETRY_REDUCTION_FACTOR", 0.80)))
 PROMPT_MAX_INPUT_TOKENS = max(8_000, min(120_000, _parse_int_env("PROMPT_MAX_INPUT_TOKENS", 100_000)))
 PROMPT_RESPONSE_TOKEN_RESERVE = max(1_000, min(32_000, _parse_int_env("PROMPT_RESPONSE_TOKEN_RESERVE", 8_000)))
-PROMPT_RECENT_HISTORY_MAX_TOKENS = max(1_000, min(PROMPT_MAX_INPUT_TOKENS, _parse_int_env("PROMPT_RECENT_HISTORY_MAX_TOKENS", 70_000)))
+PROMPT_RECENT_HISTORY_MAX_TOKENS = max(
+    1_000, min(PROMPT_MAX_INPUT_TOKENS, _parse_int_env("PROMPT_RECENT_HISTORY_MAX_TOKENS", 70_000))
+)
 PROMPT_SUMMARY_MAX_TOKENS = max(500, min(PROMPT_MAX_INPUT_TOKENS, _parse_int_env("PROMPT_SUMMARY_MAX_TOKENS", 15_000)))
 PROMPT_RAG_MAX_TOKENS = max(0, min(PROMPT_MAX_INPUT_TOKENS, _parse_int_env("PROMPT_RAG_MAX_TOKENS", 6_000)))
 PROMPT_RAG_AUTO_MAX_TOKENS = max(
@@ -247,8 +252,12 @@ PROMPT_RAG_AUTO_MAX_TOKENS = max(
     min(PROMPT_RAG_MAX_TOKENS, _parse_int_env("PROMPT_RAG_AUTO_MAX_TOKENS", min(3_000, PROMPT_RAG_MAX_TOKENS))),
 )
 PROMPT_TOOL_TRACE_MAX_TOKENS = max(0, min(PROMPT_MAX_INPUT_TOKENS, _parse_int_env("PROMPT_TOOL_TRACE_MAX_TOKENS", 500)))
-PROMPT_TOOL_MEMORY_MAX_TOKENS = max(0, min(PROMPT_MAX_INPUT_TOKENS, _parse_int_env("PROMPT_TOOL_MEMORY_MAX_TOKENS", 1_500)))
-PROMPT_PREFLIGHT_SUMMARY_TOKEN_COUNT = max(2_000, min(200_000, _parse_int_env("PROMPT_PREFLIGHT_SUMMARY_TOKEN_COUNT", 90_000)))
+PROMPT_TOOL_MEMORY_MAX_TOKENS = max(
+    0, min(PROMPT_MAX_INPUT_TOKENS, _parse_int_env("PROMPT_TOOL_MEMORY_MAX_TOKENS", 1_500))
+)
+PROMPT_PREFLIGHT_SUMMARY_TOKEN_COUNT = max(
+    2_000, min(200_000, _parse_int_env("PROMPT_PREFLIGHT_SUMMARY_TOKEN_COUNT", 90_000))
+)
 CANVAS_PROMPT_DEFAULT_MAX_LINES = max(100, min(3_000, _parse_int_env("CANVAS_PROMPT_DEFAULT_MAX_LINES", 250)))
 CANVAS_PROMPT_DEFAULT_MAX_TOKENS = max(500, min(50_000, _parse_int_env("CANVAS_PROMPT_DEFAULT_MAX_TOKENS", 4_000)))
 CANVAS_PROMPT_DEFAULT_MAX_CHARS = max(1_000, min(200_000, _parse_int_env("CANVAS_PROMPT_DEFAULT_MAX_CHARS", 20_000)))
@@ -272,7 +281,9 @@ AGENT_TOOL_RESULT_TRANSCRIPT_MAX_CHARS = max(
     min(CONTENT_MAX_CHARS, _parse_int_env("AGENT_TOOL_RESULT_TRANSCRIPT_MAX_CHARS", 16_000)),
 )
 SUMMARY_SOURCE_TARGET_TOKENS = max(1_000, min(40_000, _parse_int_env("SUMMARY_SOURCE_TARGET_TOKENS", 6_000)))
-SUMMARY_RETRY_MIN_SOURCE_TOKENS = max(500, min(SUMMARY_SOURCE_TARGET_TOKENS, _parse_int_env("SUMMARY_RETRY_MIN_SOURCE_TOKENS", 1_500)))
+SUMMARY_RETRY_MIN_SOURCE_TOKENS = max(
+    500, min(SUMMARY_SOURCE_TARGET_TOKENS, _parse_int_env("SUMMARY_RETRY_MIN_SOURCE_TOKENS", 1_500))
+)
 
 DEFAULT_ACTIVE_TOOL_NAMES = [
     "append_scratchpad",
@@ -372,10 +383,7 @@ SCRATCHPAD_SECTION_METADATA = {
         "description": "Durable facts about the user's stack, systems, or technical domain.",
     },
 }
-SCRATCHPAD_SECTION_SETTING_KEYS = {
-    section_id: f"scratchpad_{section_id}"
-    for section_id in SCRATCHPAD_SECTION_ORDER
-}
+SCRATCHPAD_SECTION_SETTING_KEYS = {section_id: f"scratchpad_{section_id}" for section_id in SCRATCHPAD_SECTION_ORDER}
 SCRATCHPAD_ADMIN_EDITING_ENABLED = _parse_bool_env("SCRATCHPAD_ADMIN_EDITING_ENABLED", False)
 RAG_ENABLED = _parse_bool_env("RAG_ENABLED", True)
 LOW_RESOURCE_MODE = _parse_bool_env("LOW_RESOURCE_MODE", False)
@@ -387,7 +395,9 @@ RAG_CHUNK_SIZE = max(300, min(CONTENT_MAX_CHARS, _parse_int_env("RAG_CHUNK_SIZE"
 RAG_CHUNK_OVERLAP = max(0, min(RAG_CHUNK_SIZE // 2, _parse_int_env("RAG_CHUNK_OVERLAP", 250)))
 RAG_MAX_CHUNKS_PER_SOURCE = max(1, min(4, _parse_int_env("RAG_MAX_CHUNKS_PER_SOURCE", 2)))
 RAG_QUERY_EXPANSION_ENABLED = _parse_bool_env("RAG_QUERY_EXPANSION_ENABLED", True)
-RAG_QUERY_EXPANSION_MAX_VARIANTS = max(1, min(4, _parse_int_env("RAG_QUERY_EXPANSION_MAX_VARIANTS", 1 if LOW_RESOURCE_MODE else 2)))
+RAG_QUERY_EXPANSION_MAX_VARIANTS = max(
+    1, min(4, _parse_int_env("RAG_QUERY_EXPANSION_MAX_VARIANTS", 1 if LOW_RESOURCE_MODE else 2))
+)
 RAG_TEMPORAL_DECAY_ALPHA = max(0.0, min(1.0, _parse_float_env("RAG_TEMPORAL_DECAY_ALPHA", 0.15)))
 RAG_TEMPORAL_DECAY_LAMBDA = max(0.0, min(1.0, _parse_float_env("RAG_TEMPORAL_DECAY_LAMBDA", 0.05)))
 RAG_EMBED_MODEL = (os.getenv("RAG_EMBED_MODEL") or os.getenv("BGE_M3_MODEL_PATH") or "BAAI/bge-m3").strip()
@@ -435,9 +445,7 @@ RAG_DISABLED_INGEST_ERROR = (
 )
 RAG_DISABLED_FEATURE_ERROR = "RAG is disabled in configuration. Set RAG_ENABLED=true to use it."
 OCR_DISABLED_FEATURE_ERROR = "OCR is disabled in configuration. Set OCR_ENABLED=true to use OCR."
-IMAGE_UPLOADS_DISABLED_FEATURE_ERROR = (
-    "Image uploads are disabled in configuration. Configure OCR_ENABLED=true or a remote model provider to use image uploads."
-)
+IMAGE_UPLOADS_DISABLED_FEATURE_ERROR = "Image uploads are disabled in configuration. Configure OCR_ENABLED=true or a remote model provider to use image uploads."
 
 
 def _nearest_preset_name(value: float, presets: dict[str, float | int], fallback: str) -> str:
@@ -472,6 +480,7 @@ def _runtime_setting_int(value, default: int, minimum: int, maximum: int) -> int
 
 def _runtime_setting_float(value, default: float, minimum: float, maximum: float) -> float:
     return _coerce_float(value, default, minimum, maximum)
+
 
 DEFAULT_SETTINGS = {
     "user_preferences": "",
@@ -513,7 +522,9 @@ DEFAULT_SETTINGS = {
     "custom_models": "[]",
     "visible_model_order": json.dumps(DEFAULT_VISIBLE_CHAT_MODEL_ORDER, ensure_ascii=False),
     "operation_model_preferences": json.dumps(DEFAULT_OPERATION_MODEL_PREFERENCES, ensure_ascii=False),
-    "operation_model_fallback_preferences": json.dumps(DEFAULT_OPERATION_MODEL_FALLBACK_PREFERENCES, ensure_ascii=False),
+    "operation_model_fallback_preferences": json.dumps(
+        DEFAULT_OPERATION_MODEL_FALLBACK_PREFERENCES, ensure_ascii=False
+    ),
     "image_processing_method": DEFAULT_IMAGE_PROCESSING_METHOD,
     "image_helper_model": "",
     "conversation_memory_enabled": "true" if CONVERSATION_MEMORY_ENABLED else "false",
@@ -646,11 +657,7 @@ def _read_persisted_runtime_settings(database_path: str | None = None) -> dict[s
     except sqlite3.Error:
         return {}
 
-    return {
-        str(key or ""): str(value or "")
-        for key, value in rows
-        if str(key or "").strip()
-    }
+    return {str(key or ""): str(value or "") for key, value in rows if str(key or "").strip()}
 
 
 def apply_persisted_runtime_settings(database_path: str | None = None) -> dict[str, str]:
@@ -684,8 +691,12 @@ def apply_persisted_runtime_settings(database_path: str | None = None) -> dict[s
     global FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS
     global FETCH_SUMMARY_MAX_CHARS
 
-    OPENROUTER_HTTP_REFERER = str(persisted.get("openrouter_http_referer", _RUNTIME_BASE_VALUES["OPENROUTER_HTTP_REFERER"]) or "").strip()
-    OPENROUTER_APP_TITLE = str(persisted.get("openrouter_app_title", _RUNTIME_BASE_VALUES["OPENROUTER_APP_TITLE"]) or "").strip()
+    OPENROUTER_HTTP_REFERER = str(
+        persisted.get("openrouter_http_referer", _RUNTIME_BASE_VALUES["OPENROUTER_HTTP_REFERER"]) or ""
+    ).strip()
+    OPENROUTER_APP_TITLE = str(
+        persisted.get("openrouter_app_title", _RUNTIME_BASE_VALUES["OPENROUTER_APP_TITLE"]) or ""
+    ).strip()
     LOGIN_SESSION_TIMEOUT_MINUTES = _runtime_setting_int(
         persisted.get("login_session_timeout_minutes"),
         _RUNTIME_BASE_VALUES["LOGIN_SESSION_TIMEOUT_MINUTES"],
@@ -715,7 +726,9 @@ def apply_persisted_runtime_settings(database_path: str | None = None) -> dict[s
         _RUNTIME_BASE_VALUES["CONVERSATION_MEMORY_ENABLED"],
     )
     OCR_ENABLED = _runtime_setting_bool(persisted.get("ocr_enabled"), _RUNTIME_BASE_VALUES["OCR_ENABLED"])
-    normalized_ocr_provider = str(persisted.get("ocr_provider", _RUNTIME_BASE_VALUES["OCR_PROVIDER"]) or "").strip().lower()
+    normalized_ocr_provider = (
+        str(persisted.get("ocr_provider", _RUNTIME_BASE_VALUES["OCR_PROVIDER"]) or "").strip().lower()
+    )
     if normalized_ocr_provider in OCR_SUPPORTED_PROVIDERS:
         OCR_PROVIDER = normalized_ocr_provider
     YOUTUBE_TRANSCRIPTS_ENABLED = _runtime_setting_bool(
@@ -723,14 +736,19 @@ def apply_persisted_runtime_settings(database_path: str | None = None) -> dict[s
         _RUNTIME_BASE_VALUES["YOUTUBE_TRANSCRIPTS_ENABLED"],
     )
     YOUTUBE_TRANSCRIPT_MODEL_SIZE = (
-        str(persisted.get("youtube_transcript_model_size", _RUNTIME_BASE_VALUES["YOUTUBE_TRANSCRIPT_MODEL_SIZE"]) or "").strip()
+        str(
+            persisted.get("youtube_transcript_model_size", _RUNTIME_BASE_VALUES["YOUTUBE_TRANSCRIPT_MODEL_SIZE"]) or ""
+        ).strip()
         or _RUNTIME_BASE_VALUES["YOUTUBE_TRANSCRIPT_MODEL_SIZE"]
     )
     YOUTUBE_TRANSCRIPT_DEFAULT_LANGUAGE = str(
         persisted.get("youtube_transcript_language", _RUNTIME_BASE_VALUES["YOUTUBE_TRANSCRIPT_DEFAULT_LANGUAGE"]) or ""
     ).strip()
     RAG_ENABLED = _runtime_setting_bool(persisted.get("rag_enabled"), _RUNTIME_BASE_VALUES["RAG_ENABLED"])
-    CHAT_SUMMARY_MODEL = str(persisted.get("chat_summary_model", _RUNTIME_BASE_VALUES["CHAT_SUMMARY_MODEL"]) or "").strip() or DEFAULT_CHAT_MODEL
+    CHAT_SUMMARY_MODEL = (
+        str(persisted.get("chat_summary_model", _RUNTIME_BASE_VALUES["CHAT_SUMMARY_MODEL"]) or "").strip()
+        or DEFAULT_CHAT_MODEL
+    )
     RAG_CHUNK_SIZE = _runtime_setting_int(
         persisted.get("rag_chunk_size"),
         _RUNTIME_BASE_VALUES["RAG_CHUNK_SIZE"],
@@ -801,7 +819,7 @@ def apply_persisted_runtime_settings(database_path: str | None = None) -> dict[s
         500,
         CONTENT_MAX_CHARS,
     )
-    IMAGE_UPLOADS_ENABLED = OCR_ENABLED or bool(OPENROUTER_API_KEY) or bool(DEEPSEEK_API_KEY)
+    IMAGE_UPLOADS_ENABLED = OCR_ENABLED or bool(OPENROUTER_API_KEY) or bool(DEEPSEEK_API_KEY) or bool(MINIMAX_API_KEY)
 
     DEFAULT_SETTINGS.update(
         {
@@ -938,7 +956,7 @@ def get_feature_flags(settings: dict | None = None) -> dict:
         source.get("youtube_transcripts_enabled"),
         YOUTUBE_TRANSCRIPTS_ENABLED,
     )
-    image_uploads_enabled = ocr_enabled or bool(OPENROUTER_API_KEY) or bool(DEEPSEEK_API_KEY)
+    image_uploads_enabled = ocr_enabled or bool(OPENROUTER_API_KEY) or bool(DEEPSEEK_API_KEY) or bool(MINIMAX_API_KEY)
     return {
         "rag_enabled": rag_enabled,
         "ocr_enabled": ocr_enabled,
@@ -947,7 +965,8 @@ def get_feature_flags(settings: dict | None = None) -> dict:
         "youtube_transcripts_enabled": youtube_transcripts_enabled,
         "deepseek_api_configured": bool(DEEPSEEK_API_KEY),
         "openrouter_api_configured": bool(OPENROUTER_API_KEY),
-        "remote_image_provider_configured": bool(OPENROUTER_API_KEY or DEEPSEEK_API_KEY),
+        "minimax_api_configured": bool(MINIMAX_API_KEY),
+        "remote_image_provider_configured": bool(OPENROUTER_API_KEY or DEEPSEEK_API_KEY or MINIMAX_API_KEY),
         "scratchpad_admin_editing": SCRATCHPAD_ADMIN_EDITING_ENABLED,
         "login_pin_enabled": is_login_pin_configured(),
     }
