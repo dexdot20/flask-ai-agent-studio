@@ -466,6 +466,10 @@ class _MiniMaxClientProxy:
 
     def _translate_openai_to_anthropic(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         """Translate OpenAI-style kwargs to Anthropic API format."""
+        import logging
+        _logger = logging.getLogger(__name__)
+        _logger.warning(f"[MiniMax Debug] Input kwargs keys: {list(kwargs.keys())}")
+
         translated: dict[str, Any] = {}
 
         def _coerce_positive_int(value, default: int) -> int:
@@ -493,21 +497,26 @@ class _MiniMaxClientProxy:
         # Top p - not supported by Anthropic API, strip it
         # (Anthropic uses temperature only for randomness control)
 
-        # System prompt
-        system_message = None
+        # System prompt - collect ALL system messages and merge into one
+        # MiniMax requires exactly one system message; multiple are combined
+        system_parts = []
         messages = kwargs.get("messages", [])
         if messages and isinstance(messages, list):
-            # Check if first message is a system message
-            first_msg = messages[0] if messages else None
-            if first_msg and isinstance(first_msg, dict):
-                role = str(first_msg.get("role") or "").strip().lower()
+            non_system_messages = []
+            for msg in messages:
+                if not isinstance(msg, dict):
+                    continue
+                role = str(msg.get("role") or "").strip().lower()
                 if role == "system":
-                    system_message = first_msg.get("content", "")
-                    # Remove system message from messages list
-                    messages = messages[1:]
+                    content = msg.get("content", "")
+                    if content:
+                        system_parts.append(str(content))
+                else:
+                    non_system_messages.append(msg)
+            messages = non_system_messages
 
-        if system_message:
-            translated["system"] = system_message
+        if system_parts:
+            translated["system"] = "\n\n".join(system_parts)
 
         # Translate messages
         translated_messages = []
@@ -657,11 +666,21 @@ class _MiniMaxClientProxy:
         # Stream
         translated["stream"] = kwargs.get("stream", False)
 
-        # Strip OpenAI-specific parameters not supported by Anthropic API
-        for openai_only_param in ("stream_options",):
-            translated.pop(openai_only_param, None)
+        # Whitelist: only pass parameters that MiniMax's Anthropic endpoint supports
+        allowed_params = {
+            "model", "max_tokens", "system", "messages",
+            "temperature", "stream", "tools", "tool_choice",
+        }
+        translated_copy = {k: v for k, v in translated.items() if k in allowed_params}
 
-        return translated
+        import logging
+        _logger = logging.getLogger(__name__)
+        _logger.warning(f"[MiniMax Debug] After whitelist - translated keys: {list(translated_copy.keys())}")
+        filtered = set(translated.keys()) - set(translated_copy.keys())
+        if filtered:
+            _logger.warning(f"[MiniMax Debug] Filtered out params: {filtered}")
+
+        return translated_copy
 
     def _create_chat_completion(self, *args, **kwargs):
         """Handle chat.completions.create() call, translating to Anthropic API."""
@@ -675,6 +694,11 @@ class _MiniMaxClientProxy:
 
         # Translate to Anthropic format
         anthropic_kwargs = self._translate_openai_to_anthropic(kwargs)
+
+        import logging
+        _logger = logging.getLogger(__name__)
+        _logger.warning(f"[MiniMax Debug] Final anthropic_kwargs keys: {list(anthropic_kwargs.keys())}")
+        _logger.warning(f"[MiniMax Debug] anthropic_kwargs: {anthropic_kwargs}")
 
         # Get the client
         client = self._get_anthropic_client()

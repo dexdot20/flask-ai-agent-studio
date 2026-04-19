@@ -275,6 +275,31 @@ def _format_conversation_memory_timestamp(value: str) -> str:
         return text[11:16] if len(text) >= 16 else "--:--"
 
 
+def _get_conversation_memory_age_label(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        normalized = text.replace("Z", "+00:00")
+        entry_dt = datetime.fromisoformat(normalized).astimezone()
+        now = datetime.now(entry_dt.tzinfo)
+        delta = now - entry_dt
+        if delta.days == 0:
+            return "today"
+        elif delta.days == 1:
+            return "yesterday"
+        elif delta.days < 7:
+            return f"{delta.days} days ago"
+        elif delta.days < 30:
+            weeks = delta.days // 7
+            return f"{weeks} week{'s' if weeks > 1 else ''} ago"
+        else:
+            months = delta.days // 30
+            return f"{months} month{'s' if months > 1 else ''} ago"
+    except ValueError:
+        return ""
+
+
 def _normalize_conversation_memory_entries(entries) -> list[dict]:
     normalized_entries: list[dict] = []
     for entry in entries or []:
@@ -332,10 +357,6 @@ def build_conversation_memory_section(entries) -> list[str]:
     if not normalized_entries:
         return []
 
-    # Deduplicate: for the same (entry_type, key) pair, keep only the latest
-    # entry (last in list order, which corresponds to the highest DB id /
-    # most recent created_at).  This prevents the prompt from carrying stale
-    # values when a memory key has been updated multiple times.
     seen: dict[tuple[str, str], int] = {}
     for index, entry in enumerate(normalized_entries):
         seen[(entry["entry_type"], entry["key"])] = index
@@ -345,13 +366,42 @@ def build_conversation_memory_section(entries) -> list[str]:
         if seen.get((entry["entry_type"], entry["key"])) == index
     ]
 
+    def age_group_key(entry: dict) -> tuple[int, str]:
+        age_label = _get_conversation_memory_age_label(entry.get("created_at") or "")
+        if age_label == "today":
+            return (0, age_label)
+        elif age_label == "yesterday":
+            return (1, age_label)
+        elif "days ago" in age_label:
+            return (2, age_label)
+        elif "week" in age_label:
+            return (3, age_label)
+        else:
+            return (4, age_label)
+
+    normalized_entries.sort(key=age_group_key)
+
     parts = [
         "## Conversation Memory",
         "*Use this as the primary durable working memory for this chat. It survives prompt compaction, summarization, and pruning, so prefer saving chat-specific details here instead of the scratchpad unless they are clearly general cross-conversation memory.*\n",
     ]
+    current_group = None
     for entry in normalized_entries:
         entry_id = entry.get("id")
         entry_prefix = f"#{entry_id}" if isinstance(entry_id, int) and entry_id > 0 else "#?"
+        age_label = _get_conversation_memory_age_label(entry.get("created_at") or "")
+        if age_label != current_group:
+            if current_group is not None:
+                parts.append("")
+            if age_label == "today":
+                parts.append("*Recent entries:*")
+            elif age_label == "yesterday":
+                parts.append("*Yesterday:*")
+            elif "days ago" in age_label:
+                parts.append(f"*{age_label}:*")
+            elif "week" in age_label or "month" in age_label:
+                parts.append(f"*Older ({age_label}):*")
+            current_group = age_label
         parts.append(
             f"- {entry_prefix} [{entry['entry_type']}] {_format_conversation_memory_timestamp(entry.get('created_at'))} - {entry['key']}: {entry['value']}"
         )
@@ -1021,6 +1071,21 @@ def build_user_message_for_api(
 
 
 def _strip_volatile_sections_from_context_injection(context_injection: str) -> str:
+    """Return the stable static subset of a runtime context injection.
+
+    This function preserves the cache-friendly static prefix (tool contracts,
+    policies, memory write guidelines) and removes volatile per-turn sections
+    (timestamps, active tools, canvas summaries, tool execution history) that
+    would introduce cache entropy if persisted across turns.
+
+    The static prefix retained here is the same content emitted first in
+    ``build_runtime_system_message`` and ``build_runtime_context_injection``
+    via ``_build_runtime_static_parts`` and ``_build_runtime_dynamic_state_parts``.
+    When a historical message is rebuilt for a new turn, the caller re-injects
+    the current runtime context (which includes fresh volatile sections) so
+    the model always sees up-to-date runtime state while the static contract
+    content remains cache-stable across requests.
+    """
     normalized = str(context_injection or "").strip()
     if not normalized:
         return ""

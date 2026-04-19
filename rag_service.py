@@ -69,7 +69,6 @@ _rag_background_executor = None
 _rag_background_executor_lock = Lock()
 _rag_background_sync_jobs: dict[str, dict] = {}
 _rag_background_sync_jobs_lock = Lock()
-_RAG_ALL_CONVERSATIONS_SYNC_KEY = "__all__"
 CATEGORY_TOOL_MEMORY = RAG_SOURCE_TOOL_MEMORY
 DYNAMIC_RAG_CATEGORIES = {RAG_SOURCE_CONVERSATION, RAG_SOURCE_TOOL_MEMORY, RAG_SOURCE_TOOL_RESULT}
 AUTO_INJECT_EXCERPT_LIMIT = 560

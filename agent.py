@@ -429,6 +429,7 @@ def _extract_usage_metrics(usage) -> dict[str, int]:
         or prompt_cache_miss_present
         or prompt_cache_write_present
     )
+    metrics["raw"] = dict(payload)
     return metrics
 
 
@@ -688,13 +689,22 @@ def _build_context_overflow_recovery_error(messages_to_send: list[dict] | None =
     return f"{CONTEXT_OVERFLOW_RECOVERY_ERROR_TEXT} {detail}."
 
 
-def _is_context_overflow_error(error_str) -> bool:
+def _classify_context_overflow_error(error_str) -> str:
+    """Classify whether the error signal indicates a context overflow condition.
+
+    Returns a severity label:
+      - "high": Strong evidence of context-overflow (context_length_exceeded,
+                maximum context length, etc.)
+      - "medium": Weak evidence (generic "invalid params" + "context", or "token" +
+                  "exceed"/"too long" with supporting context indicators)
+      - "none": No meaningful context-overflow signal detected
+    """
     normalized = _extract_error_signal_text(error_str)
     if not normalized:
-        return False
+        return "none"
     normalized_lower = normalized.lower()
     if "rate_limit" in normalized_lower or re.search(r"\b429\b", normalized_lower):
-        return False
+        return "none"
 
     known_phrases = (
         "context_length_exceeded",
@@ -715,17 +725,17 @@ def _is_context_overflow_error(error_str) -> bool:
         "input too long",
     )
     if any(phrase in normalized_lower for phrase in known_phrases):
-        return True
+        return "high"
     # Check for generic "invalid params" error - only treat as context overflow if
     # combined with other context-related indicators
     if "invalid params" in normalized_lower and "context" in normalized_lower:
-        return True
+        return "medium"
     if "token" in normalized_lower and ("exceed" in normalized_lower or "too long" in normalized_lower):
-        return any(term in normalized_lower for term in ("context", "prompt", "input"))
-    return False
+        return "medium" if any(term in normalized_lower for term in ("context", "prompt", "input")) else "none"
+    return "none"
 
 
-def _is_truncated_stream_disconnect_error(error_str) -> bool:
+def _classify_truncated_stream_disconnect_error(error_str) -> bool:
     normalized = _extract_error_signal_text(error_str)
     if not normalized:
         return False
@@ -739,12 +749,20 @@ def _is_truncated_stream_disconnect_error(error_str) -> bool:
     )
 
 
-def _is_retryable_model_error(error: Exception | str) -> bool:
+def _classify_retryable_model_error(error: Exception | str) -> str:
+    """Classify whether the error signal indicates a retryable condition.
+
+    Returns a severity label:
+      - "high": Strong evidence of a retryable error (rate_limit, timeout,
+                service unavailable, gateway errors, etc.)
+      - "low": Weak evidence (429 status code detected via regex)
+      - "none": Not retryable (e.g. context overflow takes priority)
+    """
     error_text = str(error or "").strip().lower()
     if not error_text:
-        return False
-    if _is_context_overflow_error(error_text):
-        return False
+        return "none"
+    if _classify_context_overflow_error(error_text) != "none":
+        return "none"
 
     retryable_phrases = (
         "rate_limit",
@@ -765,8 +783,17 @@ def _is_retryable_model_error(error: Exception | str) -> bool:
         "upstream error",
     )
     if any(phrase in error_text for phrase in retryable_phrases):
-        return True
-    return bool(re.search(r"\b429\b", error_text))
+        return "high"
+    return "low" if re.search(r"\b429\b", error_text) else "none"
+
+
+# ---------------------------------------------------------------------------
+# Legacy aliases — kept to avoid breaking external test patches that reference
+# the old function names. Remove once all callers are updated.
+# ---------------------------------------------------------------------------
+_is_context_overflow_error = _classify_context_overflow_error
+_is_truncated_stream_disconnect_error = _classify_truncated_stream_disconnect_error
+_is_retryable_model_error = _classify_retryable_model_error
 
 
 def _normalize_tool_args_for_cache(value):
@@ -4981,9 +5008,7 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
                             if event_type == "tool_error":
                                 error_text = _clean_tool_text(event.get("error") or "", limit=SUB_AGENT_MAX_ERROR_CHARS)
                                 if error_text:
-                                    if str(event.get("tool") or "").strip() == "api" and _is_retryable_model_error(
-                                        error_text
-                                    ):
+                                    if str(event.get("tool") or "").strip() == "api" and _is_retryable_model_error(error_text) not in ("none", ""):
                                         retryable_model_error = True
                                         break
                                     child_errors.append(error_text)
@@ -5006,7 +5031,7 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
                         close_method()
             except Exception as exc:
                 error_text = _clean_tool_text(str(exc), limit=SUB_AGENT_MAX_ERROR_CHARS)
-                if _is_retryable_model_error(exc):
+                if _is_retryable_model_error(error_text) not in ("none", ""):
                     retryable_model_error = True
                 else:
                     child_errors.append(error_text)
@@ -8315,7 +8340,7 @@ def run_agent_stream(
             )
         except Exception as exc:
             fatal_api_error = str(exc)
-            if _is_context_overflow_error(fatal_api_error) and not context_compacted_this_step:
+            if _is_context_overflow_error(fatal_api_error) != "none" and not context_compacted_this_step:
                 _, compacted = apply_context_compaction(extra_messages, reason="reactive_model_turn", force=True)
                 if compacted:
                     context_compacted_this_step = True
@@ -8397,7 +8422,7 @@ def run_agent_stream(
                 return
 
             if stream_error:
-                if _is_context_overflow_error(stream_error) and not context_compacted_this_step:
+                if _is_context_overflow_error(stream_error) != "none" and not context_compacted_this_step:
                     _, compacted = apply_context_compaction(extra_messages, reason="reactive_stream_error", force=True)
                     if compacted:
                         context_compacted_this_step = True
@@ -9166,7 +9191,7 @@ def run_agent_stream(
             tool_calls = turn_result.get("tool_calls")
             stream_error = turn_result.get("stream_error")
             answer_emitted = bool(turn_result.get("answer_emitted"))
-            if stream_error and _is_context_overflow_error(stream_error) and not final_phase_compaction_used:
+            if stream_error and _is_context_overflow_error(stream_error) != "none" and not final_phase_compaction_used:
                 _, compacted = apply_context_compaction(
                     final_extra_messages, reason="reactive_final_stream", force=True
                 )
@@ -9232,7 +9257,7 @@ def run_agent_stream(
             break
         except Exception as exc:
             error = str(exc)
-            if _is_context_overflow_error(error) and not final_phase_compaction_used:
+            if _is_context_overflow_error(error) != "none" and not final_phase_compaction_used:
                 _, compacted = apply_context_compaction(
                     final_extra_messages, reason="reactive_final_answer", force=True
                 )

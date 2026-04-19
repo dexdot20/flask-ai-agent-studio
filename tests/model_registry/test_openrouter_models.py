@@ -130,6 +130,27 @@ def test_minimax_translation_preserves_explicit_max_tokens():
     assert translated["max_tokens"] == 1200
 
 
+def test_minimax_translation_merges_multiple_system_messages():
+    proxy = model_registry._MiniMaxClientProxy(api_key="test-key")
+    translated = proxy._translate_openai_to_anthropic(
+        {
+            "model": "MiniMax-M2.7",
+            "messages": [
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "system", "content": "Always be concise."},
+                {"role": "user", "content": "hello"},
+            ],
+        }
+    )
+
+    assert "system" in translated
+    assert "You are a helpful assistant." in translated["system"]
+    assert "Always be concise." in translated["system"]
+    assert "\n\n" in translated["system"]
+    system_messages = [m for m in translated["messages"] if m.get("role") == "system"]
+    assert len(system_messages) == 0, "No system messages should remain in messages list"
+
+
 def test_build_model_provider_policy_marks_deepseek_as_cache_friendly():
     policy = model_registry.build_model_provider_policy(
         {
