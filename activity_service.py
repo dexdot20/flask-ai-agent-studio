@@ -44,9 +44,9 @@ def log_activity_call(
     completion_tokens: int | None = None,
     total_tokens: int | None = None,
     estimated_input_tokens: int | None = None,
-    cache_hit_tokens: int | None = None,
-    cache_miss_tokens: int | None = None,
-    cache_write_tokens: int | None = None,
+    prompt_cache_hit_tokens: int | None = None,
+    prompt_cache_miss_tokens: int | None = None,
+    prompt_cache_write_tokens: int | None = None,
     cost: float | None = None,
     assistant_message_id: int | None = None,
     source_message_id: int | None = None,
@@ -81,9 +81,9 @@ def log_activity_call(
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
             estimated_input_tokens=estimated_input_tokens,
-            cache_hit_tokens=cache_hit_tokens,
-            cache_miss_tokens=cache_miss_tokens,
-            cache_write_tokens=cache_write_tokens,
+            prompt_cache_hit_tokens=prompt_cache_hit_tokens,
+            prompt_cache_miss_tokens=prompt_cache_miss_tokens,
+            prompt_cache_write_tokens=prompt_cache_write_tokens,
             cost=cost,
             assistant_message_id=assistant_message_id,
             source_message_id=source_message_id,
@@ -122,28 +122,40 @@ def extract_usage_from_response(response) -> dict:
     if total_tokens is not None:
         result["total_tokens"] = int(total_tokens)
 
+    # MiniMax / Anthropic extended fields (input_tokens → prompt, output_tokens → completion)
+    for attr in ("input_tokens", "prompt_tokens"):
+        val = getattr(usage, attr, None)
+        if val is not None and result.get("prompt_tokens") is None:
+            result["prompt_tokens"] = int(val)
+            break
+    for attr in ("output_tokens", "completion_tokens"):
+        val = getattr(usage, attr, None)
+        if val is not None and result.get("completion_tokens") is None:
+            result["completion_tokens"] = int(val)
+            break
+
     # prompt_tokens_details (OpenAI / DeepSeek cache fields)
     ptd = getattr(usage, "prompt_tokens_details", None)
     if ptd:
         cached = getattr(ptd, "cached_tokens", None)
         if cached is not None:
-            result["cache_hit_tokens"] = int(cached)
+            result["prompt_cache_hit_tokens"] = int(cached)
 
     # OpenRouter / DeepSeek extended fields
     for attr in ("cache_read_input_tokens", "cache_hit_tokens"):
         val = getattr(usage, attr, None)
         if val is not None:
-            result["cache_hit_tokens"] = int(val)
+            result["prompt_cache_hit_tokens"] = int(val)
             break
     for attr in ("cache_miss_input_tokens", "cache_miss_tokens"):
         val = getattr(usage, attr, None)
         if val is not None:
-            result["cache_miss_tokens"] = int(val)
+            result["prompt_cache_miss_tokens"] = int(val)
             break
     for attr in ("cache_creation_input_tokens", "cache_write_tokens"):
         val = getattr(usage, attr, None)
         if val is not None:
-            result["cache_write_tokens"] = int(val)
+            result["prompt_cache_write_tokens"] = int(val)
             break
 
     return result

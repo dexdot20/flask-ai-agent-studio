@@ -3873,9 +3873,9 @@ def _calculate_activity_cost(
     api_model: str,
     prompt_tokens: int | None,
     completion_tokens: int | None,
-    cache_hit_tokens: int | None = 0,
-    cache_miss_tokens: int | None = None,
-    cache_write_tokens: int | None = 0,
+    prompt_cache_hit_tokens: int | None = 0,
+    prompt_cache_miss_tokens: int | None = None,
+    prompt_cache_write_tokens: int | None = 0,
 ) -> float | None:
     pricing = _get_activity_pricing(provider, api_model)
     if not isinstance(pricing, dict):
@@ -3885,16 +3885,16 @@ def _calculate_activity_cost(
 
     normalized_prompt_tokens = max(0, int(prompt_tokens or 0))
     normalized_completion_tokens = max(0, int(completion_tokens or 0))
-    normalized_cache_hit_tokens = max(0, int(cache_hit_tokens or 0))
-    normalized_cache_write_tokens = max(0, int(cache_write_tokens or 0))
-    if cache_miss_tokens is None:
+    normalized_cache_hit_tokens = max(0, int(prompt_cache_hit_tokens or 0))
+    normalized_cache_write_tokens = max(0, int(prompt_cache_write_tokens or 0))
+    if prompt_cache_miss_tokens is None:
         normalized_cache_miss_tokens = (
             normalized_prompt_tokens
             if normalized_cache_hit_tokens <= 0
             else max(0, normalized_prompt_tokens - normalized_cache_hit_tokens)
         )
     else:
-        normalized_cache_miss_tokens = max(0, int(cache_miss_tokens or 0))
+        normalized_cache_miss_tokens = max(0, int(prompt_cache_miss_tokens or 0))
         accounted_prompt_tokens = normalized_cache_hit_tokens + normalized_cache_miss_tokens
         if normalized_prompt_tokens > accounted_prompt_tokens:
             normalized_cache_miss_tokens += normalized_prompt_tokens - accounted_prompt_tokens
@@ -3914,9 +3914,9 @@ def ensure_model_invocations_activity_columns() -> None:
         "completion_tokens": "INTEGER",
         "total_tokens": "INTEGER",
         "estimated_input_tokens": "INTEGER",
-        "cache_hit_tokens": "INTEGER",
-        "cache_miss_tokens": "INTEGER",
-        "cache_write_tokens": "INTEGER",
+        "prompt_cache_hit_tokens": "INTEGER",
+        "prompt_cache_miss_tokens": "INTEGER",
+        "prompt_cache_write_tokens": "INTEGER",
         "cost": "REAL",
         "latency_ms": "INTEGER",
         "response_status": "TEXT",
@@ -3986,9 +3986,9 @@ def _model_invocation_row_to_dict(row) -> dict:
         "completion_tokens": _int_col("completion_tokens"),
         "total_tokens": _int_col("total_tokens"),
         "estimated_input_tokens": _int_col("estimated_input_tokens"),
-        "cache_hit_tokens": _int_col("cache_hit_tokens"),
-        "cache_miss_tokens": _int_col("cache_miss_tokens"),
-        "cache_write_tokens": _int_col("cache_write_tokens"),
+        "prompt_cache_hit_tokens": _int_col("prompt_cache_hit_tokens"),
+        "prompt_cache_miss_tokens": _int_col("prompt_cache_miss_tokens"),
+        "prompt_cache_write_tokens": _int_col("prompt_cache_write_tokens"),
         "cost": _real_col("cost"),
         "latency_ms": _int_col("latency_ms"),
         "response_status": _text_col("response_status"),
@@ -4022,9 +4022,9 @@ def insert_model_invocation(
     completion_tokens: int | None = None,
     total_tokens: int | None = None,
     estimated_input_tokens: int | None = None,
-    cache_hit_tokens: int | None = None,
-    cache_miss_tokens: int | None = None,
-    cache_write_tokens: int | None = None,
+    prompt_cache_hit_tokens: int | None = None,
+    prompt_cache_miss_tokens: int | None = None,
+    prompt_cache_write_tokens: int | None = None,
     cost: float | None = None,
     latency_ms: int | None = None,
     response_status: str | None = None,
@@ -4035,9 +4035,9 @@ def insert_model_invocation(
     normalized_completion_tokens = int(completion_tokens) if completion_tokens is not None else None
     normalized_total_tokens = int(total_tokens) if total_tokens is not None else None
     normalized_estimated_input_tokens = int(estimated_input_tokens) if estimated_input_tokens is not None else None
-    normalized_cache_hit_tokens = int(cache_hit_tokens) if cache_hit_tokens is not None else None
-    normalized_cache_miss_tokens = int(cache_miss_tokens) if cache_miss_tokens is not None else None
-    normalized_cache_write_tokens = int(cache_write_tokens) if cache_write_tokens is not None else None
+    normalized_prompt_cache_hit_tokens = int(prompt_cache_hit_tokens) if prompt_cache_hit_tokens is not None else None
+    normalized_prompt_cache_miss_tokens = int(prompt_cache_miss_tokens) if prompt_cache_miss_tokens is not None else None
+    normalized_prompt_cache_write_tokens = int(prompt_cache_write_tokens) if prompt_cache_write_tokens is not None else None
     normalized_latency_ms = int(latency_ms) if latency_ms is not None else None
     if normalized_total_tokens is None and normalized_prompt_tokens is not None and normalized_completion_tokens is not None:
         normalized_total_tokens = normalized_prompt_tokens + normalized_completion_tokens
@@ -4046,9 +4046,9 @@ def insert_model_invocation(
         api_model,
         normalized_prompt_tokens,
         normalized_completion_tokens,
-        cache_hit_tokens=normalized_cache_hit_tokens,
-        cache_miss_tokens=normalized_cache_miss_tokens,
-        cache_write_tokens=normalized_cache_write_tokens,
+        prompt_cache_hit_tokens=normalized_prompt_cache_hit_tokens,
+        prompt_cache_miss_tokens=normalized_prompt_cache_miss_tokens,
+        prompt_cache_write_tokens=normalized_prompt_cache_write_tokens,
     )
 
     raw_payload = _serialize_json_value(request_payload)
@@ -4075,9 +4075,9 @@ def insert_model_invocation(
                completion_tokens,
                total_tokens,
                estimated_input_tokens,
-               cache_hit_tokens,
-               cache_miss_tokens,
-               cache_write_tokens,
+               prompt_cache_hit_tokens,
+               prompt_cache_miss_tokens,
+               prompt_cache_write_tokens,
                cost,
                latency_ms,
                response_status,
@@ -4105,9 +4105,9 @@ def insert_model_invocation(
             normalized_completion_tokens,
             normalized_total_tokens,
             normalized_estimated_input_tokens,
-            normalized_cache_hit_tokens,
-            normalized_cache_miss_tokens,
-            normalized_cache_write_tokens,
+            normalized_prompt_cache_hit_tokens,
+            normalized_prompt_cache_miss_tokens,
+            normalized_prompt_cache_write_tokens,
             normalized_cost,
             normalized_latency_ms,
             str(response_status or "").strip() or None,
@@ -4127,7 +4127,7 @@ def list_conversation_model_invocations(conversation_id: int) -> list[dict]:
                       call_type, is_retry, retry_reason, sub_agent_depth, provider, api_model,
                       request_payload, response_summary, operation,
                       prompt_tokens, completion_tokens, total_tokens, estimated_input_tokens,
-                      cache_hit_tokens, cache_miss_tokens, cache_write_tokens,
+                      prompt_cache_hit_tokens, prompt_cache_miss_tokens, prompt_cache_write_tokens,
                       cost, latency_ms, response_status, error_type, error_message,
                       request_payload_bytes, request_payload_hash, created_at
                FROM model_invocations
@@ -4194,7 +4194,7 @@ def list_activity_records(
                        call_type, is_retry, retry_reason, sub_agent_depth, provider, api_model,
                        {payload_col}, response_summary, operation,
                        prompt_tokens, completion_tokens, total_tokens, estimated_input_tokens,
-                       cache_hit_tokens, cache_miss_tokens, cache_write_tokens,
+                       prompt_cache_hit_tokens, prompt_cache_miss_tokens, prompt_cache_write_tokens,
                        cost, latency_ms, response_status, error_type, error_message,
                        request_payload_bytes, request_payload_hash, created_at
                 FROM model_invocations
@@ -4257,7 +4257,7 @@ def get_activity_record(record_id: int) -> dict | None:
                       call_type, is_retry, retry_reason, sub_agent_depth, provider, api_model,
                       request_payload, response_summary, operation,
                       prompt_tokens, completion_tokens, total_tokens, estimated_input_tokens,
-                      cache_hit_tokens, cache_miss_tokens, cache_write_tokens,
+                      prompt_cache_hit_tokens, prompt_cache_miss_tokens, prompt_cache_write_tokens,
                       cost, latency_ms, response_status, error_type, error_message,
                       request_payload_bytes, request_payload_hash, created_at
                FROM model_invocations WHERE id = ?""",
