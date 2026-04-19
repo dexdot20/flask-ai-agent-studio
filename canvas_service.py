@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 from html import escape
 from io import BytesIO
+import hashlib
 import json
 import re
 from typing import Iterable
@@ -1217,6 +1218,28 @@ def get_canvas_runtime_snapshot(runtime_state: dict | None) -> dict:
         "mode": determine_canvas_mode(documents),
         "manifest": build_canvas_project_manifest(documents, active_document_id=active_document_id),
     }
+
+
+def compute_canvas_content_hash(runtime_state: dict | None) -> str | None:
+    """Compute a short SHA-256 hash of the active canvas document's content from runtime state.
+
+    This function should be called after mutations to get the authoritative hash
+    based on backend runtime state, ensuring UI and backend are synchronized.
+    """
+    if not isinstance(runtime_state, dict):
+        return None
+    documents = get_canvas_runtime_documents(runtime_state)
+    active_document_id = get_canvas_runtime_active_document_id(runtime_state)
+    if not documents or not active_document_id:
+        return None
+    for doc in documents:
+        if not isinstance(doc, dict):
+            continue
+        if str(doc.get("id") or "") == active_document_id:
+            content = str(doc.get("content") or "")
+            if content:
+                return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+    return None
 
 
 def get_canvas_runtime_documents(runtime_state: dict | None) -> list[dict]:

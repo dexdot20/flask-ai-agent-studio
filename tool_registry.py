@@ -2528,19 +2528,22 @@ def resolve_runtime_tool_names(
     canvas_documents: list[dict] | None = None,
     *,
     workspace_root: str | None = None,
+    disabled_tool_names: list[str] | None = None,
 ) -> list[str]:
     """Return the subset of active_tool_names that are available given current runtime state.
 
-    Only hard precondition gates apply:
-    - Canvas document editing tools require an existing canvas document.
-    - Text-addressable canvas tools are hidden when every canvas document is visual-only.
-    - Editable canvas tools are hidden when no canvas document is editable.
-    - Workspace file tools require a configured workspace_root.
-    Everything else (web search, canvas creation, etc.) is always included.
+    Applies two types of gating:
+    - Hard preconditions: Canvas document requirements, workspace root requirements.
+    - User constraints: Tools explicitly disabled by user negative constraints.
+
+    Tools disabled by user constraints are removed from the callable list entirely,
+    rather than being handled via backend override errors.
     """
     names = list(active_tool_names or [])
     if not names:
         return []
+
+    disabled_set = set(disabled_tool_names or [])
 
     has_canvas_documents = bool(canvas_documents)
     has_text_addressable_canvas_documents = any(
@@ -2555,6 +2558,10 @@ def resolve_runtime_tool_names(
     )
     runtime_names: list[str] = []
     for name in names:
+        # User constraint: skip tools explicitly disabled by user
+        if name in disabled_set:
+            continue
+
         metadata = TOOL_RUNTIME_METADATA.get(name) or _TOOL_RUNTIME_DEFAULTS
         if metadata.get("requires_canvas_document") is True and not has_canvas_documents:
             continue

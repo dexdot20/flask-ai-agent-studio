@@ -5140,8 +5140,9 @@ def register_chat_routes(app) -> None:
                         active_tool_names.append("set_conversation_title")
             except Exception:
                 LOGGER.exception("Failed to evaluate first-turn title state for conversation_id=%s", conv_id)
+        disabled_tool_names: list[str] = []
         if not can_answer_image_questions(settings, fallback_model_id=model):
-            active_tool_names = [name for name in active_tool_names if name != "image_explain"]
+            disabled_tool_names.append("image_explain")
         fetch_url_clip_aggressiveness = get_fetch_url_clip_aggressiveness(settings)
         fetch_url_token_threshold = get_fetch_url_token_threshold(settings)
         clarification_response = None
@@ -5156,7 +5157,7 @@ def register_chat_routes(app) -> None:
                     latest_user_message["content"]
                 )
                 if not _user_explicitly_requests_new_clarification_round(freeform_clarification_content):
-                    active_tool_names = [name for name in active_tool_names if name != "ask_clarifying_question"]
+                    disabled_tool_names.append("ask_clarifying_question")
             elif "ask_clarifying_question" in active_tool_names and conv_id is not None:
                 # Fallback: check conversation history for the pattern
                 # "clarification was issued → user responded". If found, the
@@ -5180,7 +5181,7 @@ def register_chat_routes(app) -> None:
                         latest_user_message.get("content", "") if latest_user_message else ""
                     )
                     if not _user_explicitly_requests_new_clarification_round(_fb_freeform):
-                        active_tool_names = [name for name in active_tool_names if name != "ask_clarifying_question"]
+                        disabled_tool_names.append("ask_clarifying_question")
             rag_query_text = _build_clarification_rag_query(
                 latest_user_message["content"],
                 clarification_response,
@@ -5521,13 +5522,14 @@ def register_chat_routes(app) -> None:
                 active_tool_names,
                 canvas_documents=initial_canvas_documents,
                 workspace_root=workspace_root,
+                disabled_tool_names=disabled_tool_names if disabled_tool_names else None,
             )
             prompt_tool_names = get_prompt_visible_tool_names(runtime_tool_names)
             agent_stream = run_agent_stream(
                 request_api_messages,
                 model,
                 max_steps,
-                active_tool_names,
+                runtime_tool_names,
                 prompt_tool_names=prompt_tool_names,
                 max_parallel_tools=get_max_parallel_tools(settings),
                 buffer_clarification_answers=False,
@@ -5896,6 +5898,8 @@ def register_chat_routes(app) -> None:
                                 + "\n"
                             )
                         if canvas_documents or canvas_cleared:
+                            # Get canvas_content_hash from tool_capture event if available
+                            canvas_content_hash = event.get("canvas_content_hash")
                             yield (
                                 json.dumps(
                                     {
@@ -5904,6 +5908,7 @@ def register_chat_routes(app) -> None:
                                         "active_document_id": active_document_id,
                                         "auto_open": canvas_modified,
                                         "cleared": canvas_cleared,
+                                        "canvas_content_hash": canvas_content_hash,
                                     },
                                     ensure_ascii=False,
                                 )

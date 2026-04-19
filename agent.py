@@ -31,6 +31,7 @@ from canvas_service import (
     clear_canvas_viewport,
     clear_overlapping_canvas_viewports,
     clear_canvas,
+    compute_canvas_content_hash,
     create_canvas_document,
     create_canvas_runtime_state,
     delete_canvas_document,
@@ -7586,6 +7587,8 @@ def run_agent_stream(
             for entry in persisted_tool_results
             if str((entry or {}).get("tool_name") or "").strip() not in ui_hidden_tool_names
         ]
+        # Compute hash from backend runtime state after mutations to ensure UI-backend sync
+        canvas_content_hash = compute_canvas_content_hash(runtime_state.get("canvas")) if canvas_modified else None
         return {
             "type": "tool_capture",
             "tool_results": visible_tool_results,
@@ -7595,6 +7598,7 @@ def run_agent_stream(
             "canvas_modified": canvas_modified,
             "successful_canvas_mutation": successful_canvas_mutation,
             "canvas_cleared": canvas_modified and not current_canvas_documents,
+            "canvas_content_hash": canvas_content_hash,
             "sub_agent_traces": sub_agent_traces,
         }
 
@@ -7958,36 +7962,10 @@ def run_agent_stream(
                     "usage": {"missing_provider_usage": True},
                 }
             )
-            if not should_retry_model_target_tool_choice_with_auto(exc, request_kwargs, model_target):
-                raise
-            fallback_request_kwargs = build_model_target_tool_choice_fallback_request(request_kwargs, model_target)
-            if fallback_request_kwargs is None:
-                raise
-            _trace_agent_event(
-                "openrouter_tool_choice_fallback",
-                trace_id=trace_id,
-                step=step,
-                retry_reason=retry_reason,
-                error=str(exc),
-                original_tool_choice=request_kwargs.get("tool_choice"),
-            )
-            request_kwargs = fallback_request_kwargs
-            cache_estimate_context = build_openrouter_cache_estimate_context(
-                request_kwargs.get("messages"),
-                model_target.get("record") if isinstance(model_target, dict) else None,
-                model_settings,
-            )
-            try:
-                response = model_target["client"].chat.completions.create(**request_kwargs)
-            except Exception as fallback_exc:
-                append_turn_invocation(
-                    {
-                        "status": "error",
-                        "error": str(fallback_exc),
-                        "usage": {"missing_provider_usage": True},
-                    }
-                )
-                raise
+            # Per Coding Principles: Minimize Forced Retries - Do not use backend override
+            # to force repeated failed paths. Allow the model to evaluate the error
+            # and reason about next steps rather than injecting a fallback retry.
+            raise
 
         def finalize_call_usage() -> tuple[dict[str, int], int, int]:
             nonlocal provider_usage
