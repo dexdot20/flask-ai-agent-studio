@@ -1128,6 +1128,28 @@ def _strip_volatile_sections_from_context_injection(context_injection: str) -> s
     return "\n\n".join(section for section in retained_sections if section).strip()
 
 
+def compute_static_prefix_tokens(context_injection: str) -> int:
+    """Measure the static (cacheable) prefix tokens in a runtime context injection.
+
+    This function computes the token count of the stable static subset of a
+    runtime context injection by stripping volatile per-turn sections (timestamps,
+    active tools, canvas summaries, tool execution history) that would introduce
+    cache entropy if persisted across turns.
+
+    The static prefix is the same content that remains cache-stable across requests
+    when using ``_strip_volatile_sections_from_context_injection`` and is the
+    content that benefits most from prompt caching.
+
+    Args:
+        context_injection: The full runtime context injection string to measure.
+
+    Returns:
+        The estimated token count of the static prefix portion.
+    """
+    static_content = _strip_volatile_sections_from_context_injection(context_injection)
+    return estimate_text_tokens(static_content)
+
+
 def _split_context_injection_sections(context_injection: str) -> list[tuple[str | None, str]]:
     normalized = str(context_injection or "").strip()
     if not normalized:
