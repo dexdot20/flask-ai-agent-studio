@@ -970,3 +970,40 @@ def get_feature_flags(settings: dict | None = None) -> dict:
         "scratchpad_admin_editing": SCRATCHPAD_ADMIN_EDITING_ENABLED,
         "login_pin_enabled": is_login_pin_configured(),
     }
+
+def get_runtime_setting(key: str):
+    """Merkezi runtime ayar erişim noktası.
+
+    Bu fonksiyon, _RUNTIME_PROPAGATION_NAMES'daki ayarlara her zaman güncel
+    değerleri döndürür. "from config import X" yerine bu fonksiyonun
+    kullanılması, global state'in modüler bağımlılıklarını azaltır.
+
+    Args:
+        key: Ayar adı (örn: "RAG_ENABLED", "CHAT_SUMMARY_MODEL")
+
+    Returns:
+        Ayarın güncel değeri
+
+    Raises:
+        KeyError: Anahtar _RUNTIME_PROPAGATION_NAMES'da bulunamadığında
+    """
+    if key not in _RUNTIME_PROPAGATION_NAMES:
+        raise KeyError(f"'{key}' is not a runtime setting")
+    return globals()[key]
+
+
+def _runtime_settings_snapshot() -> dict:
+    """Tüm runtime ayarlarının anlık görüntüsünü döndürür."""
+    return {key: globals()[key] for key in _RUNTIME_PROPAGATION_NAMES}
+
+
+def __getattr__(name: str):
+    """Module-level attribute erişimi için lazy lookup.
+
+    Bu, "import config; config.RAG_ENABLED" gibi erişimlerde
+    her zaman güncel değer döndürür. "from config import X" kullanan
+    kodlar için bu geçerli değildir (o andaki değer yakalanır).
+    """
+    if name in _RUNTIME_PROPAGATION_NAMES:
+        return globals()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
