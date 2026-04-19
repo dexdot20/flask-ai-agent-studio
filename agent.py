@@ -8238,6 +8238,34 @@ def run_agent_stream(
                     for event in emit_turn_answer(pending_delta):
                         yield event
 
+            # MiniMax streaming: capture usage from the stream iterator after iteration ends
+            if not provider_usage.get("received"):
+                stream_usage = _extract_usage_metrics(getattr(response, "usage", None))
+                if stream_usage.get("usage_fields_present"):
+                    provider_usage = add_usage(getattr(response, "usage", None))
+                    usage_totals["prompt_tokens"] += provider_usage["prompt_tokens"]
+                    usage_totals["prompt_cache_hit_tokens"] += provider_usage["prompt_cache_hit_tokens"]
+                    usage_totals["prompt_cache_miss_tokens"] += provider_usage["prompt_cache_miss_tokens"]
+                    usage_totals["prompt_cache_write_tokens"] += provider_usage["prompt_cache_write_tokens"]
+                    usage_totals["completion_tokens"] += provider_usage["completion_tokens"]
+                    usage_totals["total_tokens"] += provider_usage["total_tokens"]
+
+                    # Update the existing model_calls record with actual streaming usage
+                    if usage_totals["model_calls"]:
+                        last_call = usage_totals["model_calls"][-1]
+                        last_call.update(
+                            {
+                                "prompt_tokens": provider_usage["prompt_tokens"],
+                                "prompt_cache_hit_tokens": provider_usage["prompt_cache_hit_tokens"],
+                                "prompt_cache_miss_tokens": provider_usage["prompt_cache_miss_tokens"],
+                                "prompt_cache_write_tokens": provider_usage["prompt_cache_write_tokens"],
+                                "completion_tokens": provider_usage["completion_tokens"],
+                                "total_tokens": provider_usage["total_tokens"],
+                                "missing_provider_usage": not provider_usage["received"],
+                                "cache_metrics_estimated": False,
+                            }
+                        )
+
             _trace_agent_event(
                 "model_turn_completed",
                 trace_id=trace_id,

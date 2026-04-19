@@ -129,6 +129,14 @@ def _parse_float_env(name: str, default: float) -> float:
 AGENT_TRACE_LOG_ENABLED = _parse_bool_env("AGENT_TRACE_LOG_ENABLED", True)
 AGENT_TRACE_LOG_INCLUDE_RAW = _parse_bool_env("AGENT_TRACE_LOG_INCLUDE_RAW", True)
 
+# Centralized application logging
+APP_LOG_ENABLED = _parse_bool_env("APP_LOG_ENABLED", True)
+APP_LOG_LEVEL = (os.getenv("APP_LOG_LEVEL") or "INFO").strip().upper()
+APP_LOG_PATH = (os.getenv("APP_LOG_PATH") or os.path.join(BASE_DIR, "logs", "app.log")).strip()
+APP_LOG_MAX_BYTES = max(1024, _parse_int_env("APP_LOG_MAX_BYTES", 2_000_000))
+APP_LOG_BACKUP_COUNT = max(1, _parse_int_env("APP_LOG_BACKUP_COUNT", 5))
+APP_LOG_CONSOLE_ENABLED = _parse_bool_env("APP_LOG_CONSOLE_ENABLED", False)
+
 
 LOGIN_SESSION_TIMEOUT_MINUTES = max(1, _parse_int_env("LOGIN_SESSION_TIMEOUT_MINUTES", 30))
 LOGIN_MAX_FAILED_ATTEMPTS = max(1, _parse_int_env("LOGIN_MAX_FAILED_ATTEMPTS", 3))

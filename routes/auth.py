@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 
 from flask import jsonify, redirect, render_template, request, session, url_for
 
 import config
+from logging_config import get_logger
 from request_security import rotate_csrf_token
+
+LOGGER = get_logger(__name__)
 
 AUTH_SESSION_KEY = "auth_authenticated"
 AUTH_LAST_SEEN_KEY = "auth_last_seen"
@@ -127,6 +131,7 @@ def register_auth_routes(app) -> None:
         if _is_locked_out():
             lockout_until = _lockout_until()
             lockout_text = lockout_until.strftime("%Y-%m-%d %H:%M:%SZ") if lockout_until else "later"
+            LOGGER.warning("Login blocked - account locked out | IP: %s", request.remote_addr)
             return _build_login_context(
                 error=f"Too many failed attempts. Try again after {lockout_text}.",
                 next_url=next_url,
@@ -148,6 +153,7 @@ def register_auth_routes(app) -> None:
             session.permanent = remember
             rotate_csrf_token()
             session.modified = True
+            LOGGER.info("Login successful | IP: %s | Remember: %s", request.remote_addr, remember)
             return redirect(next_url or url_for("index"))
 
         failed_attempts = int(session.get(AUTH_FAILED_ATTEMPTS_KEY) or 0) + 1
@@ -157,6 +163,11 @@ def register_auth_routes(app) -> None:
             session[AUTH_LOCKED_UNTIL_KEY] = lockout_until.isoformat()
             session.modified = True
             lockout_text = lockout_until.strftime("%Y-%m-%d %H:%M:%SZ")
+            LOGGER.warning(
+                "Login failed - max attempts reached | IP: %s | Locked until: %s",
+                request.remote_addr,
+                lockout_text,
+            )
             return _build_login_context(
                 error=f"Too many failed attempts. Try again after {lockout_text}.",
                 next_url=next_url,
@@ -165,6 +176,7 @@ def register_auth_routes(app) -> None:
 
         session[AUTH_FAILED_ATTEMPTS_KEY] = failed_attempts
         session.modified = True
+        LOGGER.warning("Login failed - invalid PIN | IP: %s | Attempts: %s", request.remote_addr, failed_attempts)
         return _build_login_context(error="Invalid PIN.", next_url=next_url, status_code=401)
 
     @app.route("/logout", methods=["POST"])
@@ -173,6 +185,7 @@ def register_auth_routes(app) -> None:
         rotate_csrf_token()
         session.permanent = False
         session.modified = True
+        LOGGER.info("User logged out | IP: %s", request.remote_addr)
         if not is_login_pin_enabled():
             return redirect(url_for("index"))
         return redirect(url_for("login"))

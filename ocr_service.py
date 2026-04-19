@@ -14,6 +14,9 @@ from config import (
     OCR_SUPPORTED_PROVIDERS,
 )
 from image_utils import optimize_image_for_processing
+from logging_config import get_logger
+
+LOGGER = get_logger(__name__)
 
 _ocr_engine = None
 _ocr_engine_lock = threading.Lock()
@@ -162,23 +165,23 @@ def preload_ocr_engine(app) -> None:
 
     is_reloader_child = os.environ.get("WERKZEUG_RUN_MAIN") == "true"
     if app.debug and not is_reloader_child:
-        print("[startup] Flask reloader main process: OCR preload skipped.")
+        LOGGER.info("Flask reloader main process: OCR preload skipped.")
         return
 
     provider = _resolve_provider_name()
-    print(f"[startup] Loading OCR engine ({provider})...")
+    LOGGER.info("Loading OCR engine (%s)...", provider)
     try:
         engine = get_ocr_engine()
     except RuntimeError as exc:
         if not _is_missing_dependency_error(exc):
             raise
-        print(f"[startup] OCR preload skipped: {exc}")
+        LOGGER.info("OCR preload skipped: %s", exc)
         return
 
     resolved_provider = engine.get("provider", provider)
     if resolved_provider != provider:
-        print(f"[startup] OCR provider '{provider}' unavailable; using '{resolved_provider}' instead.")
-    print(f"[startup] OCR engine ready ({resolved_provider}).")
+        LOGGER.info("OCR provider '%s' unavailable; using '%s' instead.", provider, resolved_provider)
+    LOGGER.info("OCR engine ready (%s).", resolved_provider)
 
 
 def _dedupe_preserve_order(values: list[str]) -> list[str]:

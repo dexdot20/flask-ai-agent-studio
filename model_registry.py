@@ -311,6 +311,11 @@ class _MiniMaxChunk:
         ]
         self.index = index
 
+    @property
+    def usage(self) -> None:
+        """Per-chunk usage is not available; usage is captured at stream end."""
+        return None
+
 
 class _MiniMaxStreamIterator:
     """Iterator that translates Anthropic streaming events to OpenAI-compatible chunks."""
@@ -320,6 +325,8 @@ class _MiniMaxStreamIterator:
         self._closed = False
         # Track tool use state across streaming events
         self._tool_use_state: dict[int, dict] = {}
+        # Capture usage from message_delta events
+        self._usage: dict | None = None
 
     def __iter__(self):
         return self
@@ -408,14 +415,33 @@ class _MiniMaxStreamIterator:
                     )
 
             elif chunk.type == "message_delta":
-                # Final message metadata (e.g., usage)
-                # Could emit a final chunk with usage info if needed
+                # Capture usage from final message metadata
+                usage = getattr(chunk, "usage", None)
+                if usage is not None:
+                    prompt_tokens = getattr(usage, "input_tokens", 0) or 0
+                    output_tokens = getattr(usage, "output_tokens", 0) or 0
+                    self._usage = {
+                        "prompt_tokens": int(prompt_tokens),
+                        "completion_tokens": int(output_tokens),
+                        "total_tokens": int(prompt_tokens + output_tokens),
+                    }
                 continue
 
             elif chunk.type == "message_stop":
                 raise StopIteration
 
         raise StopIteration
+
+    @property
+    def usage(self) -> _MiniMaxUsage | None:
+        """Return captured usage after iteration completes."""
+        if self._usage is None:
+            return None
+        return _MiniMaxUsage(
+            prompt_tokens=self._usage["prompt_tokens"],
+            completion_tokens=self._usage["completion_tokens"],
+            total_tokens=self._usage["total_tokens"],
+        )
 
     def close(self):
         self._closed = True
