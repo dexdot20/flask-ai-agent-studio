@@ -1894,6 +1894,11 @@ def apply_model_target_request_options(request_kwargs: dict[str, Any], target: d
     prepared_messages = _prepare_model_request_messages(merged_request_kwargs.get("messages"), record, settings)
     if prepared_messages is not merged_request_kwargs.get("messages"):
         merged_request_kwargs["messages"] = prepared_messages
+    # Add top-level cache_control for Anthropic models (OpenRouter API format)
+    if _should_add_openrouter_top_level_cache_control(record, settings):
+        merged_request_kwargs["cache_control"] = _build_cache_control(
+            _get_openrouter_anthropic_ttl(settings)
+        )
     extra_body = target.get("extra_body") if isinstance(target, dict) else None
     if isinstance(extra_body, dict) and extra_body:
         existing_extra_body = merged_request_kwargs.get("extra_body")
@@ -1901,6 +1906,26 @@ def apply_model_target_request_options(request_kwargs: dict[str, Any], target: d
             existing_extra_body = {}
         merged_request_kwargs["extra_body"] = _merge_nested_dicts(existing_extra_body, extra_body)
     return merged_request_kwargs
+
+
+def _should_add_openrouter_top_level_cache_control(record: dict[str, Any] | None, settings: dict[str, Any] | None) -> bool:
+    """Check if top-level cache_control should be added for the model."""
+    if not isinstance(record, dict):
+        return False
+    if str(record.get("provider") or "").strip() != OPENROUTER_PROVIDER:
+        return False
+    if not _is_openrouter_prompt_cache_enabled(settings):
+        return False
+    api_model = str(record.get("api_model") or "").strip()
+    return _openrouter_supports_top_level_prompt_cache(api_model)
+
+
+def _get_openrouter_anthropic_ttl(settings: dict[str, Any] | None) -> str:
+    """Get the cache TTL for Anthropic models from settings."""
+    if not isinstance(settings, dict):
+        return "5m"
+    raw_ttl = str(settings.get("openrouter_anthropic_cache_ttl") or "").strip().lower()
+    return "1h" if raw_ttl == "1h" else "5m"
 
 
 def get_model_pricing(model_id: str, settings: dict | None = None) -> dict[str, float]:
