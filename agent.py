@@ -1537,7 +1537,7 @@ def _build_sub_agent_messages(
         "If the task text is not in English, first rewrite it into clear English working notes for yourself, then continue in English.",
         "Use English for tool planning, reasoning, status updates, and the final answer unless told otherwise.",
         f"When using read-only search tools like search_web or search_news, batch queries between 1 and {normalized_search_tool_query_limit} items per list and split broader searches into multiple calls.",
-        "Default to batching independent read-only tool calls into the same turn when they do not depend on each other; avoid one-by-one fan-out unless a later tool truly needs an earlier result.",
+        "You may batch independent read-only tool calls into the same turn when they do not depend on each other.",
         "Synthesize your findings and return a concise, definitive final answer that directly helps the parent assistant continue.",
     ]
     parts.append(build_current_time_context(now))
@@ -1549,7 +1549,7 @@ def _build_sub_agent_messages(
         )
         parts.append(
             f"At most {normalized_parallel_tools} tool call(s) can execute in parallel in one turn. "
-            f"If you need more independent reads than that, prioritize the best {normalized_parallel_tools} first and avoid low-value fan-out."
+            f"If you need more independent reads than that, prioritize the most relevant first."
         )
 
     user_parts = [f"Delegated task from the parent assistant:\n{_clean_tool_text(task, limit=2_000)}"]

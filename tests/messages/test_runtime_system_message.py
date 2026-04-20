@@ -711,13 +711,12 @@ class TestRuntimeSystemMessage:
         scroll_description = TOOL_SPEC_BY_NAME["scroll_canvas_document"]["description"]
         search_guidance = TOOL_SPEC_BY_NAME["search_canvas_document"]["prompt"]["guidance"]
 
-        assert "Prefer one batch_canvas_edits call" in batch_guidance
-        assert "plain JSON object with an action field" in batch_guidance
-        assert "For replace use start_line, end_line, and lines" in batch_guidance
+        assert "Apply several line edits to one document in a single call" in batch_guidance
+        assert "replace needs start_line, end_line, lines" in batch_guidance
         assert "Always include title" in create_guidance
         assert "src/app.py -> app.py" in create_guidance
         assert "Do not default to this when only part of the file needs to change" in rewrite_guidance
-        assert "Multiple localized replace_canvas_lines calls are fine" in replace_guidance
+        assert "Multiple replace_canvas_lines calls are fine" in replace_guidance
         assert "document_id is optional" in expand_description
         assert "call-time snapshot" in expand_description
         assert "use document_path from the workspace summary or manifest" in expand_guidance

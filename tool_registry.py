@@ -34,10 +34,9 @@ SCRATCHPAD_SECTION_DESCRIPTION = "Section to update: " + "; ".join(
     for section_id in SCRATCHPAD_SECTION_ORDER
 )
 CANVAS_LINE_ARRAY_DESCRIPTION = (
-    "Each element is one line of text as a properly quoted JSON string with no trailing newline characters. "
-    "Code content, including quotes, backslashes, and semicolons, must appear inside these strings and be properly escaped. "
-    'Example: ["const char* ssid = \\"MyNet\\";", "const char* pass = \\"abc\\";"] . '
-    "Never place code outside this array or as an argument key."
+    "Array of raw text strings, one per line. No escape sequences needed. "
+    'Example: ["First line", "Second line", "const char* ssid = "MyNet";"] '
+    "Apply lines in array order, top to bottom."
 )
 
 
@@ -1699,13 +1698,7 @@ TOOL_SPECS = [
                 "document_path": "optional target project-relative path",
                 "operations": "ordered edit operations",
             },
-            "guidance": (
-                "Use this when you want to inspect the exact before/after effect of planned canvas changes before applying them. "
-                "Each operation must be a plain JSON object with an action field set to replace, insert, or delete. "
-                "Do not wrap one operation in a string, array, or nested object shell. "
-                "Use the same schema as batch_canvas_edits: replace needs start_line, end_line, and lines; insert needs after_line and lines; delete needs start_line and end_line. "
-                "Prefer this over speculative prose descriptions when the user needs a concrete diff preview."
-            ),
+            "guidance": ("Preview batch_canvas_edits before applying them. Same operation schema."),
         },
     },
     {
@@ -1767,15 +1760,12 @@ TOOL_SPECS = [
                 "atomic": "optional rollback flag",
             },
             "guidance": (
-                "Use this when you already know several non-overlapping edits for one document or multiple documents. "
-                "Prefer one batch_canvas_edits call over serial replace_canvas_lines, insert_canvas_lines, or delete_canvas_lines calls when the targets are already known. "
-                "Every operation must target a disjoint region or insertion anchor. "
-                "Every operation must be a plain JSON object with an action field set to replace, insert, or delete. "
-                "Do not nest a single operation inside an extra array or wrapper object. "
-                "For replace use start_line, end_line, and lines. For insert use after_line and lines. For delete use start_line and end_line. "
-                "Line numbers are interpreted against the pre-batch document and adjusted automatically for earlier operations in the same batch. "
-                "When you are editing from a previously seen snippet, include expected_lines and expected_start_line on each operation so stale edits are rejected safely. "
-                "Use targets when multiple files should change together. In project mode, prefer document_path when possible."
+                "Apply several line edits to one document in a single call. "
+                "Each operation is a JSON object: "
+                "replace needs start_line, end_line, lines; "
+                "insert needs after_line, lines; "
+                "delete needs start_line, end_line. "
+                "All operations go in one operations array. Prefer document_path in project mode."
             ),
         },
     },
@@ -2027,11 +2017,8 @@ TOOL_SPECS = [
             },
             "guidance": (
                 "Use only when the exact 1-based line range is known from the visible excerpt or a recent scroll/expand result. "
-                "Put ALL code content inside the lines array as properly escaped JSON strings. "
-                'Example: {"start_line": 3, "end_line": 5, "lines": ["  int x = 1;", "  return x;"]}. '
-                "Multiple localized replace_canvas_lines calls are fine when the changes are separated. "
-                "If the previous tool result includes expected_lines, reuse those values on the next related edit instead of guessing a fresh snippet. "
-                "When you are editing based on a previously seen snippet and line numbers may have shifted, include expected_lines (and expected_start_line when needed) so the tool can reject stale edits safely. "
+                "Multiple replace_canvas_lines calls are fine when the changes are separated. "
+                "If the previous tool result included expected_lines, reuse them on the next related edit to guard against line shifts. "
                 "If you do not know the document_id, use document_path from the workspace summary or manifest. "
                 "For broad rewrites, prefer rewrite_canvas_document. In project mode, prefer document_path when possible."
             ),
@@ -2089,8 +2076,7 @@ TOOL_SPECS = [
             "guidance": (
                 "Use only when the insertion point is known from the visible excerpt or a recent scroll/expand result. "
                 "Use this for partial additions instead of rewriting the whole document when the rest should stay intact. "
-                "If the previous tool result includes expected_lines, reuse those values on the next related edit instead of guessing a fresh snippet. "
-                "When the insertion point comes from an earlier view, include expected_lines (and expected_start_line when needed) so the tool can catch drift before inserting. "
+                "If the previous tool result included expected_lines, reuse them on the next related edit to guard against line shifts. "
                 "If the target region is not visible, inspect it first. In project mode, prefer document_path when possible."
             ),
         },
@@ -2135,8 +2121,7 @@ TOOL_SPECS = [
             "guidance": (
                 "Use only when the exact 1-based line range is visible in the current excerpt or in a recent scroll/expand result. "
                 "Use this for partial removals instead of rewriting the whole document when the rest should stay intact. "
-                "If the previous tool result includes expected_lines, reuse those values on the next related edit instead of guessing a fresh snippet. "
-                "When the target range came from an earlier snippet, include expected_lines (and expected_start_line when needed) so stale deletions are rejected safely. "
+                "If the previous tool result included expected_lines, reuse them on the next related edit to guard against line shifts. "
                 "If the target region is not visible, inspect it first. In project mode, prefer document_path when possible."
             ),
         },

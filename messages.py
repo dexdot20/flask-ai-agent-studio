@@ -2141,12 +2141,10 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
         "- Use preview_canvas_changes before large batches. Use transform_canvas_lines for bulk find-replace.",
         "- Verify affected region with a read-only tool after mutating.",
         "- update_canvas_metadata handles title, role, dependency, or symbol changes (not content). Set ignored=true to hide a document.",
-        "- Do not use line-based tools on an ignored document until re-enabled with ignored=false.",
         "- For multi-page documents, use focus_canvas_page for page-specific tasks.",
         "- When targeting, prefer document_path over document_id when shown in the prompt.",
-        "- All code must be inside the `lines` array as properly escaped JSON strings.",
+        "- Send code as plain strings in the lines array — no escape sequences needed.",
         "- Use rewrite_canvas_document when most of the document should change.",
-        "- After rewrite, do not call it again for the same document in the same session.",
     ]
     if "create_canvas_document" in active_set:
         lines.insert(2, "- create_canvas_document always needs BOTH title and content.")
