@@ -62,8 +62,8 @@ if [[ -z "${APP_USER}" ]]; then
 fi
 
 if [[ ! -x "${GUNICORN_BIN}" ]]; then
-  echo "gunicorn was not found in ${VENV_DIR}. Make sure it is installed." >&2
-  exit 1
+  echo "gunicorn was not found in ${VENV_DIR}; installing it now..." >&2
+  "${VENV_DIR}/bin/pip" install gunicorn
 fi
 
 if systemctl list-unit-files | grep -q "^${SERVICE_NAME}\.service"; then
