@@ -11114,9 +11114,11 @@ async function loadToolMemoryPanel() {
   const body = document.getElementById("tool-memory-panel-body");
   if (!body) return;
   if (!currentConvId) {
-    body.innerHTML = '<p class="tool-memory-empty">Open a conversation to view tool memory.</p>';
+    body.innerHTML = '<p class="tool-memory-empty">No tool memory entries yet.</p>';
     return;
   }
+  body.innerHTML = "";
+  const fragment = document.createDocumentFragment();
   try {
     const response = await fetch(`/api/conversations/${currentConvId}/tool-memory?limit=50`);
     if (!response.ok) {
@@ -11129,8 +11131,6 @@ async function loadToolMemoryPanel() {
       body.innerHTML = '<p class="tool-memory-empty">No tool memory entries yet.</p>';
       return;
     }
-    body.innerHTML = "";
-    const fragment = document.createDocumentFragment();
     entries.forEach((entry) => {
       const isDeleted = Boolean(entry.deleted_content_preview || entry.reason_for_deletion);
       const article = document.createElement("article");
