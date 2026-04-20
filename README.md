@@ -1,5 +1,7 @@
 # Flask ChatBot: Multi-Provider + Tools + RAG + OCR + Multimodal + Canvas + Memory + Workspace
 
+> **AI-Assisted Development Notice:** This project was developed with AI assistance. All code, architecture decisions, and documentation have been written, reviewed, and validated by humans. AI was used as a pair programmer and productivity tool — not as an autonomous generator. Every line has passed human review before inclusion.
+
 This is a single-page Flask chat application built around DeepSeek plus optional OpenRouter and MiniMax models, multi-step tool use, registry-driven composer slash commands, local RAG, dedicated local OCR, configurable helper/direct image analysis, conversation summarization, pruning, user-configurable entropy-aware context selection, persistent conversation memory, persona-scoped memory, editable canvas documents, page-aware canvas navigation, per-conversation parameter overrides, activity/audit logging, and a per-conversation workspace sandbox.
 
 It is not a minimal prompt/response demo. The app keeps conversation history in SQLite, restores assistant metadata when a conversation is reopened, supports editing earlier user messages, streams tool progress and reasoning, can enrich a user turn with local OCR or extracted document text before the model sees it, exposes persona and conversation memory APIs, logs outbound model activity for auditing, and can compact older content with summaries and pruning.
