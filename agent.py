@@ -1817,20 +1817,34 @@ def _count_exchange_blocks(messages: list[dict]) -> int:
 
 
 def _compact_exchange_to_message(block: dict) -> dict:
+    """Compact an exchange block into a single summary message.
+
+    Preserves original role hierarchy in metadata per Coding Principles.md:
+    - Chronological Integrity: step_index maintained
+    - Metadata Preservation: original roles and tool calls stored in metadata
+    """
     tool_previews: list[str] = []
     result_parts: list[str] = []
     recovery_hints: list[str] = []
     assistant_intent = ""
     reasoning_content = ""
+    original_roles: list[str] = []
+    original_tool_call_count = 0
+    original_tool_result_count = 0
+
     for message in block.get("messages") or []:
         role = str(message.get("role") or "").strip()
+        if role not in original_roles:
+            original_roles.append(role)
         if role == "assistant":
             assistant_intent = assistant_intent or _extract_compaction_assistant_intent(message)
             # Extract reasoning_content from metadata for preservation
             if not reasoning_content:
                 metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
                 reasoning_content = str(metadata.get("reasoning_content") or "").strip()
-            for tool_call in message.get("tool_calls") or []:
+            tool_calls = message.get("tool_calls") or []
+            original_tool_call_count += len(tool_calls)
+            for tool_call in tool_calls:
                 preview = _extract_compaction_tool_call_preview(tool_call)
                 if preview and preview not in tool_previews:
                     tool_previews.append(preview)
@@ -1842,10 +1856,12 @@ def _compact_exchange_to_message(block: dict) -> dict:
                 if recovery_hint and recovery_hint not in recovery_hints:
                     recovery_hints.append(recovery_hint)
         elif role == "tool" or _is_tool_execution_result_message(message):
+            original_tool_result_count += 1
             content = _extract_compaction_tool_result_preview(message)
             if content:
                 result_parts.append(content)
 
+    # Build content with clear section headers per Coding Principles.md
     parts = [f"[Context: compacted tool step {block.get('step_index') or '?'}]"]
     if assistant_intent:
         parts.append(f"Assistant intent: {assistant_intent}")
@@ -1860,7 +1876,20 @@ def _compact_exchange_to_message(block: dict) -> dict:
         parts.append("Outcomes:\n- " + "\n- ".join(result_parts[:3]))
     if recovery_hints:
         parts.append("Recovery:\n- " + "\n- ".join(recovery_hints[:2]))
-    return {"role": "user", "content": "\n".join(parts)}
+
+    # Preserve metadata per Coding Principles.md — Metadata Preservation
+    # This ensures original role hierarchy is not lost during compaction
+    return {
+        "role": "user",
+        "content": "\n".join(parts),
+        "metadata": {
+            "compacted": True,
+            "step_index": block.get("step_index"),
+            "original_roles": original_roles,
+            "original_tool_call_count": original_tool_call_count,
+            "original_tool_result_count": original_tool_result_count,
+        },
+    }
 
 
 def _try_compact_messages(messages: list[dict], budget: int, keep_recent: int = 2) -> list[dict] | None:

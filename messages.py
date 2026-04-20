@@ -202,16 +202,21 @@ def _format_summary_message_for_model(content: str, metadata: dict | None = None
 # call that depends on their output.
 DEPENDENT_TOOL_NAMES = ("search_knowledge_base",)
 
+# ---------------------------------------------------------------------------
+# Context Injection Section Categorization (per Coding Principles.md)
+# ---------------------------------------------------------------------------
+# Volatile sections: change every turn, stripped from historical context
+#   to prevent cache entropy. These are re-injected fresh each turn.
+# Stable sections: persist across turns and are retained in historical context.
+
 HISTORICAL_CONTEXT_INJECTION_STRIP_HEADINGS = {
-    "## Clarification Response",
-    "## Double-Check Protocol",
-    "## Tool Memory",
-    "## Knowledge Base",
-    "## User Profile",
-    "## Scratchpad (AI Persistent Memory)",
-    "## Persona Memory",
-    "## Conversation Memory",
-    "## Conversation Memory Priority",
+    # --- Volatile Per-Turn Sections (strip from history, re-inject fresh) ---
+    "## Current Date and Time",  # Timestamp changes every request
+    "## Active Tools This Turn",  # Tool list varies per turn
+    "## Tool Execution History",  # Re-injected as part of runtime state
+    # --- Transient Clarification Sections (already consumed by prior turns) ---
+    "## Clarification Response",  # Already answered, not active requirement
+    # --- Canvas State Sections (refreshed each turn from canvas_service) ---
     "## Canvas File Set Summary",
     "## Canvas Workspace Summary",
     "## Canvas Editing Guidance",
@@ -219,11 +224,21 @@ HISTORICAL_CONTEXT_INJECTION_STRIP_HEADINGS = {
     "## Active Canvas Document",
     "## Ignored Canvas Documents",
     "## Pinned Canvas Viewports",
-    "## Conversation Summaries",
-    "## Tool Execution History",
-    "## Active Tools This Turn",
-    "## Current Date and Time",
+    # --- Deprecated/Archived Sections (superseded by current runtime state) ---
+    "## Double-Check Protocol",
+    "## Tool Memory",  # Replaced by active tool memory retrieval
+    "## Knowledge Base",  # Replaced by RAG retrieval
+    "## User Profile",  # Re-injected from user_profile table
+    "## Scratchpad (AI Persistent Memory)",  # Re-injected from scratchpad table
+    "## Persona Memory",  # Re-injected from persona_memory table
+    "## Conversation Memory",  # Re-injected from conversation_memory table
+    "## Conversation Memory Priority",
+    "## Conversation Summaries",  # Re-generated if needed, not stored verbatim
 }
+
+# Stable sections that survive context injection stripping and are always retained
+HISTORICAL_CONTEXT_INJECTION_RETAIN_HEADINGS: set[str] = set()
+
 CANVAS_RUNTIME_CONTEXT_REFRESH_HEADINGS = {
     "## Canvas File Set Summary",
     "## Active Canvas Document",
@@ -1097,18 +1112,24 @@ def build_user_message_for_api(
 def _strip_volatile_sections_from_context_injection(context_injection: str) -> str:
     """Return the stable static subset of a runtime context injection.
 
-    This function preserves the cache-friendly static prefix (tool contracts,
-    policies, memory write guidelines) and removes volatile per-turn sections
-    (timestamps, active tools, canvas summaries, tool execution history) that
-    would introduce cache entropy if persisted across turns.
+    ## Data Layer: Interpretation Layer (per Coding Principles.md)
+    - Input: Raw context_injection string from message metadata
+    - Output: Filtered string with volatile sections removed
 
-    The static prefix retained here is the same content emitted first in
-    ``build_runtime_system_message`` and ``build_runtime_context_injection``
-    via ``_build_runtime_static_parts`` and ``_build_runtime_dynamic_state_parts``.
+    ## Section Categorization
+    - **Volatile Per-Turn:** ``## Current Date and Time``, ``## Active Tools This Turn``,
+      ``## Tool Execution History`` — change every request, stripped to prevent cache entropy
+    - **Consumed Clarification:** ``## Clarification Response`` — already answered, not active
+    - **Canvas State:** ``## Canvas *`` headings — refreshed from canvas_service each turn
+    - **Superseded Sections:** ``## Tool Memory``, ``## Knowledge Base``, ``## User Profile``,
+      ``## Scratchpad*``, ``## Persona Memory``, ``## Conversation Memory*`` — re-injected
+      fresh from their respective tables, not stored verbatim
+
+    ## Chronological Integrity
     When a historical message is rebuilt for a new turn, the caller re-injects
-    the current runtime context (which includes fresh volatile sections) so
-    the model always sees up-to-date runtime state while the static contract
-    content remains cache-stable across requests.
+    the current runtime context (fresh volatile sections) so the model always
+    sees up-to-date runtime state while static contract content remains
+    cache-stable across requests.
     """
     normalized = str(context_injection or "").strip()
     if not normalized:
