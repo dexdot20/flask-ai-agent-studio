@@ -79,7 +79,10 @@ class TestRuntimeSystemMessage:
             }
         )
 
-        assert combined == "General instructions:\nKeep answers short.\n\nAI personality:\nSound calm, direct, and rigorous."
+        assert (
+            combined
+            == "General instructions:\nKeep answers short.\n\nAI personality:\nSound calm, direct, and rigorous."
+        )
 
     def test_runtime_system_message_places_volatile_context_after_tool_calling(self):
         message = build_runtime_system_message(
@@ -99,9 +102,17 @@ class TestRuntimeSystemMessage:
         message = build_runtime_system_message(active_tool_names=["search_web", "fetch_url"])
 
         content = message["content"]
-        assert "If you can answer definitively from the current context and the task does not require current, external, or source-specific verification, do not call a tool." in content
-        assert "Use web-research tools only when the task genuinely needs current facts, external verification, or exact source text." in content
-        assert "If the answer is already available from the current context, do not search or fetch anything." in content
+        assert (
+            "Call a tool only when strictly required. If you can answer from the current context without current/external/source-specific verification, do not call a tool."
+            in content
+        )
+        assert (
+            "Use web-research tools only when the task genuinely needs current facts, external verification, or exact source text."
+            in content
+        )
+        assert (
+            "If the answer is already available from the current context, do not search or fetch anything." in content
+        )
 
     def test_runtime_system_message_uses_canonical_role_heading_without_excess_blank_lines(self):
         message = build_runtime_system_message(
@@ -250,7 +261,10 @@ class TestRuntimeSystemMessage:
         content = message["content"]
         assert "## Double-Check Protocol" in content
         assert "Treat this turn as a verification pass" in content
-        assert "verify this specific claim or request first: Verify whether the deployment command is still correct." in content
+        assert (
+            "verify this specific claim or request first: Verify whether the deployment command is still correct."
+            in content
+        )
         assert "strongest counterargument" in content
         assert "Do not present uncertain claims as certain" in content
         assert content.index("## Current Date and Time") < content.index("## Double-Check Protocol")
@@ -277,10 +291,9 @@ class TestRuntimeSystemMessage:
 
         content = message["content"]
         assert "## Canvas Editing Guidance" in content
-        assert "Do not rewrite the whole document when only part needs to change" in content
-        assert "obsolete, superseded, or just a scratch draft" in content
-        assert "use clear_canvas instead of leaving dead documents behind" in content
-        assert "If you do not know the document_id, use the document_path" in content
+        assert "Prefer replace/insert/delete_canvas_lines over rewrite when only a part needs to change" in content
+        assert "delete obsolete documents with delete_canvas_document" in content
+        assert "If the whole canvas is obsolete, use clear_canvas" in content
         assert "## Tool Calling" in content
         assert "## Active Tools This Turn" in content
         assert "Native function calling is enabled for this turn." in content
@@ -329,15 +342,14 @@ class TestRuntimeSystemMessage:
         assert "1: print('hello')" in content
         assert "2: print('world')" in content
         assert "## Canvas Editing Guidance" in content
-        assert "Multiple canvas tool calls in one answer are fine" in content
-        assert "If you do not know the document_id, use the document_path" in content
+        assert "batch independent inspections in one answer, then batch all known edits in one answer" in content
         assert "## Active Tools This Turn" in content
         assert "## Canvas File Set Summary" not in content
         assert "## Canvas Decision Matrix" not in content
         assert "create_canvas_document" in content
         assert "## Canvas Workflow" not in content
         assert "## Tool Calling" in content
-        assert "Use only the tools listed in the Active Tools section for this turn" in content
+        assert "Use only the tools listed in the Active Tools section" in content
 
     def test_runtime_system_message_represents_ignored_canvas_documents_as_metadata_only(self):
         message = build_runtime_system_message(
@@ -538,8 +550,8 @@ class TestRuntimeSystemMessage:
         content = message["content"]
         assert "- Active document: Research Notes" in content
         assert "- Other canvas documents: Ricky - Career Profile and Preferences" in content
-        assert "use document_path only when an explicit project path is shown" in content
-        assert "otherwise do not invent a path" in content
+        assert "Use document_path only when an explicit project path is shown" in content
+        assert "target the active document or use document_id" in content
 
     def test_runtime_system_message_includes_pinned_canvas_viewports(self):
         runtime_state = create_canvas_runtime_state(
@@ -776,8 +788,8 @@ class TestRuntimeSystemMessage:
         )
 
         content = message["content"]
-        assert "Every batch_canvas_edits operation must be a plain object" in content
-        assert "For batch_canvas_edits, replace needs start_line, end_line, and lines" in content
+        assert "prefer batch_canvas_edits over serial calls" in content
+        assert "replace needs start_line+end_line+lines" in content
 
     def test_runtime_system_message_omits_disabled_scroll_guidance(self):
         message = build_runtime_system_message(
@@ -822,7 +834,12 @@ class TestRuntimeSystemMessage:
         )
 
         tool_names = [entry["function"]["name"] for entry in tools]
-        assert tool_names == ["expand_canvas_document", "create_canvas_document", "rewrite_canvas_document", "batch_canvas_edits"]
+        assert tool_names == [
+            "expand_canvas_document",
+            "create_canvas_document",
+            "rewrite_canvas_document",
+            "batch_canvas_edits",
+        ]
 
     def test_openai_tool_specs_hide_canvas_edit_tools_without_canvas_document(self):
         tools = get_openai_tool_specs(
@@ -858,7 +875,9 @@ class TestRuntimeSystemMessage:
         assert "## Scratchpad (AI Persistent Memory)" in dynamic_content
         assert "Persistent note" in dynamic_content
         assert "## Current Date and Time" in dynamic_content
-        assert dynamic_content.index("## Scratchpad (AI Persistent Memory)") < dynamic_content.index("## Current Date and Time")
+        assert dynamic_content.index("## Scratchpad (AI Persistent Memory)") < dynamic_content.index(
+            "## Current Date and Time"
+        )
 
     def test_prepend_runtime_context_moves_dynamic_state_into_bottom_system_message(self):
         messages = prepend_runtime_context(
@@ -891,7 +910,9 @@ class TestRuntimeSystemMessage:
         assert "Goal: Keep stable rules cached." in dynamic_content
         assert "## Current Date and Time" in dynamic_content
         assert dynamic_content.index("## User Profile") < dynamic_content.index("## Current Date and Time")
-        assert dynamic_content.index("## Scratchpad (AI Persistent Memory)") < dynamic_content.index("## Current Date and Time")
+        assert dynamic_content.index("## Scratchpad (AI Persistent Memory)") < dynamic_content.index(
+            "## Current Date and Time"
+        )
         assert dynamic_content.index("## Conversation Memory") < dynamic_content.index("## Current Date and Time")
         assert messages[2]["role"] == "user"
         assert messages[2]["content"] == "Hello"
@@ -968,7 +989,10 @@ class TestRuntimeSystemMessage:
             assert str(prompt.get("guidance") or "").strip()
 
         assert "current information, external verification" in TOOL_SPEC_BY_NAME["search_web"]["description"]
-        assert "If the answer is already available from the current context" in TOOL_SPEC_BY_NAME["search_web"]["prompt"]["guidance"]
+        assert (
+            "If the answer is already available from the current context"
+            in TOOL_SPEC_BY_NAME["search_web"]["prompt"]["guidance"]
+        )
         assert not TOOL_SPEC_BY_NAME["search_web"]["parameters"].get("additionalProperties", True)
         assert "Do not pass max_results" in TOOL_SPEC_BY_NAME["search_web"]["prompt"]["guidance"]
         assert "current news coverage" in TOOL_SPEC_BY_NAME["search_news_ddgs"]["description"]

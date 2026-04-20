@@ -268,6 +268,9 @@ SUMMARY_TOOL_MESSAGE_TEXT_LIMIT = 320
 SUMMARY_MAX_OUTPUT_CHARS = 4_800
 SUMMARY_MAX_BULLETS = 18
 SUMMARY_TOOL_TRACE_LIMIT = 8
+# Minimum token budget reserved for Tool Execution History to prevent complete removal
+# when context is tight. This ensures anti-repetition guidance remains visible.
+PROMPT_TOOL_TRACE_MIN_TOKENS = 500
 OMITTED_TOOL_OUTPUT_TEXT = "[Tool output omitted from older history to save context budget.]"
 PROMPT_CONTINUITY_REPLY_MAX_TOKENS = 12
 PROMPT_CONTINUITY_REPLY_MAX_CHARS = 80
@@ -3022,9 +3025,20 @@ def _build_budgeted_prompt_messages(
     remaining_context_budget = max(0, remaining_context_budget - rag_tokens)
     tool_trace_budget_cap = get_prompt_tool_trace_max_tokens(settings)
     tool_memory_budget_cap = get_prompt_tool_memory_max_tokens(settings)
+    # Reserve a minimum floor for tool trace to ensure anti-repetition guidance
+    # remains visible even when context budget is tight. Never let tool_trace
+    # budget drop below PROMPT_TOOL_TRACE_MIN_TOKENS.
+    # Note: This floor sets the trimming budget target, not the guaranteed output
+    # token count. If tool_trace_context is sparse, output may be smaller than
+    # PROMPT_TOOL_TRACE_MIN_TOKENS. The floor prevents aggressive trimming when
+    # context is tight, not guaranteed content fill.
+    tool_trace_effective_budget = max(
+        min(tool_trace_budget_cap, remaining_context_budget),
+        PROMPT_TOOL_TRACE_MIN_TOKENS,
+    )
     trimmed_tool_trace = _trim_text_sections_to_token_budget(
         tool_trace_context,
-        min(tool_trace_budget_cap, remaining_context_budget),
+        tool_trace_effective_budget,
     )
     tool_trace_tokens = estimate_text_tokens(trimmed_tool_trace or "")
     remaining_context_budget = max(0, remaining_context_budget - tool_trace_tokens)

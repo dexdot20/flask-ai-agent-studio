@@ -2114,35 +2114,22 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
 
     lines = [
         "## Canvas Editing Guidance",
-        "- Prefer the smallest valid canvas change that satisfies the request.",
-        "- Do not rewrite the whole document when only part needs to change; use replace_canvas_lines, insert_canvas_lines, or delete_canvas_lines for local edits when the exact visible lines are known.",
-        "- When several non-overlapping edits for the same document are already known, prefer batch_canvas_edits over serial line-edit calls.",
-        "- Every batch_canvas_edits operation must be a plain object with action set to replace, insert, or delete; do not wrap it in an array, string, or nested shell.",
-        "- For batch_canvas_edits, replace needs start_line, end_line, and lines; insert needs after_line and lines; delete needs start_line and end_line.",
-        "- Use preview_canvas_changes before a large or risky batch when you need a non-mutating diff preview first.",
-        "- Use transform_canvas_lines for bulk find-replace work; use count_only first when the replacement scope is uncertain.",
-        "- After mutating a canvas document, it is recommended to verify the affected region with an available read-only canvas inspection tool before finalizing your answer.",
-        "- Use update_canvas_metadata for title, summary, role, dependency, or symbol metadata changes that do not change document content.",
-        "- Use update_canvas_metadata with ignored=true and ignored_reason to hide a canvas document's content from future prompts without deleting it; set ignored=false later to re-enable it.",
-        "- Do not use line-based read, search, validate, or edit tools on an ignored canvas document until it has been re-enabled.",
-        "- Cleanup: if a canvas document is obsolete, superseded, or just a scratch draft that no longer needs to stay in context, delete it with delete_canvas_document so it stops consuming prompt space.",
-        "- If the entire canvas is now obsolete or should be reset, use clear_canvas instead of leaving dead documents behind.",
-        "- If you will keep working in the same region for multiple turns, use set_canvas_viewport so the pinned lines are injected automatically in later prompts.",
-        "- If the document is multi-page and the task is page-specific, use focus_canvas_page instead of manually estimating a page's line range.",
-        "- When multiple files or canvas regions are involved, batch independent inspection calls together in one answer instead of requesting them one by one.",
-        "- If you do not know the document_id, use the document_path carefully: use document_path only when an explicit project path is shown in the Canvas File Set Summary or Active Canvas Document block; otherwise do not invent a path and target the active document or use document_id.",
-        "- For optional selector fields such as document_id or document_path, omit the key entirely when unknown; never send null.",
-        "- Use rewrite_canvas_document when most of the document should change or when you already know the complete intended replacement content.",
-        "- When you already know the required edits across multiple canvas documents, emit all of those edit tool calls in a single answer instead of editing one document, waiting, and then editing the next.",
-        "- Preferred pattern for multi-file canvas work: batch inspections first, then batch all known edits in one answer.",
-        "- Multiple canvas tool calls in one answer are fine when needed: inspect, then edit, then create or update other files.",
-        "- When using replace_canvas_lines or insert_canvas_lines, ALL code content must be placed INSIDE the `lines` array as properly escaped JSON strings. "
-        'Example: {"start_line": 2, "end_line": 3, "lines": ["const char* ssid = \\"MyNet\\";"]}. '
-        "Never put code outside the lines array.",
+        "- Prefer the smallest valid canvas change that satisfies the request. Prefer replace/insert/delete_canvas_lines over rewrite when only a part needs to change.",
+        "- When several non-overlapping edits for the same document are already known, prefer batch_canvas_edits over serial calls. replace needs start_line+end_line+lines; insert needs after_line+lines; delete needs start_line+end_line.",
+        "- Use preview_canvas_changes before large or risky batches. Use transform_canvas_lines for bulk find-replace; count_only when scope is uncertain.",
+        "- After mutating, verify the affected region with a read-only inspection tool before finalizing.",
+        "- update_canvas_metadata handles title, summary, role, dependency, or symbol changes (not content). Set ignored=true to hide a document without deleting it.",
+        "- Do not use line-based tools on an ignored canvas document until re-enabled with ignored=false.",
+        "- Cleanup: delete obsolete documents with delete_canvas_document. If the whole canvas is obsolete, use clear_canvas.",
+        "- For multi-page documents, use focus_canvas_page for page-specific tasks instead of estimating ranges.",
+        "- When multiple files or regions are involved, batch independent inspections in one answer, then batch all known edits in one answer.",
+        "- If you do not know the document_id, target the active document or use document_id. Use document_path only when an explicit project path is shown in the Canvas File Set Summary or Active Canvas Document block.",
+        '- When using replace_canvas_lines/insert_canvas_lines, ALL code must be inside the `lines` array as properly escaped JSON strings. Example: {"start_line":2,"end_line":3,"lines":["const char* ssid=\\"MyNet\\";"]}. Never put code outside the lines array.',
+        "- Use rewrite_canvas_document when most of the document should change or when the complete replacement is already known.",
+        "- After calling rewrite_canvas_document for a document, do NOT call it again for the same document in the same session — continue working with the saved content instead. Only call it again if: the user explicitly asks to restart/rewrite, the document was cleared/reset, or content has diverged significantly from the last saved version.",
         "## Code Document Rules",
-        "- For source code files, use format='code'. If path is given, format and language are usually inferred automatically.",
-        "- The content of a code document is raw source code — do NOT wrap it in triple-backtick fences.",
-        "- When editing code lines, preserve indentation exactly. Each element of the lines array is one complete line.",
+        "- For source code files, use format='code'. Path usually infers format and language automatically.",
+        "- Code document content is raw source — no triple-backtick fences. Preserve indentation exactly.",
     ]
     if "create_canvas_document" in active_set:
         lines.insert(2, "- create_canvas_document always needs BOTH title and content.")
@@ -2438,11 +2425,9 @@ def build_tool_call_contract(
     if not normalized_tool_names:
         return None
     rules = [
-        "Call a tool only when it is strictly required to fulfill the user's request. If you can answer definitively from the current context and the task does not require current, external, or source-specific verification, do not call a tool.",
-        "Use only the tools listed in the Active Tools section for this turn. Do not invent unavailable tools.",
-        "If you do need a tool, call it via native function calling. Never write tool JSON or schema representations in your regular text response.",
-        "Unnecessary tool calls waste compute and context. Do not use tools for trivial checks, repetition, or mere curiosity.",
-        "Before repeating a tool call, check Tool Execution History and Conversation Memory first. Repeat only when there is a concrete new reason (new user input, changed state, or unresolved missing evidence).",
+        "Call a tool only when strictly required. If you can answer from the current context without current/external/source-specific verification, do not call a tool.",
+        "Use only the tools listed in the Active Tools section. Do not invent unavailable tools.",
+        "Before repeating a tool call, check Tool Execution History and Conversation Memory first. Repeat only when there is concrete new evidence to gather; otherwise reuse the existing result and continue.",
     ]
 
     web_research_tool_names = {
