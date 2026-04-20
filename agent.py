@@ -4130,7 +4130,13 @@ def _validate_tool_arguments(tool_name: str, tool_args: dict) -> str | None:
                     return f"Argument '{key}' in {tool_name} must be <= {maximum}"
         enum_values = property_schema.get("enum")
         if enum_values and value not in enum_values:
-            return f"Argument '{key}' in {tool_name} must be one of: {', '.join(str(item) for item in enum_values)}"
+            # For canvas document `role`, silently fall back to "note" rather than
+            # erroring out — the model sometimes generates valid-sounding but
+            # out-of-spec role labels (e.g. "readme", "data", "diagram").
+            if key == "role" and "note" in enum_values:
+                tool_args[key] = "note"
+            else:
+                return f"Argument '{key}' in {tool_name} must be one of: {', '.join(str(item) for item in enum_values)}"
     return None
 
 

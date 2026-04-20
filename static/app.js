@@ -3791,20 +3791,18 @@ if (markdownEngine && typeof markdownEngine.use === "function") {
     breaks: true,
     gfm: true,
   });
-  if (highlighter) {
-    markdownEngine.use({
-      renderer: {
-        // Compatible with both marked v4 (code: string, language: string)
-        // and marked v5+ (code: token object with .text and .lang properties).
-        code(tokenOrCode, languageHint) {
-          const isToken = tokenOrCode !== null && typeof tokenOrCode === "object";
-          const codeText = isToken ? String(tokenOrCode.text || "") : String(tokenOrCode || "");
-          const rawLang = isToken ? (tokenOrCode.lang || null) : (languageHint || null);
-          return `${renderHighlightedCodeBlock(codeText, rawLang)}\n`;
-        },
+  markdownEngine.use({
+    renderer: {
+      // Compatible with both marked v4 (code: string, language: string)
+      // and marked v5+ (code: token object with .text and .lang properties).
+      code(tokenOrCode, languageHint) {
+        const isToken = tokenOrCode !== null && typeof tokenOrCode === "object";
+        const codeText = isToken ? String(tokenOrCode.text || "") : String(tokenOrCode || "");
+        const rawLang = isToken ? (tokenOrCode.lang || null) : (languageHint || null);
+        return `${renderHighlightedCodeBlock(codeText, rawLang)}\n`;
       },
-    });
-  }
+    },
+  });
 }
 
 function sanitizeHtml(html) {
@@ -12420,41 +12418,26 @@ async function requestActiveChatCancellation() {
     activeChatCancellationFallbackTimer = null;
   }
 
+  // Abort the SSE stream immediately so the UI stops streaming at once.
+  if (activeAbortController) {
+    activeAbortController.abort();
+  }
+
+  clearEmptyAssistantStreamingBubble();
+  scrollToBottom();
+
+  // Notify the server in the background so it can save partial output gracefully.
   const runId = String(activeChatRunId || "").trim();
   if (runId) {
-    activeChatCancellationFallbackTimer = window.setTimeout(() => {
-      activeChatCancellationFallbackTimer = null;
-      if (activeAbortController) {
-        activeAbortController.abort();
-      }
-    }, 4000);
-
     try {
-      const response = await fetch(`/api/chat-runs/${encodeURIComponent(runId)}/cancel`, {
+      await fetch(`/api/chat-runs/${encodeURIComponent(runId)}/cancel`, {
         method: "POST",
         keepalive: true,
       });
-      if (!response.ok && activeAbortController) {
-        if (activeChatCancellationFallbackTimer !== null) {
-          window.clearTimeout(activeChatCancellationFallbackTimer);
-          activeChatCancellationFallbackTimer = null;
-        }
-        activeAbortController.abort();
-      }
     } catch (_error) {
-      if (activeChatCancellationFallbackTimer !== null) {
-        window.clearTimeout(activeChatCancellationFallbackTimer);
-        activeChatCancellationFallbackTimer = null;
-      }
-      if (activeAbortController) {
-        activeAbortController.abort();
-      }
+      // ignore — the stream is already aborted client-side
     }
-  } else if (activeAbortController) {
-    activeAbortController.abort();
   }
-  clearEmptyAssistantStreamingBubble();
-  scrollToBottom();
 }
 
 cancelBtn.addEventListener("click", () => {

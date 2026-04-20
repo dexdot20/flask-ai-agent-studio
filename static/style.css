@@ -5443,6 +5443,11 @@ kbd {
   border-color: rgba(255, 255, 255, 0.08);
 }
 
+.canvas-page-sheet .code-block-shell {
+  max-width: 100%;
+  overflow: hidden;
+}
+
 .canvas-page-sheet table,
 .canvas-page-sheet hr {
   border-color: rgba(255, 255, 255, 0.08);
@@ -6218,11 +6223,12 @@ kbd {
 
 /* Tables */
 .canvas-document table {
-  width: 100%;
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
   border-collapse: collapse;
   margin: 1em 0;
   font-size: 0.88em;
-  overflow: hidden;
   border-radius: 8px;
   border: 1px solid var(--border);
 }
