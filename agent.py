@@ -1821,10 +1821,15 @@ def _compact_exchange_to_message(block: dict) -> dict:
     result_parts: list[str] = []
     recovery_hints: list[str] = []
     assistant_intent = ""
+    reasoning_content = ""
     for message in block.get("messages") or []:
         role = str(message.get("role") or "").strip()
         if role == "assistant":
             assistant_intent = assistant_intent or _extract_compaction_assistant_intent(message)
+            # Extract reasoning_content from metadata for preservation
+            if not reasoning_content:
+                metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+                reasoning_content = str(metadata.get("reasoning_content") or "").strip()
             for tool_call in message.get("tool_calls") or []:
                 preview = _extract_compaction_tool_call_preview(tool_call)
                 if preview and preview not in tool_previews:
@@ -1844,6 +1849,11 @@ def _compact_exchange_to_message(block: dict) -> dict:
     parts = [f"[Context: compacted tool step {block.get('step_index') or '?'}]"]
     if assistant_intent:
         parts.append(f"Assistant intent: {assistant_intent}")
+    if reasoning_content:
+        if len(reasoning_content) > 500:
+            parts.append(f"Reasoning: {reasoning_content[:497]}...")
+        else:
+            parts.append(f"Reasoning: {reasoning_content}")
     if tool_previews:
         parts.append("Actions:\n- " + "\n- ".join(tool_previews[:4]))
     if result_parts:
@@ -3189,6 +3199,13 @@ def _extract_reasoning_text(value) -> str:
     reasoning_text = _coerce_text(_read_api_field(value, "reasoning", ""))
     if reasoning_text:
         return reasoning_text
+
+    # Check metadata.reasoning_content for stored messages (loaded from DB)
+    metadata = _read_api_field(value, "metadata", {})
+    if isinstance(metadata, dict):
+        reasoning_text = _coerce_text(metadata.get("reasoning_content", ""))
+        if reasoning_text:
+            return reasoning_text
 
     return _extract_reasoning_details_text(_read_api_field(value, "reasoning_details", []))
 
@@ -8599,7 +8616,7 @@ def run_agent_stream(
 
             if tool_name not in enabled_tool_names:
                 slot["kind"] = "error"
-                slot["error"] = f"Tool disabled: {tool_name}"
+                slot["error"] = f"Tool not available in current context: {tool_name}"
                 slots.append(slot)
                 continue
 
