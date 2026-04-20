@@ -895,6 +895,8 @@ def build_user_message_for_model(
             context_block = str(attachment.get("file_context_block") or "").strip()
             if _document_attachment_is_represented_in_canvas(attachment, canvas_document_lookup):
                 continue
+            if attachment.get("excluded_from_context") is True:
+                continue
             if context_block and context_block not in file_context_blocks:
                 file_context_blocks.append(context_block)
             continue

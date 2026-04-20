@@ -36,7 +36,7 @@ SCRATCHPAD_SECTION_DESCRIPTION = "Section to update: " + "; ".join(
 CANVAS_LINE_ARRAY_DESCRIPTION = (
     "Each element is one line of text as a properly quoted JSON string with no trailing newline characters. "
     "Code content, including quotes, backslashes, and semicolons, must appear inside these strings and be properly escaped. "
-    'Example: ["const char* ssid = \\\"MyNet\\\";", "const char* pass = \\\"abc\\\";"] . '
+    'Example: ["const char* ssid = \\"MyNet\\";", "const char* pass = \\"abc\\";"] . '
     "Never place code outside this array or as an argument key."
 )
 
@@ -46,12 +46,24 @@ def _build_canvas_edit_operation_variants() -> list[dict]:
         {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["replace"], "description": "Replace an inclusive 1-based line range."},
+                "action": {
+                    "type": "string",
+                    "enum": ["replace"],
+                    "description": "Replace an inclusive 1-based line range.",
+                },
                 "start_line": {"type": "integer", "minimum": 1, "description": "1-based first line to replace."},
                 "end_line": {"type": "integer", "minimum": 1, "description": "1-based last line to replace."},
                 "lines": {"type": "array", "items": {"type": "string"}, "description": CANVAS_LINE_ARRAY_DESCRIPTION},
-                "expected_start_line": {"type": "integer", "minimum": 1, "description": "Optional first line of the current snippet that must still match before applying the edit."},
-                "expected_lines": {"type": "array", "items": {"type": "string"}, "description": "Optional current lines that must still match before applying the edit."},
+                "expected_start_line": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Optional first line of the current snippet that must still match before applying the edit.",
+                },
+                "expected_lines": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional current lines that must still match before applying the edit.",
+                },
             },
             "required": ["action", "start_line", "end_line", "lines"],
             "additionalProperties": False,
@@ -59,11 +71,27 @@ def _build_canvas_edit_operation_variants() -> list[dict]:
         {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["insert"], "description": "Insert new lines after a specific anchor line."},
-                "after_line": {"type": "integer", "minimum": 0, "description": "Insert after this line number. Use 0 to insert before line 1 at the top of the file."},
+                "action": {
+                    "type": "string",
+                    "enum": ["insert"],
+                    "description": "Insert new lines after a specific anchor line.",
+                },
+                "after_line": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Insert after this line number. Use 0 to insert before line 1 at the top of the file.",
+                },
                 "lines": {"type": "array", "items": {"type": "string"}, "description": CANVAS_LINE_ARRAY_DESCRIPTION},
-                "expected_start_line": {"type": "integer", "minimum": 1, "description": "Optional first line of the current snippet that must still match before applying the insert."},
-                "expected_lines": {"type": "array", "items": {"type": "string"}, "description": "Optional nearby current lines that must still match before applying the insert."},
+                "expected_start_line": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Optional first line of the current snippet that must still match before applying the insert.",
+                },
+                "expected_lines": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional nearby current lines that must still match before applying the insert.",
+                },
             },
             "required": ["action", "after_line", "lines"],
             "additionalProperties": False,
@@ -71,16 +99,29 @@ def _build_canvas_edit_operation_variants() -> list[dict]:
         {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["delete"], "description": "Delete an inclusive 1-based line range."},
+                "action": {
+                    "type": "string",
+                    "enum": ["delete"],
+                    "description": "Delete an inclusive 1-based line range.",
+                },
                 "start_line": {"type": "integer", "minimum": 1, "description": "1-based first line to delete."},
                 "end_line": {"type": "integer", "minimum": 1, "description": "1-based last line to delete."},
-                "expected_start_line": {"type": "integer", "minimum": 1, "description": "Optional first line of the current snippet that must still match before applying the delete."},
-                "expected_lines": {"type": "array", "items": {"type": "string"}, "description": "Optional current lines that must still match before applying the delete."},
+                "expected_start_line": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Optional first line of the current snippet that must still match before applying the delete.",
+                },
+                "expected_lines": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional current lines that must still match before applying the delete.",
+                },
             },
             "required": ["action", "start_line", "end_line"],
             "additionalProperties": False,
         },
     ]
+
 
 TOOL_SPECS = [
     {
@@ -103,7 +144,7 @@ TOOL_SPECS = [
                     "items": {"type": "string"},
                     "description": "List of short durable facts to append. Each item must be a single standalone fact — do not bundle multiple facts into one item. Minimum 1 item.",
                     "minItems": 1,
-                }
+                },
             },
             "required": ["section", "notes"],
         },
@@ -141,7 +182,7 @@ TOOL_SPECS = [
                 "new_content": {
                     "type": "string",
                     "description": "The new content that will fully replace the selected scratchpad section.",
-                }
+                },
             },
             "required": ["section", "new_content"],
         },
@@ -178,165 +219,165 @@ TOOL_SPECS = [
             ),
         },
     },
-        {
-            "name": "save_to_conversation_memory",
-            "description": (
-                "Save one or more compact conversation-scoped memory entries for this chat only. "
-                "Use this as the default place to store important chat-specific details, active constraints, decisions, discovered repo or environment facts, or critical tool outcomes that should not be lost later in the same conversation. "
-                "Pass multiple entries in the 'entries' array to save them all in one call instead of calling this tool repeatedly. "
-                "If the same key already exists, the entry is refreshed instead of duplicated."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "entries": {
-                        "type": "array",
-                        "description": (
-                            "List of memory entries to save in one call. "
-                            "Use this instead of calling the tool multiple times. "
-                            "Each item must have entry_type, key, and value."
-                        ),
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "entry_type": {
-                                    "type": "string",
-                                    "enum": ["user_info", "task_context", "tool_result", "decision"],
-                                    "description": "Classification for the memory entry.",
-                                },
-                                "key": {
-                                    "type": "string",
-                                    "description": "Short label for the fact or result. Keep it compact and specific.",
-                                },
-                                "value": {
-                                    "type": "string",
-                                    "description": "Single-line micro-summary of the information to remember for later turns in this same chat.",
-                                },
+    {
+        "name": "save_to_conversation_memory",
+        "description": (
+            "Save one or more compact conversation-scoped memory entries for this chat only. "
+            "Use this as the default place to store important chat-specific details, active constraints, decisions, discovered repo or environment facts, or critical tool outcomes that should not be lost later in the same conversation. "
+            "Pass multiple entries in the 'entries' array to save them all in one call instead of calling this tool repeatedly. "
+            "If the same key already exists, the entry is refreshed instead of duplicated."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "entries": {
+                    "type": "array",
+                    "description": (
+                        "List of memory entries to save in one call. "
+                        "Use this instead of calling the tool multiple times. "
+                        "Each item must have entry_type, key, and value."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "entry_type": {
+                                "type": "string",
+                                "enum": ["user_info", "task_context", "tool_result", "decision"],
+                                "description": "Classification for the memory entry.",
                             },
-                            "required": ["entry_type", "key", "value"],
+                            "key": {
+                                "type": "string",
+                                "description": "Short label for the fact or result. Keep it compact and specific.",
+                            },
+                            "value": {
+                                "type": "string",
+                                "description": "Single-line micro-summary of the information to remember for later turns in this same chat.",
+                            },
                         },
-                        "minItems": 1,
+                        "required": ["entry_type", "key", "value"],
                     },
-                    "entry_type": {
-                        "type": "string",
-                        "enum": ["user_info", "task_context", "tool_result", "decision"],
-                        "description": "Classification for a single memory entry (use 'entries' array instead when saving multiple).",
-                    },
-                    "key": {
-                        "type": "string",
-                        "description": "Short label for a single memory entry (use 'entries' array instead when saving multiple).",
-                    },
-                    "value": {
-                        "type": "string",
-                        "description": "Single-line micro-summary for a single memory entry (use 'entries' array instead when saving multiple).",
-                    },
+                    "minItems": 1,
                 },
-            },
-            "prompt": {
-                "purpose": "Writes one or more short conversation-specific memory entries that will be auto-injected in later turns of this same chat.",
-                "inputs": {
-                    "entries": "[{entry_type, key, value}, ...] — preferred when saving multiple facts at once",
-                    "entry_type": "user_info, task_context, tool_result, or decision (single-entry fallback)",
-                    "key": "short label (single-entry fallback)",
-                    "value": "one compact factual line (single-entry fallback)",
+                "entry_type": {
+                    "type": "string",
+                    "enum": ["user_info", "task_context", "tool_result", "decision"],
+                    "description": "Classification for a single memory entry (use 'entries' array instead when saving multiple).",
                 },
-                "guidance": (
-                    "When you need to save multiple facts, pass them all as an array in the 'entries' field in a SINGLE call — never call this tool repeatedly one entry at a time. "
-                    "Use this whenever the information is important within this conversation but not clearly durable general memory for the cross-conversation scratchpad. "
-                    "When choosing between scratchpad and conversation memory, default to conversation memory unless the fact is durable, general, and likely useful across future chats. "
-                    "Prefer concise micro-summaries over raw outputs. "
-                    "Reuse the same key when updating the same fact so memory stays compact. "
-                    "Do NOT save raw clarification question answers here — the clarification system already persists and injects them automatically. "
-                    "Saving clarification answers to memory wastes steps and creates confusion in later turns."
-                ),
+                "key": {
+                    "type": "string",
+                    "description": "Short label for a single memory entry (use 'entries' array instead when saving multiple).",
+                },
+                "value": {
+                    "type": "string",
+                    "description": "Single-line micro-summary for a single memory entry (use 'entries' array instead when saving multiple).",
+                },
             },
         },
-        {
-            "name": "delete_conversation_memory_entry",
-            "description": (
-                "Delete one outdated or incorrect conversation memory entry by id. "
-                "Use this to clean up stale memory inside the current chat."
+        "prompt": {
+            "purpose": "Writes one or more short conversation-specific memory entries that will be auto-injected in later turns of this same chat.",
+            "inputs": {
+                "entries": "[{entry_type, key, value}, ...] — preferred when saving multiple facts at once",
+                "entry_type": "user_info, task_context, tool_result, or decision (single-entry fallback)",
+                "key": "short label (single-entry fallback)",
+                "value": "one compact factual line (single-entry fallback)",
+            },
+            "guidance": (
+                "When you need to save multiple facts, pass them all as an array in the 'entries' field in a SINGLE call — never call this tool repeatedly one entry at a time. "
+                "Use this whenever the information is important within this conversation but not clearly durable general memory for the cross-conversation scratchpad. "
+                "When choosing between scratchpad and conversation memory, default to conversation memory unless the fact is durable, general, and likely useful across future chats. "
+                "Prefer concise micro-summaries over raw outputs. "
+                "Reuse the same key when updating the same fact so memory stays compact. "
+                "Do NOT save raw clarification question answers here — the clarification system already persists and injects them automatically. "
+                "Saving clarification answers to memory wastes steps and creates confusion in later turns."
             ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "entry_id": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "description": "Conversation memory entry id to remove.",
-                    },
-                },
-                "required": ["entry_id"],
-            },
-            "prompt": {
-                "purpose": "Removes one obsolete conversation-scoped memory entry.",
-                "inputs": {
-                    "entry_id": "id shown in the Conversation Memory prompt section",
-                },
-                "guidance": "Use this when an earlier conversation-memory entry is no longer valid, was superseded, or should not keep influencing later turns.",
-            },
         },
-        {
-            "name": "save_to_persona_memory",
-            "description": (
-                "Save one compact persona-scoped memory entry for the currently active persona. "
-                "This memory is shared across conversations that use the same persona. "
-                "If the same key already exists, the entry is refreshed instead of duplicated."
+    },
+    {
+        "name": "delete_conversation_memory_entry",
+        "description": (
+            "Delete one outdated or incorrect conversation memory entry by id. "
+            "Use this to clean up stale memory inside the current chat."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "entry_id": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Conversation memory entry id to remove.",
+                },
+            },
+            "required": ["entry_id"],
+        },
+        "prompt": {
+            "purpose": "Removes one obsolete conversation-scoped memory entry.",
+            "inputs": {
+                "entry_id": "id shown in the Conversation Memory prompt section",
+            },
+            "guidance": "Use this when an earlier conversation-memory entry is no longer valid, was superseded, or should not keep influencing later turns.",
+        },
+    },
+    {
+        "name": "save_to_persona_memory",
+        "description": (
+            "Save one compact persona-scoped memory entry for the currently active persona. "
+            "This memory is shared across conversations that use the same persona. "
+            "If the same key already exists, the entry is refreshed instead of duplicated."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "Short label for the stable persona-scoped fact. Keep it compact and specific.",
+                },
+                "value": {
+                    "type": "string",
+                    "description": "Single-line micro-summary of the information to remember across future conversations that use this persona.",
+                },
+            },
+            "required": ["key", "value"],
+        },
+        "prompt": {
+            "purpose": "Writes one short persona-scoped memory entry that will be auto-injected in later conversations using this same persona.",
+            "inputs": {
+                "key": "short label",
+                "value": "one compact factual line",
+            },
+            "guidance": (
+                "Use this for stable persona-scoped facts that should survive beyond the current chat, but are not broad enough for the global scratchpad. "
+                "Prefer this for recurring conventions, reusable repo or domain facts tied to this persona's work, and other durable persona-level context. "
+                "If the detail only matters for this current chat, save it to conversation memory instead. "
+                "Do NOT save raw tool outputs, temporary plans, or one-off task state here. "
+                "Reuse the same key when updating the same fact so persona memory stays compact."
             ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "key": {
-                        "type": "string",
-                        "description": "Short label for the stable persona-scoped fact. Keep it compact and specific.",
-                    },
-                    "value": {
-                        "type": "string",
-                        "description": "Single-line micro-summary of the information to remember across future conversations that use this persona.",
-                    },
-                },
-                "required": ["key", "value"],
-            },
-            "prompt": {
-                "purpose": "Writes one short persona-scoped memory entry that will be auto-injected in later conversations using this same persona.",
-                "inputs": {
-                    "key": "short label",
-                    "value": "one compact factual line",
-                },
-                "guidance": (
-                    "Use this for stable persona-scoped facts that should survive beyond the current chat, but are not broad enough for the global scratchpad. "
-                    "Prefer this for recurring conventions, reusable repo or domain facts tied to this persona's work, and other durable persona-level context. "
-                    "If the detail only matters for this current chat, save it to conversation memory instead. "
-                    "Do NOT save raw tool outputs, temporary plans, or one-off task state here. "
-                    "Reuse the same key when updating the same fact so persona memory stays compact."
-                ),
-            },
         },
-        {
-            "name": "delete_persona_memory_entry",
-            "description": (
-                "Delete one outdated or incorrect persona memory entry by id. "
-                "Use this to clean up stale persona-scoped memory."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "entry_id": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "description": "Persona memory entry id to remove.",
-                    },
+    },
+    {
+        "name": "delete_persona_memory_entry",
+        "description": (
+            "Delete one outdated or incorrect persona memory entry by id. "
+            "Use this to clean up stale persona-scoped memory."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "entry_id": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Persona memory entry id to remove.",
                 },
-                "required": ["entry_id"],
             },
-            "prompt": {
-                "purpose": "Removes one obsolete persona-scoped memory entry.",
-                "inputs": {
-                    "entry_id": "id shown in the Persona Memory prompt section",
-                },
-                "guidance": "Use this when an earlier persona-memory entry is no longer valid, was superseded, or should stop influencing future conversations for this persona.",
-            },
+            "required": ["entry_id"],
         },
+        "prompt": {
+            "purpose": "Removes one obsolete persona-scoped memory entry.",
+            "inputs": {
+                "entry_id": "id shown in the Persona Memory prompt section",
+            },
+            "guidance": "Use this when an earlier persona-memory entry is no longer valid, was superseded, or should stop influencing future conversations for this persona.",
+        },
+    },
     {
         "name": "ask_clarifying_question",
         "description": (
@@ -347,10 +388,7 @@ TOOL_SPECS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "intro": {
-                    "type": "string",
-                    "description": "Short lead-in shown before the questions."
-                },
+                "intro": {"type": "string", "description": "Short lead-in shown before the questions."},
                 "questions": {
                     "type": "array",
                     "description": "List of clarification questions.",
@@ -359,26 +397,20 @@ TOOL_SPECS = [
                     "items": {
                         "type": "object",
                         "properties": {
-                            "id": {
-                                "type": "string",
-                                "description": "Stable identifier for mapping the answer later."
-                            },
-                            "label": {
-                                "type": "string",
-                                "description": "The question shown to the user."
-                            },
+                            "id": {"type": "string", "description": "Stable identifier for mapping the answer later."},
+                            "label": {"type": "string", "description": "The question shown to the user."},
                             "input_type": {
                                 "type": "string",
                                 "enum": ["text", "single_select", "multi_select"],
-                                "description": "How the user should answer this question."
+                                "description": "How the user should answer this question.",
                             },
                             "required": {
                                 "type": "boolean",
-                                "description": "Whether the user must answer this question."
+                                "description": "Whether the user must answer this question.",
                             },
                             "placeholder": {
                                 "type": "string",
-                                "description": "Optional placeholder for free-text answers."
+                                "description": "Optional placeholder for free-text answers.",
                             },
                             "options": {
                                 "type": "array",
@@ -388,14 +420,14 @@ TOOL_SPECS = [
                                     "properties": {
                                         "label": {"type": "string"},
                                         "value": {"type": "string"},
-                                        "description": {"type": "string"}
+                                        "description": {"type": "string"},
                                     },
-                                    "required": ["label", "value"]
-                                }
+                                    "required": ["label", "value"],
+                                },
                             },
                             "allow_free_text": {
                                 "type": "boolean",
-                                "description": "Whether the user may add custom text alongside the predefined options."
+                                "description": "Whether the user may add custom text alongside the predefined options.",
                             },
                             "depends_on": {
                                 "type": "object",
@@ -403,29 +435,26 @@ TOOL_SPECS = [
                                 "properties": {
                                     "question_id": {
                                         "type": "string",
-                                        "description": "The id of the earlier question this one depends on."
+                                        "description": "The id of the earlier question this one depends on.",
                                     },
                                     "value": {
                                         "type": "string",
-                                        "description": "One required value from the parent question that should reveal this question."
+                                        "description": "One required value from the parent question that should reveal this question.",
                                     },
                                     "values": {
                                         "type": "array",
                                         "description": "Allowed parent-question values that should reveal this question.",
                                         "items": {"type": "string"},
                                         "minItems": 1,
-                                        "maxItems": 10
-                                    }
-                                }
-                            }
+                                        "maxItems": 10,
+                                    },
+                                },
+                            },
                         },
-                        "required": ["id", "label", "input_type"]
-                    }
+                        "required": ["id", "label", "input_type"],
+                    },
                 },
-                "submit_label": {
-                    "type": "string",
-                    "description": "Optional button label shown in the UI."
-                }
+                "submit_label": {"type": "string", "description": "Optional button label shown in the UI."},
             },
             "required": ["questions"],
         },
@@ -434,7 +463,7 @@ TOOL_SPECS = [
             "inputs": {
                 "intro": "optional short lead-in",
                 "questions": "structured questions",
-                "submit_label": "optional button label"
+                "submit_label": "optional button label",
             },
             "guidance": (
                 "Use this instead of guessing when important requirements are missing. "
@@ -445,7 +474,7 @@ TOOL_SPECS = [
                 "When you call this tool, it must be the only tool call in that assistant message and you must wait for the user's reply before answering. "
                 "Prefer single_select or multi_select when the likely answers are known, keep question ids short and unique, and use required=false for optional follow-ups. "
                 "Use depends_on only for short follow-up branches that should stay hidden until a previous answer makes them relevant. "
-                "Each questions item must be an object with id, label, and input_type; example: {\"id\":\"scope\",\"label\":\"Which scope?\",\"input_type\":\"text\"}. "
+                'Each questions item must be an object with id, label, and input_type; example: {"id":"scope","label":"Which scope?","input_type":"text"}. '
                 "Use plain UI text only for intro, labels, placeholders, and options. Do not include Q:/A: prefixes, markdown bullets, XML/tag wrappers, code fences, or markers like <| and |>."
             ),
         },
@@ -637,7 +666,14 @@ TOOL_SPECS = [
         },
         "prompt": {
             "purpose": "Searches the internal RAG knowledge base built from files, URLs, notes, and conversations.",
-            "inputs": {"query": "semantic search query", "category": "optional category", "top_k": "1-12 results", "min_similarity": "optional threshold 0.0-1.0", "save_to_conversation_memory": "optional boolean", "memory_key": "optional short memory label"},
+            "inputs": {
+                "query": "semantic search query",
+                "category": "optional category",
+                "top_k": "1-12 results",
+                "min_similarity": "optional threshold 0.0-1.0",
+                "save_to_conversation_memory": "optional boolean",
+                "memory_key": "optional short memory label",
+            },
             "guidance": "Use category when the likely source type is clear, and use at most a few focused searches. Synthesize from returned chunks instead of retrying near-duplicate queries. If the current context is already sufficient, do not search again; unnecessary searches waste tokens. If the finding should survive later turns in this chat, set save_to_conversation_memory=true and provide a short memory_key.",
         },
     },
@@ -681,7 +717,13 @@ TOOL_SPECS = [
         },
         "prompt": {
             "purpose": "Searches memory of past web searches, URL fetches, and news lookups.",
-            "inputs": {"query": "semantic search query", "top_k": "1-10 results", "min_similarity": "optional threshold 0.0-1.0", "save_to_conversation_memory": "optional boolean", "memory_key": "optional short memory label"},
+            "inputs": {
+                "query": "semantic search query",
+                "top_k": "1-10 results",
+                "min_similarity": "optional threshold 0.0-1.0",
+                "save_to_conversation_memory": "optional boolean",
+                "memory_key": "optional short memory label",
+            },
             "guidance": (
                 "Use before making a new web request if similar research may already exist and you cannot answer from the current context. "
                 "If high-similarity results already answer the question, reuse them instead of repeating the search. "
@@ -771,7 +813,7 @@ TOOL_SPECS = [
                 "focus": {
                     "type": "string",
                     "description": "Optional question, angle, or topic to focus the summary on.",
-                }
+                },
             },
             "required": ["url"],
         },
@@ -921,7 +963,11 @@ TOOL_SPECS = [
         },
         "prompt": {
             "purpose": "Searches news headlines/links/dates/sources with DuckDuckGo News.",
-            "inputs": {"queries": f"1-{DEFAULT_SEARCH_TOOL_QUERY_LIMIT} news queries", "lang": "tr|en", "when": "d|w|m|y"},
+            "inputs": {
+                "queries": f"1-{DEFAULT_SEARCH_TOOL_QUERY_LIMIT} news queries",
+                "lang": "tr|en",
+                "when": "d|w|m|y",
+            },
             "guidance": (
                 "Use this for broad recent-news discovery when you actually need headlines, sources, and timestamps before reading full articles. "
                 "Prefer this over search_news_google for generic international topics or the first pass on a topic. "
@@ -962,7 +1008,11 @@ TOOL_SPECS = [
         },
         "prompt": {
             "purpose": "Searches news headlines/links/dates/sources with Google News RSS.",
-            "inputs": {"queries": f"1-{DEFAULT_SEARCH_TOOL_QUERY_LIMIT} news queries", "lang": "tr|en", "when": "d|w|m|y"},
+            "inputs": {
+                "queries": f"1-{DEFAULT_SEARCH_TOOL_QUERY_LIMIT} news queries",
+                "lang": "tr|en",
+                "when": "d|w|m|y",
+            },
             "guidance": (
                 "Use this when Google News coverage is likely stronger than DuckDuckGo News for the topic or locale and the request genuinely needs current news verification. "
                 f"Never pass more than {DEFAULT_SEARCH_TOOL_QUERY_LIMIT} queries in one call. After scanning the feed, fetch only the few links that are actually needed."
@@ -979,15 +1029,12 @@ TOOL_SPECS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "document_id": {
-                    "type": "string",
-                    "description": "Optional target canvas document id."
-                },
+                "document_id": {"type": "string", "description": "Optional target canvas document id."},
                 "document_path": {
                     "type": "string",
-                    "description": "Optional target project-relative path. Prefer this in project mode."
-                }
-            }
+                    "description": "Optional target project-relative path. Prefer this in project mode.",
+                },
+            },
         },
         "prompt": {
             "purpose": "Expands one canvas document into full line-numbered context for focused reasoning or editing.",
@@ -1018,31 +1065,28 @@ TOOL_SPECS = [
                     "items": {
                         "type": "object",
                         "properties": {
-                            "document_id": {
-                                "type": "string",
-                                "description": "Optional target canvas document id."
-                            },
+                            "document_id": {"type": "string", "description": "Optional target canvas document id."},
                             "document_path": {
                                 "type": "string",
-                                "description": "Optional target project-relative path. Prefer this in project mode."
+                                "description": "Optional target project-relative path. Prefer this in project mode.",
                             },
                             "start_line": {
                                 "type": "integer",
-                                "description": "Optional 1-based start line. Provide with end_line to read only a range."
+                                "description": "Optional 1-based start line. Provide with end_line to read only a range.",
                             },
                             "end_line": {
                                 "type": "integer",
-                                "description": "Optional 1-based end line. Provide with start_line to read only a range."
+                                "description": "Optional 1-based end line. Provide with start_line to read only a range.",
                             },
                             "max_lines": {
                                 "type": "integer",
-                                "description": "Optional max line budget for this request."
-                            }
-                        }
-                    }
+                                "description": "Optional max line budget for this request.",
+                            },
+                        },
+                    },
                 }
             },
-            "required": ["documents"]
+            "required": ["documents"],
         },
         "prompt": {
             "purpose": "Loads several canvas documents or targeted ranges in a single tool call.",
@@ -1063,24 +1107,15 @@ TOOL_SPECS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "document_id": {
-                    "type": "string",
-                    "description": "Optional target canvas document id."
-                },
+                "document_id": {"type": "string", "description": "Optional target canvas document id."},
                 "document_path": {
                     "type": "string",
-                    "description": "Optional target project-relative path. Prefer this in project mode."
+                    "description": "Optional target project-relative path. Prefer this in project mode.",
                 },
-                "start_line": {
-                    "type": "integer",
-                    "description": "1-based starting line number to read."
-                },
-                "end_line": {
-                    "type": "integer",
-                    "description": "1-based ending line number to read."
-                }
+                "start_line": {"type": "integer", "description": "1-based starting line number to read."},
+                "end_line": {"type": "integer", "description": "1-based ending line number to read."},
             },
-            "required": ["start_line", "end_line"]
+            "required": ["start_line", "end_line"],
         },
         "prompt": {
             "purpose": "Reads a focused line window from one canvas document without loading the entire file into the prompt.",
@@ -1088,7 +1123,7 @@ TOOL_SPECS = [
                 "document_id": "optional target id",
                 "document_path": "optional target project-relative path",
                 "start_line": "1-based starting line",
-                "end_line": "1-based ending line"
+                "end_line": "1-based ending line",
             },
             "guidance": (
                 "Use this when you know which region you need and the active excerpt is truncated. "
@@ -1107,49 +1142,40 @@ TOOL_SPECS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Literal text or regex pattern to search for."
-                },
+                "query": {"type": "string", "description": "Literal text or regex pattern to search for."},
                 "document_id": {
                     "type": "string",
-                    "description": "Optional target canvas document id. Defaults to the active document when all_documents is false."
+                    "description": "Optional target canvas document id. Defaults to the active document when all_documents is false.",
                 },
                 "document_path": {
                     "type": "string",
-                    "description": "Optional target project-relative path. Prefer this in project mode."
+                    "description": "Optional target project-relative path. Prefer this in project mode.",
                 },
                 "all_documents": {
                     "type": "boolean",
-                    "description": "Search across all open canvas documents instead of only the active or explicitly targeted one."
+                    "description": "Search across all open canvas documents instead of only the active or explicitly targeted one.",
                 },
-                "is_regex": {
-                    "type": "boolean",
-                    "description": "Treat query as a regex pattern instead of plain text."
-                },
-                "case_sensitive": {
-                    "type": "boolean",
-                    "description": "Whether the search should be case-sensitive."
-                },
+                "is_regex": {"type": "boolean", "description": "Treat query as a regex pattern instead of plain text."},
+                "case_sensitive": {"type": "boolean", "description": "Whether the search should be case-sensitive."},
                 "context_lines": {
                     "type": "integer",
                     "minimum": 0,
                     "maximum": 10,
-                    "description": "Optional number of context lines to include above and below each match. Defaults to 0."
+                    "description": "Optional number of context lines to include above and below each match. Defaults to 0.",
                 },
                 "offset": {
                     "type": "integer",
                     "minimum": 0,
-                    "description": "Optional match offset for pagination. Defaults to 0."
+                    "description": "Optional match offset for pagination. Defaults to 0.",
                 },
                 "max_results": {
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 50,
-                    "description": "Maximum number of matches to return. Defaults to 10."
-                }
+                    "description": "Maximum number of matches to return. Defaults to 10.",
+                },
             },
-            "required": ["query"]
+            "required": ["query"],
         },
         "prompt": {
             "purpose": "Finds where text or patterns appear inside canvas documents without loading more lines than necessary.",
@@ -1160,7 +1186,7 @@ TOOL_SPECS = [
                 "all_documents": "optional boolean to search all open canvas documents",
                 "is_regex": "optional boolean",
                 "case_sensitive": "optional boolean",
-                "max_results": "optional result limit"
+                "max_results": "optional result limit",
             },
             "guidance": (
                 "Use this first when the user asks you to find something inside a large canvas or when you do not yet know which lines matter. "
@@ -1178,24 +1204,25 @@ TOOL_SPECS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "document_id": {
-                    "type": "string",
-                    "description": "Optional target canvas document id."
-                },
+                "document_id": {"type": "string", "description": "Optional target canvas document id."},
                 "document_path": {
                     "type": "string",
-                    "description": "Optional target project-relative path. Prefer this in project mode."
+                    "description": "Optional target project-relative path. Prefer this in project mode.",
                 },
                 "validator": {
                     "type": "string",
                     "enum": ["python", "json", "markdown", "auto"],
-                    "description": "Validator to use. Defaults to auto based on document language or format."
-                }
-            }
+                    "description": "Validator to use. Defaults to auto based on document language or format.",
+                },
+            },
         },
         "prompt": {
             "purpose": "Runs a non-mutating syntax or structure check on one canvas document.",
-            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "validator": "python, json, markdown, or auto"},
+            "inputs": {
+                "document_id": "optional target id",
+                "document_path": "optional target project-relative path",
+                "validator": "python, json, markdown, or auto",
+            },
             "guidance": (
                 "Use this after editing code or config in the canvas when you want a fast correctness check before running anything. "
                 "Prefer validator='auto' unless you specifically need to override the inferred format."
@@ -1207,13 +1234,8 @@ TOOL_SPECS = [
         "description": "Create a directory inside the conversation workspace sandbox.",
         "parameters": {
             "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Workspace-relative directory path to create."
-                }
-            },
-            "required": ["path"]
+            "properties": {"path": {"type": "string", "description": "Workspace-relative directory path to create."}},
+            "required": ["path"],
         },
         "prompt": {
             "purpose": "Creates one or more directories inside the workspace sandbox.",
@@ -1227,16 +1249,10 @@ TOOL_SPECS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Workspace-relative file path to create."
-                },
-                "content": {
-                    "type": "string",
-                    "description": "Full text content for the new file."
-                }
+                "path": {"type": "string", "description": "Workspace-relative file path to create."},
+                "content": {"type": "string", "description": "Full text content for the new file."},
             },
-            "required": ["path", "content"]
+            "required": ["path", "content"],
         },
         "prompt": {
             "purpose": "Creates a new file in the workspace sandbox.",
@@ -1250,16 +1266,10 @@ TOOL_SPECS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Workspace-relative file path to update."
-                },
-                "content": {
-                    "type": "string",
-                    "description": "Full replacement text content."
-                }
+                "path": {"type": "string", "description": "Workspace-relative file path to update."},
+                "content": {"type": "string", "description": "Full replacement text content."},
             },
-            "required": ["path", "content"]
+            "required": ["path", "content"],
         },
         "prompt": {
             "purpose": "Updates an existing file in the workspace sandbox.",
@@ -1273,26 +1283,23 @@ TOOL_SPECS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Workspace-relative file path to read."
-                },
+                "path": {"type": "string", "description": "Workspace-relative file path to read."},
                 "start_line": {
                     "type": "integer",
                     "minimum": 1,
-                    "description": "Optional first line to include. Defaults to 1."
+                    "description": "Optional first line to include. Defaults to 1.",
                 },
-                "end_line": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "description": "Optional last line to include."
-                }
+                "end_line": {"type": "integer", "minimum": 1, "description": "Optional last line to include."},
             },
-            "required": ["path"]
+            "required": ["path"],
         },
         "prompt": {
             "purpose": "Reads a file from the workspace sandbox.",
-            "inputs": {"path": "workspace-relative file path", "start_line": "optional first line", "end_line": "optional last line"},
+            "inputs": {
+                "path": "workspace-relative file path",
+                "start_line": "optional first line",
+                "end_line": "optional last line",
+            },
             "guidance": (
                 "Use this when you need exact source text from a known file. Prefer narrow line ranges for large files, and use search_files or list_dir first when the path or target region is still unknown."
             ),
@@ -1306,9 +1313,9 @@ TOOL_SPECS = [
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Optional workspace-relative directory path. Defaults to the workspace root."
+                    "description": "Optional workspace-relative directory path. Defaults to the workspace root.",
                 }
-            }
+            },
         },
         "prompt": {
             "purpose": "Lists workspace files and directories.",
@@ -1324,24 +1331,25 @@ TOOL_SPECS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Case-insensitive search text."
-                },
+                "query": {"type": "string", "description": "Case-insensitive search text."},
                 "path_prefix": {
                     "type": "string",
-                    "description": "Optional workspace-relative directory to search under."
+                    "description": "Optional workspace-relative directory to search under.",
                 },
                 "search_content": {
                     "type": "boolean",
-                    "description": "Whether to search inside file contents in addition to file paths."
-                }
+                    "description": "Whether to search inside file contents in addition to file paths.",
+                },
             },
-            "required": ["query"]
+            "required": ["query"],
         },
         "prompt": {
             "purpose": "Searches file paths or contents inside the workspace sandbox.",
-            "inputs": {"query": "case-insensitive search text", "path_prefix": "optional subdirectory", "search_content": "optional boolean"},
+            "inputs": {
+                "query": "case-insensitive search text",
+                "path_prefix": "optional subdirectory",
+                "search_content": "optional boolean",
+            },
             "guidance": "Use this when you know a filename fragment, directory prefix, or exact text to look for. Prefer path-only search first, then enable search_content when you need matching file contents too.",
         },
     },
@@ -1354,29 +1362,30 @@ TOOL_SPECS = [
                 "directories": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Workspace-relative directories to create."
+                    "description": "Workspace-relative directories to create.",
                 },
                 "files": {
                     "type": "array",
                     "description": "Files to write with path and content.",
                     "items": {
                         "type": "object",
-                        "properties": {
-                            "path": {"type": "string"},
-                            "content": {"type": "string"}
-                        },
-                        "required": ["path", "content"]
-                    }
+                        "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+                        "required": ["path", "content"],
+                    },
                 },
                 "confirm": {
                     "type": "boolean",
-                    "description": "Set true only after the user approves overwriting existing files."
-                }
-            }
+                    "description": "Set true only after the user approves overwriting existing files.",
+                },
+            },
         },
         "prompt": {
             "purpose": "Writes a batch of project directories and files into the workspace sandbox.",
-            "inputs": {"directories": "optional directories", "files": "optional file entries", "confirm": "optional overwrite confirmation"},
+            "inputs": {
+                "directories": "optional directories",
+                "files": "optional file entries",
+                "confirm": "optional overwrite confirmation",
+            },
             "guidance": "If the tool reports needs_confirmation, review the returned diffs with the user and do not re-run with confirm=true until the overwrite set is approved.",
         },
     },
@@ -1388,9 +1397,9 @@ TOOL_SPECS = [
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Optional workspace-relative directory path. Defaults to the workspace root."
+                    "description": "Optional workspace-relative directory path. Defaults to the workspace root.",
                 }
-            }
+            },
         },
         "prompt": {
             "purpose": "Validates project files in the workspace sandbox.",
@@ -1411,10 +1420,10 @@ TOOL_SPECS = [
             "properties": {
                 "url": {
                     "type": "string",
-                    "description": "GitHub repository URL, such as https://github.com/owner/repo or https://github.com/owner/repo/tree/branch/subdir."
+                    "description": "GitHub repository URL, such as https://github.com/owner/repo or https://github.com/owner/repo/tree/branch/subdir.",
                 }
             },
-            "required": ["url"]
+            "required": ["url"],
         },
         "prompt": {
             "purpose": "Returns a file listing preview for a GitHub repository without mutating Canvas.",
@@ -1440,10 +1449,10 @@ TOOL_SPECS = [
             "properties": {
                 "url": {
                     "type": "string",
-                    "description": "GitHub repository URL to import, such as https://github.com/owner/repo or https://github.com/owner/repo/tree/branch/subdir."
+                    "description": "GitHub repository URL to import, such as https://github.com/owner/repo or https://github.com/owner/repo/tree/branch/subdir.",
                 }
             },
-            "required": ["url"]
+            "required": ["url"],
         },
         "prompt": {
             "purpose": "Imports a GitHub repository into Canvas as path-aware project files and chooses one high-signal file as the active document.",
@@ -1461,15 +1470,14 @@ TOOL_SPECS = [
     {
         "name": "create_canvas_document",
         "description": (
-            "Create a canvas document for the current conversation. "
-            "Use one document per file or editable artifact."
+            "Create a canvas document for the current conversation. Use one document per file or editable artifact."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "title": {
                     "type": "string",
-                    "description": "Required document title shown in the canvas panel. Never omit it. If path is set, this should usually match the filename or basename."
+                    "description": "Required document title shown in the canvas panel. Never omit it. If path is set, this should usually match the filename or basename.",
                 },
                 "content": {
                     "type": "string",
@@ -1477,60 +1485,60 @@ TOOL_SPECS = [
                         "Full document content. "
                         "For format='code' documents this is raw source code without any markdown wrapper — no triple-backtick fences. "
                         "For format='markdown' documents this is the markdown body."
-                    )
+                    ),
                 },
                 "format": {
                     "type": "string",
                     "enum": ["markdown", "code"],
-                    "description": "Canvas document format. Use code for a raw code document without markdown wrappers."
+                    "description": "Canvas document format. Use code for a raw code document without markdown wrappers.",
                 },
                 "language": {
                     "type": "string",
-                    "description": "Optional dominant code language for the document, such as python, javascript, or sql."
+                    "description": "Optional dominant code language for the document, such as python, javascript, or sql.",
                 },
                 "path": {
                     "type": "string",
-                    "description": "Optional project-relative path such as src/app.py, README.md, or tests/test_app.py."
+                    "description": "Optional project-relative path such as src/app.py, README.md, or tests/test_app.py.",
                 },
                 "role": {
                     "type": "string",
                     "enum": ["source", "config", "dependency", "docs", "test", "script", "note"],
-                    "description": "Optional semantic role for the document inside a project workspace."
+                    "description": "Optional semantic role for the document inside a project workspace.",
                 },
                 "summary": {
                     "type": "string",
-                    "description": "Optional short semantic summary of the document's responsibility."
+                    "description": "Optional short semantic summary of the document's responsibility.",
                 },
                 "imports": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Optional imported modules, files, or config keys referenced by this document."
+                    "description": "Optional imported modules, files, or config keys referenced by this document.",
                 },
                 "exports": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Optional exported entry points, functions, classes, or files produced by this document."
+                    "description": "Optional exported entry points, functions, classes, or files produced by this document.",
                 },
                 "symbols": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Optional important symbols defined in this document."
+                    "description": "Optional important symbols defined in this document.",
                 },
                 "dependencies": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Optional package or file dependencies associated with this document."
+                    "description": "Optional package or file dependencies associated with this document.",
                 },
                 "project_id": {
                     "type": "string",
-                    "description": "Optional stable project identifier grouping related canvas documents."
+                    "description": "Optional stable project identifier grouping related canvas documents.",
                 },
                 "workspace_id": {
                     "type": "string",
-                    "description": "Optional stable workspace identifier grouping related canvas documents."
-                }
+                    "description": "Optional stable workspace identifier grouping related canvas documents.",
+                },
             },
-            "required": ["title", "content"]
+            "required": ["title", "content"],
         },
         "prompt": {
             "purpose": "Creates an editable canvas document attached to the conversation, optionally as part of a project workspace.",
@@ -1547,7 +1555,7 @@ TOOL_SPECS = [
                 "symbols": "optional key symbols defined in the document",
                 "dependencies": "optional package or file dependencies",
                 "project_id": "optional project identifier",
-                "workspace_id": "optional workspace identifier"
+                "workspace_id": "optional workspace identifier",
             },
             "guidance": (
                 "Always include title. Never omit it. "
@@ -1575,76 +1583,80 @@ TOOL_SPECS = [
                         "The full replacement content. "
                         "For code documents this is raw source code without any markdown wrapper — no triple-backtick fences. "
                         "For markdown documents this is the markdown body."
-                    )
+                    ),
                 },
-                "title": {
-                    "type": "string",
-                    "description": "Optional replacement title."
-                },
+                "title": {"type": "string", "description": "Optional replacement title."},
                 "format": {
                     "type": "string",
                     "enum": ["markdown", "code"],
-                    "description": "Optional replacement format for the document."
+                    "description": "Optional replacement format for the document.",
                 },
                 "language": {
                     "type": "string",
-                    "description": "Optional dominant code language for the updated document."
+                    "description": "Optional dominant code language for the updated document.",
                 },
                 "path": {
                     "type": "string",
-                    "description": "Optional replacement project-relative path for the document."
+                    "description": "Optional replacement project-relative path for the document.",
                 },
                 "role": {
                     "type": "string",
                     "enum": ["source", "config", "dependency", "docs", "test", "script", "note"],
-                    "description": "Optional replacement semantic role for the document."
+                    "description": "Optional replacement semantic role for the document.",
                 },
-                "summary": {
-                    "type": "string",
-                    "description": "Optional replacement short semantic summary."
-                },
+                "summary": {"type": "string", "description": "Optional replacement short semantic summary."},
                 "imports": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Optional replacement import list."
+                    "description": "Optional replacement import list.",
                 },
                 "exports": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Optional replacement export list."
+                    "description": "Optional replacement export list.",
                 },
                 "symbols": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Optional replacement symbol list."
+                    "description": "Optional replacement symbol list.",
                 },
                 "dependencies": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Optional replacement dependency list."
+                    "description": "Optional replacement dependency list.",
                 },
-                "project_id": {
-                    "type": "string",
-                    "description": "Optional replacement project identifier."
-                },
-                "workspace_id": {
-                    "type": "string",
-                    "description": "Optional replacement workspace identifier."
-                },
+                "project_id": {"type": "string", "description": "Optional replacement project identifier."},
+                "workspace_id": {"type": "string", "description": "Optional replacement workspace identifier."},
                 "document_id": {
                     "type": "string",
-                    "description": "Optional target canvas document id. Defaults to the active document."
+                    "description": "Optional target canvas document id. Defaults to the active document.",
                 },
                 "document_path": {
                     "type": "string",
-                    "description": "Optional target project-relative path. Prefer this over document_id in project mode."
-                }
+                    "description": "Optional target project-relative path. Prefer this over document_id in project mode.",
+                },
             },
-            "required": ["content"]
+            "required": ["content"],
         },
         "prompt": {
             "purpose": "Replaces the full content of an existing canvas document.",
-            "inputs": {"content": "full document body", "title": "optional title", "format": "optional markdown or code", "language": "optional dominant code language", "path": "optional project-relative file path", "role": "optional semantic role", "summary": "optional short responsibility summary", "imports": "optional import list", "exports": "optional export list", "symbols": "optional symbol list", "dependencies": "optional dependency list", "project_id": "optional project identifier", "workspace_id": "optional workspace identifier", "document_id": "optional target id", "document_path": "optional target project-relative path"},
+            "inputs": {
+                "content": "full document body",
+                "title": "optional title",
+                "format": "optional markdown or code",
+                "language": "optional dominant code language",
+                "path": "optional project-relative file path",
+                "role": "optional semantic role",
+                "summary": "optional short responsibility summary",
+                "imports": "optional import list",
+                "exports": "optional export list",
+                "symbols": "optional symbol list",
+                "dependencies": "optional dependency list",
+                "project_id": "optional project identifier",
+                "workspace_id": "optional workspace identifier",
+                "document_id": "optional target id",
+                "document_path": "optional target project-relative path",
+            },
             "guidance": (
                 "Use this for full-document replacement once you know the intended final content. "
                 "Do not default to this when only part of the file needs to change; use replace_canvas_lines, insert_canvas_lines, or delete_canvas_lines for targeted edits. "
@@ -1662,19 +1674,26 @@ TOOL_SPECS = [
             "type": "object",
             "properties": {
                 "document_id": {"type": "string", "description": "Optional target canvas document id."},
-                "document_path": {"type": "string", "description": "Optional target project-relative path. Prefer this over document_id in project mode."},
+                "document_path": {
+                    "type": "string",
+                    "description": "Optional target project-relative path. Prefer this over document_id in project mode.",
+                },
                 "operations": {
                     "type": "array",
                     "minItems": 1,
                     "description": "Ordered list of non-overlapping replace, insert, or delete operations to preview.",
-                    "items": {"oneOf": _build_canvas_edit_operation_variants()}
-                }
+                    "items": {"oneOf": _build_canvas_edit_operation_variants()},
+                },
             },
-            "required": ["operations"]
+            "required": ["operations"],
         },
         "prompt": {
             "purpose": "Shows a non-mutating preview of planned batch canvas edits.",
-            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "operations": "ordered edit operations"},
+            "inputs": {
+                "document_id": "optional target id",
+                "document_path": "optional target project-relative path",
+                "operations": "ordered edit operations",
+            },
             "guidance": (
                 "Use this when you want to inspect the exact before/after effect of planned canvas changes before applying them. "
                 "Each operation must be a plain JSON object with an action field set to replace, insert, or delete. "
@@ -1692,17 +1711,17 @@ TOOL_SPECS = [
             "properties": {
                 "document_id": {
                     "type": "string",
-                    "description": "Optional target canvas document id. Defaults to the active document when document_path is omitted."
+                    "description": "Optional target canvas document id. Defaults to the active document when document_path is omitted.",
                 },
                 "document_path": {
                     "type": "string",
-                    "description": "Optional target project-relative path. Prefer this over document_id in project mode."
+                    "description": "Optional target project-relative path. Prefer this over document_id in project mode.",
                 },
                 "operations": {
                     "type": "array",
                     "description": "Ordered list of non-overlapping replace, insert, or delete operations to apply against the same document snapshot.",
                     "minItems": 1,
-                    "items": {"oneOf": _build_canvas_edit_operation_variants()}
+                    "items": {"oneOf": _build_canvas_edit_operation_variants()},
                 },
                 "targets": {
                     "type": "array",
@@ -1711,37 +1730,37 @@ TOOL_SPECS = [
                     "items": {
                         "type": "object",
                         "properties": {
-                            "document_id": {
-                                "type": "string",
-                                "description": "Optional target canvas document id."
-                            },
+                            "document_id": {"type": "string", "description": "Optional target canvas document id."},
                             "document_path": {
                                 "type": "string",
-                                "description": "Optional target project-relative path. Prefer this in project mode."
+                                "description": "Optional target project-relative path. Prefer this in project mode.",
                             },
                             "operations": {
                                 "type": "array",
                                 "minItems": 1,
                                 "items": {"oneOf": _build_canvas_edit_operation_variants()},
-                                "description": "Ordered list of non-overlapping replace, insert, or delete operations for this target."
-                            }
+                                "description": "Ordered list of non-overlapping replace, insert, or delete operations for this target.",
+                            },
                         },
-                        "required": ["operations"]
-                    }
+                        "required": ["operations"],
+                    },
                 },
                 "atomic": {
                     "type": "boolean",
-                    "description": "When true, restore the original document or documents if any operation in the batch fails."
-                }
+                    "description": "When true, restore the original document or documents if any operation in the batch fails.",
+                },
             },
-            "anyOf": [
-                {"required": ["operations"]},
-                {"required": ["targets"]}
-            ]
+            "anyOf": [{"required": ["operations"]}, {"required": ["targets"]}],
         },
         "prompt": {
             "purpose": "Applies multiple disjoint line edits to one or more canvas documents in a single call.",
-            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "operations": "ordered edit operations for one document", "targets": "optional multi-document target array", "atomic": "optional rollback flag"},
+            "inputs": {
+                "document_id": "optional target id",
+                "document_path": "optional target project-relative path",
+                "operations": "ordered edit operations for one document",
+                "targets": "optional multi-document target array",
+                "atomic": "optional rollback flag",
+            },
             "guidance": (
                 "Use this when you already know several non-overlapping edits for one document or multiple documents. "
                 "Prefer one batch_canvas_edits call over serial replace_canvas_lines, insert_canvas_lines, or delete_canvas_lines calls when the targets are already known. "
@@ -1762,19 +1781,37 @@ TOOL_SPECS = [
             "type": "object",
             "properties": {
                 "document_id": {"type": "string", "description": "Optional target canvas document id."},
-                "document_path": {"type": "string", "description": "Optional target project-relative path. Prefer this over document_id in project mode."},
+                "document_path": {
+                    "type": "string",
+                    "description": "Optional target project-relative path. Prefer this over document_id in project mode.",
+                },
                 "pattern": {"type": "string", "description": "Search text or regex pattern."},
-                "replacement": {"type": "string", "description": "Replacement text. Regex capture groups may use $1, $2, and so on."},
+                "replacement": {
+                    "type": "string",
+                    "description": "Replacement text. Regex capture groups may use $1, $2, and so on.",
+                },
                 "scope": {"type": "string", "description": "Use 'all' or 'lines_<start>_<end>'."},
                 "is_regex": {"type": "boolean"},
                 "case_sensitive": {"type": "boolean"},
-                "count_only": {"type": "boolean", "description": "When true, report matches without mutating the document."}
+                "count_only": {
+                    "type": "boolean",
+                    "description": "When true, report matches without mutating the document.",
+                },
             },
-            "required": ["pattern", "replacement"]
+            "required": ["pattern", "replacement"],
         },
         "prompt": {
             "purpose": "Performs a scoped plain-text or regex transformation across one canvas document.",
-            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "pattern": "search text or regex", "replacement": "replacement text", "scope": "all or lines range", "is_regex": "regex toggle", "case_sensitive": "case sensitivity toggle", "count_only": "preview-only toggle"},
+            "inputs": {
+                "document_id": "optional target id",
+                "document_path": "optional target project-relative path",
+                "pattern": "search text or regex",
+                "replacement": "replacement text",
+                "scope": "all or lines range",
+                "is_regex": "regex toggle",
+                "case_sensitive": "case sensitivity toggle",
+                "count_only": "preview-only toggle",
+            },
             "guidance": (
                 "Use this for bulk find-replace work across a document or a bounded line range. "
                 "If the exact impact is uncertain, run with count_only=true first, then apply the real replacement."
@@ -1788,24 +1825,51 @@ TOOL_SPECS = [
             "type": "object",
             "properties": {
                 "document_id": {"type": "string", "description": "Optional target canvas document id."},
-                "document_path": {"type": "string", "description": "Optional target project-relative path. Prefer this over document_id in project mode."},
+                "document_path": {
+                    "type": "string",
+                    "description": "Optional target project-relative path. Prefer this over document_id in project mode.",
+                },
                 "title": {"type": "string"},
                 "summary": {"type": "string"},
-                "role": {"type": "string", "enum": ["source", "config", "dependency", "docs", "test", "script", "note"]},
-                "ignored": {"type": "boolean", "description": "Set true to hide this document's content from future automatic prompt excerpts without deleting it. Set false to re-enable the document later."},
-                "ignored_reason": {"type": "string", "description": "Short reason explaining why the document is being ignored. Required when turning ignored on for a document that does not already have a reason."},
+                "role": {
+                    "type": "string",
+                    "enum": ["source", "config", "dependency", "docs", "test", "script", "note"],
+                },
+                "ignored": {
+                    "type": "boolean",
+                    "description": "Set true to hide this document's content from future automatic prompt excerpts without deleting it. Set false to re-enable the document later.",
+                },
+                "ignored_reason": {
+                    "type": "string",
+                    "description": "Short reason explaining why the document is being ignored. Required when turning ignored on for a document that does not already have a reason.",
+                },
                 "add_imports": {"type": "array", "items": {"type": "string"}},
                 "remove_imports": {"type": "array", "items": {"type": "string"}},
                 "add_exports": {"type": "array", "items": {"type": "string"}},
                 "remove_exports": {"type": "array", "items": {"type": "string"}},
                 "add_dependencies": {"type": "array", "items": {"type": "string"}},
                 "remove_dependencies": {"type": "array", "items": {"type": "string"}},
-                "add_symbols": {"type": "array", "items": {"type": "string"}}
-            }
+                "add_symbols": {"type": "array", "items": {"type": "string"}},
+            },
         },
         "prompt": {
             "purpose": "Updates canvas metadata without touching document content.",
-            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "title": "new title", "summary": "new summary", "role": "new role", "ignored": "set true to suppress future prompt content or false to re-enable it", "ignored_reason": "short reason for ignoring the document", "add_imports": "imports to append", "remove_imports": "imports to remove", "add_exports": "exports to append", "remove_exports": "exports to remove", "add_dependencies": "dependencies to append", "remove_dependencies": "dependencies to remove", "add_symbols": "symbols to append"},
+            "inputs": {
+                "document_id": "optional target id",
+                "document_path": "optional target project-relative path",
+                "title": "new title",
+                "summary": "new summary",
+                "role": "new role",
+                "ignored": "set true to suppress future prompt content or false to re-enable it",
+                "ignored_reason": "short reason for ignoring the document",
+                "add_imports": "imports to append",
+                "remove_imports": "imports to remove",
+                "add_exports": "exports to append",
+                "remove_exports": "exports to remove",
+                "add_dependencies": "dependencies to append",
+                "remove_dependencies": "dependencies to remove",
+                "add_symbols": "symbols to append",
+            },
             "guidance": "Use this when only metadata should change and the document body must remain untouched. Set ignored=true with ignored_reason to hide a document's content from future prompt excerpts without deleting it, and set ignored=false later when that document should become visible again.",
         },
     },
@@ -1816,18 +1880,39 @@ TOOL_SPECS = [
             "type": "object",
             "properties": {
                 "document_id": {"type": "string", "description": "Optional target canvas document id."},
-                "document_path": {"type": "string", "description": "Optional target project-relative path. Prefer this over document_id in project mode."},
+                "document_path": {
+                    "type": "string",
+                    "description": "Optional target project-relative path. Prefer this over document_id in project mode.",
+                },
                 "start_line": {"type": "integer", "minimum": 1, "description": "1-based first line to pin."},
                 "end_line": {"type": "integer", "minimum": 1, "description": "1-based last line to pin."},
-                "ttl_turns": {"type": "integer", "minimum": 0, "description": "How many future turns to keep the viewport pinned. Use 0 to keep it pinned until explicitly cleared. Ignored when permanent=true."},
-                "permanent": {"type": "boolean", "description": "When true, pin the viewport until explicitly cleared and ignore ttl_turns."},
-                "auto_unpin_on_edit": {"type": "boolean", "description": "When true, automatically clear the viewport if an overlapping edit changes that region."}
+                "ttl_turns": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "How many future turns to keep the viewport pinned. Use 0 to keep it pinned until explicitly cleared. Ignored when permanent=true.",
+                },
+                "permanent": {
+                    "type": "boolean",
+                    "description": "When true, pin the viewport until explicitly cleared and ignore ttl_turns.",
+                },
+                "auto_unpin_on_edit": {
+                    "type": "boolean",
+                    "description": "When true, automatically clear the viewport if an overlapping edit changes that region.",
+                },
             },
-            "required": ["start_line", "end_line"]
+            "required": ["start_line", "end_line"],
         },
         "prompt": {
             "purpose": "Pins a canvas range for automatic reuse in subsequent prompts.",
-            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "start_line": "viewport start", "end_line": "viewport end", "ttl_turns": "number of future turns to keep it pinned", "permanent": "pin until explicitly cleared", "auto_unpin_on_edit": "whether overlapping edits clear it automatically"},
+            "inputs": {
+                "document_id": "optional target id",
+                "document_path": "optional target project-relative path",
+                "start_line": "viewport start",
+                "end_line": "viewport end",
+                "ttl_turns": "number of future turns to keep it pinned",
+                "permanent": "pin until explicitly cleared",
+                "auto_unpin_on_edit": "whether overlapping edits clear it automatically",
+            },
             "guidance": "Use this only for text-addressable canvas documents when you expect to keep working in the same known line range for multiple turns and want to avoid repeated scroll or expand calls. Use permanent=true when the range should stay pinned until you explicitly clear it.",
         },
     },
@@ -1838,16 +1923,32 @@ TOOL_SPECS = [
             "type": "object",
             "properties": {
                 "document_id": {"type": "string", "description": "Optional target canvas document id."},
-                "document_path": {"type": "string", "description": "Optional target project-relative path. Prefer this over document_id in project mode."},
+                "document_path": {
+                    "type": "string",
+                    "description": "Optional target project-relative path. Prefer this over document_id in project mode.",
+                },
                 "page_number": {"type": "integer", "minimum": 1, "description": "1-based page number to pin."},
-                "ttl_turns": {"type": "integer", "minimum": 0, "description": "How many future turns to keep the page pinned. Use 0 to keep it pinned until explicitly cleared."},
-                "auto_unpin_on_edit": {"type": "boolean", "description": "When true, automatically clear the pinned page if an overlapping edit changes that region."}
+                "ttl_turns": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "How many future turns to keep the page pinned. Use 0 to keep it pinned until explicitly cleared.",
+                },
+                "auto_unpin_on_edit": {
+                    "type": "boolean",
+                    "description": "When true, automatically clear the pinned page if an overlapping edit changes that region.",
+                },
             },
-            "required": ["page_number"]
+            "required": ["page_number"],
         },
         "prompt": {
             "purpose": "Pins one full page from a multi-page canvas document for automatic reuse in subsequent prompts.",
-            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "page_number": "page to focus", "ttl_turns": "number of future turns to keep it pinned", "auto_unpin_on_edit": "whether overlapping edits clear it automatically"},
+            "inputs": {
+                "document_id": "optional target id",
+                "document_path": "optional target project-relative path",
+                "page_number": "page to focus",
+                "ttl_turns": "number of future turns to keep it pinned",
+                "auto_unpin_on_edit": "whether overlapping edits clear it automatically",
+            },
             "guidance": "Use this only when the canvas content exposes explicit page markers such as '## Page N'. Prefer it over set_canvas_viewport when the user refers to a specific page and those markers already exist in the text content.",
         },
     },
@@ -1858,8 +1959,11 @@ TOOL_SPECS = [
             "type": "object",
             "properties": {
                 "document_id": {"type": "string", "description": "Optional target canvas document id."},
-                "document_path": {"type": "string", "description": "Optional target project-relative path. When omitted with document_id, clears all viewports."}
-            }
+                "document_path": {
+                    "type": "string",
+                    "description": "Optional target project-relative path. When omitted with document_id, clears all viewports.",
+                },
+            },
         },
         "prompt": {
             "purpose": "Removes one or all pinned canvas viewports.",
@@ -1884,32 +1988,38 @@ TOOL_SPECS = [
                         "must appear INSIDE these strings, properly escaped. "
                         'Example: ["const char* ssid = \\"MyNet\\";", "const char* pass = \\"abc\\";"]. '
                         "Never place code outside this array or as an argument key."
-                    )
+                    ),
                 },
                 "document_id": {
                     "type": "string",
-                    "description": "Optional target canvas document id. Defaults to the active document."
+                    "description": "Optional target canvas document id. Defaults to the active document.",
                 },
                 "document_path": {
                     "type": "string",
-                    "description": "Optional target project-relative path. Prefer this over document_id in project mode."
+                    "description": "Optional target project-relative path. Prefer this over document_id in project mode.",
                 },
                 "expected_start_line": {
                     "type": "integer",
                     "minimum": 1,
-                    "description": "Optional first line of the current document context you expect to still match before the edit is applied."
+                    "description": "Optional first line of the current document context you expect to still match before the edit is applied.",
                 },
                 "expected_lines": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Optional current lines that must still match before replacing. Use this to guard against line drift after earlier edits or stale previews."
-                }
+                    "description": "Optional current lines that must still match before replacing. Use this to guard against line drift after earlier edits or stale previews.",
+                },
             },
-            "required": ["start_line", "end_line", "lines"]
+            "required": ["start_line", "end_line", "lines"],
         },
         "prompt": {
             "purpose": "Replaces specific lines in the canvas document.",
-            "inputs": {"start_line": "first line", "end_line": "last line", "lines": "replacement lines as JSON string array", "document_id": "optional target id", "document_path": "optional target project-relative path"},
+            "inputs": {
+                "start_line": "first line",
+                "end_line": "last line",
+                "lines": "replacement lines as JSON string array",
+                "document_id": "optional target id",
+                "document_path": "optional target project-relative path",
+            },
             "guidance": (
                 "Use only when the exact 1-based line range is known from the visible excerpt or a recent scroll/expand result. "
                 "Put ALL code content inside the lines array as properly escaped JSON strings. "
@@ -1928,7 +2038,11 @@ TOOL_SPECS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "after_line": {"type": "integer", "minimum": 0, "description": "Insert after this 1-based line. Use 0 to insert at the top."},
+                "after_line": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Insert after this 1-based line. Use 0 to insert at the top.",
+                },
                 "lines": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -1936,32 +2050,37 @@ TOOL_SPECS = [
                         "New lines to insert. Each element is one line of text as a properly quoted JSON string — "
                         "no trailing newline characters. Code content must appear INSIDE these strings, properly escaped. "
                         "Never place code outside this array or as an argument key."
-                    )
+                    ),
                 },
                 "document_id": {
                     "type": "string",
-                    "description": "Optional target canvas document id. Defaults to the active document."
+                    "description": "Optional target canvas document id. Defaults to the active document.",
                 },
                 "document_path": {
                     "type": "string",
-                    "description": "Optional target project-relative path. Prefer this over document_id in project mode."
+                    "description": "Optional target project-relative path. Prefer this over document_id in project mode.",
                 },
                 "expected_start_line": {
                     "type": "integer",
                     "minimum": 1,
-                    "description": "Optional first line of the current document context you expect to still match before inserting."
+                    "description": "Optional first line of the current document context you expect to still match before inserting.",
                 },
                 "expected_lines": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Optional nearby current lines that must still match before inserting. Use this to guard against stale insertion anchors."
-                }
+                    "description": "Optional nearby current lines that must still match before inserting. Use this to guard against stale insertion anchors.",
+                },
             },
-            "required": ["after_line", "lines"]
+            "required": ["after_line", "lines"],
         },
         "prompt": {
             "purpose": "Inserts lines into the canvas document.",
-            "inputs": {"after_line": "insertion point", "lines": "new lines", "document_id": "optional target id", "document_path": "optional target project-relative path"},
+            "inputs": {
+                "after_line": "insertion point",
+                "lines": "new lines",
+                "document_id": "optional target id",
+                "document_path": "optional target project-relative path",
+            },
             "guidance": (
                 "Use only when the insertion point is known from the visible excerpt or a recent scroll/expand result. "
                 "Use this for partial additions instead of rewriting the whole document when the rest should stay intact. "
@@ -1981,28 +2100,33 @@ TOOL_SPECS = [
                 "end_line": {"type": "integer", "minimum": 1, "description": "1-based last line to delete."},
                 "document_id": {
                     "type": "string",
-                    "description": "Optional target canvas document id. Defaults to the active document."
+                    "description": "Optional target canvas document id. Defaults to the active document.",
                 },
                 "document_path": {
                     "type": "string",
-                    "description": "Optional target project-relative path. Prefer this over document_id in project mode."
+                    "description": "Optional target project-relative path. Prefer this over document_id in project mode.",
                 },
                 "expected_start_line": {
                     "type": "integer",
                     "minimum": 1,
-                    "description": "Optional first line of the current document context you expect to still match before deleting."
+                    "description": "Optional first line of the current document context you expect to still match before deleting.",
                 },
                 "expected_lines": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Optional current lines that must still match before deleting. Use this to guard against stale ranges."
-                }
+                    "description": "Optional current lines that must still match before deleting. Use this to guard against stale ranges.",
+                },
             },
-            "required": ["start_line", "end_line"]
+            "required": ["start_line", "end_line"],
         },
         "prompt": {
             "purpose": "Deletes specific lines from the canvas document.",
-            "inputs": {"start_line": "first line", "end_line": "last line", "document_id": "optional target id", "document_path": "optional target project-relative path"},
+            "inputs": {
+                "start_line": "first line",
+                "end_line": "last line",
+                "document_id": "optional target id",
+                "document_path": "optional target project-relative path",
+            },
             "guidance": (
                 "Use only when the exact 1-based line range is visible in the current excerpt or in a recent scroll/expand result. "
                 "Use this for partial removals instead of rewriting the whole document when the rest should stay intact. "
@@ -2020,13 +2144,13 @@ TOOL_SPECS = [
             "properties": {
                 "document_id": {
                     "type": "string",
-                    "description": "Optional target canvas document id. Defaults to the active document."
+                    "description": "Optional target canvas document id. Defaults to the active document.",
                 },
                 "document_path": {
                     "type": "string",
-                    "description": "Optional target project-relative path. Prefer this over document_id in project mode."
-                }
-            }
+                    "description": "Optional target project-relative path. Prefer this over document_id in project mode.",
+                },
+            },
         },
         "prompt": {
             "purpose": "Deletes one canvas document from the current conversation.",
@@ -2037,14 +2161,34 @@ TOOL_SPECS = [
     {
         "name": "clear_canvas",
         "description": "Delete all canvas documents for the current conversation.",
-        "parameters": {
-            "type": "object",
-            "properties": {}
-        },
+        "parameters": {"type": "object", "properties": {}},
         "prompt": {
             "purpose": "Clears all canvas documents from the current conversation.",
             "inputs": {},
             "guidance": "Use this when the whole canvas is obsolete, should be reset, or the user explicitly requests deleting all canvas documents. This is irreversible for the current conversation state, so do not use it as a shortcut for deleting a single file.",
+        },
+    },
+    {
+        "name": "expand_truncated_tool_result",
+        "description": "Retrieves the full uncropped content of a previously executed tool call that may have been truncated in the conversation history. Use this when you need complete details from an earlier tool execution whose result was cut off.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "message_id": {
+                    "type": "string",
+                    "description": "The message ID of the assistant message that issued the tool call.",
+                },
+                "tool_call_id": {
+                    "type": "string",
+                    "description": "The tool call ID of the specific tool result to expand.",
+                },
+            },
+            "required": ["message_id", "tool_call_id"],
+        },
+        "prompt": {
+            "purpose": "Retrieves the full content of a previously executed tool call whose result was truncated.",
+            "inputs": {"message_id": "the assistant message id", "tool_call_id": "the tool call id to expand"},
+            "guidance": "Use this when a previous tool result was truncated and you need the complete output to proceed.",
         },
     },
 ]
@@ -2316,14 +2460,10 @@ def _build_tool_runtime_metadata() -> dict[str, dict]:
 
 TOOL_RUNTIME_METADATA = _build_tool_runtime_metadata()
 WEB_TOOL_NAMES = frozenset(
-    tool_name
-    for tool_name, metadata in TOOL_RUNTIME_METADATA.items()
-    if "web" in metadata.get("state_domains", ())
+    tool_name for tool_name, metadata in TOOL_RUNTIME_METADATA.items() if "web" in metadata.get("state_domains", ())
 )
 PARALLEL_SAFE_TOOL_NAMES = frozenset(
-    tool_name
-    for tool_name, metadata in TOOL_RUNTIME_METADATA.items()
-    if metadata.get("parallel_safe") is True
+    tool_name for tool_name, metadata in TOOL_RUNTIME_METADATA.items() if metadata.get("parallel_safe") is True
 )
 PARALLEL_SAFE_READ_ONLY_TOOL_NAMES = tuple(
     tool_name
@@ -2331,9 +2471,7 @@ PARALLEL_SAFE_READ_ONLY_TOOL_NAMES = tuple(
     if metadata.get("parallel_safe") is True and metadata.get("read_only") is True
 )
 SESSION_CACHEABLE_TOOL_NAMES = frozenset(
-    tool_name
-    for tool_name, metadata in TOOL_RUNTIME_METADATA.items()
-    if metadata.get("session_cacheable") is True
+    tool_name for tool_name, metadata in TOOL_RUNTIME_METADATA.items() if metadata.get("session_cacheable") is True
 )
 CANVAS_READ_BARRIER_TOOL_NAMES = frozenset(
     tool_name
@@ -2608,7 +2746,6 @@ def get_openai_tool_specs(
             }
         )
     return specs
-
 
 
 def _compact_arg_type(arg_props: dict) -> str:

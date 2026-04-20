@@ -174,6 +174,7 @@ const headerEl = document.querySelector("header");
 const sidebarList = document.getElementById("sidebar-list");
 const sidebarToggleBtn = document.getElementById("sidebar-toggle-btn");
 const sidebarOverlay = document.getElementById("sidebar-overlay");
+const uploadedFilesToggle = document.getElementById("sidebar-uploaded-files-toggle");
 const newChatBtn = document.getElementById("new-chat-btn");
 const mobileToolsBtn = document.getElementById("mobile-tools-btn");
 const mobileToolsPanel = document.getElementById("mobile-tools-panel");
@@ -11274,6 +11275,16 @@ if (sidebarToggleBtn) {
 if (sidebarOverlay) {
   sidebarOverlay.addEventListener("click", () => setSidebarOpen(false));
 }
+if (uploadedFilesToggle) {
+  uploadedFilesToggle.addEventListener("click", () => {
+    const panel = document.getElementById("sidebar-uploaded-files-panel");
+    if (panel) {
+      const isHidden = panel.hidden;
+      panel.hidden = !isHidden;
+      uploadedFilesToggle.querySelector(".sidebar-uploaded-files__chevron")?.classList.toggle("rotated", !isHidden);
+    }
+  });
+}
 if (mobileToolsBtn) {
   mobileToolsBtn.addEventListener("click", () => {
     if (mobileToolsPanel?.classList.contains("open")) {
@@ -11527,6 +11538,84 @@ document.addEventListener("click", (event) => {
     }
   }
 });
+
+async function loadUploadedFilesPanel() {
+  const panel = document.getElementById("sidebar-uploaded-files-panel");
+  if (!panel || !currentConvId) {
+    if (panel) panel.hidden = true;
+    return;
+  }
+  try {
+    const response = await fetch(`/api/conversations/${currentConvId}/uploaded-files`);
+    if (!response.ok) {
+      panel.innerHTML = '<p class="sidebar-empty">Could not load files.</p>';
+      panel.hidden = false;
+      return;
+    }
+    const data = await response.json();
+    const files = Array.isArray(data.files) ? data.files : [];
+    if (files.length === 0) {
+      panel.innerHTML = '<p class="sidebar-empty">No uploaded files.</p>';
+      panel.hidden = false;
+      return;
+    }
+    panel.innerHTML = "";
+    const list = document.createElement("ul");
+    list.className = "uploaded-files-list";
+    files.forEach((file) => {
+      const isDoc = file.kind === "document";
+      const icon = isDoc
+        ? `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`
+        : `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`;
+      const name = escHtml(file.filename || "unknown");
+      const isExcluded = file.excluded_from_context === true;
+      const row = document.createElement("li");
+      row.className = "uploaded-file-row" + (isExcluded ? " uploaded-file-row--excluded" : "");
+      row.innerHTML =
+        `<span class="uploaded-file-row__icon">${icon}</span>` +
+        `<span class="uploaded-file-row__name" title="${name}">${name}</span>` +
+        `<button class="uploaded-file-row__toggle" data-id="${escHtml(file.id)}" data-excluded="${isExcluded}" title="${isExcluded ? "Add back to context" : "Remove from context"}">` +
+        (isExcluded
+          ? `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`
+          : `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`) +
+        `</button>`;
+      row.querySelector(".uploaded-file-row__toggle").addEventListener("click", async () => {
+        const btn = row.querySelector(".uploaded-file-row__toggle");
+        const fileId = file.id;
+        const currentlyExcluded = file.excluded_from_context === true;
+        btn.disabled = true;
+        try {
+          const res = await fetch(`/api/conversations/${currentConvId}/uploaded-files/${encodeURIComponent(fileId)}/context`, {
+            method: "PATCH",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({excluded: !currentlyExcluded}),
+          });
+          if (res.ok) {
+            file.excluded_from_context = !currentlyExcluded;
+            row.classList.toggle("uploaded-file-row--excluded", !currentlyExcluded);
+            btn.title = currentlyExcluded ? "Add back to context" : "Remove from context";
+            btn.innerHTML = currentlyExcluded
+              ? `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`
+              : `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+          }
+        } catch (e) {
+          console.error("Failed to update file context:", e);
+        } finally {
+          btn.disabled = false;
+        }
+      });
+      list.appendChild(row);
+    });
+    panel.appendChild(list);
+    panel.hidden = false;
+  } catch (error) {
+    const panel = document.getElementById("sidebar-uploaded-files-panel");
+    if (panel) {
+      panel.innerHTML = '<p class="sidebar-empty">Could not load files.</p>';
+      panel.hidden = false;
+    }
+  }
+}
 
 async function loadSidebar() {
   cancelSidebarRename();
@@ -11850,6 +11939,7 @@ async function openConversation(id) {
   }
 
   loadSidebar();
+  loadUploadedFilesPanel();
   scrollToBottom();
   inputEl.focus();
 }

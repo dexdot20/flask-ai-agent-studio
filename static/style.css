@@ -9083,3 +9083,116 @@ body.login-page-body {
     gap: 6px;
   }
 }
+
+/* ── Sidebar Uploaded Files Panel ──────────────────────── */
+.sidebar-uploaded-files {
+  border-top: 1px solid var(--border);
+  padding: 6px 0;
+}
+
+.sidebar-uploaded-files__toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 12px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  text-align: left;
+}
+
+.sidebar-uploaded-files__toggle:hover {
+  color: var(--text-primary);
+}
+
+.sidebar-uploaded-files__icon {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.sidebar-uploaded-files__chevron {
+  margin-left: auto;
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+  opacity: 0.6;
+}
+
+.sidebar-uploaded-files__chevron.rotated {
+  transform: rotate(180deg);
+}
+
+.sidebar-uploaded-files__panel {
+  padding: 4px 8px 8px;
+}
+
+.uploaded-files-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.uploaded-file-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  transition: background 0.15s ease;
+}
+
+.uploaded-file-row:hover {
+  background: var(--surface-hover);
+}
+
+.uploaded-file-row--excluded {
+  opacity: 0.45;
+}
+
+.uploaded-file-row__icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  color: var(--text-secondary);
+}
+
+.uploaded-file-row__name {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.uploaded-file-row__toggle {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  padding: 0;
+}
+
+.uploaded-file-row__toggle:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.uploaded-file-row--excluded .uploaded-file-row__toggle:hover {
+  color: var(--accent);
+}

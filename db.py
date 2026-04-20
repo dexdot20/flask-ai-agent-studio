@@ -3930,9 +3930,7 @@ def ensure_model_invocations_activity_columns() -> None:
         for col, col_type in new_columns.items():
             if col not in existing:
                 conn.execute(f"ALTER TABLE model_invocations ADD COLUMN {col} {col_type}")
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_model_invocations_created_at ON model_invocations(created_at)"
-        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_model_invocations_created_at ON model_invocations(created_at)")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_model_invocations_provider_created ON model_invocations(provider, created_at)"
         )
@@ -3957,15 +3955,19 @@ def delete_expired_activity_records(retention_days: int = 30) -> int:
 
 def _model_invocation_row_to_dict(row) -> dict:
     keys = row.keys() if hasattr(row, "keys") else []
+
     def _int_col(col):
         val = row[col] if col in keys else None
         return int(val) if val is not None else None
+
     def _real_col(col):
         val = row[col] if col in keys else None
         return float(val) if val is not None else None
+
     def _text_col(col):
         val = row[col] if col in keys else None
         return str(val or "").strip() or None
+
     return {
         "id": int(row["id"]),
         "conversation_id": int(row["conversation_id"]),
@@ -4036,19 +4038,31 @@ def insert_model_invocation(
     normalized_total_tokens = int(total_tokens) if total_tokens is not None else None
     normalized_estimated_input_tokens = int(estimated_input_tokens) if estimated_input_tokens is not None else None
     normalized_prompt_cache_hit_tokens = int(prompt_cache_hit_tokens) if prompt_cache_hit_tokens is not None else None
-    normalized_prompt_cache_miss_tokens = int(prompt_cache_miss_tokens) if prompt_cache_miss_tokens is not None else None
-    normalized_prompt_cache_write_tokens = int(prompt_cache_write_tokens) if prompt_cache_write_tokens is not None else None
+    normalized_prompt_cache_miss_tokens = (
+        int(prompt_cache_miss_tokens) if prompt_cache_miss_tokens is not None else None
+    )
+    normalized_prompt_cache_write_tokens = (
+        int(prompt_cache_write_tokens) if prompt_cache_write_tokens is not None else None
+    )
     normalized_latency_ms = int(latency_ms) if latency_ms is not None else None
-    if normalized_total_tokens is None and normalized_prompt_tokens is not None and normalized_completion_tokens is not None:
+    if (
+        normalized_total_tokens is None
+        and normalized_prompt_tokens is not None
+        and normalized_completion_tokens is not None
+    ):
         normalized_total_tokens = normalized_prompt_tokens + normalized_completion_tokens
-    normalized_cost = float(cost) if cost is not None else _calculate_activity_cost(
-        provider,
-        api_model,
-        normalized_prompt_tokens,
-        normalized_completion_tokens,
-        prompt_cache_hit_tokens=normalized_prompt_cache_hit_tokens,
-        prompt_cache_miss_tokens=normalized_prompt_cache_miss_tokens,
-        prompt_cache_write_tokens=normalized_prompt_cache_write_tokens,
+    normalized_cost = (
+        float(cost)
+        if cost is not None
+        else _calculate_activity_cost(
+            provider,
+            api_model,
+            normalized_prompt_tokens,
+            normalized_completion_tokens,
+            prompt_cache_hit_tokens=normalized_prompt_cache_hit_tokens,
+            prompt_cache_miss_tokens=normalized_prompt_cache_miss_tokens,
+            prompt_cache_write_tokens=normalized_prompt_cache_write_tokens,
+        )
     )
 
     raw_payload = _serialize_json_value(request_payload)
@@ -4138,7 +4152,16 @@ def list_conversation_model_invocations(conversation_id: int) -> list[dict]:
     return [_model_invocation_row_to_dict(row) for row in rows]
 
 
-_ACTIVITY_ALLOWED_SORT = {"created_at", "id", "provider", "call_type", "response_status", "total_tokens", "cost", "latency_ms"}
+_ACTIVITY_ALLOWED_SORT = {
+    "created_at",
+    "id",
+    "provider",
+    "call_type",
+    "response_status",
+    "total_tokens",
+    "cost",
+    "latency_ms",
+}
 _ACTIVITY_ALLOWED_DIRECTIONS = {"ASC", "DESC"}
 
 
@@ -6059,3 +6082,164 @@ def find_summary_covering_message_id(conversation_id: int, message_id: int) -> d
         if target_id in covered_ids:
             return message
     return None
+
+
+def get_conversation_uploaded_files(conversation_id: int) -> list[dict]:
+    normalized_conv_id = int(conversation_id or 0)
+    if normalized_conv_id <= 0:
+        return []
+
+    with get_db() as conn:
+        file_rows = conn.execute(
+            """SELECT fa.file_id, fa.message_id, fa.filename, fa.mime_type, fa.created_at,
+                      'document' AS kind
+               FROM file_assets fa
+               WHERE fa.conversation_id = ?
+               ORDER BY fa.created_at ASC""",
+            (normalized_conv_id,),
+        ).fetchall()
+
+        image_rows = conn.execute(
+            """SELECT ia.image_id, ia.message_id, ia.filename, ia.mime_type, ia.created_at,
+                      'image' AS kind
+               FROM image_assets ia
+               WHERE ia.conversation_id = ?
+               ORDER BY ia.created_at ASC""",
+            (normalized_conv_id,),
+        ).fetchall()
+
+    results = []
+    all_rows = [(row, "file") for row in file_rows] + [(row, "image") for row in image_rows]
+
+    with get_db() as conn:
+        for row, asset_kind in all_rows:
+            message_id = int(row["message_id"] or 0) if row["message_id"] else None
+            excluded = False
+            if message_id:
+                msg_row = conn.execute(
+                    "SELECT metadata FROM messages WHERE id = ? AND conversation_id = ?",
+                    (message_id, normalized_conv_id),
+                ).fetchone()
+                if msg_row and msg_row["metadata"]:
+                    try:
+                        meta = json.loads(msg_row["metadata"])
+                        attachments = meta.get("attachments") if isinstance(meta.get("attachments"), list) else []
+                        if asset_kind == "file":
+                            for att in attachments:
+                                if att.get("file_id") == row["file_id"]:
+                                    excluded = bool(att.get("excluded_from_context"))
+                                    break
+                        else:
+                            for att in attachments:
+                                if att.get("image_id") == row["image_id"]:
+                                    excluded = bool(att.get("excluded_from_context"))
+                                    break
+                    except Exception:
+                        pass
+
+            if asset_kind == "file":
+                results.append(
+                    {
+                        "id": str(row["file_id"] or "").strip(),
+                        "kind": "document",
+                        "filename": str(row["filename"] or "").strip(),
+                        "mime_type": str(row["mime_type"] or "").strip(),
+                        "upload_time": str(row["created_at"] or "").strip(),
+                        "message_id": message_id,
+                        "excluded_from_context": excluded,
+                    }
+                )
+            else:
+                results.append(
+                    {
+                        "id": str(row["image_id"] or "").strip(),
+                        "kind": "image",
+                        "filename": str(row["filename"] or "").strip(),
+                        "mime_type": str(row["mime_type"] or "").strip(),
+                        "upload_time": str(row["created_at"] or "").strip(),
+                        "message_id": message_id,
+                        "excluded_from_context": excluded,
+                    }
+                )
+
+    return results
+
+
+def set_attachment_excluded_from_context(
+    message_id: int,
+    attachment_id: str,
+    *,
+    excluded: bool,
+) -> bool:
+    normalized_message_id = int(message_id or 0)
+    if normalized_message_id <= 0:
+        return False
+
+    normalized_attachment_id = str(attachment_id or "").strip()
+    if not normalized_attachment_id:
+        return False
+
+    with get_db() as conn:
+        msg_row = conn.execute(
+            "SELECT id, conversation_id, metadata FROM messages WHERE id = ?",
+            (normalized_message_id,),
+        ).fetchone()
+        if not msg_row:
+            return False
+
+        raw_metadata = msg_row["metadata"]
+        metadata = json.loads(raw_metadata) if raw_metadata else {}
+        attachments = metadata.get("attachments") if isinstance(metadata.get("attachments"), list) else []
+
+        modified = False
+        for att in attachments:
+            file_id = str(att.get("file_id") or "").strip()
+            image_id = str(att.get("image_id") or "").strip()
+            if file_id == normalized_attachment_id or image_id == normalized_attachment_id:
+                att["excluded_from_context"] = excluded
+                modified = True
+                break
+
+        if not modified:
+            return False
+
+        metadata["attachments"] = attachments
+        conn.execute(
+            "UPDATE messages SET metadata = ? WHERE id = ?",
+            (json.dumps(metadata, ensure_ascii=False), normalized_message_id),
+        )
+        return True
+
+
+def get_message_tool_result_content(message_id: int, tool_call_id: str) -> str | None:
+    normalized_message_id = int(message_id or 0)
+    if normalized_message_id <= 0:
+        return None
+
+    normalized_tool_call_id = str(tool_call_id or "").strip()
+    if not normalized_tool_call_id:
+        return None
+
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT id, conversation_id, content, metadata FROM messages WHERE id = ?",
+            (normalized_message_id,),
+        ).fetchone()
+        if not row:
+            return None
+
+        raw_metadata = row["metadata"]
+        if raw_metadata:
+            try:
+                meta = json.loads(raw_metadata)
+                tool_results = meta.get("tool_results") if isinstance(meta.get("tool_results"), list) else []
+                for tr in tool_results:
+                    if str(tr.get("tool_call_id") or "").strip() == normalized_tool_call_id:
+                        result_content = tr.get("content")
+                        if isinstance(result_content, str):
+                            return result_content
+                        return json.dumps(result_content, ensure_ascii=False)
+            except Exception:
+                pass
+
+        return None

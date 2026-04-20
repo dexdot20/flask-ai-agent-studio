@@ -110,6 +110,7 @@ from db import (
     get_app_settings,
     get_db,
     get_clarification_max_questions,
+    get_message_tool_result_content,
     get_model_temperature,
     get_prompt_max_input_tokens,
     get_rag_source_types,
@@ -5009,7 +5010,9 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
                             if event_type == "tool_error":
                                 error_text = _clean_tool_text(event.get("error") or "", limit=SUB_AGENT_MAX_ERROR_CHARS)
                                 if error_text:
-                                    if str(event.get("tool") or "").strip() == "api" and _is_retryable_model_error(error_text) not in ("none", ""):
+                                    if str(event.get("tool") or "").strip() == "api" and _is_retryable_model_error(
+                                        error_text
+                                    ) not in ("none", ""):
                                         retryable_model_error = True
                                         break
                                     child_errors.append(error_text)
@@ -5347,6 +5350,20 @@ def _run_search_tool_memory(tool_args: dict, runtime_state: dict):
     return result, _build_search_summary(
         f"{result.get('count', 0)} tool memory matches found", conversation_memory_result
     )
+
+
+def _run_expand_truncated_tool_result(tool_args: dict, runtime_state: dict):
+    del runtime_state
+    message_id = str(tool_args.get("message_id") or "").strip()
+    tool_call_id = str(tool_args.get("tool_call_id") or "").strip()
+    if not message_id or not tool_call_id:
+        return {
+            "error": "message_id and tool_call_id are required"
+        }, "expand_truncated_tool_result skipped: missing parameters"
+    result_text = get_message_tool_result_content(int(message_id), tool_call_id)
+    if result_text is None:
+        return {"error": "Tool result not found or access denied."}, "expand_truncated_tool_result: not found"
+    return {"content": result_text}, f"expand_truncated_tool_result: retrieved {len(result_text)} characters"
 
 
 def _run_search_web(tool_args: dict, runtime_state: dict):
@@ -6182,6 +6199,7 @@ _TOOL_EXECUTORS = {
     "transcribe_youtube_video": _run_transcribe_youtube_video,
     "search_knowledge_base": _run_search_knowledge_base,
     "search_tool_memory": _run_search_tool_memory,
+    "expand_truncated_tool_result": _run_expand_truncated_tool_result,
     "search_web": _run_search_web,
     "search_news_ddgs": _run_search_news_ddgs,
     "search_news_google": _run_search_news_google,

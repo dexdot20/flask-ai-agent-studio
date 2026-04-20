@@ -60,6 +60,8 @@ from db import (
     get_rag_source_types,
     get_conversation_message_rows,
     get_conversation_messages,
+    get_conversation_uploaded_files,
+    set_attachment_excluded_from_context,
     get_db,
     insert_message,
     insert_conversation_memory_entry,
@@ -81,7 +83,13 @@ from db import (
     update_persona_memory_entry,
     update_persona,
 )
-from doc_service import build_canvas_markdown, extract_document_text, infer_canvas_format, infer_canvas_language, read_uploaded_document
+from doc_service import (
+    build_canvas_markdown,
+    extract_document_text,
+    infer_canvas_format,
+    infer_canvas_language,
+    read_uploaded_document,
+)
 from github_import_service import import_github_repository_into_canvas
 from model_registry import (
     DEEPSEEK_PROVIDER,
@@ -401,7 +409,7 @@ def _parse_rag_metadata_filter_mode(raw_value: str | None) -> tuple[str, bool]:
 def _normalize_upload_metadata_title(raw_title: str) -> str:
     text = re.sub(r"\s+", " ", str(raw_title or "").replace("\n", " ")).strip()
     if not text:
-                return ""
+        return ""
     text = re.sub(r"^[\s\-*>#`\"'“”‘’\[\](){}:;,.!?]+", "", text)
     text = re.sub(r"[\s\-*>#`\"'“”‘’\[\](){}:;,.!?]+$", "", text)
     text = re.sub(r"\s+", " ", text).strip()
@@ -430,11 +438,15 @@ def _build_upload_metadata_fallback(filename: str, source_name: str, text: str) 
         snippet = snippet[:220].rstrip()
         if len(snippet) == 220:
             snippet += "…"
-    fallback_description = snippet or f"Document imported from {os.path.basename(filename or 'uploaded file') or 'uploaded file'}."
+    fallback_description = (
+        snippet or f"Document imported from {os.path.basename(filename or 'uploaded file') or 'uploaded file'}."
+    )
     return fallback_title, fallback_description
 
 
-def _generate_upload_metadata_suggestion(filename: str, mime_type: str, text: str, source_name: str = "", description: str = "") -> dict:
+def _generate_upload_metadata_suggestion(
+    filename: str, mime_type: str, text: str, source_name: str = "", description: str = ""
+) -> dict:
     cleaned_filename = os.path.basename(str(filename or "uploaded.txt").strip()) or "uploaded.txt"
     cleaned_source_name = _normalize_upload_metadata_title(source_name)
     cleaned_description = _normalize_upload_metadata_description(description)
@@ -520,7 +532,9 @@ def _generate_upload_metadata_suggestion(filename: str, mime_type: str, text: st
     title = _normalize_upload_metadata_title(parsed.get("title") or "")
     description_text = _normalize_upload_metadata_description(parsed.get("description") or "")
 
-    fallback_title, fallback_description = _build_upload_metadata_fallback(cleaned_filename, cleaned_source_name, cleaned_text)
+    fallback_title, fallback_description = _build_upload_metadata_fallback(
+        cleaned_filename, cleaned_source_name, cleaned_text
+    )
     if not title:
         title = fallback_title
     if not description_text:
@@ -758,15 +772,17 @@ def register_conversation_routes(app) -> None:
             conversation_id = cursor.lastrowid
         if RAG_ENABLED:
             sync_conversations_to_rag_safe(conversation_id=conversation_id)
-        return jsonify({
-            "id": conversation_id,
-            "title": title,
-            "title_source": title_source,
-            "title_overridden": title_overridden,
-            "model": model,
-            "persona_id": persona_id,
-            "model_label": get_model_label(model, settings),
-        }), 201
+        return jsonify(
+            {
+                "id": conversation_id,
+                "title": title,
+                "title_source": title_source,
+                "title_overridden": title_overridden,
+                "model": model,
+                "persona_id": persona_id,
+                "model_label": get_model_label(model, settings),
+            }
+        ), 201
 
     @app.route("/api/conversations/<int:conv_id>", methods=["GET"])
     def get_conversation(conv_id):
@@ -908,6 +924,95 @@ def register_conversation_routes(app) -> None:
         payload.update({"deleted_entry_id": entry_id})
         return jsonify(payload)
 
+    @app.route("/api/conversations/<int:conv_id>/uploaded-files", methods=["GET"])
+    def list_uploaded_files(conv_id):
+        conversation, _ = _load_conversation_payload(conv_id)
+        if not conversation:
+            return jsonify({"error": "Not found."}), 404
+
+        canvas_service = conversation.get("canvas_service")
+        canvas_documents = []
+        if canvas_service:
+            try:
+                canvas_documents = get_canvas_runtime_documents(canvas_service)
+            except Exception:
+                canvas_documents = []
+
+        files = get_conversation_uploaded_files(conv_id)
+
+        if canvas_documents:
+            from canvas_service import (
+                _normalize_canvas_document_name,
+                _normalize_canvas_document_stem,
+                _extract_document_context_body,
+            )
+
+            canvas_document_lookup = {}
+            for doc in canvas_documents:
+                name = _normalize_canvas_document_name(doc.get("title") or "")
+                stem = _normalize_canvas_document_stem(doc.get("title") or "")
+                if name:
+                    canvas_document_lookup.setdefault(name, []).append(
+                        (_extract_document_context_body(doc.get("content") or "") or "")[:500].casefold()
+                    )
+                if stem:
+                    canvas_document_lookup.setdefault(stem, []).append(
+                        (_extract_document_context_body(doc.get("content") or "") or "")[:500].casefold()
+                    )
+
+            filtered = []
+            for f in files:
+                if f.get("kind") != "document":
+                    filtered.append(f)
+                    continue
+                filename = f.get("filename") or ""
+                name = _normalize_canvas_document_name(filename)
+                stem = _normalize_canvas_document_stem(filename)
+                candidates = list(filter(None, [name, stem]))
+                represented = False
+                for cand in candidates:
+                    for content in canvas_document_lookup.get(cand, []):
+                        body_excerpt = _extract_document_context_body(f.get("file_context_block", "")) or ""
+                        if body_excerpt[:500].casefold() in content:
+                            represented = True
+                            break
+                    if represented:
+                        break
+                if not represented:
+                    filtered.append(f)
+            files = filtered
+
+        return jsonify({"files": files})
+
+    @app.route("/api/conversations/<int:conv_id>/uploaded-files/<file_id>/context", methods=["PATCH"])
+    def update_uploaded_file_context(conv_id, file_id):
+        conversation, _ = _load_conversation_payload(conv_id)
+        if not conversation:
+            return jsonify({"error": "Not found."}), 404
+
+        data = request.get_json(silent=True) or {}
+        excluded = bool(data.get("excluded", False))
+
+        files = get_conversation_uploaded_files(conv_id)
+        target = None
+        for f in files:
+            if f.get("id") == file_id:
+                target = f
+                break
+
+        if not target:
+            return jsonify({"error": "File not found."}), 404
+
+        message_id = target.get("message_id")
+        if not message_id:
+            return jsonify({"error": "File has no associated message."}), 400
+
+        ok = set_attachment_excluded_from_context(message_id, file_id, excluded=excluded)
+        if not ok:
+            return jsonify({"error": "Failed to update file context exclusion."}), 500
+
+        return jsonify({"ok": True, "file_id": file_id, "excluded_from_context": excluded})
+
     @app.route("/api/conversations/<int:conv_id>/export", methods=["GET", "POST"])
     def export_conversation(conv_id):
         format_name = str(request.args.get("format") or "md").strip().lower()
@@ -987,7 +1092,9 @@ def register_conversation_routes(app) -> None:
             else:
                 return jsonify({"error": "format must be md, html, or pdf."}), 400
         except Exception:
-            app.logger.exception("Failed to export canvas document %s as %s for conversation %s", document_id, format_name, conv_id)
+            app.logger.exception(
+                "Failed to export canvas document %s as %s for conversation %s", document_id, format_name, conv_id
+            )
             return jsonify({"error": "Export failed due to an internal error."}), 500
 
         return Response(
@@ -1052,7 +1159,9 @@ def register_conversation_routes(app) -> None:
             {
                 "canvas_documents": next_documents,
                 "active_document_id": get_canvas_runtime_active_document_id(runtime_state),
-                "canvas_viewports": runtime_state.get("viewports") if isinstance(runtime_state.get("viewports"), dict) else {},
+                "canvas_viewports": runtime_state.get("viewports")
+                if isinstance(runtime_state.get("viewports"), dict)
+                else {},
                 "canvas_cleared": not next_documents,
             }
         )
@@ -1123,7 +1232,9 @@ def register_conversation_routes(app) -> None:
             if resolved_format == "markdown" and mime_type == "application/pdf":
                 content = extracted_text
             else:
-                content = build_canvas_markdown(title, extracted_text) if resolved_format == "markdown" else extracted_text
+                content = (
+                    build_canvas_markdown(title, extracted_text) if resolved_format == "markdown" else extracted_text
+                )
             format_name = resolved_format
             language = resolved_language
         else:
@@ -1139,7 +1250,8 @@ def register_conversation_routes(app) -> None:
                 (
                     message
                     for message in messages
-                    if message.get("id") == source_assistant_message_id and str(message.get("role") or "").strip() == "assistant"
+                    if message.get("id") == source_assistant_message_id
+                    and str(message.get("role") or "").strip() == "assistant"
                 ),
                 None,
             )
@@ -1178,7 +1290,9 @@ def register_conversation_routes(app) -> None:
             {
                 "canvas_documents": next_documents,
                 "active_document_id": get_canvas_runtime_active_document_id(runtime_state),
-                "canvas_viewports": runtime_state.get("viewports") if isinstance(runtime_state.get("viewports"), dict) else {},
+                "canvas_viewports": runtime_state.get("viewports")
+                if isinstance(runtime_state.get("viewports"), dict)
+                else {},
                 "canvas_cleared": not next_documents,
             }
         )
@@ -1245,7 +1359,9 @@ def register_conversation_routes(app) -> None:
             {
                 "canvas_documents": next_documents,
                 "active_document_id": get_canvas_runtime_active_document_id(runtime_state),
-                "canvas_viewports": runtime_state.get("viewports") if isinstance(runtime_state.get("viewports"), dict) else {},
+                "canvas_viewports": runtime_state.get("viewports")
+                if isinstance(runtime_state.get("viewports"), dict)
+                else {},
                 "canvas_cleared": not next_documents,
             }
         )
@@ -1310,12 +1426,20 @@ def register_conversation_routes(app) -> None:
             return jsonify({"error": "Canvas document not found."}), 404
 
         try:
-            active_document = find_latest_canvas_document(messages, document_id=document_id, document_path=document_path)
+            active_document = find_latest_canvas_document(
+                messages, document_id=document_id, document_path=document_path
+            )
             if not active_document:
                 return jsonify({"error": "Canvas document not found."}), 404
 
             # always_expanded-only update: patch the document in-place without a full rewrite
-            if always_expanded is not None and content is None and title is None and format_name is None and language is None:
+            if (
+                always_expanded is not None
+                and content is None
+                and title is None
+                and format_name is None
+                and language is None
+            ):
                 patched_doc = dict(active_document)
                 # Set explicitly so normalize_canvas_document sees the key and applies the elif branch
                 patched_doc["always_expanded"] = always_expanded
@@ -1341,20 +1465,24 @@ def register_conversation_routes(app) -> None:
                 # Propagate always_expanded change into the runtime documents list too
                 if always_expanded is not None:
                     next_documents = [
-                        {**d, "always_expanded": always_expanded}
-                        if d.get("id") == result.get("id")
-                        else d
+                        {**d, "always_expanded": always_expanded} if d.get("id") == result.get("id") else d
                         for d in next_documents
                     ]
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
 
-        active_document_id_out = result.get("id") or get_canvas_runtime_active_document_id(runtime_state) or latest_canvas_state.get("active_document_id")
+        active_document_id_out = (
+            result.get("id")
+            or get_canvas_runtime_active_document_id(runtime_state)
+            or latest_canvas_state.get("active_document_id")
+        )
         metadata = serialize_message_metadata(
             {
                 "canvas_documents": next_documents,
                 "active_document_id": active_document_id_out,
-                "canvas_viewports": runtime_state.get("viewports") if isinstance(runtime_state.get("viewports"), dict) else {},
+                "canvas_viewports": runtime_state.get("viewports")
+                if isinstance(runtime_state.get("viewports"), dict)
+                else {},
                 "canvas_cleared": not next_documents,
             }
         )
@@ -1562,9 +1690,7 @@ def register_conversation_routes(app) -> None:
     @app.route("/api/conversations/<int:conv_id>/prune-batch", methods=["POST"])
     def prune_conversation_batch_route(conv_id):
         with get_db() as conn:
-            conv = conn.execute(
-                "SELECT id FROM conversations WHERE id = ?", (conv_id,)
-            ).fetchone()
+            conv = conn.execute("SELECT id FROM conversations WHERE id = ?", (conv_id,)).fetchone()
             if not conv:
                 return jsonify({"error": "Not found."}), 404
 
@@ -1617,14 +1743,12 @@ def register_conversation_routes(app) -> None:
             return jsonify({"error": "message_ids must be a non-empty list of up to 50 integer ids."}), 400
 
         scored_messages = score_conversation_messages_for_prune(conv_id, message_ids)
-        scored_by_id = {
-            int(score.get("id") or 0): score
-            for score in scored_messages
-            if int(score.get("id") or 0) > 0
-        }
+        scored_by_id = {int(score.get("id") or 0): score for score in scored_messages if int(score.get("id") or 0) > 0}
         missing_ids = [message_id for message_id in message_ids if message_id not in scored_by_id]
         if missing_ids:
-            return jsonify({"error": "One or more selected messages cannot be pruned.", "message_ids": missing_ids}), 400
+            return jsonify(
+                {"error": "One or more selected messages cannot be pruned.", "message_ids": missing_ids}
+            ), 400
 
         pruned_count = 0
         results = []
@@ -1636,7 +1760,9 @@ def register_conversation_routes(app) -> None:
             except ValueError as exc:
                 results.append({"id": message_id, "pruned": False, "error": str(exc)})
             except Exception:
-                current_app.logger.exception("Failed to prune selected message %s in conversation %s.", message_id, conv_id)
+                current_app.logger.exception(
+                    "Failed to prune selected message %s in conversation %s.", message_id, conv_id
+                )
                 results.append({"id": message_id, "pruned": False, "error": "Message could not be pruned."})
 
         if pruned_count:
@@ -1679,7 +1805,12 @@ def register_conversation_routes(app) -> None:
         persona_provided = "persona_id" in data
         tool_overrides_provided = "tool_overrides" in data
         parameter_overrides_provided = "parameter_overrides" in data
-        if not title_provided and not persona_provided and not tool_overrides_provided and not parameter_overrides_provided:
+        if (
+            not title_provided
+            and not persona_provided
+            and not tool_overrides_provided
+            and not parameter_overrides_provided
+        ):
             return jsonify({"error": "Provide title, persona_id, tool_overrides, and/or parameter_overrides."}), 400
 
         title = None
@@ -1783,15 +1914,17 @@ def register_conversation_routes(app) -> None:
         response_parameter_overrides = None
         if parameter_overrides_provided:
             response_parameter_overrides = _deserialize_parameter_overrides(next_parameter_overrides)
-        return jsonify({
-            "id": conv_id,
-            "title": next_title,
-            "title_source": next_title_source,
-            "title_overridden": bool(next_title_overridden),
-            "persona_id": int(next_persona_id) if next_persona_id is not None else None,
-            "tool_overrides": response_tool_overrides,
-            "parameter_overrides": response_parameter_overrides,
-        })
+        return jsonify(
+            {
+                "id": conv_id,
+                "title": next_title,
+                "title_source": next_title_source,
+                "title_overridden": bool(next_title_overridden),
+                "persona_id": int(next_persona_id) if next_persona_id is not None else None,
+                "tool_overrides": response_tool_overrides,
+                "parameter_overrides": response_parameter_overrides,
+            }
+        )
 
     @app.route("/api/rag/documents", methods=["GET"])
     def list_rag_documents():
@@ -1889,7 +2022,9 @@ def register_conversation_routes(app) -> None:
                     text = extract_document_text(doc_bytes, mime_type)
                 else:
                     text = str(raw_text or "")
-                    filename = os.path.basename(str(request.form.get("filename") or "uploaded.txt").strip()) or "uploaded.txt"
+                    filename = (
+                        os.path.basename(str(request.form.get("filename") or "uploaded.txt").strip()) or "uploaded.txt"
+                    )
                     mime_type = "text/plain"
             else:
                 data = request.get_json(silent=True) or {}
