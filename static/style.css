@@ -5315,13 +5315,27 @@ kbd {
   display: block;
 }
 
+/* Streaming code blocks - use same design as final code blocks */
 .canvas-stream-code-block {
   margin: 0;
-  padding: 18px 20px;
-  border: 1px solid var(--canvas-panel-border);
-  border-radius: 14px;
-  background: rgba(8, 10, 18, 0.72);
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
   overflow-x: auto;
+}
+
+.canvas-code-block.streaming {
+  margin: 0;
+  padding: 14px 0;
+  background: transparent;
+}
+
+.canvas-code-block.streaming code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.85em;
+  line-height: 1.6;
+  background: transparent;
 }
 
 .canvas-stream-code {

@@ -4019,8 +4019,17 @@ function buildStreamingMarkdownRenderer() {
     const codeText = isToken ? String(tokenOrCode.text || "") : String(tokenOrCode || "");
     const rawLang = isToken ? (tokenOrCode.lang || null) : (languageHint || null);
     const language = String(rawLang || "").trim().toLowerCase();
-    const languageClass = language ? ` class="language-${escHtml(language)}"` : "";
-    return `<pre class="canvas-stream-code-block"><code${languageClass}>${escHtml(codeText)}</code></pre>`;
+    const langClass = language ? ` language-${escHtml(language)}` : "";
+    const langLabel = `<span class="canvas-code-lang">${escHtml(language || "Code")}</span>`;
+    return (
+      `<div class="code-block-shell streaming">` +
+        `<div class="code-block-toolbar">` +
+          `${langLabel}` +
+          `<button type="button" class="code-copy-btn" aria-label="Copy code">Copy code</button>` +
+        `</div>` +
+        `<pre class="canvas-code-block streaming"><code class="hljs${langClass}">${escHtml(codeText)}</code></pre>` +
+      `</div>`
+    );
   };
   return renderer;
 }
