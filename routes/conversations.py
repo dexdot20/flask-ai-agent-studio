@@ -1341,6 +1341,8 @@ def register_conversation_routes(app) -> None:
                         result["always_expanded"] = True
                     else:
                         result.pop("always_expanded", None)
+                        # Normalize to persist the explicit false into runtime state
+                        result = normalize_canvas_document(result) or result
                 next_documents = get_canvas_runtime_documents(runtime_state)
                 # Propagate always_expanded change into the runtime documents list too
                 if always_expanded is not None:

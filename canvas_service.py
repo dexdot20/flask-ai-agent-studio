@@ -1066,6 +1066,9 @@ def normalize_canvas_document(value, *, fallback_title: str = "Canvas") -> dict 
             cleaned["ignored_reason"] = ignored_reason
     if always_expanded:
         cleaned["always_expanded"] = True
+    elif "always_expanded" in value:
+        # Explicit false from PATCH should be preserved so the field can be toggled off
+        cleaned["always_expanded"] = False
 
     return cleaned
 

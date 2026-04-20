@@ -5898,7 +5898,8 @@ function setPendingDocumentCanvasOpen(files) {
 
 async function toggleCanvasAlwaysExpanded(activeDocument) {
   if (!currentConvId || !activeDocument) return;
-  const next = !activeDocument.always_expanded;
+  const current = Boolean(activeDocument.always_expanded);
+  const next = !current;
   try {
     const response = await fetch(`/api/conversations/${currentConvId}/canvas`, {
       method: "PATCH",
