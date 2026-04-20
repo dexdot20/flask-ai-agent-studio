@@ -379,6 +379,76 @@ TOOL_SPECS = [
         },
     },
     {
+        "name": "delete_tool_result",
+        "description": (
+            "Delete a tool result from the current context and store it in tool memory for future reference. "
+            "Use this when a tool result is no longer needed in context but should be remembered for potential future retrieval. "
+            "This helps keep context lean while preserving the ability to reason about past tool usage."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "tool_call_id": {
+                    "type": "string",
+                    "description": "The tool_call_id of the result to delete from context.",
+                },
+                "reason_for_deletion": {
+                    "type": "string",
+                    "description": "Short explanation of why this tool result is being deleted from context.",
+                },
+                "about_the_content": {
+                    "type": "string",
+                    "description": "Brief description of what the content was about (e.g. 'weather for NYC', 'Python error trace', 'search results for X').",
+                },
+                "context_before_deletion": {
+                    "type": "string",
+                    "description": "Optional brief context about when/why this was used or what question it answered.",
+                },
+            },
+            "required": ["tool_call_id", "reason_for_deletion", "about_the_content"],
+        },
+        "prompt": {
+            "purpose": "Removes a tool result from the active context while preserving a summary in tool memory for potential future retrieval.",
+            "inputs": {
+                "tool_call_id": "The tool_call_id of the tool result message to remove",
+                "reason_for_deletion": "Why the content is no longer needed in context",
+                "about_the_content": "What the content was about",
+                "context_before_deletion": "Optional context about when/why this was used",
+            },
+            "guidance": (
+                "Use this when tool results accumulate in context and are no longer actively needed, to prevent context bloat while preserving the ability to reason about past tool usage. "
+                "Always provide a clear reason_for_deletion and about_the_content so the memory can be searched later if needed. "
+                "Prefer deleting older tool results that are no longer relevant to the current task. "
+                "Do NOT delete tool results that are still being referenced or needed for the current reasoning chain."
+            ),
+        },
+    },
+    {
+        "name": "list_tool_memory",
+        "description": (
+            "List recently deleted tool results from tool memory to help remember past tool calls that were cleaned up. "
+            "Use this to verify what was previously deleted or to find context that was removed."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50,
+                    "description": "Number of entries to return (1-50, default 10).",
+                },
+            },
+        },
+        "prompt": {
+            "purpose": "Lists recently deleted tool result summaries for review.",
+            "inputs": {
+                "limit": "Number of entries to return (default 10)",
+            },
+            "guidance": "Use this to recall what tool results were previously deleted when that information might be useful again.",
+        },
+    },
+    {
         "name": "ask_clarifying_question",
         "description": (
             "Ask the user one or more structured clarification questions and stop answering until they reply. "

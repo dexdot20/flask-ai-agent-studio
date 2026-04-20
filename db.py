@@ -466,6 +466,23 @@ def init_db() -> None:
             ON conversation_state_mutations(target_kind, target_key, id);
             CREATE INDEX IF NOT EXISTS idx_personas_updated_at
             ON personas(updated_at, id);
+            CREATE TABLE IF NOT EXISTS tool_memory (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tool_name TEXT NOT NULL,
+                tool_call_id TEXT,
+                original_content_hash TEXT,
+                deleted_content_preview TEXT,
+                reason_for_deletion TEXT,
+                about_the_content TEXT,
+                context_before_deletion TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                conversation_id INTEGER,
+                message_id INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_tool_memory_conversation_created
+            ON tool_memory(conversation_id, created_at, id);
+            CREATE INDEX IF NOT EXISTS idx_tool_memory_tool_name
+            ON tool_memory(tool_name, created_at, id);
             """
         )
 
@@ -593,6 +610,188 @@ def datetime_utc_now_iso() -> str:
     return str(row["now_iso"] or "").strip()
 
 
+def ensure_tool_memory_table() -> None:
+    with get_db() as conn:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS tool_memory (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tool_name TEXT NOT NULL,
+                tool_call_id TEXT,
+                original_content_hash TEXT,
+                deleted_content_preview TEXT,
+                reason_for_deletion TEXT,
+                about_the_content TEXT,
+                context_before_deletion TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                conversation_id INTEGER,
+                message_id INTEGER
+            )"""
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tool_memory_conversation_created ON tool_memory(conversation_id, created_at, id)"
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_memory_tool_name ON tool_memory(tool_name, created_at, id)")
+
+
+def _tool_memory_row_to_dict(row) -> dict | None:
+    if not row:
+        return None
+    return {
+        "id": int(row["id"]),
+        "tool_name": str(row["tool_name"] or "").strip(),
+        "tool_call_id": str(row["tool_call_id"] or "").strip() or None,
+        "original_content_hash": str(row["original_content_hash"] or "").strip() or None,
+        "deleted_content_preview": str(row["deleted_content_preview"] or "").strip() or None,
+        "reason_for_deletion": str(row["reason_for_deletion"] or "").strip() or None,
+        "about_the_content": str(row["about_the_content"] or "").strip() or None,
+        "context_before_deletion": str(row["context_before_deletion"] or "").strip() or None,
+        "created_at": str(row["created_at"] or "").strip(),
+        "conversation_id": int(row["conversation_id"]) if row["conversation_id"] is not None else None,
+        "message_id": int(row["message_id"]) if row["message_id"] is not None else None,
+    }
+
+
+def insert_tool_memory_entry(
+    tool_name: str,
+    tool_call_id: str | None,
+    deleted_content_preview: str,
+    reason_for_deletion: str,
+    about_the_content: str,
+    context_before_deletion: str | None = None,
+    conversation_id: int | None = None,
+    message_id: int | None = None,
+    original_content_hash: str | None = None,
+) -> dict:
+    normalized_tool_name = str(tool_name or "").strip()[:80]
+    if not normalized_tool_name:
+        raise ValueError("tool_name is required.")
+
+    normalized_tool_call_id = str(tool_call_id or "").strip()[:120] if tool_call_id else None
+    normalized_preview = str(deleted_content_preview or "").strip()[:1000]
+    normalized_reason = str(reason_for_deletion or "").strip()[:500]
+    normalized_about = str(about_the_content or "").strip()[:500]
+    normalized_context = str(context_before_deletion or "").strip()[:500] if context_before_deletion else None
+    normalized_hash = str(original_content_hash or "").strip()[:64] if original_content_hash else None
+    normalized_conversation_id = int(conversation_id) if conversation_id else None
+    normalized_message_id = int(message_id) if message_id else None
+
+    with get_db() as conn:
+        cursor = conn.execute(
+            """INSERT INTO tool_memory (
+                tool_name, tool_call_id, original_content_hash, deleted_content_preview,
+                reason_for_deletion, about_the_content, context_before_deletion,
+                conversation_id, message_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                normalized_tool_name,
+                normalized_tool_call_id,
+                normalized_hash,
+                normalized_preview,
+                normalized_reason,
+                normalized_about,
+                normalized_context,
+                normalized_conversation_id,
+                normalized_message_id,
+            ),
+        )
+        entry_id = int(cursor.lastrowid)
+        row = conn.execute("SELECT * FROM tool_memory WHERE id = ?", (entry_id,)).fetchone()
+    return _tool_memory_row_to_dict(row) or {}
+
+
+def search_tool_memory_entries(
+    query: str | None = None,
+    tool_name: str | None = None,
+    conversation_id: int | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    normalized_limit = max(1, min(100, int(limit or 20)))
+
+    with get_db() as conn:
+        conditions = []
+        params = []
+
+        if tool_name:
+            normalized_tool_name = str(tool_name or "").strip()[:80]
+            if normalized_tool_name:
+                conditions.append("tool_name = ?")
+                params.append(normalized_tool_name)
+
+        if conversation_id:
+            conditions.append("conversation_id = ?")
+            params.append(int(conversation_id))
+
+        if query:
+            normalized_query = str(query or "").strip().lower()
+            if normalized_query:
+                # Escape LIKE special characters to prevent pattern matching
+                escaped_query = normalized_query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                conditions.append(
+                    "(about_the_content LIKE ? ESCAPE '\\' OR deleted_content_preview LIKE ? ESCAPE '\\' OR reason_for_deletion LIKE ? ESCAPE '\\')"
+                )
+                pattern = f"%{escaped_query}%"
+                params.extend([pattern, pattern, pattern])
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+        rows = conn.execute(
+            f"""SELECT * FROM tool_memory
+                WHERE {where_clause}
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?""",
+            (*params, normalized_limit),
+        ).fetchall()
+
+    return [_tool_memory_row_to_dict(row) for row in rows if _tool_memory_row_to_dict(row)]
+
+
+def list_tool_memory_entries(
+    conversation_id: int | None = None,
+    limit: int = 10,
+) -> list[dict]:
+    normalized_limit = max(1, min(50, int(limit or 10)))
+    normalized_conversation_id = int(conversation_id) if conversation_id else None
+
+    with get_db() as conn:
+        if normalized_conversation_id:
+            rows = conn.execute(
+                """SELECT * FROM tool_memory
+                   WHERE conversation_id = ?
+                   ORDER BY created_at DESC, id DESC
+                   LIMIT ?""",
+                (normalized_conversation_id, normalized_limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT * FROM tool_memory
+                   ORDER BY created_at DESC, id DESC
+                   LIMIT ?""",
+                (normalized_limit,),
+            ).fetchall()
+
+    return [_tool_memory_row_to_dict(row) for row in rows if _tool_memory_row_to_dict(row)]
+
+
+def delete_tool_memory_entry(entry_id: int) -> bool:
+    normalized_entry_id = int(entry_id or 0)
+    if normalized_entry_id <= 0:
+        return False
+
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM tool_memory WHERE id = ?", (normalized_entry_id,))
+    return int(cursor.rowcount or 0) > 0
+
+
+def get_tool_memory_entry(entry_id: int) -> dict | None:
+    normalized_entry_id = int(entry_id or 0)
+    if normalized_entry_id <= 0:
+        return None
+
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM tool_memory WHERE id = ?", (normalized_entry_id,)).fetchone()
+    return _tool_memory_row_to_dict(row)
+
+
 def initialize_database() -> None:
     init_db()
     ensure_conversation_title_columns()
@@ -605,6 +804,7 @@ def initialize_database() -> None:
     ensure_messages_deleted_at_column()
     ensure_rag_documents_expires_at_column()
     ensure_model_invocations_activity_columns()
+    ensure_tool_memory_table()
 
 
 def _normalize_user_profile_value(value, max_length: int = 500) -> str:

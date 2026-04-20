@@ -93,12 +93,14 @@ from config import (
     SCRATCHPAD_SECTION_METADATA,
     SCRATCHPAD_SECTION_ORDER,
     SUB_AGENT_ALLOWED_TOOL_NAMES as DEFAULT_SUB_AGENT_ALLOWED_TOOL_NAMES,
+    TOOL_MEMORY_ENABLED,
 )
 from db import (
     append_to_scratchpad,
     count_scratchpad_notes,
     delete_conversation_memory_entry,
     delete_persona_memory_entry,
+    delete_tool_memory_entry,
     get_context_compaction_keep_recent_rounds,
     get_context_compaction_threshold,
     get_effective_conversation_persona,
@@ -122,6 +124,8 @@ from db import (
     get_sub_agent_timeout_seconds,
     insert_conversation_memory_entry,
     insert_persona_memory_entry,
+    insert_tool_memory_entry,
+    list_tool_memory_entries,
     parse_message_tool_calls,
     read_image_asset_bytes,
     replace_scratchpad,
@@ -4734,6 +4738,108 @@ def _run_delete_persona_memory_entry(tool_args: dict, runtime_state: dict):
     }, (f"Persona memory deleted: {entry_id}" if deleted else f"Persona memory not found: {entry_id}")
 
 
+def _run_delete_tool_result(tool_args: dict, runtime_state: dict):
+    if not TOOL_MEMORY_ENABLED:
+        return {"status": "error", "error": "Tool memory is disabled."}, "Tool memory disabled"
+
+    tool_call_id = str(tool_args.get("tool_call_id") or "").strip()
+    if not tool_call_id:
+        return {"status": "error", "error": "tool_call_id is required."}, "delete_tool_result: missing tool_call_id"
+
+    reason_for_deletion = str(tool_args.get("reason_for_deletion") or "").strip()
+    about_the_content = str(tool_args.get("about_the_content") or "").strip()
+    context_before_deletion = str(tool_args.get("context_before_deletion") or "").strip() or None
+
+    if not about_the_content:
+        return {
+            "status": "error",
+            "error": "about_the_content is required.",
+        }, "delete_tool_result: missing about_the_content"
+
+    agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
+    conversation_id = int(agent_context.get("conversation_id") or 0) or None
+    source_message_id = agent_context.get("source_message_id")
+    message_id = int(source_message_id) if source_message_id not in (None, "") else None
+
+    messages = runtime_state.get("_accumulated_messages")
+    deleted_content_preview = ""
+    tool_name = "unknown"
+
+    if isinstance(messages, list):
+        for i, msg in enumerate(messages):
+            if isinstance(msg, dict) and str(msg.get("tool_call_id") or "").strip() == tool_call_id:
+                content = str(msg.get("content") or "").strip()
+                deleted_content_preview = content[:500] if content else ""
+                if i > 0:
+                    prev_msg = messages[i - 1]
+                    if isinstance(prev_msg, dict) and prev_msg.get("role") == "assistant":
+                        tool_calls = prev_msg.get("tool_calls")
+                        if isinstance(tool_calls, list):
+                            for tc in tool_calls:
+                                if isinstance(tc, dict) and str(tc.get("id") or "").strip() == tool_call_id:
+                                    func = tc.get("function")
+                                    if isinstance(func, dict):
+                                        tool_name = str(func.get("name") or "unknown").strip()
+                                    break
+                        if tool_name == "unknown":
+                            tc_id = prev_msg.get("tool_call_id")
+                            if tc_id and str(tc_id).strip() == tool_call_id:
+                                tool_name = str(prev_msg.get("tool_name") or "unknown").strip()
+                break
+
+    if "deleted_tool_call_ids" not in runtime_state:
+        runtime_state["deleted_tool_call_ids"] = set()
+    runtime_state["deleted_tool_call_ids"].add(tool_call_id)
+
+    entry = insert_tool_memory_entry(
+        tool_name=tool_name,
+        tool_call_id=tool_call_id,
+        deleted_content_preview=deleted_content_preview,
+        reason_for_deletion=reason_for_deletion,
+        about_the_content=about_the_content,
+        context_before_deletion=context_before_deletion,
+        conversation_id=conversation_id,
+        message_id=message_id,
+    )
+
+    return {
+        "status": "ok",
+        "deleted_tool_call_id": tool_call_id,
+        "tool_memory_id": entry.get("id"),
+        "preview": deleted_content_preview[:200] if deleted_content_preview else "",
+    }, f"Tool result deleted and stored in tool memory: {tool_call_id}"
+
+
+def _run_list_tool_memory(tool_args: dict, runtime_state: dict):
+    if not TOOL_MEMORY_ENABLED:
+        return {"status": "error", "error": "Tool memory is disabled."}, "Tool memory disabled"
+
+    limit = max(1, min(50, int(tool_args.get("limit") or 10)))
+
+    agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
+    conversation_id = int(agent_context.get("conversation_id") or 0) or None
+
+    entries = list_tool_memory_entries(conversation_id=conversation_id, limit=limit)
+
+    return {
+        "status": "ok",
+        "entries": [
+            {
+                "id": e.get("id"),
+                "tool_name": e.get("tool_name"),
+                "tool_call_id": e.get("tool_call_id"),
+                "about_the_content": e.get("about_the_content"),
+                "reason_for_deletion": e.get("reason_for_deletion"),
+                "deleted_content_preview": e.get("deleted_content_preview"),
+                "context_before_deletion": e.get("context_before_deletion"),
+                "created_at": e.get("created_at"),
+            }
+            for e in entries
+        ],
+        "count": len(entries),
+    }, f"Listed {len(entries)} tool memory entries"
+
+
 def _run_ask_clarifying_question(tool_args: dict, runtime_state: dict):
     del runtime_state
     payload = _normalize_clarification_payload(tool_args)
@@ -6198,6 +6304,8 @@ _TOOL_EXECUTORS = {
     "delete_conversation_memory_entry": _run_delete_conversation_memory_entry,
     "save_to_persona_memory": _run_save_to_persona_memory,
     "delete_persona_memory_entry": _run_delete_persona_memory_entry,
+    "delete_tool_result": _run_delete_tool_result,
+    "list_tool_memory": _run_list_tool_memory,
     "ask_clarifying_question": _run_ask_clarifying_question,
     "set_conversation_title": _run_set_conversation_title,
     "sub_agent": _run_sub_agent,
@@ -7546,6 +7654,7 @@ def run_agent_stream(
         else create_workspace_runtime_state(),
         "invocation_log_sink": invocation_log_sink if isinstance(invocation_log_sink, list) else None,
     }
+    runtime_state["_accumulated_messages"] = messages
     runtime_state["agent_context"] = {
         "model": str(model or "").strip(),
         "enabled_tool_names": normalized_enabled_tool_names,
@@ -7720,10 +7829,27 @@ def run_agent_stream(
         output_cost = (completion_tokens / 1_000_000) * pricing["output"]
         return round(input_cost + output_cost, 6)
 
+    def _filter_deleted_tool_results(msg_list: list[dict]) -> list[dict]:
+        deleted_ids = (
+            runtime_state.get("deleted_tool_call_ids")
+            if isinstance(runtime_state.get("deleted_tool_call_ids"), set)
+            else set()
+        )
+        if not deleted_ids:
+            return msg_list
+        filtered = []
+        for msg in msg_list:
+            if isinstance(msg, dict) and msg.get("role") == "tool":
+                if str(msg.get("tool_call_id") or "").strip() in deleted_ids:
+                    continue
+            filtered.append(msg)
+        return filtered
+
     def apply_context_compaction(extra_messages: list[dict] | None = None, reason: str = "", force: bool = False):
         nonlocal messages
         extra_messages = list(extra_messages or [])
-        turn_messages = [*messages, *extra_messages]
+        filtered_messages = _filter_deleted_tool_results(messages)
+        turn_messages = [*filtered_messages, *extra_messages]
         threshold = max(1, int(configured_prompt_max_input_tokens * configured_context_compaction_threshold))
         before_tokens = _estimate_messages_tokens(turn_messages)
         before_message_count = len(turn_messages)
@@ -7761,8 +7887,10 @@ def run_agent_stream(
         if compacted_messages is None:
             return turn_messages, False
 
-        messages = compacted_messages
-        compacted_turn_messages = [*messages, *extra_messages]
+        filtered_compacted = _filter_deleted_tool_results(compacted_messages)
+        messages = filtered_compacted
+        runtime_state["_accumulated_messages"] = messages
+        compacted_turn_messages = [*filtered_compacted, *extra_messages]
         after_tokens = _estimate_messages_tokens(compacted_turn_messages)
         after_message_count = len(compacted_turn_messages)
         after_exchange_count = _count_exchange_blocks(messages)
@@ -9182,6 +9310,7 @@ def run_agent_stream(
                 "messages": public_history_messages,
             }
         messages.extend(tool_messages)
+        runtime_state["_accumulated_messages"] = messages
         _merge_tool_execution_result_message(messages, tool_execution_result_message)
         if canvas_context_refresh_needed:
             _refresh_latest_canvas_context_injection_message(messages, runtime_state)

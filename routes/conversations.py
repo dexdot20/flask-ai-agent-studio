@@ -924,6 +924,23 @@ def register_conversation_routes(app) -> None:
         payload.update({"deleted_entry_id": entry_id})
         return jsonify(payload)
 
+    @app.route("/api/conversations/<int:conv_id>/tool-memory", methods=["GET"])
+    def list_conversation_tool_memory(conv_id):
+        from db import list_tool_memory_entries
+
+        conversation, _ = _load_conversation_payload(conv_id)
+        if not conversation:
+            return jsonify({"error": "Not found."}), 404
+
+        # NOTE: This endpoint follows the same access pattern as other conversation
+        # endpoints (e.g., list_uploaded_files). It relies on the caller
+        # (frontend) to only request tool memory for conversations the user
+        # has access to. The conversations table has no user_id column, so
+        # per-conversation access control is enforced at a higher layer.
+        limit = max(1, min(50, request.args.get("limit", 10, type=int)))
+        entries = list_tool_memory_entries(conversation_id=conv_id, limit=limit)
+        return jsonify({"entries": entries, "count": len(entries)})
+
     @app.route("/api/conversations/<int:conv_id>/uploaded-files", methods=["GET"])
     def list_uploaded_files(conv_id):
         conversation, _ = _load_conversation_payload(conv_id)

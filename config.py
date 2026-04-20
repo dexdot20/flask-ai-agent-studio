@@ -303,6 +303,8 @@ DEFAULT_ACTIVE_TOOL_NAMES = [
     "delete_conversation_memory_entry",
     "save_to_persona_memory",
     "delete_persona_memory_entry",
+    "delete_tool_result",
+    "list_tool_memory",
     "ask_clarifying_question",
     "sub_agent",
     "image_explain",
@@ -450,6 +452,10 @@ FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS = max(
 TOOL_MEMORY_TTL_DEFAULT_SECONDS = max(3_600, _parse_int_env("TOOL_MEMORY_TTL_DEFAULT_SECONDS", 604_800))
 TOOL_MEMORY_TTL_WEB_SECONDS = max(3_600, _parse_int_env("TOOL_MEMORY_TTL_WEB_SECONDS", 43_200))
 TOOL_MEMORY_TTL_NEWS_SECONDS = max(1_800, _parse_int_env("TOOL_MEMORY_TTL_NEWS_SECONDS", 7_200))
+TOOL_MEMORY_ENABLED = _parse_bool_env("TOOL_MEMORY_ENABLED", True)
+TOOL_MEMORY_MAX_ENTRIES = max(100, _parse_int_env("TOOL_MEMORY_MAX_ENTRIES", 500))
+FORCE_MEMORY_CLEANUP_AT_PERCENT = max(0.5, min(0.98, _parse_float_env("FORCE_MEMORY_CLEANUP_AT_PERCENT", 0.85)))
+MEMORY_CLEANUP_MIN_TOOL_RESULTS = max(1, _parse_int_env("MEMORY_CLEANUP_MIN_TOOL_RESULTS", 3))
 RAG_DISABLED_INGEST_ERROR = (
     "Manual RAG ingestion is disabled. RAG now only indexes conversation history and successful text-like tool results."
 )

@@ -87,6 +87,7 @@
     <button class="mobile-tools-action" id="mobile-conv-tools-btn" type="button">Tool permissions</button>
     <button class="mobile-tools-action" id="mobile-params-btn" type="button">Set Parameters</button>
     <button class="mobile-tools-action" id="mobile-uploaded-files-btn" type="button">Uploaded Files</button>
+    <button class="mobile-tools-action" id="mobile-tool-memory-btn" type="button">Tool Memory</button>
     <a class="mobile-tools-action" id="mobile-settings-btn" href="/settings">Settings</a>
     {% if auth_enabled %}
     <form action="/logout" method="post">
@@ -704,6 +705,20 @@
   </div>
   <div class="uploaded-files-panel__body" id="uploaded-files-panel-body">
     <p class="sidebar-empty">No conversation selected.</p>
+  </div>
+</div>
+
+<div id="tool-memory-panel" class="tool-memory-panel" aria-hidden="true">
+  <div class="tool-memory-panel__header">
+    <span class="tool-memory-panel__title">Tool Memory</span>
+    <button class="tool-memory-panel__close" id="tool-memory-panel-close" type="button" title="Close">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>
+  </div>
+  <div class="tool-memory-panel__body" id="tool-memory-panel-body">
+    <p class="tool-memory-empty">Open a conversation to view tool memory.</p>
   </div>
 </div>
 

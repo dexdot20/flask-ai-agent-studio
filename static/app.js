@@ -177,6 +177,8 @@ const sidebarOverlay = document.getElementById("sidebar-overlay");
 const uploadedFilesToggle = document.getElementById("sidebar-uploaded-files-toggle");
 const uploadedFilesPanelClose = document.getElementById("uploaded-files-panel-close");
 const uploadedFilesOverlay = document.getElementById("uploaded-files-overlay");
+const toolMemoryPanel = document.getElementById("tool-memory-panel");
+const toolMemoryPanelClose = document.getElementById("tool-memory-panel-close");
 const newChatBtn = document.getElementById("new-chat-btn");
 const mobileToolsBtn = document.getElementById("mobile-tools-btn");
 const mobileToolsPanel = document.getElementById("mobile-tools-panel");
@@ -192,6 +194,7 @@ const mobileUploadedFilesBtn = document.getElementById("mobile-uploaded-files-bt
 const mobileSettingsBtn = document.getElementById("mobile-settings-btn");
 const mobileLogoutBtn = document.getElementById("mobile-logout-btn");
 const mobileTokensBtn = document.getElementById("mobile-tokens-btn");
+const mobileToolMemoryBtn = document.getElementById("mobile-tool-memory-btn");
 const exportPanel = document.getElementById("export-panel");
 const exportOverlay = document.getElementById("export-overlay");
 const exportClose = document.getElementById("export-close");
@@ -10923,6 +10926,9 @@ if (uploadedFilesPanelClose) {
 if (uploadedFilesOverlay) {
   uploadedFilesOverlay.addEventListener("click", closeUploadedFilesPanel);
 }
+if (toolMemoryPanelClose) {
+  toolMemoryPanelClose.addEventListener("click", closeToolMemoryPanel);
+}
 if (canvasClose) {
   canvasClose.addEventListener("click", closeCanvas);
 }
@@ -11061,6 +11067,14 @@ if (mobileUploadedFilesBtn) {
     }, 150);
   });
 }
+if (mobileToolMemoryBtn) {
+  mobileToolMemoryBtn.addEventListener("click", () => {
+    closeMobileTools();
+    setTimeout(() => {
+      openToolMemoryPanel();
+    }, 150);
+  });
+}
 
 function openUploadedFilesPanel() {
   const panel = document.getElementById("uploaded-files-panel");
@@ -11079,6 +11093,94 @@ function closeUploadedFilesPanel() {
   panel.classList.remove("open");
   panel.setAttribute("aria-hidden", "true");
   if (overlay) overlay.classList.remove("open");
+}
+
+function openToolMemoryPanel() {
+  const panel = document.getElementById("tool-memory-panel");
+  if (!panel) return;
+  panel.classList.add("open");
+  panel.setAttribute("aria-hidden", "false");
+  void loadToolMemoryPanel();
+}
+
+function closeToolMemoryPanel() {
+  const panel = document.getElementById("tool-memory-panel");
+  if (!panel) return;
+  panel.classList.remove("open");
+  panel.setAttribute("aria-hidden", "true");
+}
+
+async function loadToolMemoryPanel() {
+  const body = document.getElementById("tool-memory-panel-body");
+  if (!body) return;
+  if (!currentConvId) {
+    body.innerHTML = '<p class="tool-memory-empty">Open a conversation to view tool memory.</p>';
+    return;
+  }
+  try {
+    const response = await fetch(`/api/conversations/${currentConvId}/tool-memory?limit=50`);
+    if (!response.ok) {
+      body.innerHTML = '<p class="tool-memory-empty">Could not load tool memory.</p>';
+      return;
+    }
+    const data = await response.json();
+    const entries = Array.isArray(data.entries) ? data.entries : [];
+    if (entries.length === 0) {
+      body.innerHTML = '<p class="tool-memory-empty">No tool memory entries yet.</p>';
+      return;
+    }
+    body.innerHTML = "";
+    const fragment = document.createDocumentFragment();
+    entries.forEach((entry) => {
+      const isDeleted = Boolean(entry.deleted_content_preview || entry.reason_for_deletion);
+      const article = document.createElement("article");
+      article.className = "tool-memory-entry";
+
+      const header = document.createElement("div");
+      header.className = "tool-memory-entry__header";
+
+      const title = document.createElement("div");
+      title.className = "tool-memory-entry__title";
+
+      const badge = document.createElement("span");
+      badge.className = "tool-memory-entry__badge" + (isDeleted ? " tool-memory-entry__badge--deleted" : "");
+      badge.textContent = entry.tool_name || "tool";
+
+      const toolCallId = document.createElement("span");
+      toolCallId.style.cssText = "font-size:0.7rem;color:var(--text-muted)";
+      toolCallId.textContent = entry.tool_call_id ? `#${entry.tool_call_id.slice(0, 12)}…` : "";
+
+      title.append(badge, toolCallId);
+
+      const timestamp = document.createElement("div");
+      timestamp.className = "tool-memory-entry__timestamp";
+      timestamp.textContent = entry.created_at ? `Added ${entry.created_at}` : "";
+
+      header.append(title, timestamp);
+
+      const preview = document.createElement("p");
+      preview.className = "tool-memory-entry__preview";
+      if (isDeleted) {
+        preview.textContent = entry.deleted_content_preview || "(deleted)";
+      } else {
+        preview.textContent = entry.about_the_content || "(no description)";
+      }
+
+      article.append(header, preview);
+
+      if (entry.reason_for_deletion) {
+        const reason = document.createElement("p");
+        reason.className = "tool-memory-entry__reason";
+        reason.textContent = `Deleted: ${entry.reason_for_deletion}`;
+        article.append(reason);
+      }
+
+      fragment.appendChild(article);
+    });
+    body.appendChild(fragment);
+  } catch (_) {
+    body.innerHTML = '<p class="tool-memory-empty">Could not load tool memory.</p>';
+  }
 }
 
 async function loadUploadedFilesPanelInPanel() {
