@@ -563,6 +563,36 @@ def _normalize_clarification_rounds(
     if not raw_rounds:
         raw_rounds = [clarification_response] if isinstance(clarification_response, dict) else []
 
+    # Deduplicate rounds by assistant_message_id + normalized questions + normalized answers.
+    # When user resends (cancel+resend or cancel+edit+resend), the same round can appear multiple
+    # times in all_clarification_rounds, causing the AI to see duplicate clarification answers
+    # and wrongly conclude "questions were already answered twice".
+    seen_round_sigs: set[str] = set()
+    deduped_rounds: list[dict] = []
+    for rp in raw_rounds:
+        if not isinstance(rp, dict):
+            continue
+        answers_sig_parts: list[str] = []
+        answers_dict = rp.get("answers") if isinstance(rp.get("answers"), dict) else {}
+        for k in sorted(answers_dict.keys()):
+            v = answers_dict[k]
+            if isinstance(v, dict):
+                answers_sig_parts.append(f"{k}:{v.get('display', '')}")
+        questions_sig_parts: list[str] = []
+        questions_list = rp.get("questions") if isinstance(rp.get("questions"), list) else []
+        for q in questions_list:
+            if isinstance(q, dict):
+                qid = str(q.get("id") or "").strip()[:80]
+                qtxt = str(q.get("label") or q.get("text") or "").strip()[:300]
+                if qid or qtxt:
+                    questions_sig_parts.append(f"{qid}|{qtxt}")
+        assistant_id = str(rp.get("assistant_message_id") or "").strip()
+        sig = f"{assistant_id}|#Q#{'|'.join(questions_sig_parts)}|#A#{'|'.join(answers_sig_parts)}"
+        if sig not in seen_round_sigs:
+            seen_round_sigs.add(sig)
+            deduped_rounds.append(rp)
+    raw_rounds = deduped_rounds
+
     # Freshness guard:
     # - If historical rounds include explicit assistant_message_id values,
     #   the current clarification response must match one of them.
