@@ -70,7 +70,12 @@ def validate_csrf_request():
         or request.form.get("csrf_token")
         or ""
     ).strip()
-    if expected_token and provided_token and secrets.compare_digest(expected_token, provided_token):
+    token_valid = (
+        bool(expected_token)
+        and bool(provided_token)
+        and secrets.compare_digest(expected_token, provided_token)
+    )
+    if token_valid:
         return None
 
     if request.path.startswith("/api/") or request.path == "/chat":

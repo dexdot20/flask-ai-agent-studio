@@ -87,6 +87,24 @@ def create_app(database_path: str | None = None, *, load_persisted_runtime_setti
             return redirect(secure_url, code=308)
         _logger.info("HTTPS enforcement enabled")
 
+    @app.after_request
+    def _inject_security_headers(response):
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data: blob:; "
+                "font-src 'self' data:; "
+                "connect-src 'self'"
+            ),
+        )
+        return response
+
     @app.before_request
     def _sync_rag_once_before_request():
         if app.config.get("RAG_STARTUP_SYNC_DONE"):
