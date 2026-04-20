@@ -7,10 +7,26 @@ SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 APP_USER="${SUDO_USER:-${USER:-}}"
 APP_GROUP="${APP_USER}"
 WORKING_DIR="${ROOT_DIR}"
-PYTHON_BIN="${WORKING_DIR}/.venv/bin/python"
-GUNICORN_BIN="${WORKING_DIR}/.venv/bin/gunicorn"
 ENV_FILE="${WORKING_DIR}/.env"
 APP_ENTRY="app:app"
+VENV_DIR=""
+PYTHON_BIN=""
+GUNICORN_BIN=""
+
+detect_virtualenv() {
+  local candidate
+
+  for candidate in "${WORKING_DIR}/.venv" "${WORKING_DIR}/venv"; do
+    if [[ -x "${candidate}/bin/python" ]]; then
+      VENV_DIR="${candidate}"
+      PYTHON_BIN="${candidate}/bin/python"
+      GUNICORN_BIN="${candidate}/bin/gunicorn"
+      return 0
+    fi
+  done
+
+  return 1
+}
 
 if [[ "$(uname -s)" != "Linux" ]]; then
   echo "This script only runs on Linux." >&2
@@ -27,9 +43,9 @@ if [[ ! -d "${WORKING_DIR}" ]]; then
   exit 1
 fi
 
-if [[ ! -x "${PYTHON_BIN}" ]]; then
-  echo "Virtual environment not found: ${PYTHON_BIN}" >&2
-  echo "Install dependencies and create .venv first." >&2
+if ! detect_virtualenv; then
+  echo "Virtual environment not found in ${WORKING_DIR}/.venv or ${WORKING_DIR}/venv." >&2
+  echo "Install dependencies and create a virtual environment first." >&2
   exit 1
 fi
 
@@ -46,7 +62,7 @@ if [[ -z "${APP_USER}" ]]; then
 fi
 
 if [[ ! -x "${GUNICORN_BIN}" ]]; then
-  echo "gunicorn was not found in the virtual environment. Make sure it is installed." >&2
+  echo "gunicorn was not found in ${VENV_DIR}. Make sure it is installed." >&2
   exit 1
 fi
 
