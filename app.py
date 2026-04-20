@@ -76,15 +76,18 @@ def create_app(database_path: str | None = None, *, load_persisted_runtime_setti
             if request.is_secure:
                 response.headers.setdefault("Strict-Transport-Security", hsts_value)
             return response
+
         _logger.info("HSTS enabled: %s", hsts_value)
 
     if config.FORCE_HTTPS:
+
         @app.before_request
         def _enforce_https():
             if request.is_secure:
                 return None
             secure_url = request.url.replace("http://", "https://", 1)
             return redirect(secure_url, code=308)
+
         _logger.info("HTTPS enforcement enabled")
 
     @app.after_request
@@ -96,11 +99,12 @@ def create_app(database_path: str | None = None, *, load_persisted_runtime_setti
             "Content-Security-Policy",
             (
                 "default-src 'self'; "
-                "script-src 'self' 'unsafe-inline'; "
-                "style-src 'self' 'unsafe-inline'; "
+                "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdn.jsdelivr.net/npm/ https://cdn.jsdelivr.net/gh/; "
+                "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdn.jsdelivr.net/npm/ https://cdn.jsdelivr.net/gh/; "
                 "img-src 'self' data: blob:; "
-                "font-src 'self' data:; "
-                "connect-src 'self'"
+                "font-src 'self' data: https://cdn.jsdelivr.net https://cdn.jsdelivr.net/npm/ https://cdn.jsdelivr.net/gh/; "
+                "connect-src 'self' https://cdn.jsdelivr.net https://cdn.jsdelivr.net/npm/ https://cdn.jsdelivr.net/gh/; "
+                "frame-src 'self'"
             ),
         )
         return response
