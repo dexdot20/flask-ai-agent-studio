@@ -448,14 +448,9 @@ def _build_clarification_policy_payload(
         "tool": "ask_clarifying_question",
         "guidance": (
             "If a good answer depends on missing requirements, ask for clarification instead of guessing. "
-            "If the user explicitly asks you to ask questions first, you MUST emit an actual ask_clarifying_question tool call — "
-            "outlining questions in your reasoning/thinking without emitting the call is not sufficient, "
-            "and conversation memory entries or prior chat mentions do NOT satisfy this requirement. "
-            "After you ask clarifying questions, wait for the user's reply before continuing. "
-            "If the Clarification Response section is already present for this turn, that reply has already arrived; proceed directly to the task — do NOT call ask_clarifying_question again. "
-            "Conversation memory entries and ordinary prior messages are NOT Clarification Responses — they do not release you from asking questions the user has explicitly requested. "
-            "When the Clarification Response is present, do NOT call save_to_conversation_memory for those answers — "
-            "they are already persisted and injected automatically. Doing so wastes steps without benefit."
+            "If the user explicitly asks you to ask questions, you MUST emit an actual ask_clarifying_question tool call. "
+            "After asking, wait for the user's reply before continuing. "
+            "If Clarification Response is present for this turn, that reply has arrived; proceed directly — do NOT ask again."
         ),
     }
 
@@ -2140,23 +2135,18 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
     hidden_excerpt_guidance_line = _build_canvas_hidden_excerpt_guidance_line(active_tool_names)
 
     lines = [
-        "## Canvas Editing Guidance",
-        "- Prefer the smallest valid canvas change that satisfies the request. Prefer replace/insert/delete_canvas_lines over rewrite when only a part needs to change.",
-        "- When several non-overlapping edits for the same document are already known, prefer batch_canvas_edits over serial calls. replace needs start_line+end_line+lines; insert needs after_line+lines; delete needs start_line+end_line.",
-        "- Use preview_canvas_changes before large or risky batches. Use transform_canvas_lines for bulk find-replace; count_only when scope is uncertain.",
-        "- After mutating, verify the affected region with a read-only inspection tool before finalizing.",
-        "- update_canvas_metadata handles title, summary, role, dependency, or symbol changes (not content). Set ignored=true to hide a document without deleting it.",
-        "- Do not use line-based tools on an ignored canvas document until re-enabled with ignored=false.",
-        "- Cleanup: delete obsolete documents with delete_canvas_document. If the whole canvas is obsolete, use clear_canvas.",
-        "- For multi-page documents, use focus_canvas_page for page-specific tasks instead of estimating ranges.",
-        "- When multiple files or regions are involved, batch independent inspections in one answer, then batch all known edits in one answer.",
-        "- If you do not know the document_id, target the active document or use document_id. Use document_path only when an explicit project path is shown in the Canvas File Set Summary or Active Canvas Document block.",
-        '- When using replace_canvas_lines/insert_canvas_lines, ALL code must be inside the `lines` array as properly escaped JSON strings. Example: {"start_line":2,"end_line":3,"lines":["const char* ssid=\\"MyNet\\";"]}. Never put code outside the lines array.',
-        "- Use rewrite_canvas_document when most of the document should change or when the complete replacement is already known.",
-        "- After calling rewrite_canvas_document for a document, do NOT call it again for the same document in the same session — continue working with the saved content instead. Only call it again if: the user explicitly asks to restart/rewrite, the document was cleared/reset, or content has diverged significantly from the last saved version.",
-        "## Code Document Rules",
-        "- For source code files, use format='code'. Path usually infers format and language automatically.",
-        "- Code document content is raw source — no triple-backtick fences. Preserve indentation exactly.",
+        "## Canvas",
+        "- Prefer the smallest valid change. Use replace/insert/delete_canvas_lines over rewrite when only part changes.",
+        "- Batch known non-overlapping edits for the same document with batch_canvas_edits.",
+        "- Use preview_canvas_changes before large batches. Use transform_canvas_lines for bulk find-replace.",
+        "- Verify affected region with a read-only tool after mutating.",
+        "- update_canvas_metadata handles title, role, dependency, or symbol changes (not content). Set ignored=true to hide a document.",
+        "- Do not use line-based tools on an ignored document until re-enabled with ignored=false.",
+        "- For multi-page documents, use focus_canvas_page for page-specific tasks.",
+        "- When targeting, prefer document_path over document_id when shown in the prompt.",
+        "- All code must be inside the `lines` array as properly escaped JSON strings.",
+        "- Use rewrite_canvas_document when most of the document should change.",
+        "- After rewrite, do not call it again for the same document in the same session.",
     ]
     if "create_canvas_document" in active_set:
         lines.insert(2, "- create_canvas_document always needs BOTH title and content.")
@@ -2779,14 +2769,11 @@ def _build_runtime_dynamic_state_parts(
                 parts.append("")
         if any(name in {"append_scratchpad", "replace_scratchpad"} for name in runtime_tool_names):
             parts.append(
-                "\n### Memory Write Policy\n"
-                "- **DO save**: Only minimal durable general facts that are likely to matter across future conversations. Examples: stable user preferences, long-lived general constraints, confirmed identity details, and recurring requirements.\n"
-                "- **Default away from scratchpad**: If a detail is mainly about the current chat, current task, recent tool results, current repo state, or temporary plans, save it to conversation memory instead or do not store it at all.\n"
-                "- **DO NOT save**: One-off tasks, transient project state, raw tool outputs, web/search results, speculative inferences, broad summaries, or details already obvious from the current chat.\n"
-                "- **Before saving**: Ask whether this information is both general enough for future conversations and important enough to deserve long-term storage. If not, do not save it.\n"
-                "- **Use the right section**: Preferences belong in User Preferences, reasoning patterns in User Profile & Mindset, durable takeaways in Lessons Learned, recurring unresolved issues in Open Problems, long-running cross-conversation continuity in In-Progress Tasks, technical background in Domain Facts, and overflow facts in General Notes.\n"
-                "- **Web findings**: Do not turn search/news/URL results into scratchpad entries unless the result is clearly durable and the user would reasonably expect it to be remembered later. Never save them just because they were requested.\n"
-                "- **Style**: Each `notes` item must be one single short standalone fact. Never put multiple facts in one item. `append_scratchpad` appends to one section at a time, and `replace_scratchpad` rewrites one section at a time."
+                "\n## Scratchpad Policy\n"
+                "DO save: rare durable general facts likely to matter across future conversations.\n"
+                "Default away: current-chat details (use conversation memory instead).\n"
+                "DO NOT save: one-off tasks, transient project state, raw tool outputs, web/search results.\n"
+                "Style: each notes item = one short standalone fact."
             )
         parts.append("")
 
@@ -2827,10 +2814,8 @@ def _build_runtime_static_parts(
     )
 
     parts = [
-        "## Assistant Role",
-        "- You are a tool-using assistant.",
-        "- Base decisions on the conversation state, tool results, and runtime context with minimal redundancy.",
-        "- Follow the tool contracts, policies, and runtime guidance below.",
+        "## Role",
+        "- You are a tool-using assistant. Make decisions based on conversation state and tool results.",
         "",
     ]
 
@@ -2850,8 +2835,7 @@ def _build_runtime_static_parts(
     if contract:
         parts.append("## Tool Calling")
         parts.append(
-            "Native function calling is enabled for this turn. Use the Active Tools section later in this prompt for the exact callable set in this turn. "
-            "Do not restate tool schemas in regular text.\n"
+            "Native function calling is enabled. Use the Active Tools section for exact callables in this turn.\n"
         )
         for rule in contract["rules"]:
             parts.append(f"- {rule}")
@@ -2875,31 +2859,24 @@ def _build_runtime_static_parts(
         parts.append("## Important Policies\n" + "\n".join(f"- {policy}" for policy in policies) + "\n")
 
     if persona_memory_tools_enabled:
-        parts.append("## Persona Memory Write Policy")
+        parts.append("## Persona Memory")
         parts.append(
-            "- **Use save_to_persona_memory** for stable persona-scoped facts that should persist across future conversations using this same persona.\n"
-            "- **DO save**: standing persona preferences, recurring conventions, reusable repo or domain facts tied to this persona's work, and durable details broader than one chat but narrower than global scratchpad memory.\n"
-            "- **Default away from persona memory**: if the detail only matters for the current chat, save it to conversation memory instead.\n"
-            "- **Use scratchpad instead** for truly cross-persona, cross-conversation durable user memory.\n"
-            "- **DO NOT save**: one-off tasks, temporary plans, raw tool outputs, or volatile chat state.\n"
-            "- **Style**: `key` should be a short label and `value` should be one compact factual line.\n"
-            "- **Cleanup**: If an entry becomes wrong or obsolete, remove it with delete_persona_memory_entry."
+            "Use save_to_persona_memory for stable persona facts across future conversations.\n"
+            "DO save: preferences, recurring conventions, reusable domain facts.\n"
+            "Default away: details that only matter for the current chat (use conversation memory instead).\n"
+            "DO NOT save: one-off tasks, raw tool outputs, or volatile state.\n"
+            "Style: key = short label, value = one compact factual line."
         )
         parts.append("")
 
     if conversation_memory_tools_enabled:
-        parts.append("## Conversation Memory Write Policy")
+        parts.append("## Conversation Memory")
         parts.append(
-            "- **Use save_to_conversation_memory** proactively and often for important conversation-scoped facts that should survive later turns in this same chat.\n"
-            "- **Default choice**: if information mainly matters for this chat, save it to conversation memory rather than the scratchpad.\n"
-            "- **DO save**: confirmed user details relevant to this chat, active goals, firm constraints, accepted decisions, discovered repo or environment facts, and critical tool results that may matter later in the conversation.\n"
-            "- **Save incrementally**: after important clarifications, tool results, plan changes, and decision points, prefer a new compact record over hoping the detail remains visible in context.\n"
-            "- **Especially save before context loss**: details that would be expensive to rediscover after summarization, pruning, or long tool-heavy detours.\n"
-            "- **DO NOT save**: raw verbose outputs, broad summaries, speculative inferences, or durable general facts better suited for the scratchpad.\n"
-            "- **Style**: `key` should be a short label and `value` should be one compact factual line.\n"
-            "- **Prefer multiple small entries**: one fact, decision, or result per memory entry is better than one overloaded summary.\n"
-            "- **Prefer update over duplication**: Reuse the same key for the same fact. Saving an existing key refreshes that memory instead of creating noisy duplicates.\n"
-            "- **Cleanup**: If an entry becomes wrong or obsolete, remove it with delete_conversation_memory_entry."
+            "Use save_to_conversation_memory proactively for important chat-scoped facts.\n"
+            "DO save: confirmed user details, active goals, firm constraints, decisions, discovered facts, critical tool results.\n"
+            "Save incrementally after clarifications, tool results, plan changes, and decision points.\n"
+            "DO NOT save: raw outputs, broad summaries, speculative inferences, or durable facts better suited for scratchpad.\n"
+            "Style: key = short label, value = one compact factual line. Prefer many small entries over one overloaded entry."
         )
         parts.append("")
 

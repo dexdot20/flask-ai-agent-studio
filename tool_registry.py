@@ -155,12 +155,9 @@ TOOL_SPECS = [
                 "notes": "list of single short durable memory lines — one fact per item",
             },
             "guidance": (
-                "Use very sparingly. Save only durable user-specific facts, recurring constraints, or stable preferences that are likely to matter in future conversations. "
-                "If the information mainly belongs to the current chat, task, investigation, or tool run, save it to conversation memory instead. "
-                "Do not save temporary requests, current-task details, large summaries, tool outputs, web/search results, speculative guesses, or sensitive data. "
-                "If the information would not change future responses or behavior across conversations, do not store it. "
-                "Choose the section deliberately: preferences for stable style/language instructions, profile for reasoning patterns, lessons for takeaways, problems for recurring unresolved issues, tasks for long-running cross-conversation work, domain for durable technical facts, and notes for anything durable that does not fit elsewhere. "
-                "Each item in `notes` must be a single short standalone fact. Never combine multiple facts into one item."
+                "Use sparingly. Save only durable facts likely to matter in future conversations. "
+                "If the information mainly belongs to the current chat, use conversation memory instead. "
+                "Each item in `notes` must be a single short standalone fact."
             ),
         },
     },
@@ -193,9 +190,8 @@ TOOL_SPECS = [
                 "new_content": "the new complete content for that one section",
             },
             "guidance": (
-                "Use carefully to prune or reorganize existing facts in one section. Ensure you do not accidentally delete important existing preferences or lessons from that section. "
-                "Keep the final text compact and only include durable, general, high-signal facts that should matter across future conversations. "
-                "If the content is mainly about the current chat or task, keep it out of the scratchpad and use conversation memory instead. Prefer a short bulleted list over paragraphs."
+                "Use carefully to prune or reorganize existing facts in one section. "
+                "Keep the text compact. If the content is mainly about the current chat, use conversation memory instead."
             ),
         },
     },
@@ -282,13 +278,9 @@ TOOL_SPECS = [
                 "value": "one compact factual line (single-entry fallback)",
             },
             "guidance": (
-                "When you need to save multiple facts, pass them all as an array in the 'entries' field in a SINGLE call — never call this tool repeatedly one entry at a time. "
-                "Use this whenever the information is important within this conversation but not clearly durable general memory for the cross-conversation scratchpad. "
-                "When choosing between scratchpad and conversation memory, default to conversation memory unless the fact is durable, general, and likely useful across future chats. "
-                "Prefer concise micro-summaries over raw outputs. "
-                "Reuse the same key when updating the same fact so memory stays compact. "
-                "Do NOT save raw clarification question answers here — the clarification system already persists and injects them automatically. "
-                "Saving clarification answers to memory wastes steps and creates confusion in later turns."
+                "Use this for important chat-specific details, constraints, decisions, and tool outcomes. "
+                "Default to this over scratchpad unless the fact is durable and cross-conversation. "
+                "Pass multiple entries in one call. Reuse the same key when updating to keep memory compact."
             ),
         },
     },
@@ -345,11 +337,9 @@ TOOL_SPECS = [
                 "value": "one compact factual line",
             },
             "guidance": (
-                "Use this for stable persona-scoped facts that should survive beyond the current chat, but are not broad enough for the global scratchpad. "
-                "Prefer this for recurring conventions, reusable repo or domain facts tied to this persona's work, and other durable persona-level context. "
-                "If the detail only matters for this current chat, save it to conversation memory instead. "
-                "Do NOT save raw tool outputs, temporary plans, or one-off task state here. "
-                "Reuse the same key when updating the same fact so persona memory stays compact."
+                "Use for stable persona-scoped facts that survive beyond the current chat. "
+                "If the detail only matters for this chat, use conversation memory instead. "
+                "Reuse the same key when updating to keep persona memory compact."
             ),
         },
     },

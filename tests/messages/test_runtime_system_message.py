@@ -56,12 +56,9 @@ class TestRuntimeSystemMessage:
         assert "Scratchpad (AI Persistent Memory)" in content
         assert "### User Profile & Mindset" in content
         assert "The user is 22 years old." in content
-        assert "Only minimal durable general facts" in content
-        assert "Default away from scratchpad" in content
-        assert "Web findings" in content
-        assert "important enough to deserve long-term storage" in content
-        assert "Never save them just because they were requested." in content
-        assert "Err on the side of saving if in doubt." not in content
+        assert "DO save:" in content
+        assert "Default away" in content
+        assert "Scratchpad Policy" in content
         assert "Clarification**: If a good answer depends" in content
         assert "Image Follow-up**: Use for follow-up questions" in content
         assert "Tool Memory" in content
@@ -121,7 +118,7 @@ class TestRuntimeSystemMessage:
         )
 
         content = message["content"]
-        assert "## Assistant Role" in content
+        assert "## Role" in content
         assert "- You are a tool-using assistant." in content
         assert "\n\n\n" not in content
 
@@ -289,13 +286,11 @@ class TestRuntimeSystemMessage:
         )
 
         content = message["content"]
-        assert "## Canvas Editing Guidance" in content
-        assert "Prefer replace/insert/delete_canvas_lines over rewrite when only a part needs to change" in content
-        assert "delete obsolete documents with delete_canvas_document" in content
-        assert "If the whole canvas is obsolete, use clear_canvas" in content
+        assert "## Canvas" in content
+        assert "Prefer the smallest valid change" in content
         assert "## Tool Calling" in content
         assert "## Active Tools This Turn" in content
-        assert "Native function calling is enabled for this turn." in content
+        assert "Native function calling is enabled" in content
         active_tools_start = content.index("## Active Tools This Turn")
         active_tools_block = content[active_tools_start:]
         assert "Callable tools: `create_canvas_document`" in active_tools_block
@@ -340,8 +335,7 @@ class TestRuntimeSystemMessage:
         assert "- Visible excerpt tokens (estimated): ~" in content
         assert "1: print('hello')" in content
         assert "2: print('world')" in content
-        assert "## Canvas Editing Guidance" in content
-        assert "batch independent inspections in one answer, then batch all known edits in one answer" in content
+        assert "## Canvas" in content
         assert "## Active Tools This Turn" in content
         assert "## Canvas File Set Summary" not in content
         assert "## Canvas Decision Matrix" not in content
@@ -549,8 +543,7 @@ class TestRuntimeSystemMessage:
         content = message["content"]
         assert "- Active document: Research Notes" in content
         assert "- Other canvas documents: Ricky - Career Profile and Preferences" in content
-        assert "Use document_path only when an explicit project path is shown" in content
-        assert "target the active document or use document_id" in content
+        assert "prefer document_path" in content.lower()
 
     def test_runtime_system_message_includes_pinned_canvas_viewports(self):
         runtime_state = create_canvas_runtime_state(
@@ -787,8 +780,8 @@ class TestRuntimeSystemMessage:
         )
 
         content = message["content"]
-        assert "prefer batch_canvas_edits over serial calls" in content
-        assert "replace needs start_line+end_line+lines" in content
+        assert "## Canvas" in content
+        assert "batch_canvas_edits" in content
 
     def test_runtime_system_message_omits_disabled_scroll_guidance(self):
         message = build_runtime_system_message(
@@ -870,7 +863,7 @@ class TestRuntimeSystemMessage:
 
         static_content = messages[0]["content"]
         dynamic_content = messages[1]["content"]
-        assert "## Assistant Role" in static_content
+        assert "## Role" in static_content
         assert "## Scratchpad (AI Persistent Memory)" in dynamic_content
         assert "Persistent note" in dynamic_content
         assert "## Current Date and Time" in dynamic_content
@@ -899,8 +892,8 @@ class TestRuntimeSystemMessage:
         assert len(messages) == 3
         static_content = messages[0]["content"]
         dynamic_content = messages[1]["content"]
-        assert "## Assistant Role" in static_content
-        assert "## Conversation Memory Write Policy" in static_content
+        assert "## Role" in static_content
+        assert "## Conversation Memory" in static_content
         assert "## User Profile" in dynamic_content
         assert "The user prefers concise answers." in dynamic_content
         assert "## Scratchpad (AI Persistent Memory)" in dynamic_content
@@ -1004,11 +997,11 @@ class TestRuntimeSystemMessage:
         persona_guidance = TOOL_SPEC_BY_NAME["save_to_persona_memory"]["prompt"]["guidance"]
 
         assert "conversation memory instead" in scratchpad_guidance
-        assert "future responses or behavior across conversations" in scratchpad_guidance
-        assert "default to conversation memory" in conversation_guidance
-        assert "When you need to save multiple facts" in conversation_guidance
+        assert "matter in future conversations" in scratchpad_guidance
+        assert "Default to this over scratchpad" in conversation_guidance
+        assert "Pass multiple entries in one call" in conversation_guidance
         assert "current chat" in persona_guidance
-        assert "global scratchpad" in persona_guidance
+        assert "conversation memory instead" in persona_guidance
 
     def test_search_tool_specs_allow_optional_conversation_memory_promotion(self):
         knowledge_base_spec = TOOL_SPEC_BY_NAME["search_knowledge_base"]
@@ -1034,6 +1027,5 @@ class TestRuntimeSystemMessage:
         assert "## Persona Memory" in content
         assert "#5 09:15 - Repo style: Prefer concise progress updates." in content
         assert "Shared durable memory for the currently active persona" in content
-        assert "## Persona Memory Write Policy" in content
         assert "save_to_persona_memory" in content
         assert "conversation memory instead" in content

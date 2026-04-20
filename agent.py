@@ -4142,16 +4142,11 @@ def _build_final_answer_instruction() -> dict:
     return {
         "role": "system",
         "content": (
-            "[INSTRUCTION: FINAL ANSWER REQUIRED]\n\n"
-            "Tool execution budget is exhausted. Do not call more tools.\n"
-            "Respond with the best possible final answer using the available context.\n"
-            "Do not claim that an action was completed unless a tool result in this run confirms it. "
-            "If work remains unfinished, say so explicitly.\n"
-            "Do not repeat, recap, or re-state any step-by-step planning or tool-invocation "
-            "announcements from previous assistant turns. Begin your final answer directly.\n"
-            "Do not include stray JSON objects, status payloads, bracketed asides, insults, roleplay, "
-            "or meta commentary unrelated to the user's request.\n"
-            "Place the final answer in assistant content, not reasoning_content."
+            "[FINAL ANSWER REQUIRED]\n\n"
+            "Tool budget exhausted. Respond with the best final answer using available context.\n"
+            "Do not claim completion unless confirmed by tool results. "
+            "If work is unfinished, say so.\n"
+            "Begin your answer directly. No step-by-step recap."
         ),
     }
 
@@ -4159,7 +4154,7 @@ def _build_final_answer_instruction() -> dict:
 def _build_minimal_final_answer_instruction() -> dict:
     return {
         "role": "system",
-        "content": "[FINAL ANSWER ONLY]\nNo tools. Answer in assistant content only.",
+        "content": "[FINAL ANSWER ONLY] No tools.",
     }
 
 
@@ -4167,11 +4162,8 @@ def _build_missing_final_answer_instruction() -> dict:
     return {
         "role": "system",
         "content": (
-            "[INSTRUCTION: MISSING FINAL ANSWER — RETRY]\n\n"
-            "You have not returned any final answer in assistant content yet.\n"
-            "Continue and respond now using assistant content only.\n"
-            "If you need tools, place only the tool_calls JSON in assistant content.\n"
-            "Do not place the final answer or tool JSON in reasoning_content."
+            "[FINAL ANSWER REQUIRED]\n\n"
+            "No final answer in assistant content yet. Respond now using assistant content only."
         ),
     }
 

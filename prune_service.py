@@ -45,11 +45,8 @@ PRUNABLE_ROLES = {"user", "assistant"}
 PRUNING_MODEL = DEFAULT_CHAT_MODEL
 client = get_provider_client(DEEPSEEK_PROVIDER)
 PRUNING_SYSTEM_PROMPT = (
-    "You are a specialized text refinement AI. Your goal is to rewrite a single chat message for conciseness while strictly preserving the original language, core meaning, intent, tone, and all critical facts.\n"
-    "Do not delete, summarize, or paraphrase code blocks, commands, logs, JSON, tables, numbers, URLs, identifiers, API names, configuration values, or other technical data.\n"
-    "Preserve unresolved questions, decisions, constraints, requested follow-ups, and references that later turns may rely on.\n"
-    "When you encounter those sections, keep those sections verbatim and only trim truly redundant surrounding prose.\n"
-    "Return only the refined message text without conversational filler or markdown artifacts."
+    "Rewrite the message concisely. Preserve all technical data, code, numbers, URLs, and facts. "
+    "Remove only redundant prose. Return only the refined text."
 )
 PRUNING_CONTEXT_MESSAGE_MAX_CHARS = 700
 PRUNING_CONTEXT_NEIGHBOR_COUNT = 2
@@ -93,18 +90,13 @@ def _normalize_prune_score_weights(weights: dict[str, float]) -> dict[str, float
     if total <= 0:
         return _PruneScoreWeights(
             {
-            "entropy_prunability": 0.35,
-            "rag_coverage": 0.30,
-            "staleness": 0.25,
-            "token_weight": 0.10,
+                "entropy_prunability": 0.35,
+                "rag_coverage": 0.30,
+                "staleness": 0.25,
+                "token_weight": 0.10,
             }
         )
-    return _PruneScoreWeights(
-        {
-            key: value / total
-            for key, value in normalized.items()
-        }
-    )
+    return _PruneScoreWeights({key: value / total for key, value in normalized.items()})
 
 
 def _extract_response_text(response: Any) -> str:
@@ -279,20 +271,22 @@ def _compute_rag_coverage_score_for_query(
     if not matches:
         return 0.0
 
-    strongest_similarity = max(
-        float(match.get("similarity") or 0.0)
-        for match in matches
-        if isinstance(match.get("similarity"), (int, float))
-    ) if any(isinstance(match.get("similarity"), (int, float)) for match in matches) else 0.0
+    strongest_similarity = (
+        max(
+            float(match.get("similarity") or 0.0)
+            for match in matches
+            if isinstance(match.get("similarity"), (int, float))
+        )
+        if any(isinstance(match.get("similarity"), (int, float)) for match in matches)
+        else 0.0
+    )
     threshold = float((result or {}).get("min_similarity") or PRUNE_SCORE_RAG_MIN_SIMILARITY)
     similarity_score = 0.0
     if strongest_similarity > threshold:
         similarity_score = (strongest_similarity - threshold) / max(0.01, 1.0 - threshold)
 
     unique_sources = {
-        str(match.get("source_key") or "").strip()
-        for match in matches
-        if str(match.get("source_key") or "").strip()
+        str(match.get("source_key") or "").strip() for match in matches if str(match.get("source_key") or "").strip()
     }
     diversity_bonus = min(0.2, max(0, len(unique_sources) - 1) * 0.05)
     return _clamp_score(similarity_score + diversity_bonus)
@@ -378,8 +372,7 @@ def score_conversation_messages_for_prune(
             _load_conversation_messages(normalized_conversation_id),
             key=lambda message: (int(message.get("position") or 0), int(message.get("id") or 0)),
         )
-        if is_prunable_message(message)
-        and (filtered_ids is None or int(message.get("id") or 0) in filtered_ids)
+        if is_prunable_message(message) and (filtered_ids is None or int(message.get("id") or 0) in filtered_ids)
     ]
     if not candidates:
         return []
@@ -518,7 +511,11 @@ def _build_pruning_context_hint(conversation_id: int, message_id: int) -> str:
 
     visible_messages = [message_row_to_dict(row) for row in rows]
     current_index = next(
-        (index for index, message in enumerate(visible_messages) if int(message.get("id") or 0) == normalized_message_id),
+        (
+            index
+            for index, message in enumerate(visible_messages)
+            if int(message.get("id") or 0) == normalized_message_id
+        ),
         -1,
     )
     if current_index < 0:
@@ -617,7 +614,7 @@ def is_prunable_message(message: dict) -> bool:
 def _load_message_row(message_id: int):
     with get_db() as conn:
         return conn.execute(
-        """SELECT id, conversation_id, position, role, content, metadata, tool_calls, tool_call_id,
+            """SELECT id, conversation_id, position, role, content, metadata, tool_calls, tool_call_id,
                   prompt_tokens, completion_tokens, total_tokens, deleted_at
            FROM messages
            WHERE id = ? AND deleted_at IS NULL""",
@@ -684,7 +681,14 @@ def prune_message(message_id: int) -> dict:
             },
             target,
         )
-        from activity_service import ActivityTimer, STATUS_OK, STATUS_ERROR, extract_usage_from_response, log_activity_call
+        from activity_service import (
+            ActivityTimer,
+            STATUS_OK,
+            STATUS_ERROR,
+            extract_usage_from_response,
+            log_activity_call,
+        )
+
         _conv_id_for_log = int(row["conversation_id"] or 0)
         _timer = ActivityTimer()
         _response_status = STATUS_OK
