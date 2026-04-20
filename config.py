@@ -310,7 +310,6 @@ DEFAULT_ACTIVE_TOOL_NAMES = [
     "image_explain",
     "transcribe_youtube_video",
     "search_knowledge_base",
-    "search_tool_memory",
     "search_web",
     "fetch_url",
     "fetch_url_summarized",

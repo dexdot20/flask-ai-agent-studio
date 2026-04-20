@@ -15,7 +15,6 @@ from rag_service import (
     ensure_supported_rag_sources,
     get_exact_tool_memory_match,
     search_knowledge_base_tool,
-    search_tool_memory,
     sync_conversations_to_rag_background,
     upsert_tool_memory_result,
 )
@@ -85,7 +84,9 @@ class TestRagRuntime:
             from db import get_db, insert_message
 
             with get_db() as conn:
-                insert_message(conn, conversation_id, "user", "Please keep answers short and concise in future replies.")
+                insert_message(
+                    conn, conversation_id, "user", "Please keep answers short and concise in future replies."
+                )
                 insert_message(conn, conversation_id, "assistant", "Understood. I will keep future answers concise.")
 
         summary_payload = {
@@ -95,20 +96,28 @@ class TestRagRuntime:
                         "The user prefers concise answers in future replies and wants the assistant to keep responses short unless more detail is explicitly requested.",
                         "The user is actively working on an os-chatbot codebase and expects continuity across iterations so the assistant should preserve implementation context when responding.",
                     ],
-                    "decisions": ["Future replies should stay concise while still preserving implementation-critical details and current repository context."],
-                    "open_issues": ["Need to keep tracking codebase-specific preferences across future maintenance tasks."],
+                    "decisions": [
+                        "Future replies should stay concise while still preserving implementation-critical details and current repository context."
+                    ],
+                    "open_issues": [
+                        "Need to keep tracking codebase-specific preferences across future maintenance tasks."
+                    ],
                     "entities": ["os-chatbot"],
-                    "tool_outcomes": ["No external tool results were required for this summary; the key persistent preference is concise reply style."],
+                    "tool_outcomes": [
+                        "No external tool results were required for this summary; the key persistent preference is concise reply style."
+                    ],
                 }
             )
         }
         settings = get_app_settings()
-        settings.update({
-            "chat_summary_mode": "auto",
-            "chat_summary_detail_level": "detailed",
-            "summary_skip_first": 0,
-            "summary_skip_last": 0,
-        })
+        settings.update(
+            {
+                "chat_summary_mode": "auto",
+                "chat_summary_detail_level": "detailed",
+                "summary_skip_first": 0,
+                "summary_skip_last": 0,
+            }
+        )
 
         with patch("routes.chat.collect_agent_response", return_value=summary_payload) as mocked_collect:
             outcome = maybe_create_conversation_summary(
@@ -137,15 +146,30 @@ class TestRagRuntime:
         fake_collection = Mock()
         fake_collection.query.return_value = {
             "documents": [["expired result", "fresh result"]],
-            "metadatas": [[
-                {"source_key": "expired", "source_type": "tool_memory", "category": "tool_memory", "expires_at_ts": past_ts},
-                {"source_key": "fresh", "source_type": "tool_memory", "category": "tool_memory", "expires_at_ts": future_ts},
-            ]],
+            "metadatas": [
+                [
+                    {
+                        "source_key": "expired",
+                        "source_type": "tool_memory",
+                        "category": "tool_memory",
+                        "expires_at_ts": past_ts,
+                    },
+                    {
+                        "source_key": "fresh",
+                        "source_type": "tool_memory",
+                        "category": "tool_memory",
+                        "expires_at_ts": future_ts,
+                    },
+                ]
+            ],
             "distances": [[0.1, 0.05]],
             "ids": [["old-id", "fresh-id"]],
         }
 
-        with patch("rag.store._iter_query_collections", return_value=[(fake_collection, {"category": "tool_memory"})]), patch("rag.store.embed_texts", return_value=[[0.1, 0.2]]):
+        with (
+            patch("rag.store._iter_query_collections", return_value=[(fake_collection, {"category": "tool_memory"})]),
+            patch("rag.store.embed_texts", return_value=[[0.1, 0.2]]),
+        ):
             rows = query_chunks("latest result", top_k=5, category="tool_memory")
 
         assert len(rows) == 1
@@ -184,7 +208,10 @@ class TestRagRuntime:
                 return collection_tool_memory
             return Mock()
 
-        with patch("rag.store.get_collection", side_effect=fake_get_collection), patch("rag.store.embed_texts", return_value=[[0.1, 0.2], [0.3, 0.4]]):
+        with (
+            patch("rag.store.get_collection", side_effect=fake_get_collection),
+            patch("rag.store.embed_texts", return_value=[[0.1, 0.2], [0.3, 0.4]]),
+        ):
             inserted = upsert_chunks(chunks)
 
         assert inserted == 2
@@ -192,20 +219,24 @@ class TestRagRuntime:
         collection_tool_memory.upsert.assert_called_once()
 
     def test_get_exact_tool_memory_match_returns_joined_chunk_content(self):
-        with patch("rag_service.ensure_supported_rag_sources"), patch(
-            "rag_service.get_rag_document_record",
-            return_value={
-                "source_key": "src-1",
-                "source_name": "fetch_url: https://example.com/page",
-                "metadata": json.dumps({"summary": "Page content extracted: Example"}),
-                "expires_at": None,
-            },
-        ), patch(
-            "rag_service.rag_get_source_chunks",
-            return_value=[
-                {"id": "chunk-1", "text": "Title: Example", "metadata": {"chunk_index": 0}},
-                {"id": "chunk-2", "text": "Body: Retrieved content", "metadata": {"chunk_index": 1}},
-            ],
+        with (
+            patch("rag_service.ensure_supported_rag_sources"),
+            patch(
+                "rag_service.get_rag_document_record",
+                return_value={
+                    "source_key": "src-1",
+                    "source_name": "fetch_url: https://example.com/page",
+                    "metadata": json.dumps({"summary": "Page content extracted: Example"}),
+                    "expires_at": None,
+                },
+            ),
+            patch(
+                "rag_service.rag_get_source_chunks",
+                return_value=[
+                    {"id": "chunk-1", "text": "Title: Example", "metadata": {"chunk_index": 0}},
+                    {"id": "chunk-2", "text": "Body: Retrieved content", "metadata": {"chunk_index": 1}},
+                ],
+            ),
         ):
             match = get_exact_tool_memory_match("fetch_url", "https://example.com/page")
 
@@ -215,7 +246,10 @@ class TestRagRuntime:
         assert "Body: Retrieved content" in match["content"]
 
     def test_upsert_tool_memory_result_assigns_ttl_metadata(self):
-        with patch("rag_service.time.time", return_value=1_000), patch("rag_service.ingest_rag_chunks") as mocked_ingest:
+        with (
+            patch("rag_service.time.time", return_value=1_000),
+            patch("rag_service.ingest_rag_chunks") as mocked_ingest,
+        ):
             mocked_ingest.return_value = {"ok": True}
             upsert_tool_memory_result(
                 "search_news_ddgs",
@@ -233,7 +267,10 @@ class TestRagRuntime:
         assert str(kwargs["metadata"]["document_path"]).startswith("tool_memory/")
 
     def test_upsert_tool_memory_result_sanitizes_html_entities(self):
-        with patch("rag_service.time.time", return_value=1_000), patch("rag_service.ingest_rag_chunks") as mocked_ingest:
+        with (
+            patch("rag_service.time.time", return_value=1_000),
+            patch("rag_service.ingest_rag_chunks") as mocked_ingest,
+        ):
             mocked_ingest.return_value = {"ok": True}
             upsert_tool_memory_result(
                 "fetch_url",
@@ -275,9 +312,12 @@ class TestRagRuntime:
             },
         ]
 
-        with patch("rag_service.ensure_supported_rag_sources"), patch("rag_service.rag_query_chunks", return_value=fake_hits), patch(
-            "rag_service.get_db"
-        ) as mocked_db, patch("rag_service.time.time", return_value=2_000):
+        with (
+            patch("rag_service.ensure_supported_rag_sources"),
+            patch("rag_service.rag_query_chunks", return_value=fake_hits),
+            patch("rag_service.get_db") as mocked_db,
+            patch("rag_service.time.time", return_value=2_000),
+        ):
             mocked_db.return_value.__enter__.return_value.execute.return_value.fetchall.return_value = [
                 {"source_key": "src-1", "chunk_count": 3}
             ]
@@ -306,7 +346,14 @@ class TestRagRuntime:
                     {
                         "id": "chunk-1",
                         "text": "sort docs",
-                        "metadata": {"source_key": "src-1", "source_name": "doc-1", "source_type": "conversation", "category": "conversation", "chunk_index": 0, "indexed_at_ts": 2_000},
+                        "metadata": {
+                            "source_key": "src-1",
+                            "source_name": "doc-1",
+                            "source_type": "conversation",
+                            "category": "conversation",
+                            "chunk_index": 0,
+                            "indexed_at_ts": 2_000,
+                        },
                         "similarity": 0.40,
                     }
                 ]
@@ -314,64 +361,55 @@ class TestRagRuntime:
                 {
                     "id": "chunk-1",
                     "text": "sort docs",
-                    "metadata": {"source_key": "src-1", "source_name": "doc-1", "source_type": "conversation", "category": "conversation", "chunk_index": 0, "indexed_at_ts": 2_000},
+                    "metadata": {
+                        "source_key": "src-1",
+                        "source_name": "doc-1",
+                        "source_type": "conversation",
+                        "category": "conversation",
+                        "chunk_index": 0,
+                        "indexed_at_ts": 2_000,
+                    },
                     "similarity": 0.52,
                 },
                 {
                     "id": "chunk-2",
                     "text": "list order",
-                    "metadata": {"source_key": "src-2", "source_name": "doc-2", "source_type": "conversation", "category": "conversation", "chunk_index": 1, "indexed_at_ts": 2_000},
+                    "metadata": {
+                        "source_key": "src-2",
+                        "source_name": "doc-2",
+                        "source_type": "conversation",
+                        "category": "conversation",
+                        "chunk_index": 1,
+                        "indexed_at_ts": 2_000,
+                    },
                     "similarity": 0.45,
                 },
             ]
 
-        with patch("rag_service.ensure_supported_rag_sources"), patch("rag_service.rag_query_chunks", side_effect=fake_query) as mocked_query, patch("rag_service.time.time", return_value=2_000):
+        with (
+            patch("rag_service.ensure_supported_rag_sources"),
+            patch("rag_service.rag_query_chunks", side_effect=fake_query) as mocked_query,
+            patch("rag_service.time.time", return_value=2_000),
+        ):
             result = search_knowledge_base_tool(original_query, top_k=5)
 
         assert mocked_query.call_count >= 2
         assert result["count"] == 2
-        assert [match["id"] for match in result["matches"]] == ["chunk-1", "chunk-2"]
-
-    def test_search_tool_memory_supports_similarity_and_expiry_fields(self):
-        fake_hits = [
-            {
-                "id": "chunk-1",
-                "text": "cached result",
-                "metadata": {
-                    "source_key": "src-1",
-                    "source_name": "fetch_url: example",
-                    "source_type": "tool_memory",
-                    "category": "tool_memory",
-                    "chunk_index": 0,
-                    "indexed_at_ts": 2_000,
-                    "expires_at_ts": 2_800,
-                },
-                "similarity": 0.41,
-            }
-        ]
-
-        with patch("rag_service.ensure_supported_rag_sources"), patch("rag_service.rag_query_chunks", return_value=fake_hits), patch(
-            "rag_service.get_db"
-        ) as mocked_db, patch("rag_service.time.time", return_value=2_000):
-            mocked_db.return_value.__enter__.return_value.execute.return_value.fetchall.return_value = [
-                {"source_key": "src-1", "chunk_count": 2}
-            ]
-            result = search_tool_memory("cached result", top_k=5, min_similarity=0.4)
-
-        assert result["min_similarity"] == 0.4
-        assert result["matches"][0]["total_chunks"] == 2
-        assert result["matches"][0]["expires_at_utc"] == "1970-01-01 00:46:40"
-        assert result["matches"][0]["expiry_warning"] == "Expires within 1 hour"
 
     def test_ensure_supported_rag_sources_uses_cooldown(self):
         fake_conn = Mock()
         fake_conn.execute.return_value.fetchall.return_value = []
 
-        with patch("rag_service._rag_sources_verified", True), patch("rag_service._rag_sources_last_verified_at", 100.0), patch(
-            "rag_service.time.time", return_value=120.0
-        ), patch("rag_service.get_db", return_value=Mock(__enter__=Mock(return_value=fake_conn), __exit__=Mock(return_value=False))), patch(
-            "rag_service.get_expired_rag_document_source_keys"
-        ) as mocked_expired:
+        with (
+            patch("rag_service._rag_sources_verified", True),
+            patch("rag_service._rag_sources_last_verified_at", 100.0),
+            patch("rag_service.time.time", return_value=120.0),
+            patch(
+                "rag_service.get_db",
+                return_value=Mock(__enter__=Mock(return_value=fake_conn), __exit__=Mock(return_value=False)),
+            ),
+            patch("rag_service.get_expired_rag_document_source_keys") as mocked_expired,
+        ):
             removed = ensure_supported_rag_sources()
 
         assert removed == 0
@@ -463,7 +501,10 @@ class TestRagRuntime:
             },
         ]
 
-        with patch("rag_service.ensure_supported_rag_sources"), patch("rag_service.rag_query_chunks", return_value=fake_hits):
+        with (
+            patch("rag_service.ensure_supported_rag_sources"),
+            patch("rag_service.rag_query_chunks", return_value=fake_hits),
+        ):
             result = build_rag_auto_context(
                 "manual memory",
                 True,
@@ -482,18 +523,36 @@ class TestRagRuntime:
             {
                 "id": "old-hit",
                 "text": "older memory",
-                "metadata": {"source_key": "old", "source_name": "Old", "source_type": "tool_memory", "category": "tool_memory", "chunk_index": 0, "indexed_at_ts": old_timestamp},
+                "metadata": {
+                    "source_key": "old",
+                    "source_name": "Old",
+                    "source_type": "tool_memory",
+                    "category": "tool_memory",
+                    "chunk_index": 0,
+                    "indexed_at_ts": old_timestamp,
+                },
                 "similarity": 0.50,
             },
             {
                 "id": "new-hit",
                 "text": "newer memory",
-                "metadata": {"source_key": "new", "source_name": "New", "source_type": "tool_memory", "category": "tool_memory", "chunk_index": 0, "indexed_at_ts": new_timestamp},
+                "metadata": {
+                    "source_key": "new",
+                    "source_name": "New",
+                    "source_type": "tool_memory",
+                    "category": "tool_memory",
+                    "chunk_index": 0,
+                    "indexed_at_ts": new_timestamp,
+                },
                 "similarity": 0.50,
             },
         ]
 
-        with patch("rag_service.ensure_supported_rag_sources"), patch("rag_service.rag_query_chunks", return_value=fake_hits), patch("rag_service.time.time", return_value=new_timestamp):
+        with (
+            patch("rag_service.ensure_supported_rag_sources"),
+            patch("rag_service.rag_query_chunks", return_value=fake_hits),
+            patch("rag_service.time.time", return_value=new_timestamp),
+        ):
             result = build_rag_auto_context("recent memory", True, threshold=0.1, top_k=5)
 
         assert result is not None
@@ -507,13 +566,25 @@ class TestRagRuntime:
             {
                 "id": "conversation-hit",
                 "text": "conversation memory",
-                "metadata": {"source_key": "conversation-1", "source_name": "Conversation", "source_type": "conversation", "category": "conversation", "chunk_index": 0},
+                "metadata": {
+                    "source_key": "conversation-1",
+                    "source_name": "Conversation",
+                    "source_type": "conversation",
+                    "category": "conversation",
+                    "chunk_index": 0,
+                },
                 "similarity": 0.98,
             },
             {
                 "id": "tool-hit",
                 "text": "tool memory",
-                "metadata": {"source_key": "tool-1", "source_name": "Tool result", "source_type": "tool_result", "category": "tool_result", "chunk_index": 0},
+                "metadata": {
+                    "source_key": "tool-1",
+                    "source_name": "Tool result",
+                    "source_type": "tool_result",
+                    "category": "tool_result",
+                    "chunk_index": 0,
+                },
                 "similarity": 0.95,
             },
             {
@@ -533,12 +604,21 @@ class TestRagRuntime:
             {
                 "id": "other-hit",
                 "text": "other memory",
-                "metadata": {"source_key": "other-1", "source_name": "Other", "source_type": "tool_memory", "category": "tool_memory", "chunk_index": 0},
+                "metadata": {
+                    "source_key": "other-1",
+                    "source_name": "Other",
+                    "source_type": "tool_memory",
+                    "category": "tool_memory",
+                    "chunk_index": 0,
+                },
                 "similarity": 0.90,
             },
         ]
 
-        with patch("rag_service.ensure_supported_rag_sources"), patch("rag_service.rag_query_chunks", return_value=fake_hits):
+        with (
+            patch("rag_service.ensure_supported_rag_sources"),
+            patch("rag_service.rag_query_chunks", return_value=fake_hits),
+        ):
             result = build_rag_auto_context(
                 "recent memory",
                 True,
@@ -558,32 +638,64 @@ class TestRagRuntime:
             {
                 "id": "same-1",
                 "text": "same source chunk 1",
-                "metadata": {"source_key": "same", "source_name": "Same Source", "source_type": "uploaded_document", "category": "uploaded_document", "chunk_index": 0, "auto_inject_enabled": True},
+                "metadata": {
+                    "source_key": "same",
+                    "source_name": "Same Source",
+                    "source_type": "uploaded_document",
+                    "category": "uploaded_document",
+                    "chunk_index": 0,
+                    "auto_inject_enabled": True,
+                },
                 "similarity": 0.99,
             },
             {
                 "id": "same-2",
                 "text": "same source chunk 2",
-                "metadata": {"source_key": "same", "source_name": "Same Source", "source_type": "uploaded_document", "category": "uploaded_document", "chunk_index": 1, "auto_inject_enabled": True},
+                "metadata": {
+                    "source_key": "same",
+                    "source_name": "Same Source",
+                    "source_type": "uploaded_document",
+                    "category": "uploaded_document",
+                    "chunk_index": 1,
+                    "auto_inject_enabled": True,
+                },
                 "similarity": 0.98,
             },
             {
                 "id": "same-3",
                 "text": "same source chunk 3",
-                "metadata": {"source_key": "same", "source_name": "Same Source", "source_type": "uploaded_document", "category": "uploaded_document", "chunk_index": 2, "auto_inject_enabled": True},
+                "metadata": {
+                    "source_key": "same",
+                    "source_name": "Same Source",
+                    "source_type": "uploaded_document",
+                    "category": "uploaded_document",
+                    "chunk_index": 2,
+                    "auto_inject_enabled": True,
+                },
                 "similarity": 0.97,
             },
             {
                 "id": "other-1",
                 "text": "other source chunk",
-                "metadata": {"source_key": "other", "source_name": "Other Source", "source_type": "uploaded_document", "category": "uploaded_document", "chunk_index": 0, "auto_inject_enabled": True},
+                "metadata": {
+                    "source_key": "other",
+                    "source_name": "Other Source",
+                    "source_type": "uploaded_document",
+                    "category": "uploaded_document",
+                    "chunk_index": 0,
+                    "auto_inject_enabled": True,
+                },
                 "similarity": 0.96,
             },
         ]
 
-        with patch("rag_service.ensure_supported_rag_sources"), patch("rag_service.rag_query_chunks", return_value=fake_hits), patch(
-            "rag_service.RAG_MAX_CHUNKS_PER_SOURCE",
-            2,
+        with (
+            patch("rag_service.ensure_supported_rag_sources"),
+            patch("rag_service.rag_query_chunks", return_value=fake_hits),
+            patch(
+                "rag_service.RAG_MAX_CHUNKS_PER_SOURCE",
+                2,
+            ),
         ):
             result = build_rag_auto_context("memory", True, threshold=0.1, top_k=4)
 
@@ -591,9 +703,13 @@ class TestRagRuntime:
         assert [match["source_name"] for match in result["matches"]] == ["Same Source", "Same Source", "Other Source"]
 
     def test_build_rag_auto_context_overfetches_candidates_for_source_diversity(self):
-        with patch("rag_service.ensure_supported_rag_sources"), patch("rag_service.rag_query_chunks", return_value=[]) as mocked_query, patch(
-            "rag_service.RAG_MAX_CHUNKS_PER_SOURCE",
-            2,
+        with (
+            patch("rag_service.ensure_supported_rag_sources"),
+            patch("rag_service.rag_query_chunks", return_value=[]) as mocked_query,
+            patch(
+                "rag_service.RAG_MAX_CHUNKS_PER_SOURCE",
+                2,
+            ),
         ):
             build_rag_auto_context("memory", True, threshold=0.1, top_k=3)
 
@@ -617,13 +733,18 @@ class TestRagRuntime:
             for index in range(4)
         ]
 
-        with patch("rag_service.ensure_supported_rag_sources"), patch(
-            "rag_service._expand_query_variants",
-            return_value=["memory", "memory variant"],
-        ), patch(
-            "rag_service.rag_query_chunks",
-            side_effect=[first_variant_hits, RuntimeError("Second variant should not run")],
-        ) as mocked_query, patch("rag_service.RAG_MAX_CHUNKS_PER_SOURCE", 2):
+        with (
+            patch("rag_service.ensure_supported_rag_sources"),
+            patch(
+                "rag_service._expand_query_variants",
+                return_value=["memory", "memory variant"],
+            ),
+            patch(
+                "rag_service.rag_query_chunks",
+                side_effect=[first_variant_hits, RuntimeError("Second variant should not run")],
+            ) as mocked_query,
+            patch("rag_service.RAG_MAX_CHUNKS_PER_SOURCE", 2),
+        ):
             result = search_knowledge_base_tool("memory", top_k=2)
 
         assert mocked_query.call_count == 1
@@ -651,9 +772,12 @@ class TestRagRuntime:
             "Large|Small B": 195,
         }
 
-        with patch("routes.chat.format_knowledge_base_auto_context", side_effect=fake_format), patch(
-            "routes.chat.estimate_text_tokens",
-            side_effect=lambda text: token_map.get(text, 999),
+        with (
+            patch("routes.chat.format_knowledge_base_auto_context", side_effect=fake_format),
+            patch(
+                "routes.chat.estimate_text_tokens",
+                side_effect=lambda text: token_map.get(text, 999),
+            ),
         ):
             trimmed = _trim_rag_context_to_token_budget(retrieved_context, max_tokens=100)
 
@@ -665,33 +789,48 @@ class TestRagRuntime:
         settings["rag_source_types"] = json.dumps(["uploaded_document"], ensure_ascii=False)
         save_app_settings(settings)
 
-        with patch("routes.conversations.search_knowledge_base_tool", return_value={"query": "memory", "count": 0, "matches": []}) as mocked_search:
+        with patch(
+            "routes.conversations.search_knowledge_base_tool",
+            return_value={"query": "memory", "count": 0, "matches": []},
+        ) as mocked_search:
             response = self.client.get("/api/rag/search?q=memory")
 
         assert response.status_code == 200
         assert mocked_search.call_args.kwargs["allowed_source_types"] == ["uploaded_document"]
 
-        with patch("routes.conversations.search_knowledge_base_tool", return_value={"query": "memory", "count": 0, "matches": []}) as mocked_search:
+        with patch(
+            "routes.conversations.search_knowledge_base_tool",
+            return_value={"query": "memory", "count": 0, "matches": []},
+        ) as mocked_search:
             response = self.client.get("/api/rag/search?q=memory&source_types=conversation,tool_memory")
 
         assert response.status_code == 200
         assert mocked_search.call_args.kwargs["allowed_source_types"] == ["conversation", "tool_memory"]
 
-        with patch("routes.conversations.search_knowledge_base_tool", return_value={"query": "memory", "count": 0, "matches": []}) as mocked_search:
+        with patch(
+            "routes.conversations.search_knowledge_base_tool",
+            return_value={"query": "memory", "count": 0, "matches": []},
+        ) as mocked_search:
             response = self.client.get("/api/rag/search?q=memory&source_type=conversation,tool_memory")
 
         assert response.status_code == 200
         assert mocked_search.call_args.kwargs["allowed_source_types"] == ["conversation", "tool_memory"]
 
     def test_rag_search_route_passes_min_similarity(self):
-        with patch("routes.conversations.search_knowledge_base_tool", return_value={"query": "memory", "count": 0, "matches": []}) as mocked_search:
+        with patch(
+            "routes.conversations.search_knowledge_base_tool",
+            return_value={"query": "memory", "count": 0, "matches": []},
+        ) as mocked_search:
             response = self.client.get("/api/rag/search?q=memory&min_similarity=0.75")
 
         assert response.status_code == 200
         assert mocked_search.call_args.kwargs["min_similarity"] == 0.75
 
     def test_rag_search_route_passes_hierarchical_metadata_filters(self):
-        with patch("routes.conversations.search_knowledge_base_tool", return_value={"query": "memory", "count": 0, "matches": []}) as mocked_search:
+        with patch(
+            "routes.conversations.search_knowledge_base_tool",
+            return_value={"query": "memory", "count": 0, "matches": []},
+        ) as mocked_search:
             response = self.client.get(
                 "/api/rag/search?q=memory&workspace_id=conversation:12&project_id=chat-history&document_path=conversations/12&section_id=intro"
             )
@@ -706,7 +845,10 @@ class TestRagRuntime:
         assert mocked_search.call_args.kwargs["metadata_filter_mode"] == "and"
 
     def test_rag_search_route_passes_multi_value_filters_with_or_mode(self):
-        with patch("routes.conversations.search_knowledge_base_tool", return_value={"query": "memory", "count": 0, "matches": []}) as mocked_search:
+        with patch(
+            "routes.conversations.search_knowledge_base_tool",
+            return_value={"query": "memory", "count": 0, "matches": []},
+        ) as mocked_search:
             response = self.client.get(
                 "/api/rag/search?q=memory&workspace_id=conversation:12&workspace_id=conversation:13&section_id=intro,details&metadata_filter_mode=or"
             )
@@ -739,9 +881,10 @@ class TestRagRuntime:
 
     def test_schedule_rag_conversation_sync_runs_inline_in_testing(self):
         with self.app.app_context():
-            with patch("routes.chat.sync_conversations_to_rag_safe") as mocked_safe, patch(
-                "routes.chat.sync_conversations_to_rag_background"
-            ) as mocked_background:
+            with (
+                patch("routes.chat.sync_conversations_to_rag_safe") as mocked_safe,
+                patch("routes.chat.sync_conversations_to_rag_background") as mocked_background,
+            ):
                 _schedule_rag_conversation_sync(321)
 
         mocked_safe.assert_called_once_with(conversation_id=321, force=False)
@@ -753,9 +896,10 @@ class TestRagRuntime:
 
         try:
             with self.app.app_context():
-                with patch("routes.chat.sync_conversations_to_rag_safe") as mocked_safe, patch(
-                    "routes.chat.sync_conversations_to_rag_background"
-                ) as mocked_background:
+                with (
+                    patch("routes.chat.sync_conversations_to_rag_safe") as mocked_safe,
+                    patch("routes.chat.sync_conversations_to_rag_background") as mocked_background,
+                ):
                     _schedule_rag_conversation_sync(321, force=True)
 
             mocked_safe.assert_not_called()

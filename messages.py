@@ -200,10 +200,7 @@ def _format_summary_message_for_model(content: str, metadata: dict | None = None
 # Tools whose results may still be inputs for other calls in the same batch;
 # they are parallel-safe among themselves but must not be batched with any
 # call that depends on their output.
-DEPENDENT_TOOL_NAMES = (
-    "search_knowledge_base",
-    "search_tool_memory",
-)
+DEPENDENT_TOOL_NAMES = ("search_knowledge_base",)
 
 HISTORICAL_CONTEXT_INJECTION_STRIP_HEADINGS = {
     "## Clarification Response",
@@ -2471,7 +2468,7 @@ def build_tool_call_contract(
 
     if any(name in normalized_tool_names for name in DEPENDENT_TOOL_NAMES):
         batching_sections.append(
-            "**Dependency guard:** search_knowledge_base and search_tool_memory can be batched with other independent reads, "
+            "**Dependency guard:** search_knowledge_base can be batched with other independent reads, "
             "but not with any tool that depends on their output."
         )
 

@@ -65,13 +65,12 @@ def configure_logging() -> None:
         if isinstance(handler, RotatingFileHandler):
             continue
         if isinstance(handler, logging.StreamHandler) and not isinstance(handler, RotatingFileHandler):
-            if handler.baseFilename == "":
+            if getattr(handler, "baseFilename", "") == "":
                 root_logger.removeHandler(handler)
 
     # Dosya handler'ı ekle (zaten varsa ekleme)
     has_target_handler = any(
-        isinstance(h, RotatingFileHandler)
-        and os.path.abspath(str(getattr(h, "baseFilename", ""))) == log_path
+        isinstance(h, RotatingFileHandler) and os.path.abspath(str(getattr(h, "baseFilename", ""))) == log_path
         for h in root_logger.handlers
     )
     if not has_target_handler:

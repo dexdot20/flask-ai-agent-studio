@@ -157,7 +157,6 @@ from model_registry import (
 from rag_service import (
     get_exact_tool_memory_match,
     search_knowledge_base_tool,
-    search_tool_memory,
     upsert_tool_memory_result,
 )
 from tool_registry import (
@@ -894,10 +893,7 @@ def _build_recovery_hint_for_tool(tool_name: str, tool_args: dict | None = None)
     if normalized_tool_name == "fetch_url":
         url = _clean_tool_text(normalized_tool_args.get("url") or "", limit=160)
         if url:
-            return (
-                f"Need omitted text? Use scroll_fetched_content with {url} and a start line, "
-                f"grep_fetched_content with {url} and a keyword or regex, or search_tool_memory with the same URL."
-            )
+            return f"Need omitted text? Use scroll_fetched_content with {url} and a start line, or grep_fetched_content with {url} and a keyword or regex."
         return (
             "Need omitted text? Use scroll_fetched_content with the same URL and a start line, "
             "or grep_fetched_content with a keyword or regex."
@@ -914,8 +910,6 @@ def _build_recovery_hint_for_tool(tool_name: str, tool_args: dict | None = None)
         return "If exact wording is needed, fetch a specific returned URL or rerun the search with a narrower query."
     if normalized_tool_name == "search_knowledge_base":
         return "Repeat search_knowledge_base with the same query if you need the exact retrieved excerpts again."
-    if normalized_tool_name == "search_tool_memory":
-        return "Repeat search_tool_memory with the same query if you need the original remembered excerpt again."
     if normalized_tool_name == "read_file":
         return "Read the same file again if exact source lines are needed."
     if normalized_tool_name in {"expand_canvas_document", "scroll_canvas_document", "search_canvas_document"}:
@@ -1774,7 +1768,7 @@ def _extract_compaction_tool_call_preview(tool_call: dict) -> str:
             return f"{tool_name}: {_clean_tool_text(url, limit=90)} | {_clean_tool_text(focus, limit=45)}"
         if url:
             return f"{tool_name}: {_clean_tool_text(url, limit=140)}"
-    if tool_name in {"search_knowledge_base", "search_tool_memory"}:
+    if tool_name == "search_knowledge_base":
         query = str(arguments.get("query") or "").strip()
         if query:
             return f"{tool_name}: {_clean_tool_text(query, limit=120)}"
@@ -2824,7 +2818,7 @@ def _prepare_fetch_result_for_model(
         f"({clipped_pct}% of the page, approximately {token_estimate:,} tokens). "
         f"{coverage_note} "
         f"{('Context anchors: ' + context_summary + ' ') if context_summary else ''}"
-        f"{recovery_hint or 'Use scroll_fetched_content to browse omitted sections, grep_fetched_content for exact text, and search_tool_memory for semantic recall.'}"
+        f"{recovery_hint or 'Use scroll_fetched_content to browse omitted sections and grep_fetched_content for exact text.'}"
     )
     prepared["content_token_estimate"] = token_estimate
     prepared["raw_content_available"] = True
@@ -4503,12 +4497,8 @@ def _build_search_memory_value(tool_name: str, result: dict) -> str:
         if isinstance(similarity, (int, float)):
             details.append(f"sim {float(similarity):.2f}")
         expiry_warning = _clean_tool_text(match.get("expiry_warning") or "", limit=48)
-        expires_at = _clean_tool_text(match.get("expires_at_utc") or "", limit=32)
         if expiry_warning:
             details.append(expiry_warning)
-        elif tool_name == "search_tool_memory" and expires_at:
-            details.append(f"expires {expires_at}")
-        fragment = " ".join(part for part in details if part).strip()
         if excerpt:
             fragment = f"{fragment}: {excerpt}" if fragment else excerpt
         if fragment:
@@ -5444,26 +5434,6 @@ def _run_search_knowledge_base(tool_args: dict, runtime_state: dict):
     return result, _build_search_summary(f"{result.get('count', 0)} knowledge chunks found", conversation_memory_result)
 
 
-def _run_search_tool_memory(tool_args: dict, runtime_state: dict):
-    result = search_tool_memory(
-        tool_args.get("query", ""),
-        top_k=tool_args.get("top_k", RAG_SEARCH_DEFAULT_TOP_K),
-        min_similarity=tool_args.get("min_similarity"),
-    )
-    conversation_memory_result = _maybe_save_search_result_to_conversation_memory(
-        "search_tool_memory",
-        tool_args,
-        result,
-        runtime_state,
-    )
-    if conversation_memory_result is not None:
-        result = dict(result)
-        result["conversation_memory"] = conversation_memory_result
-    return result, _build_search_summary(
-        f"{result.get('count', 0)} tool memory matches found", conversation_memory_result
-    )
-
-
 def _run_expand_truncated_tool_result(tool_args: dict, runtime_state: dict):
     del runtime_state
     message_id = str(tool_args.get("message_id") or "").strip()
@@ -6312,7 +6282,6 @@ _TOOL_EXECUTORS = {
     "image_explain": _run_image_explain,
     "transcribe_youtube_video": _run_transcribe_youtube_video,
     "search_knowledge_base": _run_search_knowledge_base,
-    "search_tool_memory": _run_search_tool_memory,
     "expand_truncated_tool_result": _run_expand_truncated_tool_result,
     "search_web": _run_search_web,
     "search_news_ddgs": _run_search_news_ddgs,
@@ -6737,7 +6706,7 @@ def _tool_input_preview(tool_name: str, tool_args: dict) -> str:
         values = _get_search_tool_queries(tool_args)
         if isinstance(values, list):
             return ", ".join(str(value).strip() for value in values if str(value).strip())[:300]
-    if tool_name in {"search_knowledge_base", "search_tool_memory"}:
+    if tool_name == "search_knowledge_base":
         query = str(tool_args.get("query") or "").strip()
         if _coerce_tool_bool(tool_args.get("save_to_conversation_memory")):
             memory_key = str(tool_args.get("memory_key") or "").strip()
@@ -6862,7 +6831,7 @@ def _format_list_tool_result(items: list[dict], title: str, link_key: str, extra
 def _build_tool_result_storage_entry(
     tool_name: str, tool_args: dict, result, summary: str, transcript_result=None
 ) -> dict | None:
-    if tool_name in {"search_knowledge_base", "search_tool_memory"}:
+    if tool_name == "search_knowledge_base":
         return None
 
     text = ""
@@ -7331,32 +7300,8 @@ def _lookup_cross_turn_tool_memory(tool_name: str, tool_args: dict) -> tuple[obj
         )
         return excerpt, summary
 
-    if tool_name not in {"search_web", "search_news_ddgs", "search_news_google"}:
+    if tool_name not in {"fetch_url", "fetch_url_summarized"}:
         return None
-
-    query = _tool_input_preview(tool_name, tool_args)
-    if not query:
-        return None
-
-    try:
-        matches = (search_tool_memory(query, top_k=1).get("matches") or [])[:1]
-    except Exception:
-        return None
-    if not matches:
-        return None
-
-    best_match = matches[0]
-    similarity = best_match.get("similarity")
-    if not isinstance(similarity, (int, float)) or similarity < 0.85:
-        return None
-
-    excerpt = _clean_tool_text(best_match.get("text") or "", limit=RAG_TOOL_RESULT_MAX_TEXT_CHARS)
-    if not excerpt:
-        return None
-
-    source_name = _clean_tool_text(best_match.get("source_name") or "Tool memory", limit=120)
-    summary = _prefix_cross_turn_tool_memory_summary("", f"Reused tool memory from {source_name}")
-    return excerpt, summary
 
 
 def _extract_clarification_event(result: dict) -> dict | None:
@@ -9117,7 +9062,7 @@ def run_agent_stream(
                             if tool_name == "fetch_url":
                                 # Use raw_content when available so the full (unclipped) page
                                 # text is indexed in tool memory and can be found later by
-                                # search_tool_memory or grep_fetched_content.
+                                # tool memory and can be found later by grep_fetched_content.
                                 memory_content = storage_entry.get("raw_content") or storage_entry.get("content", "")
                             else:
                                 memory_content = storage_entry.get("content", "")

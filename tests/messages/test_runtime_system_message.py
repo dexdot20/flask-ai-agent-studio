@@ -40,7 +40,6 @@ class TestRuntimeSystemMessage:
                 "ask_clarifying_question",
                 "image_explain",
                 "search_knowledge_base",
-                "search_tool_memory",
             ],
             retrieved_context="Context block",
             tool_memory_context="Remembered web result",
@@ -86,7 +85,7 @@ class TestRuntimeSystemMessage:
 
     def test_runtime_system_message_places_volatile_context_after_tool_calling(self):
         message = build_runtime_system_message(
-            active_tool_names=["search_web", "search_knowledge_base", "search_tool_memory"],
+            active_tool_names=["search_web", "search_knowledge_base"],
             retrieved_context="Context block",
             tool_trace_context="- search_web [done]: prior result",
             tool_memory_context="Remembered web result",
@@ -401,7 +400,7 @@ class TestRuntimeSystemMessage:
                 "fetch_url",
                 "image_explain",
                 "search_canvas_document",
-                "search_tool_memory",
+                "search_knowledge_base",
             ]
         )
 
@@ -411,7 +410,7 @@ class TestRuntimeSystemMessage:
         assert "search_web accepts only the queries array" in rules_text
         assert "Batch independent tool calls into one assistant turn" in batching_guidance
         assert "GATHER" in batching_guidance
-        assert "search_knowledge_base and search_tool_memory can be batched" in batching_guidance
+        assert "search_knowledge_base can be batched" in batching_guidance
 
     def test_build_tool_call_contract_mentions_parallel_limit(self):
         contract = build_tool_call_contract(
@@ -940,7 +939,7 @@ class TestRuntimeSystemMessage:
 
     def test_runtime_system_message_places_datetime_before_tool_history(self):
         message = build_runtime_system_message(
-            active_tool_names=["search_knowledge_base", "search_tool_memory"],
+            active_tool_names=["search_knowledge_base"],
             tool_memory_context="Remembered result context.",
             tool_trace_context="- fetch_url https://example.com -> cached result",
             canvas_documents=[
@@ -1013,14 +1012,10 @@ class TestRuntimeSystemMessage:
 
     def test_search_tool_specs_allow_optional_conversation_memory_promotion(self):
         knowledge_base_spec = TOOL_SPEC_BY_NAME["search_knowledge_base"]
-        tool_memory_spec = TOOL_SPEC_BY_NAME["search_tool_memory"]
 
         assert "save_to_conversation_memory" in knowledge_base_spec["parameters"]["properties"]
         assert "memory_key" in knowledge_base_spec["parameters"]["properties"]
-        assert "save_to_conversation_memory" in tool_memory_spec["parameters"]["properties"]
-        assert "memory_key" in tool_memory_spec["parameters"]["properties"]
         assert "survive later turns in this chat" in knowledge_base_spec["prompt"]["guidance"]
-        assert "survive later turns in this chat" in tool_memory_spec["prompt"]["guidance"]
 
     def test_runtime_system_message_renders_persona_memory_and_policy(self):
         message = build_runtime_system_message(

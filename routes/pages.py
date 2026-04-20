@@ -188,10 +188,8 @@ def _filter_visible_operation_model_preferences(preferences: dict | None) -> dic
 
 def _filter_visible_operation_model_fallback_preferences(preferences: dict | None) -> dict:
     source = preferences if isinstance(preferences, dict) else {}
-    return {
-        key: list(source.get(key) or [])
-        for key in SETTINGS_VISIBLE_OPERATION_MODEL_KEYS
-    }
+    return {key: list(source.get(key) or []) for key in SETTINGS_VISIBLE_OPERATION_MODEL_KEYS}
+
 
 TOOL_PERMISSION_LABELS = {
     "save_to_conversation_memory": "Save chat memory",
@@ -206,7 +204,6 @@ TOOL_PERMISSION_LABELS = {
     "image_explain": "Follow up on stored images",
     "transcribe_youtube_video": "Transcribe YouTube video",
     "search_knowledge_base": "Knowledge base search",
-    "search_tool_memory": "Search remembered research",
     "search_web": "Web search",
     "fetch_url": "Read URL content",
     "fetch_url_summarized": "Summarize URL",
@@ -258,7 +255,6 @@ TOOL_PERMISSION_DESCRIPTIONS = {
     "image_explain": "Ask follow-up questions about a previously uploaded image.",
     "transcribe_youtube_video": "Validate a YouTube URL and generate a local speech transcript with a prompt-ready context block.",
     "search_knowledge_base": "Semantic search over synced chats and uploaded documents.",
-    "search_tool_memory": "Search remembered web research results from earlier conversations.",
     "search_web": "Live web search via DuckDuckGo for current facts.",
     "fetch_url": "Read and extract cleaned text from a specific web page.",
     "fetch_url_summarized": "Fetch a page and return only a focused AI summary.",
@@ -351,9 +347,30 @@ PROXY_OPERATION_OPTIONS = [
 
 
 def _get_tool_permission_section_key(name: str) -> str:
-    if name in {"save_to_conversation_memory", "delete_conversation_memory_entry", "save_to_persona_memory", "delete_persona_memory_entry", "append_scratchpad", "replace_scratchpad", "read_scratchpad", "ask_clarifying_question", "sub_agent", "image_explain", "transcribe_youtube_video", "search_knowledge_base", "search_tool_memory"}:
+    if name in {
+        "save_to_conversation_memory",
+        "delete_conversation_memory_entry",
+        "save_to_persona_memory",
+        "delete_persona_memory_entry",
+        "append_scratchpad",
+        "replace_scratchpad",
+        "read_scratchpad",
+        "ask_clarifying_question",
+        "sub_agent",
+        "image_explain",
+        "transcribe_youtube_video",
+        "search_knowledge_base",
+    }:
         return "assistant"
-    if name in {"search_web", "fetch_url", "fetch_url_summarized", "scroll_fetched_content", "grep_fetched_content", "search_news_ddgs", "search_news_google"}:
+    if name in {
+        "search_web",
+        "fetch_url",
+        "fetch_url_summarized",
+        "scroll_fetched_content",
+        "grep_fetched_content",
+        "search_news_ddgs",
+        "search_news_google",
+    }:
         return "research"
     if name in {
         "create_canvas_document",
@@ -449,12 +466,14 @@ def build_tool_catalog() -> list[dict[str, str]]:
     for section in build_tool_permission_sections():
         section_key = section.get("key", "")
         for tool in section.get("tools", []):
-            catalog.append({
-                "name": tool.get("name", ""),
-                "group": section_key,
-                "label": tool.get("label", ""),
-                "description": tool.get("description", ""),
-            })
+            catalog.append(
+                {
+                    "name": tool.get("name", ""),
+                    "group": section_key,
+                    "label": tool.get("label", ""),
+                    "description": tool.get("description", ""),
+                }
+            )
     return catalog
 
 
@@ -503,9 +522,7 @@ def build_settings_payload() -> dict:
         else get_general_instructions(raw)
     )
     ai_personality = (
-        default_persona.get("ai_personality", "")
-        if isinstance(default_persona, dict)
-        else get_ai_personality(raw)
+        default_persona.get("ai_personality", "") if isinstance(default_persona, dict) else get_ai_personality(raw)
     )
     configured_active_tools = normalize_active_tool_names(raw.get("active_tools"))
     if raw.get("active_tools") is None:
@@ -533,7 +550,9 @@ def build_settings_payload() -> dict:
         "custom_models": normalize_custom_models(raw.get("custom_models")),
         "visible_model_order": [model["id"] for model in visible_chat_models],
         "default_chat_model": get_default_chat_model_id(raw),
-        "operation_model_preferences": _filter_visible_operation_model_preferences(get_operation_model_preferences(raw)),
+        "operation_model_preferences": _filter_visible_operation_model_preferences(
+            get_operation_model_preferences(raw)
+        ),
         "operation_model_fallback_preferences": _filter_visible_operation_model_fallback_preferences(
             get_operation_model_fallback_preferences(raw)
         ),
@@ -986,7 +1005,9 @@ def register_page_routes(app) -> None:
         if scratchpad is not None:
             if not isinstance(scratchpad, str):
                 return jsonify({"error": "Invalid scratchpad."}), 400
-            settings[SCRATCHPAD_SECTION_SETTING_KEYS[SCRATCHPAD_DEFAULT_SECTION]] = normalize_scratchpad_text(scratchpad)
+            settings[SCRATCHPAD_SECTION_SETTING_KEYS[SCRATCHPAD_DEFAULT_SECTION]] = normalize_scratchpad_text(
+                scratchpad
+            )
 
         if scratchpad_sections_raw is not None:
             if not isinstance(scratchpad_sections_raw, dict):
@@ -997,7 +1018,9 @@ def register_page_routes(app) -> None:
                 if section_id not in SCRATCHPAD_SECTION_SETTING_KEYS
             ]
             if unexpected_sections:
-                return jsonify({"error": f"Unknown scratchpad sections: {', '.join(sorted(unexpected_sections))}."}), 400
+                return jsonify(
+                    {"error": f"Unknown scratchpad sections: {', '.join(sorted(unexpected_sections))}."}
+                ), 400
             for section_id, content in scratchpad_sections_raw.items():
                 if not isinstance(content, str):
                     return jsonify({"error": f"Invalid scratchpad section content for {section_id}."}), 400
@@ -1018,7 +1041,11 @@ def register_page_routes(app) -> None:
             except (TypeError, ValueError):
                 return jsonify({"error": "max_parallel_tools must be an integer."}), 400
             if not (MAX_PARALLEL_TOOLS_MIN <= max_parallel_tools <= MAX_PARALLEL_TOOLS_MAX):
-                return jsonify({"error": f"max_parallel_tools must be between {MAX_PARALLEL_TOOLS_MIN} and {MAX_PARALLEL_TOOLS_MAX}."}), 400
+                return jsonify(
+                    {
+                        "error": f"max_parallel_tools must be between {MAX_PARALLEL_TOOLS_MIN} and {MAX_PARALLEL_TOOLS_MAX}."
+                    }
+                ), 400
             settings["max_parallel_tools"] = str(max_parallel_tools)
 
         if temperature_raw is not None:
@@ -1035,8 +1062,14 @@ def register_page_routes(app) -> None:
                 clarification_max_questions = int(clarification_max_questions_raw)
             except (TypeError, ValueError):
                 return jsonify({"error": "clarification_max_questions must be an integer."}), 400
-            if not (CLARIFICATION_QUESTION_LIMIT_MIN <= clarification_max_questions <= CLARIFICATION_QUESTION_LIMIT_MAX):
-                return jsonify({"error": f"clarification_max_questions must be between {CLARIFICATION_QUESTION_LIMIT_MIN} and {CLARIFICATION_QUESTION_LIMIT_MAX}."}), 400
+            if not (
+                CLARIFICATION_QUESTION_LIMIT_MIN <= clarification_max_questions <= CLARIFICATION_QUESTION_LIMIT_MAX
+            ):
+                return jsonify(
+                    {
+                        "error": f"clarification_max_questions must be between {CLARIFICATION_QUESTION_LIMIT_MIN} and {CLARIFICATION_QUESTION_LIMIT_MAX}."
+                    }
+                ), 400
             settings["clarification_max_questions"] = str(clarification_max_questions)
 
         if search_tool_query_limit_raw is not None:
@@ -1045,7 +1078,11 @@ def register_page_routes(app) -> None:
             except (TypeError, ValueError):
                 return jsonify({"error": "search_tool_query_limit must be an integer."}), 400
             if not (SEARCH_TOOL_QUERY_LIMIT_MIN <= search_tool_query_limit <= SEARCH_TOOL_QUERY_LIMIT_MAX):
-                return jsonify({"error": f"search_tool_query_limit must be between {SEARCH_TOOL_QUERY_LIMIT_MIN} and {SEARCH_TOOL_QUERY_LIMIT_MAX}."}), 400
+                return jsonify(
+                    {
+                        "error": f"search_tool_query_limit must be between {SEARCH_TOOL_QUERY_LIMIT_MIN} and {SEARCH_TOOL_QUERY_LIMIT_MAX}."
+                    }
+                ), 400
             settings["search_tool_query_limit"] = str(search_tool_query_limit)
 
         if custom_models_raw is not None:
@@ -1132,10 +1169,14 @@ def register_page_routes(app) -> None:
             for operation_key, model_value in filtered_operation_preferences.items():
                 candidate = _resolve_model_reference_id(model_value, custom_model_reference_ids)
                 if candidate and get_model_record(candidate, settings) is None:
-                    return jsonify({"error": f"operation_model_preferences.{operation_key} must reference a known model."}), 400
+                    return jsonify(
+                        {"error": f"operation_model_preferences.{operation_key} must reference a known model."}
+                    ), 400
                 resolved_operation_preferences[operation_key] = candidate
 
-            normalized_operation_preferences = normalize_operation_model_preferences(resolved_operation_preferences, settings)
+            normalized_operation_preferences = normalize_operation_model_preferences(
+                resolved_operation_preferences, settings
+            )
             settings["operation_model_preferences"] = json.dumps(normalized_operation_preferences, ensure_ascii=False)
 
         if operation_model_fallback_preferences_raw is not None:
@@ -1159,12 +1200,20 @@ def register_page_routes(app) -> None:
                 elif isinstance(model_value, list):
                     candidate_values = model_value
                 else:
-                    return jsonify({"error": f"operation_model_fallback_preferences.{operation_key} must be an array of model ids."}), 400
+                    return jsonify(
+                        {
+                            "error": f"operation_model_fallback_preferences.{operation_key} must be an array of model ids."
+                        }
+                    ), 400
 
                 for candidate_value in candidate_values:
                     candidate = _resolve_model_reference_id(candidate_value, custom_model_reference_ids)
                     if candidate and get_model_record(candidate, settings) is None:
-                        return jsonify({"error": f"operation_model_fallback_preferences.{operation_key} must reference known models."}), 400
+                        return jsonify(
+                            {
+                                "error": f"operation_model_fallback_preferences.{operation_key} must reference known models."
+                            }
+                        ), 400
                 resolved_operation_fallback_preferences[operation_key] = [
                     _resolve_model_reference_id(candidate_value, custom_model_reference_ids)
                     for candidate_value in candidate_values
@@ -1182,7 +1231,9 @@ def register_page_routes(app) -> None:
         if image_processing_method_raw is not None:
             normalized_image_processing_method = normalize_image_processing_method(image_processing_method_raw)
             if normalized_image_processing_method != str(image_processing_method_raw or "").strip().lower():
-                return jsonify({"error": "image_processing_method must be one of auto, llm_helper, llm_direct, or local_ocr."}), 400
+                return jsonify(
+                    {"error": "image_processing_method must be one of auto, llm_helper, llm_direct, or local_ocr."}
+                ), 400
             settings["image_processing_method"] = normalized_image_processing_method
 
         if image_helper_model_raw is not None:
@@ -1268,7 +1319,9 @@ def register_page_routes(app) -> None:
         if ocr_provider_raw is not None:
             normalized_ocr_provider = str(ocr_provider_raw or "").strip().lower()
             if normalized_ocr_provider not in OCR_SUPPORTED_PROVIDERS:
-                return jsonify({"error": f"ocr_provider must be one of {', '.join(sorted(OCR_SUPPORTED_PROVIDERS))}."}), 400
+                return jsonify(
+                    {"error": f"ocr_provider must be one of {', '.join(sorted(OCR_SUPPORTED_PROVIDERS))}."}
+                ), 400
             settings["ocr_provider"] = normalized_ocr_provider
 
         if rag_enabled_raw is not None:
@@ -1387,7 +1440,9 @@ def register_page_routes(app) -> None:
             except (TypeError, ValueError):
                 return jsonify({"error": "fetch_raw_max_text_chars must be an integer."}), 400
             if not (1_000 <= fetch_raw_max_text_chars <= CONTENT_MAX_CHARS):
-                return jsonify({"error": f"fetch_raw_max_text_chars must be between 1000 and {CONTENT_MAX_CHARS}."}), 400
+                return jsonify(
+                    {"error": f"fetch_raw_max_text_chars must be between 1000 and {CONTENT_MAX_CHARS}."}
+                ), 400
             settings["fetch_raw_max_text_chars"] = str(fetch_raw_max_text_chars)
 
         if fetch_summary_max_chars_raw is not None:
@@ -1434,8 +1489,13 @@ def register_page_routes(app) -> None:
             if not isinstance(rag_auto_inject_source_types, list):
                 return jsonify({"error": "rag_auto_inject_source_types must be an array."}), 400
             normalized_rag_auto_inject_source_types = normalize_rag_source_types(rag_auto_inject_source_types)
-            incoming_auto_inject_source_types = [str(value or "").strip().lower() for value in rag_auto_inject_source_types]
-            if any(source_type not in normalized_rag_auto_inject_source_types for source_type in incoming_auto_inject_source_types):
+            incoming_auto_inject_source_types = [
+                str(value or "").strip().lower() for value in rag_auto_inject_source_types
+            ]
+            if any(
+                source_type not in normalized_rag_auto_inject_source_types
+                for source_type in incoming_auto_inject_source_types
+            ):
                 return jsonify({"error": "rag_auto_inject_source_types contains unsupported source types."}), 400
 
         current_raw_rag_auto_inject_source_types = normalize_rag_source_types(
@@ -1448,7 +1508,9 @@ def register_page_routes(app) -> None:
         elif normalized_rag_auto_inject_toggle is False:
             effective_rag_auto_inject_source_types = []
         elif normalized_rag_auto_inject_toggle is True:
-            effective_rag_auto_inject_source_types = current_raw_rag_auto_inject_source_types or get_rag_source_types(settings)
+            effective_rag_auto_inject_source_types = current_raw_rag_auto_inject_source_types or get_rag_source_types(
+                settings
+            )
         else:
             effective_rag_auto_inject_source_types = get_rag_auto_inject_source_types(settings)
 
@@ -1473,13 +1535,25 @@ def register_page_routes(app) -> None:
         if chat_summary_mode_raw is not None:
             normalized_summary_mode = str(chat_summary_mode_raw or "").strip().lower()
             if normalized_summary_mode not in CHAT_SUMMARY_ALLOWED_MODES:
-                return jsonify({"error": "chat_summary_mode must be one of auto, conservative, never, or aggressive."}), 400
+                return jsonify(
+                    {"error": "chat_summary_mode must be one of auto, conservative, never, or aggressive."}
+                ), 400
             settings["chat_summary_mode"] = normalized_summary_mode
 
         if chat_summary_detail_level_raw is not None:
             normalized_summary_detail_level = str(chat_summary_detail_level_raw or "").strip().lower()
-            if normalized_summary_detail_level not in {"very_concise", "concise", "balanced", "detailed", "comprehensive"}:
-                return jsonify({"error": "chat_summary_detail_level must be one of very_concise, concise, balanced, detailed, or comprehensive."}), 400
+            if normalized_summary_detail_level not in {
+                "very_concise",
+                "concise",
+                "balanced",
+                "detailed",
+                "comprehensive",
+            }:
+                return jsonify(
+                    {
+                        "error": "chat_summary_detail_level must be one of very_concise, concise, balanced, detailed, or comprehensive."
+                    }
+                ), 400
             settings["chat_summary_detail_level"] = normalized_summary_detail_level
 
         if chat_summary_trigger_raw is not None:
@@ -1620,7 +1694,9 @@ def register_page_routes(app) -> None:
         if context_selection_strategy_raw is not None:
             normalized_context_selection_strategy = str(context_selection_strategy_raw or "").strip().lower()
             if normalized_context_selection_strategy not in CONTEXT_SELECTION_ALLOWED_STRATEGIES:
-                return jsonify({"error": "context_selection_strategy must be one of classic, entropy, or entropy_rag_hybrid."}), 400
+                return jsonify(
+                    {"error": "context_selection_strategy must be one of classic, entropy, or entropy_rag_hybrid."}
+                ), 400
             settings["context_selection_strategy"] = normalized_context_selection_strategy
 
         if entropy_profile_raw is not None:
@@ -1643,7 +1719,9 @@ def register_page_routes(app) -> None:
                 settings["entropy_protect_code_blocks"] = "true" if entropy_protect_code_blocks_raw else "false"
             else:
                 settings["entropy_protect_code_blocks"] = (
-                    "true" if str(entropy_protect_code_blocks_raw).strip().lower() in {"1", "true", "yes", "on"} else "false"
+                    "true"
+                    if str(entropy_protect_code_blocks_raw).strip().lower() in {"1", "true", "yes", "on"}
+                    else "false"
                 )
 
         if entropy_protect_tool_results_raw is not None:
@@ -1651,7 +1729,9 @@ def register_page_routes(app) -> None:
                 settings["entropy_protect_tool_results"] = "true" if entropy_protect_tool_results_raw else "false"
             else:
                 settings["entropy_protect_tool_results"] = (
-                    "true" if str(entropy_protect_tool_results_raw).strip().lower() in {"1", "true", "yes", "on"} else "false"
+                    "true"
+                    if str(entropy_protect_tool_results_raw).strip().lower() in {"1", "true", "yes", "on"}
+                    else "false"
                 )
 
         if entropy_reference_boost_raw is not None:
@@ -1659,7 +1739,9 @@ def register_page_routes(app) -> None:
                 settings["entropy_reference_boost"] = "true" if entropy_reference_boost_raw else "false"
             else:
                 settings["entropy_reference_boost"] = (
-                    "true" if str(entropy_reference_boost_raw).strip().lower() in {"1", "true", "yes", "on"} else "false"
+                    "true"
+                    if str(entropy_reference_boost_raw).strip().lower() in {"1", "true", "yes", "on"}
+                    else "false"
                 )
 
         if reasoning_auto_collapse_raw is not None:
@@ -1667,7 +1749,9 @@ def register_page_routes(app) -> None:
                 settings["reasoning_auto_collapse"] = "true" if reasoning_auto_collapse_raw else "false"
             else:
                 settings["reasoning_auto_collapse"] = (
-                    "true" if str(reasoning_auto_collapse_raw).strip().lower() in {"1", "true", "yes", "on"} else "false"
+                    "true"
+                    if str(reasoning_auto_collapse_raw).strip().lower() in {"1", "true", "yes", "on"}
+                    else "false"
                 )
 
         if pruning_enabled_raw is not None:
@@ -1746,7 +1830,9 @@ def register_page_routes(app) -> None:
             settings.get("summary_retry_min_source_tokens", get_summary_retry_min_source_tokens(settings))
         )
         if configured_summary_retry_min_source_tokens > configured_summary_source_target_tokens:
-            return jsonify({"error": "summary_retry_min_source_tokens cannot exceed summary_source_target_tokens."}), 400
+            return jsonify(
+                {"error": "summary_retry_min_source_tokens cannot exceed summary_source_target_tokens."}
+            ), 400
 
         if fetch_url_token_threshold_raw is not None:
             try:
@@ -1769,7 +1855,9 @@ def register_page_routes(app) -> None:
         if fetch_html_converter_mode_raw is not None:
             normalized_fetch_html_converter_mode = str(fetch_html_converter_mode_raw or "").strip().lower()
             if normalized_fetch_html_converter_mode not in FETCH_HTML_CONVERTER_MODES:
-                return jsonify({"error": "fetch_html_converter_mode must be one of internal, external, or hybrid."}), 400
+                return jsonify(
+                    {"error": "fetch_html_converter_mode must be one of internal, external, or hybrid."}
+                ), 400
             settings["fetch_html_converter_mode"] = normalized_fetch_html_converter_mode
 
         if fetch_url_summarized_max_input_chars_raw is not None:
@@ -1778,7 +1866,9 @@ def register_page_routes(app) -> None:
             except (TypeError, ValueError):
                 return jsonify({"error": "fetch_url_summarized_max_input_chars must be an integer."}), 400
             if not (4_000 <= fetch_url_summarized_max_input_chars <= CONTENT_MAX_CHARS):
-                return jsonify({"error": f"fetch_url_summarized_max_input_chars must be between 4000 and {CONTENT_MAX_CHARS}."}), 400
+                return jsonify(
+                    {"error": f"fetch_url_summarized_max_input_chars must be between 4000 and {CONTENT_MAX_CHARS}."}
+                ), 400
             settings["fetch_url_summarized_max_input_chars"] = str(fetch_url_summarized_max_input_chars)
 
         if fetch_url_summarized_max_output_tokens_raw is not None:
@@ -1859,7 +1949,11 @@ def register_page_routes(app) -> None:
             except (TypeError, ValueError):
                 return jsonify({"error": "sub_agent_max_steps must be an integer."}), 400
             if not (SUB_AGENT_MAX_STEPS_MIN <= sub_agent_max_steps <= SUB_AGENT_MAX_STEPS_MAX):
-                return jsonify({"error": f"sub_agent_max_steps must be between {SUB_AGENT_MAX_STEPS_MIN} and {SUB_AGENT_MAX_STEPS_MAX}."}), 400
+                return jsonify(
+                    {
+                        "error": f"sub_agent_max_steps must be between {SUB_AGENT_MAX_STEPS_MIN} and {SUB_AGENT_MAX_STEPS_MAX}."
+                    }
+                ), 400
             settings["sub_agent_max_steps"] = str(sub_agent_max_steps)
 
         if sub_agent_timeout_seconds_raw is not None:
@@ -1895,7 +1989,11 @@ def register_page_routes(app) -> None:
             except (TypeError, ValueError):
                 return jsonify({"error": "sub_agent_max_parallel_tools must be an integer."}), 400
             if not (MAX_PARALLEL_TOOLS_MIN <= sub_agent_max_parallel_tools <= MAX_PARALLEL_TOOLS_MAX):
-                return jsonify({"error": f"sub_agent_max_parallel_tools must be between {MAX_PARALLEL_TOOLS_MIN} and {MAX_PARALLEL_TOOLS_MAX}."}), 400
+                return jsonify(
+                    {
+                        "error": f"sub_agent_max_parallel_tools must be between {MAX_PARALLEL_TOOLS_MIN} and {MAX_PARALLEL_TOOLS_MAX}."
+                    }
+                ), 400
             settings["sub_agent_max_parallel_tools"] = str(sub_agent_max_parallel_tools)
 
         if sub_agent_allowed_tool_names_raw is not None:
@@ -1935,7 +2033,11 @@ def register_page_routes(app) -> None:
             except (TypeError, ValueError):
                 return jsonify({"error": "web_cache_ttl_hours must be an integer."}), 400
             if not (WEB_CACHE_TTL_HOURS_MIN <= web_cache_ttl_hours <= WEB_CACHE_TTL_HOURS_MAX):
-                return jsonify({"error": f"web_cache_ttl_hours must be between {WEB_CACHE_TTL_HOURS_MIN} and {WEB_CACHE_TTL_HOURS_MAX}."}), 400
+                return jsonify(
+                    {
+                        "error": f"web_cache_ttl_hours must be between {WEB_CACHE_TTL_HOURS_MIN} and {WEB_CACHE_TTL_HOURS_MAX}."
+                    }
+                ), 400
             settings["web_cache_ttl_hours"] = str(web_cache_ttl_hours)
 
         if activity_enabled_raw is not None:
@@ -1956,9 +2058,7 @@ def register_page_routes(app) -> None:
             else:
                 normalized_prompt_cache = str(openrouter_prompt_cache_enabled_raw).strip().lower()
                 settings["openrouter_prompt_cache_enabled"] = (
-                    "true"
-                    if normalized_prompt_cache in {"1", "true", "yes", "on"}
-                    else "false"
+                    "true" if normalized_prompt_cache in {"1", "true", "yes", "on"} else "false"
                 )
 
         if openrouter_anthropic_cache_ttl_raw is not None:

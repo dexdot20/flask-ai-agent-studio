@@ -697,7 +697,7 @@ TOOL_SPECS = [
         "description": (
             "Search the internal knowledge base indexed with RAG. "
             "Use this when the answer may exist in synced conversation history, stored tool outputs, or uploaded documents and you cannot answer reliably from the current context. "
-            "Optionally filter by category. Use this for conversation, tool_result, or uploaded_document content. For cross-conversation web research memory, use search_tool_memory instead. "
+            "Optionally filter by category. Use this for conversation, tool_result, or uploaded_document content. "
             "Avoid repeating semantically overlapping searches when one good result set already answers the question; unnecessary searches waste tokens."
         ),
         "parameters": {
@@ -709,7 +709,7 @@ TOOL_SPECS = [
                 },
                 "category": {
                     "type": "string",
-                    "description": "Optional category filter: conversation, tool_result, or uploaded_document. Do not pass tool_memory here; use search_tool_memory for web research memory.",
+                    "description": "Optional category filter: conversation, tool_result, or uploaded_document.",
                 },
                 "top_k": {
                     "type": "integer",
@@ -745,61 +745,6 @@ TOOL_SPECS = [
                 "memory_key": "optional short memory label",
             },
             "guidance": "Use category when the likely source type is clear, and use at most a few focused searches. Synthesize from returned chunks instead of retrying near-duplicate queries. If the current context is already sufficient, do not search again; unnecessary searches waste tokens. If the finding should survive later turns in this chat, set save_to_conversation_memory=true and provide a short memory_key.",
-        },
-    },
-    {
-        "name": "search_tool_memory",
-        "description": (
-            "Search past web tool results stored from previous conversations. "
-            "Use this before making a new web request when you suspect the topic was already researched and the current context is not enough. "
-            "This searches remembered results from fetch_url, search_web, and news tools across conversations. "
-            "Use search_knowledge_base instead for uploaded documents or conversation content. Unnecessary lookups waste tokens."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Semantic search query for past web tool results.",
-                },
-                "top_k": {
-                    "type": "integer",
-                    "description": "Maximum number of remembered results to retrieve (1-10).",
-                    "minimum": 1,
-                    "maximum": 10,
-                },
-                "min_similarity": {
-                    "type": "number",
-                    "description": "Optional minimum similarity threshold between 0.0 and 1.0. Higher values trade recall for precision.",
-                    "minimum": 0.0,
-                    "maximum": 1.0,
-                },
-                "save_to_conversation_memory": {
-                    "type": "boolean",
-                    "description": "If true, save a compact summary of the strongest remembered findings to conversation memory for this chat.",
-                },
-                "memory_key": {
-                    "type": "string",
-                    "description": "Optional short conversation-memory key to use when save_to_conversation_memory is true. Reuse the same key to refresh an existing finding.",
-                },
-            },
-            "required": ["query"],
-        },
-        "prompt": {
-            "purpose": "Searches memory of past web searches, URL fetches, and news lookups.",
-            "inputs": {
-                "query": "semantic search query",
-                "top_k": "1-10 results",
-                "min_similarity": "optional threshold 0.0-1.0",
-                "save_to_conversation_memory": "optional boolean",
-                "memory_key": "optional short memory label",
-            },
-            "guidance": (
-                "Use before making a new web request if similar research may already exist and you cannot answer from the current context. "
-                "If high-similarity results already answer the question, reuse them instead of repeating the search. "
-                "When the response includes expires_at_utc, treat older or near-expiry results more cautiously. Unnecessary lookups waste tokens. "
-                "If the finding should survive later turns in this chat, set save_to_conversation_memory=true and provide a short memory_key."
-            ),
         },
     },
     {
@@ -862,7 +807,7 @@ TOOL_SPECS = [
                 "Do not repeat the same URL in the same turn. "
                 "If a long page will remain useful across later turns, fetch_url keeps the raw page text available for later scroll_fetched_content and grep_fetched_content calls without importing it into Canvas. "
                 "Use scroll_fetched_content to browse omitted sections and grep_fetched_content to locate exact text in a clipped page. "
-                "To recall content from a previously fetched URL across turns use search_tool_memory."
+                "To recall content from a previously fetched URL across turns, store it in conversation memory."
             ),
         },
     },
@@ -2309,12 +2254,6 @@ _TOOL_RUNTIME_METADATA_OVERRIDES = {
         "depends_on_tool_outputs": True,
         "state_domains": ("memory", "rag"),
     },
-    "search_tool_memory": {
-        "read_only": True,
-        "parallel_safe": True,
-        "depends_on_tool_outputs": True,
-        "state_domains": ("memory", "web"),
-    },
     "search_web": {
         "read_only": True,
         "parallel_safe": True,
@@ -2564,7 +2503,7 @@ def is_tool_parallel_safe(tool_name: str, tool_args: dict | None = None) -> bool
     if not metadata or metadata.get("parallel_safe") is not True:
         return False
     normalized_tool_args = tool_args if isinstance(tool_args, dict) else {}
-    if normalized_tool_name in {"search_knowledge_base", "search_tool_memory"} and _coerce_runtime_tool_bool(
+    if normalized_tool_name == "search_knowledge_base" and _coerce_runtime_tool_bool(
         normalized_tool_args.get("save_to_conversation_memory")
     ):
         return False
