@@ -4695,7 +4695,6 @@ kbd {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.01), rgba(255, 255, 255, 0));
 }
 
@@ -4704,7 +4703,6 @@ kbd {
   flex-direction: column;
   gap: 16px;
   padding: 16px;
-  overflow: hidden;
 }
 
 .canvas-workspace-main--editing > .canvas-diff {
@@ -4713,8 +4711,9 @@ kbd {
 
 .canvas-workspace-main--editing > .canvas-editor {
   width: 100%;
-  min-height: 0;
-  height: clamp(26rem, 68vh, 80vh);
+  flex: 1;
+  min-height: 28rem;
+  max-height: 80vh;
   margin: 0;
   background:
     linear-gradient(180deg, rgba(11, 16, 29, 0.95), rgba(16, 22, 38, 0.92)),
@@ -5372,7 +5371,7 @@ kbd {
 
 @media (max-width: 1180px) {
   .canvas-workspace-main--editing > .canvas-editor {
-    height: auto;
+    flex: 1;
     min-height: 24rem;
   }
 }
@@ -5683,7 +5682,8 @@ kbd {
   }
 
   .canvas-workspace-main--editing > .canvas-editor {
-    min-height: max(22rem, 56dvh);
+    flex: 1;
+    min-height: 22rem;
   }
 
   .canvas-diff {

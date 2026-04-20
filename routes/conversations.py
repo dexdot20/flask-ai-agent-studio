@@ -1317,10 +1317,8 @@ def register_conversation_routes(app) -> None:
             # always_expanded-only update: patch the document in-place without a full rewrite
             if always_expanded is not None and content is None and title is None and format_name is None and language is None:
                 patched_doc = dict(active_document)
-                if always_expanded:
-                    patched_doc["always_expanded"] = True
-                else:
-                    patched_doc.pop("always_expanded", None)
+                # Set explicitly so normalize_canvas_document sees the key and applies the elif branch
+                patched_doc["always_expanded"] = always_expanded
                 patched_doc = normalize_canvas_document(patched_doc)
                 if not patched_doc:
                     return jsonify({"error": "Canvas document normalisation failed."}), 400
@@ -1337,18 +1335,15 @@ def register_conversation_routes(app) -> None:
                     language_name=language,
                 )
                 if always_expanded is not None:
-                    if always_expanded:
-                        result["always_expanded"] = True
-                    else:
-                        result.pop("always_expanded", None)
-                        # Normalize to persist the explicit false into runtime state
-                        result = normalize_canvas_document(result) or result
+                    result["always_expanded"] = always_expanded
+                    result = normalize_canvas_document(result) or result
                 next_documents = get_canvas_runtime_documents(runtime_state)
                 # Propagate always_expanded change into the runtime documents list too
                 if always_expanded is not None:
                     next_documents = [
-                        {**d, "always_expanded": True} if d.get("id") == result.get("id") and always_expanded
-                        else {k: v for k, v in d.items() if not (d.get("id") == result.get("id") and k == "always_expanded" and not always_expanded)}
+                        {**d, "always_expanded": always_expanded}
+                        if d.get("id") == result.get("id")
+                        else d
                         for d in next_documents
                     ]
         except ValueError as exc:

@@ -2873,6 +2873,9 @@ function normalizeCanvasDocument(document) {
     source_file_id: String(document.source_file_id || "").trim(),
     source_mime_type: String(document.source_mime_type || "").trim().toLowerCase(),
     visual_page_image_ids: visualPageImageIds,
+    ...(document.always_expanded !== undefined
+      ? { always_expanded: Boolean(document.always_expanded) }
+      : {}),
   };
 }
 
@@ -5975,7 +5978,10 @@ function renderCanvasMetaBar(renderState) {
     expandToggleEl = globalThis.document.createElement("button");
     expandToggleEl.className = "canvas-meta-expand-toggle";
     expandToggleEl.type = "button";
-    expandToggleEl.addEventListener("click", () => toggleCanvasAlwaysExpanded(activeDocument));
+    expandToggleEl.addEventListener("click", () => {
+      const currentActiveDocument = getCanvasEditingPreviewDocument(getActiveCanvasDocument());
+      toggleCanvasAlwaysExpanded(currentActiveDocument);
+    });
     canvasMetaBar.appendChild(expandToggleEl);
   }
   expandToggleEl.textContent = isAlwaysExpanded ? "⊛ Always expanded" : "⊙ Always expanded";
