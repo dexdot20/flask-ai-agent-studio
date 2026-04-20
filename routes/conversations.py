@@ -941,7 +941,7 @@ def register_conversation_routes(app) -> None:
         files = get_conversation_uploaded_files(conv_id)
 
         if canvas_documents:
-            from canvas_service import (
+            from messages import (
                 _normalize_canvas_document_name,
                 _normalize_canvas_document_stem,
                 _extract_document_context_body,

@@ -175,6 +175,8 @@ const sidebarList = document.getElementById("sidebar-list");
 const sidebarToggleBtn = document.getElementById("sidebar-toggle-btn");
 const sidebarOverlay = document.getElementById("sidebar-overlay");
 const uploadedFilesToggle = document.getElementById("sidebar-uploaded-files-toggle");
+const uploadedFilesPanelClose = document.getElementById("uploaded-files-panel-close");
+const uploadedFilesOverlay = document.getElementById("uploaded-files-overlay");
 const newChatBtn = document.getElementById("new-chat-btn");
 const mobileToolsBtn = document.getElementById("mobile-tools-btn");
 const mobileToolsPanel = document.getElementById("mobile-tools-panel");
@@ -186,6 +188,7 @@ const mobileExportBtn = document.getElementById("mobile-export-btn");
 const mobilePruneBtn = document.getElementById("mobile-prune-btn");
 const mobileConvToolsBtn = document.getElementById("mobile-conv-tools-btn");
 const mobileParamsBtn = document.getElementById("mobile-params-btn");
+const mobileUploadedFilesBtn = document.getElementById("mobile-uploaded-files-btn");
 const mobileSettingsBtn = document.getElementById("mobile-settings-btn");
 const mobileLogoutBtn = document.getElementById("mobile-logout-btn");
 const mobileTokensBtn = document.getElementById("mobile-tokens-btn");
@@ -10916,6 +10919,12 @@ function closeSidebarOnMobile() {
 
 statsClose.addEventListener("click", closeStats);
 statsOverlay.addEventListener("click", closeStats);
+if (uploadedFilesPanelClose) {
+  uploadedFilesPanelClose.addEventListener("click", closeUploadedFilesPanel);
+}
+if (uploadedFilesOverlay) {
+  uploadedFilesOverlay.addEventListener("click", closeUploadedFilesPanel);
+}
 if (canvasClose) {
   canvasClose.addEventListener("click", closeCanvas);
 }
@@ -11042,31 +11051,108 @@ if (mobileConvToolsBtn) {
     }
   });
 }
-if (paramsToggleBtn) {
-  paramsToggleBtn.addEventListener("click", () => {
+if (mobileUploadedFilesBtn) {
+  mobileUploadedFilesBtn.addEventListener("click", () => {
     if (!currentConvId) {
-      showToast("Open a conversation first to set parameters.", "warning");
+      showToast("Open a conversation first to view uploaded files.", "warning");
       return;
     }
-    if (isParamsPanelOpen()) {
-      closeParamsPanel();
-    } else {
-      openParamsPanel(paramsToggleBtn);
-    }
+    closeMobileTools();
+    setTimeout(() => {
+      openUploadedFilesPanel();
+    }, 150);
   });
 }
-if (mobileParamsBtn) {
-  mobileParamsBtn.addEventListener("click", () => {
-    if (!currentConvId) {
-      showToast("Open a conversation first to set parameters.", "warning");
+
+function openUploadedFilesPanel() {
+  const panel = document.getElementById("uploaded-files-panel");
+  const overlay = document.getElementById("uploaded-files-overlay");
+  if (!panel) return;
+  panel.classList.add("open");
+  panel.setAttribute("aria-hidden", "false");
+  if (overlay) overlay.classList.add("open");
+  void loadUploadedFilesPanelInPanel();
+}
+
+function closeUploadedFilesPanel() {
+  const panel = document.getElementById("uploaded-files-panel");
+  const overlay = document.getElementById("uploaded-files-overlay");
+  if (!panel) return;
+  panel.classList.remove("open");
+  panel.setAttribute("aria-hidden", "true");
+  if (overlay) overlay.classList.remove("open");
+}
+
+async function loadUploadedFilesPanelInPanel() {
+  const body = document.getElementById("uploaded-files-panel-body");
+  if (!body) return;
+  if (!currentConvId) {
+    body.innerHTML = '<p class="sidebar-empty">No conversation selected.</p>';
+    return;
+  }
+  try {
+    const response = await fetch(`/api/conversations/${currentConvId}/uploaded-files`);
+    if (!response.ok) {
+      body.innerHTML = '<p class="sidebar-empty">Could not load files.</p>';
       return;
     }
-    if (isParamsPanelOpen()) {
-      closeParamsPanel();
-    } else {
-      openParamsPanel(mobileToolsBtn || mobileParamsBtn);
+    const data = await response.json();
+    const files = Array.isArray(data.files) ? data.files : [];
+    if (files.length === 0) {
+      body.innerHTML = '<p class="sidebar-empty">No uploaded files.</p>';
+      return;
     }
-  });
+    body.innerHTML = "";
+    const list = document.createElement("ul");
+    list.className = "uploaded-files-list";
+    files.forEach((file) => {
+      const isDoc = file.kind === "document";
+      const icon = isDoc
+        ? `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`
+        : `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`;
+      const name = escHtml(file.filename || "unknown");
+      const isExcluded = file.excluded_from_context === true;
+      const row = document.createElement("li");
+      row.className = "uploaded-file-row" + (isExcluded ? " uploaded-file-row--excluded" : "");
+      row.innerHTML =
+        `<span class="uploaded-file-row__icon">${icon}</span>` +
+        `<span class="uploaded-file-row__name" title="${name}">${name}</span>` +
+        `<button class="uploaded-file-row__toggle" data-id="${escHtml(file.id)}" data-excluded="${isExcluded}" title="${isExcluded ? "Add back to context" : "Remove from context"}">` +
+        (isExcluded
+          ? `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`
+          : `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`) +
+        `</button>`;
+      row.querySelector(".uploaded-file-row__toggle").addEventListener("click", async () => {
+        const btn = row.querySelector(".uploaded-file-row__toggle");
+        const fileId = file.id;
+        const currentlyExcluded = file.excluded_from_context === true;
+        btn.disabled = true;
+        try {
+          const res = await fetch(`/api/conversations/${currentConvId}/uploaded-files/${encodeURIComponent(fileId)}/context`, {
+            method: "PATCH",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({excluded: !currentlyExcluded}),
+          });
+          if (res.ok) {
+            file.excluded_from_context = !currentlyExcluded;
+            row.classList.toggle("uploaded-file-row--excluded", !currentlyExcluded);
+            btn.title = currentlyExcluded ? "Add back to context" : "Remove from context";
+            btn.innerHTML = currentlyExcluded
+              ? `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`
+              : `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+          }
+        } catch (e) {
+          console.error("Failed to update file context:", e);
+        } finally {
+          btn.disabled = false;
+        }
+      });
+      list.appendChild(row);
+    });
+    body.appendChild(list);
+  } catch (error) {
+    body.innerHTML = '<p class="sidebar-empty">Could not load files.</p>';
+  }
 }
 if (paramsClose) {
   paramsClose.addEventListener("click", () => closeParamsPanel());
@@ -11277,11 +11363,11 @@ if (sidebarOverlay) {
 }
 if (uploadedFilesToggle) {
   uploadedFilesToggle.addEventListener("click", () => {
-    const panel = document.getElementById("sidebar-uploaded-files-panel");
-    if (panel) {
-      const isHidden = panel.hidden;
-      panel.hidden = !isHidden;
-      uploadedFilesToggle.querySelector(".sidebar-uploaded-files__chevron")?.classList.toggle("rotated", !isHidden);
+    const panel = document.getElementById("uploaded-files-panel");
+    if (panel && panel.classList.contains("open")) {
+      closeUploadedFilesPanel();
+    } else {
+      openUploadedFilesPanel();
     }
   });
 }
@@ -11557,6 +11643,10 @@ async function loadUploadedFilesPanel() {
     if (files.length === 0) {
       panel.innerHTML = '<p class="sidebar-empty">No uploaded files.</p>';
       panel.hidden = false;
+      if (uploadedFilesToggle) {
+        uploadedFilesToggle.classList.add("open");
+        uploadedFilesToggle.querySelector(".sidebar-uploaded-files__chevron")?.classList.add("rotated");
+      }
       return;
     }
     panel.innerHTML = "";

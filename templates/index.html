@@ -45,9 +45,6 @@
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
       Canvas
     </button>
-    <button class="btn-ghost" id="params-toggle-btn" type="button" aria-controls="params-panel" aria-expanded="false" title="Set conversation parameters">
-      Set Parameters
-    </button>
     <button class="btn-ghost mobile-tools-toggle" id="mobile-tools-btn" type="button" aria-controls="mobile-tools-panel" aria-expanded="false" aria-haspopup="menu" aria-label="Open panels and tools" title="Open panels and tools">
       <span aria-hidden="true">⋯</span>
     </button>
@@ -89,6 +86,7 @@
     <button class="mobile-tools-action" id="mobile-prune-btn" type="button">Prune history</button>
     <button class="mobile-tools-action" id="mobile-conv-tools-btn" type="button">Tool permissions</button>
     <button class="mobile-tools-action" id="mobile-params-btn" type="button">Set Parameters</button>
+    <button class="mobile-tools-action" id="mobile-uploaded-files-btn" type="button">Uploaded Files</button>
     <a class="mobile-tools-action" id="mobile-settings-btn" href="/settings">Settings</a>
     {% if auth_enabled %}
     <form action="/logout" method="post">
@@ -673,6 +671,7 @@
     </div>
 </div>
 <div id="canvas-overlay" class="canvas-overlay"></div>
+<div id="uploaded-files-overlay" class="uploaded-files-overlay"></div>
 
 <div id="canvas-confirm-overlay" class="canvas-confirm-overlay"></div>
 <div id="canvas-confirm-modal" class="canvas-confirm-modal" aria-hidden="true" aria-labelledby="canvas-confirm-title" aria-describedby="canvas-confirm-message">
@@ -694,6 +693,20 @@
   </div>
 </div>
 
+<div id="uploaded-files-panel" class="uploaded-files-panel" aria-hidden="true">
+  <div class="uploaded-files-panel__header">
+    <span class="uploaded-files-panel__title">Uploaded Files</span>
+    <button class="uploaded-files-panel__close" id="uploaded-files-panel-close" type="button" title="Close">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>
+  </div>
+  <div class="uploaded-files-panel__body" id="uploaded-files-panel-body">
+    <p class="sidebar-empty">No conversation selected.</p>
+  </div>
+</div>
+
 <div class="main-layout">
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
@@ -711,7 +724,7 @@
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
           <polyline points="14 2 14 8 20 8"/>
         </svg>
-        Yüklenen Dosyalar
+        Uploaded Files
         <svg class="sidebar-uploaded-files__chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="6 9 12 15 18 9"/>
         </svg>
