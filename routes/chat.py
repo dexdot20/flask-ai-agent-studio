@@ -6,7 +6,7 @@ import math
 import logging
 import json
 import os
-from queue import SimpleQueue
+from queue import Empty as QueueEmpty, Queue
 import re
 import shutil
 import tempfile
@@ -6345,14 +6345,20 @@ def register_chat_routes(app) -> None:
                 headers=response_headers,
             )
 
-        event_queue = SimpleQueue()
+        event_queue: Queue = Queue()
         chat_run_state["queue"] = event_queue
         chat_run_state["attached"] = True
+        _KEEPALIVE_PING = json.dumps({"type": "ping"}, ensure_ascii=False) + "\n"
+        _KEEPALIVE_INTERVAL_S = 15
 
         def stream_chat_events():
             try:
                 while True:
-                    next_chunk = event_queue.get()
+                    try:
+                        next_chunk = event_queue.get(timeout=_KEEPALIVE_INTERVAL_S)
+                    except QueueEmpty:
+                        yield _KEEPALIVE_PING
+                        continue
                     if next_chunk is _CHAT_RUN_STREAM_SENTINEL:
                         break
                     yield next_chunk

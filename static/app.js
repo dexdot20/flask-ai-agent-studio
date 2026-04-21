@@ -8845,7 +8845,11 @@ async function streamNdjsonResponse(response, onEvent) {
       return;
     }
     try {
-      onEvent(JSON.parse(line));
+      const event = JSON.parse(line);
+      if (event.type === "ping") {
+        return;
+      }
+      onEvent(event);
     } catch (_) {
       // Ignore malformed partial chunks.
     }
