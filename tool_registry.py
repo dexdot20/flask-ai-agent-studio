@@ -38,6 +38,11 @@ CANVAS_LINE_ARRAY_DESCRIPTION = (
     'Example: ["First line", "Second line", "const char* ssid = "MyNet";"] '
     "Apply lines in array order, top to bottom."
 )
+CANVAS_DRIFT_RECOVERY_GUIDANCE = (
+    "If the tool returns 'Canvas context drift detected', do NOT retry with the same coordinates. "
+    "The error message includes the current content at that location; call expand_canvas_document "
+    "or scroll_canvas_document to refresh your view, then resubmit with corrected line numbers."
+)
 
 
 def _build_canvas_edit_operation_variants() -> list[dict]:
@@ -2020,6 +2025,7 @@ TOOL_SPECS = [
                 "Use only when the exact 1-based line range is known from the visible excerpt or a recent scroll/expand result. "
                 "Multiple replace_canvas_lines calls are fine when the changes are separated. "
                 "If the previous tool result included expected_lines, reuse them on the next related edit to guard against line shifts. "
+                + CANVAS_DRIFT_RECOVERY_GUIDANCE + " "
                 "If you do not know the document_id, use document_path from the workspace summary or manifest. "
                 "For broad rewrites, prefer rewrite_canvas_document. In project mode, prefer document_path when possible."
             ),
@@ -2078,6 +2084,7 @@ TOOL_SPECS = [
                 "Use only when the insertion point is known from the visible excerpt or a recent scroll/expand result. "
                 "Use this for partial additions instead of rewriting the whole document when the rest should stay intact. "
                 "If the previous tool result included expected_lines, reuse them on the next related edit to guard against line shifts. "
+                + CANVAS_DRIFT_RECOVERY_GUIDANCE + " "
                 "If the target region is not visible, inspect it first. In project mode, prefer document_path when possible."
             ),
         },
@@ -2123,6 +2130,7 @@ TOOL_SPECS = [
                 "Use only when the exact 1-based line range is visible in the current excerpt or in a recent scroll/expand result. "
                 "Use this for partial removals instead of rewriting the whole document when the rest should stay intact. "
                 "If the previous tool result included expected_lines, reuse them on the next related edit to guard against line shifts. "
+                + CANVAS_DRIFT_RECOVERY_GUIDANCE + " "
                 "If the target region is not visible, inspect it first. In project mode, prefer document_path when possible."
             ),
         },
