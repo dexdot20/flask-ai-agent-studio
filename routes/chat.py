@@ -5178,18 +5178,28 @@ def register_chat_routes(app) -> None:
                 # metadata-based path missed the answers (e.g. retry without
                 # metadata), but the tool must still be disabled so the model
                 # cannot ask the same questions again.
+                # Only consider the MOST RECENT clarification: if any assistant
+                # answer appeared after it, the conversation moved on and a
+                # new clarification round is appropriate.
                 _conv_msgs_clar = get_conversation_messages(conv_id)
-                _saw_clar_tool = False
-                _saw_user_after_clar = False
-                for _clar_msg in _conv_msgs_clar or []:
-                    if _saw_clar_tool:
-                        if str(_clar_msg.get("role") or "") == "user":
-                            _saw_user_after_clar = True
-                            break
-                    elif str(_clar_msg.get("role") or "") == "tool":
-                        _clar_content = str(_clar_msg.get("content") or "")
+                _last_clar_idx = None
+                for _idx in range(len(_conv_msgs_clar) - 1, -1, -1):
+                    _m = _conv_msgs_clar[_idx]
+                    if str(_m.get("role") or "") == "tool":
+                        _clar_content = str(_m.get("content") or "")
                         if '"needs_user_input"' in _clar_content and '"clarification"' in _clar_content:
-                            _saw_clar_tool = True
+                            _last_clar_idx = _idx
+                            break
+                _saw_user_after_clar = False
+                if _last_clar_idx is not None:
+                    _msgs_after_clar = _conv_msgs_clar[_last_clar_idx + 1 :]
+                    _has_assistant_after = any(
+                        str(_m.get("role") or "") == "assistant" for _m in _msgs_after_clar
+                    )
+                    _has_user_after = any(
+                        str(_m.get("role") or "") == "user" for _m in _msgs_after_clar
+                    )
+                    _saw_user_after_clar = _has_user_after and not _has_assistant_after
                 if _saw_user_after_clar:
                     _fb_freeform = extract_freeform_clarification_user_content(
                         latest_user_message.get("content", "") if latest_user_message else ""
@@ -5536,7 +5546,7 @@ def register_chat_routes(app) -> None:
                 active_tool_names,
                 canvas_documents=initial_canvas_documents,
                 workspace_root=workspace_root,
-                disabled_tool_names=disabled_tool_names if disabled_tool_names is not None else None,
+                disabled_tool_names=disabled_tool_names if disabled_tool_names else None,
             )
             prompt_tool_names = get_prompt_visible_tool_names(runtime_tool_names)
             agent_stream = run_agent_stream(
