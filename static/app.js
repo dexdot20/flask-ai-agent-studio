@@ -8384,7 +8384,6 @@ function buildAssistantMetadata({
   canvasCleared = false,
   canvas_cleared = null,
   usage = null,
-  pendingClarification = null,
   pending_clarification = null,
 } = {}) {
   const normalizedToolTrace = Array.isArray(tool_trace) ? tool_trace : toolTrace;
@@ -8395,9 +8394,7 @@ function buildAssistantMetadata({
   const normalizedCanvasCleared = canvas_cleared === true || canvasCleared === true;
   const normalizedPendingClarification = pending_clarification && typeof pending_clarification === "object"
     ? pending_clarification
-    : pendingClarification && typeof pendingClarification === "object"
-      ? pendingClarification
-      : null;
+    : null;
 
   return reasoning || usage || normalizedToolResults.length || normalizedToolTrace.length || normalizedSubAgentTraces.length || normalizedCanvasDocuments.length || normalizedActiveDocumentId || normalizedCanvasCleared || normalizedPendingClarification
     ? {

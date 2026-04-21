@@ -498,7 +498,7 @@ TOOL_SPECS = [
                                     },
                                     "value": {
                                         "type": "string",
-                                        "description": "One required value from the parent question that should reveal this question.",
+                                        "description": "Shorthand alias for a single value in 'values'. Prefer using the 'values' array directly.",
                                     },
                                     "values": {
                                         "type": "array",
@@ -508,6 +508,7 @@ TOOL_SPECS = [
                                         "maxItems": 10,
                                     },
                                 },
+                                "required": ["question_id"],
                             },
                         },
                         "required": ["id", "label", "input_type"],
