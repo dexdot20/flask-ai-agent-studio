@@ -1702,9 +1702,16 @@ TOOL_SPECS = [
             "inputs": {
                 "document_id": "optional target id",
                 "document_path": "optional target project-relative path",
-                "operations": "ordered edit operations",
+                "operations": "ordered edit operations — same schema as batch_canvas_edits",
             },
-            "guidance": ("Preview batch_canvas_edits before applying them. Same operation schema."),
+            "guidance": (
+                "Preview batch_canvas_edits before applying them. Uses the same operation schema: "
+                "each operation MUST be a JSON object with an 'action' field ('replace', 'insert', or 'delete'). "
+                "replace: {\"action\": \"replace\", \"start_line\": N, \"end_line\": M, \"lines\": [...]}. "
+                "insert: {\"action\": \"insert\", \"after_line\": N, \"lines\": [...]}. "
+                "delete: {\"action\": \"delete\", \"start_line\": N, \"end_line\": M}. "
+                "Use this before any large batch to verify line ranges are still correct before mutating."
+            ),
         },
     },
     {
@@ -1762,16 +1769,22 @@ TOOL_SPECS = [
                 "document_id": "optional target id",
                 "document_path": "optional target project-relative path",
                 "operations": "ordered edit operations for one document",
-                "targets": "optional multi-document target array",
-                "atomic": "optional rollback flag",
+                "targets": "optional multi-document target array — each item MUST be an object with an operations array",
+                "atomic": "optional rollback flag — rolls back all changes if any operation fails",
             },
             "guidance": (
                 "Apply several line edits to one document in a single call. "
-                "Each operation is a JSON object: "
-                "replace needs start_line, end_line, lines; "
-                "insert needs after_line, lines; "
-                "delete needs start_line, end_line. "
-                "All operations go in one operations array. Prefer document_path in project mode."
+                "Each operation MUST be a JSON object with an 'action' field set to one of: 'replace', 'insert', or 'delete'. "
+                "replace requires: {\"action\": \"replace\", \"start_line\": N, \"end_line\": M, \"lines\": [...]}. "
+                "insert requires: {\"action\": \"insert\", \"after_line\": N, \"lines\": [...]}. "
+                "delete requires: {\"action\": \"delete\", \"start_line\": N, \"end_line\": M}. "
+                "All operations for one document go in a single 'operations' array — do NOT put operations in the 'targets' field. "
+                "For multi-document edits, use 'targets': each target MUST be a JSON object with at least an 'operations' key "
+                "(e.g. [{\"document_path\": \"src/foo.py\", \"operations\": [{\"action\": \"replace\", ...}]}]). "
+                "Never pass document IDs or strings as items inside 'targets' — every item must be an object. "
+                "Add 'expected_lines' to each operation to guard against line drift when editing after previous mutations. "
+                + CANVAS_DRIFT_RECOVERY_GUIDANCE
+                + " Prefer document_path in project mode."
             ),
         },
     },

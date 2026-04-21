@@ -2166,6 +2166,8 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
         "- When targeting, prefer document_path over document_id when shown in the prompt.",
         "- Send code as plain strings in the lines array — no escape sequences needed.",
         "- Use rewrite_canvas_document when most of the document should change.",
+        "- After any mutation, line numbers shift. Use expected_lines on subsequent operations to guard against drift.",
+        "- If a tool returns 'Canvas context drift detected', call expand_canvas_document or scroll_canvas_document to refresh line numbers before retrying — never retry with the same coordinates.",
     ]
     if "create_canvas_document" in active_set:
         lines.insert(2, "- create_canvas_document always needs BOTH title and content.")

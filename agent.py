@@ -4135,6 +4135,13 @@ def _validate_tool_arguments(tool_name: str, tool_args: dict) -> str | None:
                 value = normalized_items
                 tool_args[key] = value
             if item_type and any(not _validate_scalar_type(item, item_type) for item in value):
+                if tool_name == "batch_canvas_edits" and key == "targets":
+                    return (
+                        "Invalid 'targets' format for batch_canvas_edits: every item in 'targets' must be a JSON object, "
+                        "not a plain string or document ID. "
+                        "Correct format: [{\"document_path\": \"src/foo.py\", \"operations\": [{\"action\": \"replace\", \"start_line\": 1, \"end_line\": 1, \"lines\": [\"new\"]}]}]. "
+                        "Use 'operations' (not 'targets') when editing a single document."
+                    )
                 return f"Invalid array item type for '{key}' in {tool_name}: expected {item_type}"
             min_items = property_schema.get("minItems")
             max_items = property_schema.get("maxItems")
