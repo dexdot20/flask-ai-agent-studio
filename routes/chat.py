@@ -5536,7 +5536,7 @@ def register_chat_routes(app) -> None:
                 active_tool_names,
                 canvas_documents=initial_canvas_documents,
                 workspace_root=workspace_root,
-                disabled_tool_names=disabled_tool_names if disabled_tool_names else None,
+                disabled_tool_names=disabled_tool_names if disabled_tool_names is not None else None,
             )
             prompt_tool_names = get_prompt_visible_tool_names(runtime_tool_names)
             agent_stream = run_agent_stream(
