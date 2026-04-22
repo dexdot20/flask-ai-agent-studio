@@ -1,72 +1,6 @@
-const bootstrapEl = document.getElementById("app-bootstrap");
-const bootstrapData = (() => {
-  if (!bootstrapEl) {
-    return { settings: {} };
-  }
-  try {
-    return JSON.parse(bootstrapEl.textContent || "{}") || { settings: {} };
-  } catch (_) {
-    return { settings: {} };
-  }
-})();
-
-const appSettings = bootstrapData.settings || {};
-const csrfToken = String(bootstrapData.csrf_token || "").trim();
+// CSRF and bootstrap loaded from shared/csrf-utils.js
+const appSettings = window.__bootstrapData?.settings || {};
 const knownModelOptions = Array.isArray(appSettings.available_models) ? appSettings.available_models : [];
-
-const nativeFetch = typeof globalThis.fetch === "function" ? globalThis.fetch.bind(globalThis) : null;
-const CSRF_SAFE_HTTP_METHODS = new Set(["GET", "HEAD", "OPTIONS", "TRACE"]);
-
-function resolveFetchMethod(input, init) {
-  const explicitMethod = String(init?.method || "").trim();
-  if (explicitMethod) {
-    return explicitMethod.toUpperCase();
-  }
-  if (input instanceof Request) {
-    return String(input.method || "GET").trim().toUpperCase() || "GET";
-  }
-  return "GET";
-}
-
-function resolveFetchUrl(input) {
-  if (input instanceof Request) {
-    return input.url;
-  }
-  return String(input || "").trim();
-}
-
-function shouldAttachCsrfHeader(input, init) {
-  if (!nativeFetch || !csrfToken) {
-    return false;
-  }
-  const method = resolveFetchMethod(input, init);
-  if (CSRF_SAFE_HTTP_METHODS.has(method)) {
-    return false;
-  }
-  const rawUrl = resolveFetchUrl(input);
-  if (!rawUrl) {
-    return true;
-  }
-  try {
-    const resolvedUrl = new URL(rawUrl, window.location.href);
-    return resolvedUrl.origin === window.location.origin;
-  } catch (_) {
-    return true;
-  }
-}
-
-if (nativeFetch) {
-  globalThis.fetch = (input, init = undefined) => {
-    if (!shouldAttachCsrfHeader(input, init)) {
-      return nativeFetch(input, init);
-    }
-    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-    if (!headers.has("X-CSRF-Token")) {
-      headers.set("X-CSRF-Token", csrfToken);
-    }
-    return nativeFetch(input, { ...(init || {}), headers });
-  };
-}
 
 const messagesEl = document.getElementById("messages");
 const inputEl = document.getElementById("user-input");
@@ -128,10 +62,6 @@ const canvasViewportActionsGroupEl = document.getElementById("canvas-actions-vie
 const canvasSubtitle = document.getElementById("canvas-subtitle");
 const canvasStatus = document.getElementById("canvas-status");
 const canvasHint = document.getElementById("canvas-hint");
-const canvasDiffEl = document.getElementById("canvas-diff");
-const canvasDiffModalEl = document.getElementById("canvas-diff-modal");
-const canvasDiffModalBefore = document.getElementById("canvas-diff-modal-before");
-const canvasDiffModalAfter = document.getElementById("canvas-diff-modal-after");
 const canvasEmptyState = document.getElementById("canvas-empty-state");
 const canvasEditorEl = document.getElementById("canvas-editor");
 const canvasDocumentEl = document.getElementById("canvas-document");
@@ -1034,7 +964,6 @@ let activeCanvasDocumentId = null;
 let streamingCanvasDocuments = [];
 let isCanvasEditing = false;
 let editingCanvasDocumentId = null;
-let pendingCanvasDiff = null;
 let canvasPageByDocumentId = new Map();
 let pendingCanvasPageSyncFrame = 0;
 let canvasHasUnreadUpdates = false;
@@ -3250,7 +3179,6 @@ function getCanvasPathFilterValue() {
 function resetCanvasWorkspaceState() {
   isCanvasEditing = false;
   editingCanvasDocumentId = null;
-  pendingCanvasDiff = null;
   if (pendingCanvasPageSyncFrame) {
     globalThis.cancelAnimationFrame(pendingCanvasPageSyncFrame);
     pendingCanvasPageSyncFrame = 0;
@@ -4273,373 +4201,6 @@ function getCanvasDocumentById(documents, documentId) {
   return documents.find((document) => document.id === targetId) || null;
 }
 
-const CANVAS_DIFF_CONTEXT_LINE_COUNT = 2;
-const CANVAS_DIFF_MAX_VISIBLE_LINES = 160;
-const CANVAS_DIFF_MAX_MATRIX_CELLS = 60000;
-
-function buildCanvasDiffOperations(previousLines, nextLines) {
-  const previousLength = previousLines.length;
-  const nextLength = nextLines.length;
-  if (!previousLength && !nextLength) {
-    return [];
-  }
-
-  if (previousLength && nextLength && previousLength * nextLength <= CANVAS_DIFF_MAX_MATRIX_CELLS) {
-    const lcsMatrix = Array.from({ length: previousLength + 1 }, () => new Uint32Array(nextLength + 1));
-    for (let previousIndex = previousLength - 1; previousIndex >= 0; previousIndex -= 1) {
-      for (let nextIndex = nextLength - 1; nextIndex >= 0; nextIndex -= 1) {
-        lcsMatrix[previousIndex][nextIndex] = previousLines[previousIndex] === nextLines[nextIndex]
-          ? lcsMatrix[previousIndex + 1][nextIndex + 1] + 1
-          : Math.max(lcsMatrix[previousIndex + 1][nextIndex], lcsMatrix[previousIndex][nextIndex + 1]);
-      }
-    }
-
-    const operations = [];
-    let previousIndex = 0;
-    let nextIndex = 0;
-    while (previousIndex < previousLength && nextIndex < nextLength) {
-      if (previousLines[previousIndex] === nextLines[nextIndex]) {
-        operations.push({ kind: "context", text: previousLines[previousIndex] });
-        previousIndex += 1;
-        nextIndex += 1;
-        continue;
-      }
-
-      if (lcsMatrix[previousIndex + 1][nextIndex] >= lcsMatrix[previousIndex][nextIndex + 1]) {
-        operations.push({ kind: "removed", text: previousLines[previousIndex] });
-        previousIndex += 1;
-        continue;
-      }
-
-      operations.push({ kind: "added", text: nextLines[nextIndex] });
-      nextIndex += 1;
-    }
-
-    while (previousIndex < previousLength) {
-      operations.push({ kind: "removed", text: previousLines[previousIndex] });
-      previousIndex += 1;
-    }
-
-    while (nextIndex < nextLength) {
-      operations.push({ kind: "added", text: nextLines[nextIndex] });
-      nextIndex += 1;
-    }
-
-    return operations;
-  }
-
-  return [
-    ...previousLines.map((text) => ({ kind: "removed", text })),
-    ...nextLines.map((text) => ({ kind: "added", text })),
-  ];
-}
-
-function buildCanvasDiffHunkLabel(lines) {
-  const firstChangedLine = lines.find((line) => line.kind !== "context") || lines[0] || null;
-  const oldAnchor = firstChangedLine?.previousLineNumber
-    ?? lines.find((line) => Number.isInteger(line.previousLineNumber))?.previousLineNumber
-    ?? null;
-  const newAnchor = firstChangedLine?.nextLineNumber
-    ?? lines.find((line) => Number.isInteger(line.nextLineNumber))?.nextLineNumber
-    ?? null;
-
-  if (Number.isInteger(oldAnchor) && Number.isInteger(newAnchor)) {
-    return `Around old line ${oldAnchor} · new line ${newAnchor}`;
-  }
-  if (Number.isInteger(oldAnchor)) {
-    return `Around old line ${oldAnchor}`;
-  }
-  if (Number.isInteger(newAnchor)) {
-    return `Around new line ${newAnchor}`;
-  }
-  return "Changed lines";
-}
-
-function buildCanvasDiffHunks(lines, contextLineCount = CANVAS_DIFF_CONTEXT_LINE_COUNT, maxVisibleLines = CANVAS_DIFF_MAX_VISIBLE_LINES) {
-  const changeIndices = [];
-  lines.forEach((line, index) => {
-    if (line.kind !== "context") {
-      changeIndices.push(index);
-    }
-  });
-
-  if (!changeIndices.length) {
-    return {
-      hunks: [],
-      truncated: false,
-      totalHunkCount: 0,
-      visibleLineCount: 0,
-    };
-  }
-
-  const mergedRanges = [];
-  changeIndices.forEach((changeIndex) => {
-    const nextRange = {
-      start: Math.max(0, changeIndex - contextLineCount),
-      end: Math.min(lines.length - 1, changeIndex + contextLineCount),
-    };
-    const previousRange = mergedRanges[mergedRanges.length - 1] || null;
-    if (previousRange && nextRange.start <= previousRange.end + 1) {
-      previousRange.end = Math.max(previousRange.end, nextRange.end);
-      return;
-    }
-    mergedRanges.push(nextRange);
-  });
-
-  const hunks = [];
-  let visibleLineCount = 0;
-  let truncated = false;
-  mergedRanges.forEach((range) => {
-    if (visibleLineCount >= maxVisibleLines) {
-      truncated = true;
-      return;
-    }
-
-    const remainingLineBudget = maxVisibleLines - visibleLineCount;
-    const fullLines = lines.slice(range.start, range.end + 1);
-    const visibleLines = fullLines.slice(0, remainingLineBudget);
-    if (!visibleLines.length) {
-      truncated = true;
-      return;
-    }
-
-    if (visibleLines.length < fullLines.length) {
-      truncated = true;
-    }
-
-    hunks.push({
-      label: buildCanvasDiffHunkLabel(visibleLines),
-      lines: visibleLines,
-    });
-    visibleLineCount += visibleLines.length;
-  });
-
-  if (mergedRanges.length > hunks.length) {
-    truncated = true;
-  }
-
-  return {
-    hunks,
-    truncated,
-    totalHunkCount: mergedRanges.length,
-    visibleLineCount,
-  };
-}
-
-function buildCanvasDiff(previousContent, nextContent) {
-  const previousLines = String(previousContent || "").replace(/\r\n?/g, "\n").split("\n");
-  const nextLines = String(nextContent || "").replace(/\r\n?/g, "\n").split("\n");
-  let start = 0;
-  while (start < previousLines.length && start < nextLines.length && previousLines[start] === nextLines[start]) {
-    start += 1;
-  }
-
-  let previousEnd = previousLines.length - 1;
-  let nextEnd = nextLines.length - 1;
-  while (previousEnd >= start && nextEnd >= start && previousLines[previousEnd] === nextLines[nextEnd]) {
-    previousEnd -= 1;
-    nextEnd -= 1;
-  }
-
-  const removed = previousEnd >= start ? previousLines.slice(start, previousEnd + 1) : [];
-  const added = nextEnd >= start ? nextLines.slice(start, nextEnd + 1) : [];
-  if (!removed.length && !added.length) {
-    return null;
-  }
-
-  const numberedLines = [];
-  const prefixContextStart = Math.max(0, start - CANVAS_DIFF_CONTEXT_LINE_COUNT);
-  for (let index = prefixContextStart; index < start; index += 1) {
-    numberedLines.push({
-      kind: "context",
-      previousLineNumber: index + 1,
-      nextLineNumber: index + 1,
-      text: previousLines[index],
-    });
-  }
-
-  let previousLineNumber = start + 1;
-  let nextLineNumber = start + 1;
-  buildCanvasDiffOperations(removed, added).forEach((operation) => {
-    if (operation.kind === "context") {
-      numberedLines.push({
-        kind: operation.kind,
-        previousLineNumber,
-        nextLineNumber,
-        text: operation.text,
-      });
-      previousLineNumber += 1;
-      nextLineNumber += 1;
-      return;
-    }
-
-    if (operation.kind === "removed") {
-      numberedLines.push({
-        kind: operation.kind,
-        previousLineNumber,
-        nextLineNumber: null,
-        text: operation.text,
-      });
-      previousLineNumber += 1;
-      return;
-    }
-
-    numberedLines.push({
-      kind: operation.kind,
-      previousLineNumber: null,
-      nextLineNumber,
-      text: operation.text,
-    });
-    nextLineNumber += 1;
-  });
-
-  const sharedSuffixCount = Math.min(
-    CANVAS_DIFF_CONTEXT_LINE_COUNT,
-    Math.max(0, previousLines.length - (previousEnd + 1)),
-    Math.max(0, nextLines.length - (nextEnd + 1)),
-  );
-  for (let offset = 0; offset < sharedSuffixCount; offset += 1) {
-    numberedLines.push({
-      kind: "context",
-      previousLineNumber,
-      nextLineNumber,
-      text: previousLines[previousEnd + 1 + offset],
-    });
-    previousLineNumber += 1;
-    nextLineNumber += 1;
-  }
-
-  const addedCount = numberedLines.filter((line) => line.kind === "added").length;
-  const removedCount = numberedLines.filter((line) => line.kind === "removed").length;
-  const { hunks, truncated, totalHunkCount, visibleLineCount } = buildCanvasDiffHunks(numberedLines);
-
-  return {
-    startLine: start + 1,
-    removed,
-    added,
-    addedCount,
-    removedCount,
-    hunkCount: totalHunkCount,
-    hunks,
-    truncated,
-    visibleLineCount,
-  };
-}
-
-function openDiffFullscreen(diff) {
-  if (!canvasDiffModalEl || !canvasDiffModalBefore || !canvasDiffModalAfter || !diff) {
-    return;
-  }
-  // Reconstruct before/after full text from hunk lines
-  const beforeLines = [];
-  const afterLines = [];
-  for (const hunk of (diff.hunks || [])) {
-    for (const line of (hunk.lines || [])) {
-      if (line.kind === "removed" || line.kind === "context") {
-        beforeLines.push(line.text || "");
-      }
-      if (line.kind === "added" || line.kind === "context") {
-        afterLines.push(line.text || "");
-      }
-    }
-  }
-  canvasDiffModalBefore.textContent = beforeLines.join("\n");
-  canvasDiffModalAfter.textContent = afterLines.join("\n");
-  canvasDiffModalEl.hidden = false;
-  canvasDiffModalEl.focus?.();
-}
-
-function closeDiffFullscreen() {
-  if (canvasDiffModalEl) {
-    canvasDiffModalEl.hidden = true;
-  }
-}
-
-function renderCanvasDiffPreview(activeDocument) {
-  if (!canvasDiffEl) {
-    return;
-  }
-  if (!pendingCanvasDiff || pendingCanvasDiff.documentId !== activeDocument?.id || activeDocument?.isStreamingPreview) {
-    canvasDiffEl.hidden = true;
-    canvasDiffEl.innerHTML = "";
-    return;
-  }
-
-  const diff = pendingCanvasDiff.diff;
-  const fileLabel = getCanvasDocumentLabel(activeDocument);
-  const metaParts = [
-    fileLabel,
-    `+${diff.addedCount}`,
-    `-${diff.removedCount}`,
-    `${diff.hunkCount} hunk${diff.hunkCount === 1 ? "" : "s"}`,
-  ];
-  if (diff.truncated) {
-    metaParts.push(`showing first ${diff.visibleLineCount} diff line${diff.visibleLineCount === 1 ? "" : "s"}`);
-  }
-  const sourceBadge = pendingCanvasDiff.source === "live-preview"
-    ? '<span class="canvas-diff__badge">Saved after live preview</span>'
-    : "";
-
-  canvasDiffEl.hidden = false;
-  canvasDiffEl.innerHTML =
-    `<div class="canvas-diff__header">` +
-      `<div class="canvas-diff__summary">` +
-        `<div class="canvas-diff__title-row">` +
-          `<div class="canvas-diff__title">Recent AI change</div>` +
-          sourceBadge +
-        `</div>` +
-        `<div class="canvas-diff__meta">${escHtml(metaParts.join(" · "))}</div>` +
-      `</div>` +
-      `<div class="canvas-diff__actions">` +
-        `<button class="canvas-diff__expand" type="button" data-action="fullscreen-canvas-diff" title="View side by side fullscreen">⤢ Side by side</button>` +
-        `<button class="canvas-diff__close" type="button" data-action="dismiss-canvas-diff">Hide diff</button>` +
-      `</div>` +
-    `</div>` +
-    `<div class="canvas-diff__body" tabindex="0">` +
-      diff.hunks.map((hunk) =>
-        `<section class="canvas-diff__hunk">` +
-          `<div class="canvas-diff__hunk-header">${escHtml(hunk.label)}</div>` +
-          hunk.lines.map((line) => {
-            const marker = line.kind === "added" ? "+" : line.kind === "removed" ? "-" : "·";
-            const previousLineNumber = Number.isInteger(line.previousLineNumber) ? String(line.previousLineNumber) : "";
-            const nextLineNumber = Number.isInteger(line.nextLineNumber) ? String(line.nextLineNumber) : "";
-            return `<div class="canvas-diff__line canvas-diff__line--${line.kind}"><span class="canvas-diff__line-marker">${marker}</span><span class="canvas-diff__line-num">${previousLineNumber}</span><span class="canvas-diff__line-num">${nextLineNumber}</span><span class="canvas-diff__line-text">${escHtml(line.text || " ")}</span></div>`;
-          }).join("") +
-        `</section>`
-      ).join("") +
-      `<div class="canvas-diff__scroll-hint" hidden aria-hidden="true">↓ scroll to see more</div>` +
-      `<div class="canvas-diff__scroll-sentinel" aria-hidden="true"></div>` +
-    `</div>`;
-
-  const diffBodyEl = canvasDiffEl.querySelector(".canvas-diff__body");
-  const scrollHintEl = canvasDiffEl.querySelector(".canvas-diff__scroll-hint");
-  const sentinelEl = canvasDiffEl.querySelector(".canvas-diff__scroll-sentinel");
-
-  // Show the sticky scroll-hint whenever the sentinel (placed after the last hunk)
-  // is not visible within the diff body's scrollport.  This is more reliable than
-  // a one-shot rAF measurement and ensures the hint is only shown when the user
-  // genuinely has content below the fold.  Because the hint lives INSIDE the body,
-  // hovering over it and using the mouse-wheel scrolls the correct element.
-  if (diffBodyEl && scrollHintEl && sentinelEl) {
-    const scrollObserver = new IntersectionObserver(
-      (entries) => {
-        scrollHintEl.hidden = entries[0].isIntersecting;
-      },
-      { root: diffBodyEl, threshold: 0 },
-    );
-    scrollObserver.observe(sentinelEl);
-  }
-
-  canvasDiffEl.querySelector('[data-action="dismiss-canvas-diff"]')?.addEventListener("click", () => {
-    pendingCanvasDiff = null;
-    renderCanvasDiffPreview(getActiveCanvasDocument());
-  });
-
-  canvasDiffEl.querySelector('[data-action="fullscreen-canvas-diff"]')?.addEventListener("click", () => {
-    openDiffFullscreen(pendingCanvasDiff?.diff);
-  });
-}
-
 function setCanvasEditing(enabled) {
   if (enabled && guardCanvasMutation("edit the active file")) {
     return;
@@ -4861,7 +4422,6 @@ async function createCanvasDocumentFromData({ title, content, format, language =
     setCanvasMutationState("", { rerender: false });
     history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
     streamingCanvasDocuments = [];
-    pendingCanvasDiff = null;
     activeCanvasDocumentId = String(payload.active_document_id || payload.document?.id || "").trim() || null;
     isCanvasEditing = true;
     editingCanvasDocumentId = null;
@@ -4950,7 +4510,6 @@ async function createCanvasDocumentFromFile(file) {
     setCanvasMutationState("", { rerender: false });
     history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
     streamingCanvasDocuments = [];
-    pendingCanvasDiff = null;
     activeCanvasDocumentId = String(payload.active_document_id || payload.document?.id || "").trim() || null;
     isCanvasEditing = true;
     editingCanvasDocumentId = null;
@@ -5018,7 +4577,6 @@ async function importGithubRepositoryToCanvas() {
     setCanvasMutationState("", { rerender: false });
     history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
     streamingCanvasDocuments = [];
-    pendingCanvasDiff = null;
     activeCanvasDocumentId = String(payload.active_document_id || "").trim() || null;
     isCanvasEditing = false;
     editingCanvasDocumentId = null;
@@ -5772,11 +5330,6 @@ function resetCanvasContentDisplay({ clearEditorValue = true, clearTabs = true }
     canvasDocumentEl.hidden = true;
     canvasDocumentEl.classList.remove("canvas-document--editing-preview");
     canvasDocumentEl.innerHTML = "";
-  }
-
-  if (canvasDiffEl) {
-    canvasDiffEl.hidden = true;
-    canvasDiffEl.innerHTML = "";
   }
 
   if (clearTabs && canvasDocumentTabsEl) {
@@ -7396,7 +6949,6 @@ async function deleteCanvasDocuments({ documentId = null, clearAll = false, conf
     setCanvasMutationState("", { rerender: false });
     history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
     streamingCanvasDocuments = [];
-    pendingCanvasDiff = null;
     isCanvasEditing = false;
     editingCanvasDocumentId = null;
     activeCanvasDocumentId = payload.cleared
@@ -7495,7 +7047,6 @@ async function saveCanvasEdits() {
     setCanvasMutationState("", { rerender: false });
     history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
     streamingCanvasDocuments = [];
-    pendingCanvasDiff = null;
     activeCanvasDocumentId = String(payload.active_document_id || activeDocument.id).trim() || activeDocument.id;
     isCanvasEditing = false;
     editingCanvasDocumentId = null;
@@ -11001,13 +10552,6 @@ if (canvasCancelBtn) {
 if (mobileCanvasBtn) {
   mobileCanvasBtn.addEventListener("click", () => openCanvas(mobileToolsBtn || mobileCanvasBtn, { deferPanelRender: false }));
 }
-document.getElementById("canvas-diff-modal-close")?.addEventListener("click", closeDiffFullscreen);
-canvasDiffModalEl?.addEventListener("click", (e) => {
-  if (e.target === canvasDiffModalEl) closeDiffFullscreen();
-});
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && canvasDiffModalEl && !canvasDiffModalEl.hidden) closeDiffFullscreen();
-});
 if (canvasToggleBtn) {
   canvasToggleBtn.addEventListener("click", () => {
     if (isCanvasOpen()) {
@@ -14596,7 +14140,6 @@ async function sendMessage(options = {}) {
     };
     streamingCanvasDocuments = [];
     resetStreamingCanvasPreview();
-    pendingCanvasDiff = null;
     isCanvasEditing = false;
     editingCanvasDocumentId = null;
     activeCanvasDocumentId = getActiveCanvasDocument(history)?.id || null;
@@ -15158,27 +14701,9 @@ async function sendMessage(options = {}) {
           || nextDocuments[nextDocuments.length - 1]
           || null;
         const previousSelectedDocument = getCanvasDocumentById(previousDocuments, previousActiveId);
-        const previousVersionOfNextDocument = getCanvasDocumentById(previousDocuments, nextActiveCandidate?.id || previousActiveId);
         const hadStreamingPreviewForDoc =
           nextActiveCandidate &&
           [...streamingCanvasPreviews.values()].some((p) => p.id === nextActiveCandidate.id);
-        if (previousVersionOfNextDocument && nextActiveCandidate) {
-          const nextDiff = previousVersionOfNextDocument.content !== nextActiveCandidate.content
-            ? buildCanvasDiff(previousVersionOfNextDocument.content, nextActiveCandidate.content)
-            : null;
-          if (nextDiff) {
-            pendingCanvasDiff = {
-              documentId: nextActiveCandidate.id,
-              source: hadStreamingPreviewForDoc ? "live-preview" : "direct-sync",
-              diff: nextDiff,
-            };
-          }
-          // Do NOT clear pendingCanvasDiff here when nextDiff is null.
-          // A second canvas_sync (e.g. from the final tool_capture after an early
-          // commit emit) sees identical content on both sides → nextDiff = null,
-          // but the diff shown to the user is still valid and should stay visible
-          // until they explicitly dismiss it or a new canvas_sync produces a new diff.
-        }
         resetStreamingCanvasPreview();
         streamingCanvasDocuments = nextDocuments;
         if (streamingCanvasDocuments.length) {
@@ -15219,7 +14744,6 @@ async function sendMessage(options = {}) {
             setCanvasStatus("Canvas updated. Open the panel to review.", "success");
           }
         } else if (event.cleared) {
-          pendingCanvasDiff = null;
           isCanvasEditing = false;
           editingCanvasDocumentId = null;
           activeCanvasDocumentId = null;

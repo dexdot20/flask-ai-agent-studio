@@ -116,33 +116,6 @@
     </button>
   </div>
   <div class="summary-panel__body">
-    <section class="summary-card summary-inspector">
-      <div class="summary-inspector__header">
-        <span id="summary-inspector-badge" class="summary-inspector__badge" data-tone="muted">Waiting</span>
-        <div class="summary-inspector__header-copy">
-          <div id="summary-inspector-headline" class="summary-inspector__headline">Start chatting to see when automatic summary will run.</div>
-        </div>
-      </div>
-      <div class="summary-inspector__grid">
-        <div class="summary-inspector__metric">
-          <span>Current estimate</span>
-          <strong id="summary-inspector-current">0</strong>
-        </div>
-        <div class="summary-inspector__metric">
-          <span>Trigger</span>
-          <strong id="summary-inspector-trigger">0</strong>
-        </div>
-        <div class="summary-inspector__metric">
-          <span>Gap</span>
-          <strong id="summary-inspector-gap">0 left</strong>
-        </div>
-      </div>
-      <p id="summary-inspector-detail" class="summary-inspector__detail"></p>
-      <p id="summary-inspector-tool-messages" class="summary-inspector__detail"></p>
-      <p id="summary-inspector-reason" class="summary-inspector__detail"></p>
-      <p id="summary-inspector-last" class="summary-inspector__detail"></p>
-    </section>
-
     <section class="summary-card">
       <div class="summary-card__header">
         <div>
@@ -643,25 +616,6 @@
         <div id="canvas-tree" class="canvas-tree" role="tree" aria-label="Canvas project tree"></div>
       </aside>
       <div class="canvas-workspace-main">
-        <section id="canvas-diff" class="canvas-diff" hidden></section>
-        <div id="canvas-diff-modal" class="canvas-diff-modal" hidden role="dialog" aria-modal="true" aria-labelledby="canvas-diff-modal-title">
-          <div class="canvas-diff-modal__inner">
-            <div class="canvas-diff-modal__header">
-              <span id="canvas-diff-modal-title" class="canvas-diff-modal__title">Diff — side by side</span>
-              <button id="canvas-diff-modal-close" class="canvas-diff-modal__close" type="button" title="Close fullscreen diff">Close</button>
-            </div>
-            <div class="canvas-diff-modal__body">
-              <div class="canvas-diff-modal__pane canvas-diff-modal__pane--removed">
-                <div class="canvas-diff-modal__pane-header">Before</div>
-                <pre id="canvas-diff-modal-before" class="canvas-diff-modal__pane-content"></pre>
-              </div>
-              <div class="canvas-diff-modal__pane canvas-diff-modal__pane--added">
-                <div class="canvas-diff-modal__pane-header">After</div>
-                <pre id="canvas-diff-modal-after" class="canvas-diff-modal__pane-content"></pre>
-              </div>
-            </div>
-          </div>
-        </div>
         <div id="canvas-empty-state" class="canvas-empty-state">
           <h3>No canvas document yet</h3>
           <p>Ask the assistant to draft something substantial, then continue refining it with line-based edits.</p>
@@ -822,6 +776,7 @@
   <div id="sidebar-overlay" class="sidebar-overlay"></div>
 
 <script id="app-bootstrap" type="application/json">{{ {"settings": settings, "features": settings.features, "csrf_token": csrf_token}|tojson }}</script>
+<script src="/static/shared/csrf-utils.js"></script>
 <script src="/static/app.js?v={{ app_js_version }}"></script>
 </body>
 </html>
