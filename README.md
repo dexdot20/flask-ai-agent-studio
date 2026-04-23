@@ -1,3 +1,5 @@
+💥 There's a bug in the main branch. I'll be pushing an update shortly. To use a version that works without issues, you can use the clean version from 6–7 commits ago (just to be safe).
+
 # Flask ChatBot: Multi-Provider + Tools + RAG + OCR + Multimodal + Canvas + Memory + Workspace
 
 > **AI-Assisted Development Notice:** This project was developed with AI assistance. All code, architecture decisions, and documentation have been written, reviewed, and validated by humans. AI was used as a pair programmer and productivity tool — not as an autonomous generator. Every line has passed human review before inclusion.
