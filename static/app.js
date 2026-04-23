@@ -1241,7 +1241,6 @@ async function createConversationMemoryEntry() {
 }
 
 renderConversationMemoryTypeOptions();
-renderParamsPanel();
 const DEFAULT_CANVAS_CONFIRM_LABEL = "Open Canvas";
 const DEFAULT_CANVAS_CONFIRM_CANCEL_LABEL = "Later";
 let activeSidebarRename = null;
