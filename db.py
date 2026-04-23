@@ -40,6 +40,8 @@ from config import (
     DEFAULT_SETTINGS,
     OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED,
     OPENROUTER_ANTHROPIC_CACHE_TTL_DEFAULT,
+    PRUNING_MIN_TARGET_TOKENS,
+    PRUNING_TARGET_REDUCTION_RATIO,
     SCRATCHPAD_DEFAULT_SECTION,
     SCRATCHPAD_SECTION_ORDER,
     SCRATCHPAD_SECTION_SETTING_KEYS,
@@ -3783,6 +3785,11 @@ def serialize_message_metadata(metadata: dict | None, *, include_private_fields:
                 normalized_points.append(point_text[:300])
         if normalized_points:
             cleaned["key_points"] = normalized_points[:8]
+    if metadata.get("is_pruned") is True:
+        cleaned["is_pruned"] = True
+    pruned_original = str(metadata.get("pruned_original") or "").strip()
+    if pruned_original:
+        cleaned["pruned_original"] = pruned_original[:CONTENT_MAX_CHARS]
     if metadata.get("is_summary") is True:
         cleaned["is_summary"] = True
     if metadata.get("covered_ids_truncated") is True:
@@ -5975,10 +5982,58 @@ def get_fetch_url_summarized_max_output_tokens(settings: dict | None = None) -> 
     )
 
 
+def get_pruning_enabled(settings: dict | None = None) -> bool:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get("pruning_enabled", DEFAULT_SETTINGS["pruning_enabled"])
+    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def get_reasoning_auto_collapse(settings: dict | None = None) -> bool:
     source = settings if settings is not None else get_app_settings()
     raw_value = source.get("reasoning_auto_collapse", DEFAULT_SETTINGS["reasoning_auto_collapse"])
     return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def get_pruning_token_threshold(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get("pruning_token_threshold", DEFAULT_SETTINGS["pruning_token_threshold"])
+    try:
+        threshold = int(raw_value)
+    except (TypeError, ValueError):
+        threshold = CHAT_SUMMARY_TRIGGER_TOKEN_COUNT
+    return max(1_000, min(200_000, threshold))
+
+
+def get_pruning_batch_size(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get("pruning_batch_size", DEFAULT_SETTINGS["pruning_batch_size"])
+    try:
+        batch_size = int(raw_value)
+    except (TypeError, ValueError):
+        batch_size = 10
+    return max(1, min(50, batch_size))
+
+
+def get_pruning_target_reduction_ratio(settings: dict | None = None) -> float:
+    source = settings if settings is not None else get_app_settings()
+    return _get_float_setting_value(
+        source,
+        "pruning_target_reduction_ratio",
+        PRUNING_TARGET_REDUCTION_RATIO,
+        0.1,
+        0.9,
+    )
+
+
+def get_pruning_min_target_tokens(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(
+        source,
+        "pruning_min_target_tokens",
+        PRUNING_MIN_TARGET_TOKENS,
+        50,
+        5_000,
+    )
 
 
 def get_next_message_position(conn: sqlite3.Connection, conversation_id: int) -> int:

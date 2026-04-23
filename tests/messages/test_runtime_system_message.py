@@ -711,14 +711,13 @@ class TestRuntimeSystemMessage:
         scroll_description = TOOL_SPEC_BY_NAME["scroll_canvas_document"]["description"]
         search_guidance = TOOL_SPEC_BY_NAME["search_canvas_document"]["prompt"]["guidance"]
 
-        assert "Apply several line edits to one document in a single call" in batch_guidance
-        # Check that replace operation documents its key parameters (start_line, end_line, lines)
-        # The guidance format may vary; focus on presence of key information
-        assert "start_line" in batch_guidance and "end_line" in batch_guidance and "lines" in batch_guidance
+        assert "Prefer one batch_canvas_edits call" in batch_guidance
+        assert "plain JSON object with an action field" in batch_guidance
+        assert "For replace use start_line, end_line, and lines" in batch_guidance
         assert "Always include title" in create_guidance
         assert "src/app.py -> app.py" in create_guidance
         assert "Do not default to this when only part of the file needs to change" in rewrite_guidance
-        assert "Multiple replace_canvas_lines calls are fine" in replace_guidance
+        assert "Multiple localized replace_canvas_lines calls are fine" in replace_guidance
         assert "document_id is optional" in expand_description
         assert "call-time snapshot" in expand_description
         assert "use document_path from the workspace summary or manifest" in expand_guidance
@@ -805,12 +804,7 @@ class TestRuntimeSystemMessage:
 
         content = message["content"]
         assert "expand_canvas_document" in content
-        # scroll_canvas_document should NOT be in the callable tools list
-        # Note: It may appear in other contexts (like error handling guidance for other tools),
-        # so we check that it's not listed as a callable tool, not that it doesn't appear anywhere
-        assert "Callable tools:" in content
-        callable_tools_line = [l for l in content.split("\n") if "Callable tools:" in l]
-        assert callable_tools_line and "scroll_canvas_document" not in callable_tools_line[0]
+        assert "scroll_canvas_document" not in content
 
     def test_openai_tool_specs_include_expand_canvas_document_with_canvas_documents(self):
         tools = get_openai_tool_specs(

@@ -1,6 +1,72 @@
-// CSRF and bootstrap loaded from shared/csrf-utils.js
-const appSettings = window.__bootstrapData?.settings || {};
-const featureFlags = window.__bootstrapData?.features || appSettings.features || {};
+const bootstrapEl = document.getElementById("app-bootstrap");
+const bootstrapData = (() => {
+  if (!bootstrapEl) {
+    return { settings: {} };
+  }
+  try {
+    return JSON.parse(bootstrapEl.textContent || "{}") || { settings: {} };
+  } catch (_) {
+    return { settings: {} };
+  }
+})();
+
+const appSettings = bootstrapData.settings || {};
+const featureFlags = bootstrapData.features || appSettings.features || {};
+const csrfToken = String(bootstrapData.csrf_token || "").trim();
+
+const nativeFetch = typeof globalThis.fetch === "function" ? globalThis.fetch.bind(globalThis) : null;
+const CSRF_SAFE_HTTP_METHODS = new Set(["GET", "HEAD", "OPTIONS", "TRACE"]);
+
+function resolveFetchMethod(input, init) {
+  const explicitMethod = String(init?.method || "").trim();
+  if (explicitMethod) {
+    return explicitMethod.toUpperCase();
+  }
+  if (input instanceof Request) {
+    return String(input.method || "GET").trim().toUpperCase() || "GET";
+  }
+  return "GET";
+}
+
+function resolveFetchUrl(input) {
+  if (input instanceof Request) {
+    return input.url;
+  }
+  return String(input || "").trim();
+}
+
+function shouldAttachCsrfHeader(input, init) {
+  if (!nativeFetch || !csrfToken) {
+    return false;
+  }
+  const method = resolveFetchMethod(input, init);
+  if (CSRF_SAFE_HTTP_METHODS.has(method)) {
+    return false;
+  }
+  const rawUrl = resolveFetchUrl(input);
+  if (!rawUrl) {
+    return true;
+  }
+  try {
+    const resolvedUrl = new URL(rawUrl, window.location.href);
+    return resolvedUrl.origin === window.location.origin;
+  } catch (_) {
+    return true;
+  }
+}
+
+if (nativeFetch) {
+  globalThis.fetch = (input, init = undefined) => {
+    if (!shouldAttachCsrfHeader(input, init)) {
+      return nativeFetch(input, init);
+    }
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+    if (!headers.has("X-CSRF-Token")) {
+      headers.set("X-CSRF-Token", csrfToken);
+    }
+    return nativeFetch(input, { ...(init || {}), headers });
+  };
+}
 
 const generalInstructionsEl = document.getElementById("general-instructions-input");
 const generalInstructionsTemplateSelectEl = document.getElementById("general-instructions-template-select");
@@ -608,7 +674,7 @@ function renderPersonaMemoryList() {
   if (!normalizedPersonaId) {
     personaMemoryListEl.innerHTML = '<p class="settings-copy">Create or select a saved persona before editing shared persona memory.</p>';
     if (personaMemoryNoteEl) {
-      personaMemoryNoteEl.textContent = "Use this for stable persona-scoped facts shared across conversations.";
+      personaMemoryNoteEl.textContent = "Use this for stable persona-scoped facts shared across conversations. Stored entries are not auto-pruned.";
     }
     return;
   }
@@ -617,13 +683,13 @@ function renderPersonaMemoryList() {
   if (!entries.length) {
     personaMemoryListEl.innerHTML = '<p class="settings-copy">No persona memory yet. Add short key-value entries that should follow this persona across conversations.</p>';
     if (personaMemoryNoteEl) {
-      personaMemoryNoteEl.textContent = "Use this for stable persona-scoped facts shared across conversations.";
+      personaMemoryNoteEl.textContent = "Use this for stable persona-scoped facts shared across conversations. Stored entries are not auto-pruned.";
     }
     return;
   }
 
   if (personaMemoryNoteEl) {
-    personaMemoryNoteEl.textContent = `${entries.length} shared persona memory entr${entries.length === 1 ? "y" : "ies"} currently stored.`;
+    personaMemoryNoteEl.textContent = `${entries.length} shared persona memory entr${entries.length === 1 ? "y" : "ies"} currently stored. These entries are not auto-pruned.`;
   }
 
   entries.forEach((entry) => {
@@ -4025,7 +4091,7 @@ void loadKnowledgeBaseDocuments();
     purgeBtnEl.addEventListener("click", async () => {
       if (!confirm("Delete all activity records older than the retention period?")) return;
       try {
-        const resp = await fetch("/api/activity/purge-expired", { method: "POST" });
+        const resp = await fetch("/api/activity/purge-expired", { method: "POST", headers: { "X-CSRF-Token": csrfToken } });
         const data = await resp.json().catch(() => ({}));
         alert(`Purged ${data.deleted ?? "?"} records (retention: ${data.retention_days ?? "?"} days).`);
         activityOffset = 0;

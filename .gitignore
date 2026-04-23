@@ -44,8 +44,14 @@ Thumbs.db
 
 # Other
 AGENTS.md
+sample/
 backup/
 memory/
+list_python_files_markdown.py
 docs/ACTIVE_PROBLEMS.md
-docs/
+python_files_dump.md
+REFACTOR
+TEST_GOVERNANCE.md
+docs
 .kilo/
+scripts/

@@ -6,7 +6,7 @@ import math
 import logging
 import json
 import os
-from queue import Empty as QueueEmpty, Queue
+from queue import SimpleQueue
 import re
 import shutil
 import tempfile
@@ -38,7 +38,6 @@ from canvas_service import (
 from config import (
     CHAT_SUMMARY_MODEL,
     CONVERSATION_MEMORY_ENABLED,
-    FORCE_MEMORY_CLEANUP_AT_PERCENT,
     IMAGE_UPLOADS_DISABLED_FEATURE_ERROR,
     IMAGE_UPLOADS_ENABLED,
     OCR_ENABLED,
@@ -106,6 +105,9 @@ from db import (
     get_file_asset,
     get_max_parallel_tools,
     get_model_temperature,
+    get_pruning_batch_size,
+    get_pruning_enabled,
+    get_pruning_token_threshold,
     get_persona_memory,
     get_prompt_max_input_tokens,
     get_prompt_preflight_summary_token_count,
@@ -202,6 +204,7 @@ from video_transcript_service import (
     read_youtube_video_reference,
     transcribe_youtube_video,
 )
+from prune_service import prune_conversation_batch
 
 
 TITLE_MAX_WORDS = 5
@@ -1514,7 +1517,7 @@ def _build_tool_trace_context(
         metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else None
         for entry in reversed(extract_message_tool_trace(metadata)):
             if str(entry.get("tool_name") or "").strip() == "ask_clarifying_question":
-                if not _clarification_sentinel_added:
+                if has_pending_clarification and not _clarification_sentinel_added:
                     clarification_state = "needs_user_input" if has_pending_clarification else "answered"
                     clarification_preview = (
                         "Awaiting user clarification answers"
@@ -2112,6 +2115,23 @@ def _trim_text_sections_to_token_budget(text: str | None, max_tokens: int) -> st
             return _clip_text_to_token_budget(section, max_tokens)
         kept.append(section)
     return "\n\n".join(kept) if kept else None
+
+
+def _count_prunable_message_tokens(messages: list[dict]) -> int:
+    total = 0
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "").strip()
+        if role not in {"user", "assistant"}:
+            continue
+        if role == "assistant" and message.get("tool_calls"):
+            continue
+        metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+        if metadata.get("is_summary") is True or metadata.get("is_pruned") is True:
+            continue
+        total += estimate_text_tokens(str(message.get("content") or ""))
+    return total
 
 
 def _trim_rag_context_to_token_budget(retrieved_context: dict | None, max_tokens: int) -> dict | None:
@@ -3026,11 +3046,8 @@ def _build_budgeted_prompt_messages(
         tool_memory_context,
         min(tool_memory_budget_cap, remaining_context_budget),
     )
-    # Pass prompt_budget to runtime_budget_stats so messages.py can compute
-    # the actual usage ratio after current_context_injection is built
     runtime_budget_stats = {
         "remaining_context_budget": remaining_context_budget,
-        "prompt_budget": prompt_budget,
     }
 
     current_context_injection = build_runtime_context_injection(
@@ -4282,14 +4299,37 @@ def _run_chat_post_response_tasks(
     except Exception:
         LOGGER.exception("Background summary task failed for conversation_id=%s", conversation_id)
 
-    if isinstance(summary_outcome, dict) and summary_outcome.get("applied") is True:
-        LOGGER.debug("Background summarization already applied for conversation_id=%s", conversation_id)
+    if not (isinstance(summary_outcome, dict) and summary_outcome.get("applied") is True):
+        _maybe_run_conversation_pruning(conversation_id, settings)
+    else:
+        LOGGER.debug(
+            "Background pruning skipped because summarization already applied for conversation_id=%s", conversation_id
+        )
 
     if RAG_ENABLED and conversation_id:
         try:
             sync_conversations_to_rag_background(app_obj, conversation_id=conversation_id)
         except Exception:
             LOGGER.exception("Background RAG sync failed for conversation_id=%s", conversation_id)
+
+
+def _maybe_run_conversation_pruning(conversation_id: int, settings: dict) -> None:
+    if not conversation_id or not get_pruning_enabled(settings):
+        return
+
+    try:
+        conversation_messages = get_conversation_messages(conversation_id)
+        visible_token_count = count_visible_message_tokens(
+            conversation_messages,
+            include_context_injections=False,
+        )
+        legacy_prunable_token_count = _count_prunable_message_tokens(conversation_messages)
+        effective_token_count = max(visible_token_count, legacy_prunable_token_count)
+        if effective_token_count < get_pruning_token_threshold(settings):
+            return
+        prune_conversation_batch(conversation_id, get_pruning_batch_size(settings))
+    except Exception:
+        LOGGER.exception("Background pruning task failed for conversation_id=%s", conversation_id)
 
 
 def _parse_request_bool(value) -> bool:
@@ -5138,24 +5178,18 @@ def register_chat_routes(app) -> None:
                 # metadata-based path missed the answers (e.g. retry without
                 # metadata), but the tool must still be disabled so the model
                 # cannot ask the same questions again.
-                # Only consider the MOST RECENT clarification: if any assistant
-                # answer appeared after it, the conversation moved on and a
-                # new clarification round is appropriate.
                 _conv_msgs_clar = get_conversation_messages(conv_id)
-                _last_clar_idx = None
-                for _idx in range(len(_conv_msgs_clar) - 1, -1, -1):
-                    _m = _conv_msgs_clar[_idx]
-                    if str(_m.get("role") or "") == "tool":
-                        _clar_content = str(_m.get("content") or "")
-                        if '"needs_user_input"' in _clar_content and '"clarification"' in _clar_content:
-                            _last_clar_idx = _idx
-                            break
+                _saw_clar_tool = False
                 _saw_user_after_clar = False
-                if _last_clar_idx is not None:
-                    _msgs_after_clar = _conv_msgs_clar[_last_clar_idx + 1 :]
-                    _has_assistant_after = any(str(_m.get("role") or "") == "assistant" for _m in _msgs_after_clar)
-                    _has_user_after = any(str(_m.get("role") or "") == "user" for _m in _msgs_after_clar)
-                    _saw_user_after_clar = _has_user_after and not _has_assistant_after
+                for _clar_msg in _conv_msgs_clar or []:
+                    if _saw_clar_tool:
+                        if str(_clar_msg.get("role") or "") == "user":
+                            _saw_user_after_clar = True
+                            break
+                    elif str(_clar_msg.get("role") or "") == "tool":
+                        _clar_content = str(_clar_msg.get("content") or "")
+                        if '"needs_user_input"' in _clar_content and '"clarification"' in _clar_content:
+                            _saw_clar_tool = True
                 if _saw_user_after_clar:
                     _fb_freeform = extract_freeform_clarification_user_content(
                         latest_user_message.get("content", "") if latest_user_message else ""
@@ -6280,6 +6314,8 @@ def register_chat_routes(app) -> None:
                         if RAG_ENABLED and conv_id:
                             _schedule_rag_conversation_sync(conversation_id=conv_id)
 
+                    _maybe_run_conversation_pruning(conv_id, settings)
+
             finalize_edited_replay_snapshot()
 
         response_headers = {
@@ -6299,20 +6335,14 @@ def register_chat_routes(app) -> None:
                 headers=response_headers,
             )
 
-        event_queue: Queue = Queue()
+        event_queue = SimpleQueue()
         chat_run_state["queue"] = event_queue
         chat_run_state["attached"] = True
-        _KEEPALIVE_PING = json.dumps({"type": "ping"}, ensure_ascii=False) + "\n"
-        _KEEPALIVE_INTERVAL_S = 15
 
         def stream_chat_events():
             try:
                 while True:
-                    try:
-                        next_chunk = event_queue.get(timeout=_KEEPALIVE_INTERVAL_S)
-                    except QueueEmpty:
-                        yield _KEEPALIVE_PING
-                        continue
+                    next_chunk = event_queue.get()
                     if next_chunk is _CHAT_RUN_STREAM_SENTINEL:
                         break
                     yield next_chunk
@@ -6347,7 +6377,6 @@ def register_chat_routes(app) -> None:
                     )
                     event_queue.put(json.dumps({"type": "done"}, ensure_ascii=False) + "\n")
             finally:
-                logger_bg.info(f"[BACKGROUND] Finished for stream_request_id={stream_request_id}")
                 if chat_run_state.get("attached"):
                     event_queue.put(_CHAT_RUN_STREAM_SENTINEL)
                 _unregister_chat_run(stream_request_id)

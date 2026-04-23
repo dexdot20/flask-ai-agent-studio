@@ -1,5 +1,3 @@
-💥 There's a bug in the main branch. I'll be pushing an update shortly. To use a version that works without issues, you can use the clean version from 6–7 commits ago (just to be safe).
-
 # Flask ChatBot: Multi-Provider + Tools + RAG + OCR + Multimodal + Canvas + Memory + Workspace
 
 > **AI-Assisted Development Notice:** This project was developed with AI assistance. All code, architecture decisions, and documentation have been written, reviewed, and validated by humans. AI was used as a pair programmer and productivity tool — not as an autonomous generator. Every line has passed human review before inclusion.
@@ -190,27 +188,19 @@ Operationally, compare repeated same-prefix turns and confirm that hit tokens tr
 ├── canvas_service.py       # Canvas document storage, page-aware navigation, and line-level editing
 ├── config.py               # Environment variables, defaults, feature flags, runtime limits
 ├── conversation_export.py  # Conversation and canvas export utilities
-├── conversation_cleanup_service.py # Branch rollback, workspace snapshots, RAG source purge
 ├── db.py                   # SQLite schema, settings, assets, cache, metadata helpers
 ├── doc_service.py          # Document upload and text extraction
-├── export_styles.py        # ReportLab PDF style definitions for export
-├── github_import_service.py # GitHub repository import into Canvas (preview + full)
 ├── image_service.py        # OCR + helper/direct multimodal orchestration for uploaded images
 ├── image_utils.py          # Shared image parsing, normalization, and optimization helpers
-├── logging_config.py       # Logging configuration for the application
-├── activity_service.py     # Activity/audit logger for outbound model calls
-├── markdown_rendering.py   # Shared Markdown-to-DOCX and Markdown-to-PDF rendering helpers
-├── messages.py             # Runtime prompt construction and API message preparation
 ├── model_registry.py       # Built-in and custom model catalog, OpenRouter model normalization
+├── messages.py             # Runtime prompt construction and API message preparation
 ├── ocr_service.py          # Dedicated OCR provider loading and text extraction
+├── markdown_rendering.py   # Shared Markdown-to-DOCX and Markdown-to-PDF rendering helpers
 ├── prune_service.py        # Message pruning helpers
 ├── project_workspace_service.py # Project-plan normalization and conversation workspace management
-├── proxy_settings.py       # Per-operation proxy configuration
 ├── rag_service.py          # RAG sync/search orchestration and tool-memory storage
-├── request_security.py     # Flask security middleware (SSRF, CSRF, rate limiting)
 ├── token_utils.py          # Token counting and prompt-source estimation
 ├── tool_registry.py        # Tool definitions and schemas exposed to the model
-├── video_transcript_service.py # YouTube transcript extraction (Whisper-based)
 ├── web_tools.py            # Web search, news search, safe URL fetch, proxy rotation, and fetch summarization
 ├── routes/
 │   ├── activity.py         # Activity/audit API for model invocation logs
@@ -1255,24 +1245,6 @@ Delete a single canvas document. Defaults to the active document when `document_
 Delete all canvas documents for the current conversation.
 
 - Arguments: none
-
-### Canvas GitHub import
-
-#### `preview_github_import_to_canvas`
-
-Fetch GitHub repository metadata and show a file-listing preview without modifying Canvas. Must be called in a turn before `import_github_repository_to_canvas`.
-
-- Arguments:
-  - `repo_url` (string, required) - full GitHub repository URL or `owner/repo` shorthand
-
-#### `import_github_repository_to_canvas`
-
-Download a GitHub repository archive and add supported text files into Canvas as path-aware project documents. Requires explicit user confirmation via a preceding `preview_github_import_to_canvas` call and `ask_clarifying_question` in a previous turn.
-
-- Arguments:
-  - `repo_url` (string, required) - full GitHub repository URL or `owner/repo` shorthand
-  - `file_paths` (array, optional) - specific file paths to import; omit to import all supported files
-  - `target_directory` (string, optional) - workspace subdirectory to import into
 
 ### Project workspace tools
 

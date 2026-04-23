@@ -1113,115 +1113,35 @@ def _normalize_canvas_expected_line(line: str) -> str:
     return _normalize_line_endings(str(line)).rstrip()
 
 
-CANVAS_DRIFT_SEARCH_WINDOW_LINES = 20
-_CANVAS_DRIFT_CURRENT_SLICE_PREVIEW_LINES = 5
-
-
-def _format_canvas_lines_preview(lines: list[str], start_line: int) -> str:
-    if not lines:
-        return "(empty)"
-    rendered: list[str] = []
-    for offset, line in enumerate(lines[:_CANVAS_DRIFT_CURRENT_SLICE_PREVIEW_LINES]):
-        rendered.append(f"  {start_line + offset}: {line!r}")
-    omitted = len(lines) - _CANVAS_DRIFT_CURRENT_SLICE_PREVIEW_LINES
-    if omitted > 0:
-        rendered.append(f"  … (+{omitted} more)")
-    return "\n".join(rendered)
-
-
-def _find_canvas_expected_block(
-    existing_lines: list[str],
-    normalized_expected: list[str],
-    preferred_start: int,
-) -> int | None:
-    """Search for ``normalized_expected`` near ``preferred_start`` (1-based).
-
-    Returns the 1-based start line of a *unique* match within the search window.
-    Returns ``None`` if the block is absent or appears more than once in the window
-    (ambiguous fuzzy matches must not silently shift edits).
-    """
-    expected_len = len(normalized_expected)
-    if expected_len == 0:
-        return None
-    total = len(existing_lines)
-    if expected_len > total:
-        return None
-
-    window = CANVAS_DRIFT_SEARCH_WINDOW_LINES
-    search_start = max(1, preferred_start - window)
-    search_end = min(total - expected_len + 1, preferred_start + window)
-    if search_start > search_end:
-        return None
-
-    matches: list[int] = []
-    for candidate in range(search_start, search_end + 1):
-        slice_ = [
-            _normalize_canvas_expected_line(line)
-            for line in existing_lines[candidate - 1 : candidate - 1 + expected_len]
-        ]
-        if slice_ == normalized_expected:
-            matches.append(candidate)
-            if len(matches) > 1:
-                return None
-    return matches[0] if len(matches) == 1 else None
-
-
 def _validate_canvas_expected_lines(
     existing_lines: list[str],
     *,
     expected_lines: list[str] | None,
     expected_start_line: int | None,
     default_start_line: int,
-) -> int | None:
-    """Validate ``expected_lines`` anchored at ``expected_start_line``.
-
-    Returns the resolved 1-based start line where ``expected_lines`` were found.
-    When drift is detected but the block matches uniquely within a nearby window,
-    the resolved start line reflects the shifted location so callers can adjust
-    their edit coordinates. Returns ``None`` when ``expected_lines`` is omitted.
-    Raises ``ValueError`` if the block cannot be located unambiguously.
-    """
+) -> None:
     if expected_lines is None:
-        return None
+        return
 
     normalized_expected = [_normalize_canvas_expected_line(line) for line in expected_lines]
     if not normalized_expected:
-        return None
+        return
 
     compare_start = expected_start_line if expected_start_line is not None else default_start_line
     if compare_start < 1:
         raise ValueError("expected_start_line must be at least 1 when expected_lines are provided.")
 
-    expected_len = len(normalized_expected)
-    compare_end = compare_start + expected_len - 1
+    compare_end = compare_start + len(normalized_expected) - 1
+    if compare_end > len(existing_lines):
+        raise ValueError(
+            "Canvas context drift detected: the expected lines no longer fit at the current location. Reinspect the document before editing."
+        )
 
-    def _current_slice_at(start: int) -> list[str]:
-        start_idx = max(0, start - 1)
-        end_idx = min(len(existing_lines), start_idx + expected_len)
-        return [_normalize_canvas_expected_line(line) for line in existing_lines[start_idx:end_idx]]
-
-    fits_in_place = compare_end <= len(existing_lines)
-    if fits_in_place and _current_slice_at(compare_start) == normalized_expected:
-        return compare_start
-
-    resolved = _find_canvas_expected_block(existing_lines, normalized_expected, compare_start)
-    if resolved is not None:
-        return resolved
-
-    current_slice = (
-        existing_lines[compare_start - 1 : compare_start - 1 + expected_len] if fits_in_place else []
-    )
-    current_preview = _format_canvas_lines_preview(current_slice, compare_start) if fits_in_place else "(range exceeds document end)"
-    expected_preview = _format_canvas_lines_preview(list(expected_lines), compare_start)
-    total_lines = len(existing_lines)
-    raise ValueError(
-        "Canvas context drift detected: expected lines not found at or near "
-        f"lines {compare_start}-{compare_end} (document has {total_lines} line(s)). "
-        "Call expand_canvas_document or scroll_canvas_document to re-read the current "
-        "content before retrying; do not retry with the same coordinates.\n"
-        f"Expected (@line {compare_start}):\n{expected_preview}\n"
-        f"Current (@line {compare_start}):\n{current_preview}"
-    )
+    current_slice = [_normalize_canvas_expected_line(line) for line in existing_lines[compare_start - 1 : compare_end]]
+    if current_slice != normalized_expected:
+        raise ValueError(
+            f"Canvas context drift detected around lines {compare_start}-{compare_end}. Reinspect the document before editing."
+        )
 
 
 def extract_canvas_viewports(metadata: dict | None, documents: list[dict] | None = None) -> dict[str, dict]:
@@ -1550,23 +1470,17 @@ def replace_canvas_lines(
     existing_lines = list_canvas_lines(document.get("content") or "")
     if start_line < 1 or end_line < start_line:
         raise ValueError("start_line and end_line must define a valid 1-based inclusive range.")
+    if start_line > len(existing_lines):
+        raise ValueError("Line range exceeds the current canvas document.")
+    if end_line > len(existing_lines):
+        raise ValueError("Line range exceeds the current canvas document.")
 
-    resolved_start = _validate_canvas_expected_lines(
+    _validate_canvas_expected_lines(
         existing_lines,
         expected_lines=expected_lines,
         expected_start_line=expected_start_line,
         default_start_line=start_line,
     )
-    # Auto-correct edit coordinates when fuzzy match found the expected block at a
-    # nearby (but different) line. Only applied when caller supplied expected_lines.
-    if resolved_start is not None and expected_start_line is not None:
-        delta = resolved_start - expected_start_line
-        if delta:
-            start_line += delta
-            end_line += delta
-
-    if start_line > len(existing_lines) or end_line > len(existing_lines):
-        raise ValueError("Line range exceeds the current canvas document.")
 
     replacement = [str(line) for line in (lines or [])]
     next_lines = [*existing_lines[: start_line - 1], *replacement, *existing_lines[end_line:]]
@@ -1597,18 +1511,12 @@ def insert_canvas_lines(
     # → validate lines 3-5 (the 2 lines before + the line at after_line).
     # Edge cases: if after_line <= 0 or expected_count=0, fall back to line 1.
     default_start_line = 1 if after_line <= 0 else max(1, after_line - max(0, expected_count - 1))
-    resolved_start = _validate_canvas_expected_lines(
+    _validate_canvas_expected_lines(
         existing_lines,
         expected_lines=expected_lines,
         expected_start_line=expected_start_line,
         default_start_line=default_start_line,
     )
-    # Auto-correct insertion point when fuzzy match located the anchor block at a
-    # nearby (but different) line. Only applied when caller supplied expected_lines.
-    if resolved_start is not None and expected_start_line is not None:
-        delta = resolved_start - expected_start_line
-        if delta:
-            after_line = max(0, min(len(existing_lines), after_line + delta))
 
     additions = [str(line) for line in (lines or [])]
     next_lines = [*existing_lines[:after_line], *additions, *existing_lines[after_line:]]

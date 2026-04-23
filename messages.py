@@ -40,7 +40,6 @@ from config import (
 )
 from config import (
     CANVAS_PROMPT_TEXT_LINE_MAX_CHARS as CANVAS_PROMPT_DEFAULT_TEXT_LINE_MAX_CHARS,
-    FORCE_MEMORY_CLEANUP_AT_PERCENT,
 )
 from db import (
     extract_clarification_response,
@@ -203,21 +202,16 @@ def _format_summary_message_for_model(content: str, metadata: dict | None = None
 # call that depends on their output.
 DEPENDENT_TOOL_NAMES = ("search_knowledge_base",)
 
-# ---------------------------------------------------------------------------
-# Context Injection Section Categorization (per Coding Principles.md)
-# ---------------------------------------------------------------------------
-# Volatile sections: change every turn, stripped from historical context
-#   to prevent cache entropy. These are re-injected fresh each turn.
-# Stable sections: persist across turns and are retained in historical context.
-
 HISTORICAL_CONTEXT_INJECTION_STRIP_HEADINGS = {
-    # --- Volatile Per-Turn Sections (strip from history, re-inject fresh) ---
-    "## Current Date and Time",  # Timestamp changes every request
-    "## Active Tools This Turn",  # Tool list varies per turn
-    "## Tool Execution History",  # Re-injected as part of runtime state
-    # --- Transient Clarification Sections (already consumed by prior turns) ---
-    "## Clarification Response",  # Already answered, not active requirement
-    # --- Canvas State Sections (refreshed each turn from canvas_service) ---
+    "## Clarification Response",
+    "## Double-Check Protocol",
+    "## Tool Memory",
+    "## Knowledge Base",
+    "## User Profile",
+    "## Scratchpad (AI Persistent Memory)",
+    "## Persona Memory",
+    "## Conversation Memory",
+    "## Conversation Memory Priority",
     "## Canvas File Set Summary",
     "## Canvas Workspace Summary",
     "## Canvas Editing Guidance",
@@ -225,21 +219,11 @@ HISTORICAL_CONTEXT_INJECTION_STRIP_HEADINGS = {
     "## Active Canvas Document",
     "## Ignored Canvas Documents",
     "## Pinned Canvas Viewports",
-    # --- Deprecated/Archived Sections (superseded by current runtime state) ---
-    "## Double-Check Protocol",
-    "## Tool Memory",  # Replaced by active tool memory retrieval
-    "## Knowledge Base",  # Replaced by RAG retrieval
-    "## User Profile",  # Re-injected from user_profile table
-    "## Scratchpad (AI Persistent Memory)",  # Re-injected from scratchpad table
-    "## Persona Memory",  # Re-injected from persona_memory table
-    "## Conversation Memory",  # Re-injected from conversation_memory table
-    "## Conversation Memory Priority",
-    "## Conversation Summaries",  # Re-generated if needed, not stored verbatim
+    "## Conversation Summaries",
+    "## Tool Execution History",
+    "## Active Tools This Turn",
+    "## Current Date and Time",
 }
-
-# Stable sections that survive context injection stripping and are always retained
-HISTORICAL_CONTEXT_INJECTION_RETAIN_HEADINGS: set[str] = set()
-
 CANVAS_RUNTIME_CONTEXT_REFRESH_HEADINGS = {
     "## Canvas File Set Summary",
     "## Active Canvas Document",
@@ -1113,24 +1097,18 @@ def build_user_message_for_api(
 def _strip_volatile_sections_from_context_injection(context_injection: str) -> str:
     """Return the stable static subset of a runtime context injection.
 
-    ## Data Layer: Interpretation Layer (per Coding Principles.md)
-    - Input: Raw context_injection string from message metadata
-    - Output: Filtered string with volatile sections removed
+    This function preserves the cache-friendly static prefix (tool contracts,
+    policies, memory write guidelines) and removes volatile per-turn sections
+    (timestamps, active tools, canvas summaries, tool execution history) that
+    would introduce cache entropy if persisted across turns.
 
-    ## Section Categorization
-    - **Volatile Per-Turn:** ``## Current Date and Time``, ``## Active Tools This Turn``,
-      ``## Tool Execution History`` — change every request, stripped to prevent cache entropy
-    - **Consumed Clarification:** ``## Clarification Response`` — already answered, not active
-    - **Canvas State:** ``## Canvas *`` headings — refreshed from canvas_service each turn
-    - **Superseded Sections:** ``## Tool Memory``, ``## Knowledge Base``, ``## User Profile``,
-      ``## Scratchpad*``, ``## Persona Memory``, ``## Conversation Memory*`` — re-injected
-      fresh from their respective tables, not stored verbatim
-
-    ## Chronological Integrity
+    The static prefix retained here is the same content emitted first in
+    ``build_runtime_system_message`` and ``build_runtime_context_injection``
+    via ``_build_runtime_static_parts`` and ``_build_runtime_dynamic_state_parts``.
     When a historical message is rebuilt for a new turn, the caller re-injects
-    the current runtime context (fresh volatile sections) so the model always
-    sees up-to-date runtime state while static contract content remains
-    cache-stable across requests.
+    the current runtime context (which includes fresh volatile sections) so
+    the model always sees up-to-date runtime state while the static contract
+    content remains cache-stable across requests.
     """
     normalized = str(context_injection or "").strip()
     if not normalized:
@@ -2163,12 +2141,12 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
         "- Use preview_canvas_changes before large batches. Use transform_canvas_lines for bulk find-replace.",
         "- Verify affected region with a read-only tool after mutating.",
         "- update_canvas_metadata handles title, role, dependency, or symbol changes (not content). Set ignored=true to hide a document.",
+        "- Do not use line-based tools on an ignored document until re-enabled with ignored=false.",
         "- For multi-page documents, use focus_canvas_page for page-specific tasks.",
         "- When targeting, prefer document_path over document_id when shown in the prompt.",
-        "- Send code as plain strings in the lines array — no escape sequences needed.",
+        "- All code must be inside the `lines` array as properly escaped JSON strings.",
         "- Use rewrite_canvas_document when most of the document should change.",
-        "- After any mutation, line numbers shift. Use expected_lines on subsequent operations to guard against drift.",
-        "- If a tool returns 'Canvas context drift detected', call expand_canvas_document or scroll_canvas_document to refresh line numbers before retrying — never retry with the same coordinates.",
+        "- After rewrite, do not call it again for the same document in the same session.",
     ]
     if "create_canvas_document" in active_set:
         lines.insert(2, "- create_canvas_document always needs BOTH title and content.")
@@ -2606,62 +2584,16 @@ def _build_runtime_volatile_parts(
         volatile_parts.append(_build_current_time_context(now))
 
     remaining_context_budget = None
-    prompt_budget = None
     if isinstance(runtime_budget_stats, dict):
         try:
             remaining_context_budget = max(0, int(runtime_budget_stats.get("remaining_context_budget") or 0))
         except (TypeError, ValueError):
             remaining_context_budget = None
-        try:
-            prompt_budget = max(1, int(runtime_budget_stats.get("prompt_budget") or 0))
-        except (TypeError, ValueError):
-            prompt_budget = None
     if remaining_context_budget is not None:
         volatile_parts.append("## Prompt Budget Status")
         volatile_parts.append(
             f"- Remaining context budget ≈ {remaining_context_budget} tokens. Keep optional tool calls, excerpts, and verbosity proportional to this remaining space."
         )
-        volatile_parts.append("")
-
-    # Inject memory cleanup reminder when context usage exceeds threshold
-    # Compute usage ratio from remaining_context_budget and prompt_budget
-    force_cleanup = False
-    if remaining_context_budget is not None and prompt_budget is not None and prompt_budget > 0:
-        usage_ratio = (prompt_budget - remaining_context_budget) / prompt_budget
-        force_cleanup = usage_ratio >= FORCE_MEMORY_CLEANUP_AT_PERCENT
-    if force_cleanup and "delete_tool_result" in set(active_tool_names or []):
-        volatile_parts.append("## Memory Cleanup Reminder")
-        volatile_parts.append(
-            "*Context is approaching its token limit. Consider using `delete_tool_result` to remove tool results that are no longer actively needed from the conversation context.*\n"
-        )
-        volatile_parts.append(
-            "- Review accumulated tool results and delete those that are no longer relevant to the current task."
-        )
-        volatile_parts.append("- Deleted tool results are stored in tool memory and can be searched later if needed.")
-        volatile_parts.append("- Focus on removing large or obsolete tool results to free up context space.")
-        volatile_parts.append("")
-
-    # Add tool memory management guidance when delete_tool_result is available
-    if "delete_tool_result" in set(active_tool_names or []):
-        volatile_parts.append("## Tool Memory Management")
-        volatile_parts.append(
-            "*Use `delete_tool_result` when tool results accumulate in context and are no longer actively needed. This prevents context bloat while preserving the ability to reason about past tool usage.*\n"
-        )
-        volatile_parts.append("- Always provide `reason_for_deletion`: Why the content is no longer needed in context")
-        volatile_parts.append(
-            "- Always provide `about_the_content`: Brief description of what the content was about (e.g. 'weather for NYC', 'Python error trace', 'search results for X')"
-        )
-        volatile_parts.append(
-            "- Optionally provide `context_before_deletion`: Brief context about when/why this was used"
-        )
-        volatile_parts.append("- Prefer deleting older tool results that are no longer relevant to the current task")
-        volatile_parts.append(
-            "- Do NOT delete tool results that are still being referenced or needed for the current reasoning chain"
-        )
-        if "list_tool_memory" in set(active_tool_names or []):
-            volatile_parts.append(
-                "- Use `list_tool_memory` to recall what was previously deleted if you need to reference it again"
-            )
         volatile_parts.append("")
 
     if is_first_turn and "set_conversation_title" in set(active_tool_names or []):

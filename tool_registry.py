@@ -34,14 +34,10 @@ SCRATCHPAD_SECTION_DESCRIPTION = "Section to update: " + "; ".join(
     for section_id in SCRATCHPAD_SECTION_ORDER
 )
 CANVAS_LINE_ARRAY_DESCRIPTION = (
-    "Array of raw text strings, one per line. No escape sequences needed. "
-    'Example: ["First line", "Second line", "const char* ssid = "MyNet";"] '
-    "Apply lines in array order, top to bottom."
-)
-CANVAS_DRIFT_RECOVERY_GUIDANCE = (
-    "If the tool returns 'Canvas context drift detected', do NOT retry with the same coordinates. "
-    "The error message includes the current content at that location; call expand_canvas_document "
-    "or scroll_canvas_document to refresh your view, then resubmit with corrected line numbers."
+    "Each element is one line of text as a properly quoted JSON string with no trailing newline characters. "
+    "Code content, including quotes, backslashes, and semicolons, must appear inside these strings and be properly escaped. "
+    'Example: ["const char* ssid = \\"MyNet\\";", "const char* pass = \\"abc\\";"] . '
+    "Never place code outside this array or as an argument key."
 )
 
 
@@ -503,7 +499,7 @@ TOOL_SPECS = [
                                     },
                                     "value": {
                                         "type": "string",
-                                        "description": "Shorthand alias for a single value in 'values'. Prefer using the 'values' array directly.",
+                                        "description": "One required value from the parent question that should reveal this question.",
                                     },
                                     "values": {
                                         "type": "array",
@@ -513,7 +509,6 @@ TOOL_SPECS = [
                                         "maxItems": 10,
                                     },
                                 },
-                                "required": ["question_id"],
                             },
                         },
                         "required": ["id", "label", "input_type"],
@@ -1702,15 +1697,14 @@ TOOL_SPECS = [
             "inputs": {
                 "document_id": "optional target id",
                 "document_path": "optional target project-relative path",
-                "operations": "ordered edit operations — same schema as batch_canvas_edits",
+                "operations": "ordered edit operations",
             },
             "guidance": (
-                "Preview batch_canvas_edits before applying them. Uses the same operation schema: "
-                "each operation MUST be a JSON object with an 'action' field ('replace', 'insert', or 'delete'). "
-                "replace: {\"action\": \"replace\", \"start_line\": N, \"end_line\": M, \"lines\": [...]}. "
-                "insert: {\"action\": \"insert\", \"after_line\": N, \"lines\": [...]}. "
-                "delete: {\"action\": \"delete\", \"start_line\": N, \"end_line\": M}. "
-                "Use this before any large batch to verify line ranges are still correct before mutating."
+                "Use this when you want to inspect the exact before/after effect of planned canvas changes before applying them. "
+                "Each operation must be a plain JSON object with an action field set to replace, insert, or delete. "
+                "Do not wrap one operation in a string, array, or nested object shell. "
+                "Use the same schema as batch_canvas_edits: replace needs start_line, end_line, and lines; insert needs after_line and lines; delete needs start_line and end_line. "
+                "Prefer this over speculative prose descriptions when the user needs a concrete diff preview."
             ),
         },
     },
@@ -1769,22 +1763,19 @@ TOOL_SPECS = [
                 "document_id": "optional target id",
                 "document_path": "optional target project-relative path",
                 "operations": "ordered edit operations for one document",
-                "targets": "optional multi-document target array — each item MUST be an object with an operations array",
-                "atomic": "optional rollback flag — rolls back all changes if any operation fails",
+                "targets": "optional multi-document target array",
+                "atomic": "optional rollback flag",
             },
             "guidance": (
-                "Apply several line edits to one document in a single call. "
-                "Each operation MUST be a JSON object with an 'action' field set to one of: 'replace', 'insert', or 'delete'. "
-                "replace requires: {\"action\": \"replace\", \"start_line\": N, \"end_line\": M, \"lines\": [...]}. "
-                "insert requires: {\"action\": \"insert\", \"after_line\": N, \"lines\": [...]}. "
-                "delete requires: {\"action\": \"delete\", \"start_line\": N, \"end_line\": M}. "
-                "All operations for one document go in a single 'operations' array — do NOT put operations in the 'targets' field. "
-                "For multi-document edits, use 'targets': each target MUST be a JSON object with at least an 'operations' key "
-                "(e.g. [{\"document_path\": \"src/foo.py\", \"operations\": [{\"action\": \"replace\", ...}]}]). "
-                "Never pass document IDs or strings as items inside 'targets' — every item must be an object. "
-                "Add 'expected_lines' to each operation to guard against line drift when editing after previous mutations. "
-                + CANVAS_DRIFT_RECOVERY_GUIDANCE
-                + " Prefer document_path in project mode."
+                "Use this when you already know several non-overlapping edits for one document or multiple documents. "
+                "Prefer one batch_canvas_edits call over serial replace_canvas_lines, insert_canvas_lines, or delete_canvas_lines calls when the targets are already known. "
+                "Every operation must target a disjoint region or insertion anchor. "
+                "Every operation must be a plain JSON object with an action field set to replace, insert, or delete. "
+                "Do not nest a single operation inside an extra array or wrapper object. "
+                "For replace use start_line, end_line, and lines. For insert use after_line and lines. For delete use start_line and end_line. "
+                "Line numbers are interpreted against the pre-batch document and adjusted automatically for earlier operations in the same batch. "
+                "When you are editing from a previously seen snippet, include expected_lines and expected_start_line on each operation so stale edits are rejected safely. "
+                "Use targets when multiple files should change together. In project mode, prefer document_path when possible."
             ),
         },
     },
@@ -2036,9 +2027,11 @@ TOOL_SPECS = [
             },
             "guidance": (
                 "Use only when the exact 1-based line range is known from the visible excerpt or a recent scroll/expand result. "
-                "Multiple replace_canvas_lines calls are fine when the changes are separated. "
-                "If the previous tool result included expected_lines, reuse them on the next related edit to guard against line shifts. "
-                + CANVAS_DRIFT_RECOVERY_GUIDANCE + " "
+                "Put ALL code content inside the lines array as properly escaped JSON strings. "
+                'Example: {"start_line": 3, "end_line": 5, "lines": ["  int x = 1;", "  return x;"]}. '
+                "Multiple localized replace_canvas_lines calls are fine when the changes are separated. "
+                "If the previous tool result includes expected_lines, reuse those values on the next related edit instead of guessing a fresh snippet. "
+                "When you are editing based on a previously seen snippet and line numbers may have shifted, include expected_lines (and expected_start_line when needed) so the tool can reject stale edits safely. "
                 "If you do not know the document_id, use document_path from the workspace summary or manifest. "
                 "For broad rewrites, prefer rewrite_canvas_document. In project mode, prefer document_path when possible."
             ),
@@ -2096,8 +2089,8 @@ TOOL_SPECS = [
             "guidance": (
                 "Use only when the insertion point is known from the visible excerpt or a recent scroll/expand result. "
                 "Use this for partial additions instead of rewriting the whole document when the rest should stay intact. "
-                "If the previous tool result included expected_lines, reuse them on the next related edit to guard against line shifts. "
-                + CANVAS_DRIFT_RECOVERY_GUIDANCE + " "
+                "If the previous tool result includes expected_lines, reuse those values on the next related edit instead of guessing a fresh snippet. "
+                "When the insertion point comes from an earlier view, include expected_lines (and expected_start_line when needed) so the tool can catch drift before inserting. "
                 "If the target region is not visible, inspect it first. In project mode, prefer document_path when possible."
             ),
         },
@@ -2142,8 +2135,8 @@ TOOL_SPECS = [
             "guidance": (
                 "Use only when the exact 1-based line range is visible in the current excerpt or in a recent scroll/expand result. "
                 "Use this for partial removals instead of rewriting the whole document when the rest should stay intact. "
-                "If the previous tool result included expected_lines, reuse them on the next related edit to guard against line shifts. "
-                + CANVAS_DRIFT_RECOVERY_GUIDANCE + " "
+                "If the previous tool result includes expected_lines, reuse those values on the next related edit instead of guessing a fresh snippet. "
+                "When the target range came from an earlier snippet, include expected_lines (and expected_start_line when needed) so stale deletions are rejected safely. "
                 "If the target region is not visible, inspect it first. In project mode, prefer document_path when possible."
             ),
         },

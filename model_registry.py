@@ -37,6 +37,7 @@ IMAGE_PROCESSING_METHODS = {"auto", "llm_helper", "llm_direct", "local_ocr"}
 MODEL_OPERATION_KEYS = (
     "summarize",
     "fetch_summarize",
+    "prune",
     "fix_text",
     "generate_title",
     "upload_metadata",
@@ -492,7 +493,6 @@ class _MiniMaxClientProxy:
     def _translate_openai_to_anthropic(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         """Translate OpenAI-style kwargs to Anthropic API format."""
         import logging
-
         _logger = logging.getLogger(__name__)
         _logger.warning(f"[MiniMax Debug] Input kwargs keys: {list(kwargs.keys())}")
 
@@ -509,7 +509,9 @@ class _MiniMaxClientProxy:
         translated["model"] = kwargs.get("model", "")
 
         # Max tokens (required by Anthropic messages.create)
-        translated["max_tokens"] = _coerce_positive_int(kwargs.get("max_tokens"), _MINIMAX_REQUIRED_MAX_TOKENS_DEFAULT)
+        translated["max_tokens"] = _coerce_positive_int(
+            kwargs.get("max_tokens"), _MINIMAX_REQUIRED_MAX_TOKENS_DEFAULT
+        )
 
         # Temperature - MiniMax requires (0.0, 1.0]
         if "temperature" in kwargs:
@@ -692,19 +694,12 @@ class _MiniMaxClientProxy:
 
         # Whitelist: only pass parameters that MiniMax's Anthropic endpoint supports
         allowed_params = {
-            "model",
-            "max_tokens",
-            "system",
-            "messages",
-            "temperature",
-            "stream",
-            "tools",
-            "tool_choice",
+            "model", "max_tokens", "system", "messages",
+            "temperature", "stream", "tools", "tool_choice",
         }
         translated_copy = {k: v for k, v in translated.items() if k in allowed_params}
 
         import logging
-
         _logger = logging.getLogger(__name__)
         _logger.warning(f"[MiniMax Debug] After whitelist - translated keys: {list(translated_copy.keys())}")
         filtered = set(translated.keys()) - set(translated_copy.keys())
@@ -727,7 +722,6 @@ class _MiniMaxClientProxy:
         anthropic_kwargs = self._translate_openai_to_anthropic(kwargs)
 
         import logging
-
         _logger = logging.getLogger(__name__)
         _logger.warning(f"[MiniMax Debug] Final anthropic_kwargs keys: {list(anthropic_kwargs.keys())}")
         _logger.warning(f"[MiniMax Debug] anthropic_kwargs: {anthropic_kwargs}")
@@ -1902,7 +1896,9 @@ def apply_model_target_request_options(request_kwargs: dict[str, Any], target: d
         merged_request_kwargs["messages"] = prepared_messages
     # Add top-level cache_control for Anthropic models (OpenRouter API format)
     if _should_add_openrouter_top_level_cache_control(record, settings):
-        merged_request_kwargs["cache_control"] = _build_cache_control(_get_openrouter_anthropic_ttl(settings))
+        merged_request_kwargs["cache_control"] = _build_cache_control(
+            _get_openrouter_anthropic_ttl(settings)
+        )
     extra_body = target.get("extra_body") if isinstance(target, dict) else None
     if isinstance(extra_body, dict) and extra_body:
         existing_extra_body = merged_request_kwargs.get("extra_body")
@@ -1912,9 +1908,7 @@ def apply_model_target_request_options(request_kwargs: dict[str, Any], target: d
     return merged_request_kwargs
 
 
-def _should_add_openrouter_top_level_cache_control(
-    record: dict[str, Any] | None, settings: dict[str, Any] | None
-) -> bool:
+def _should_add_openrouter_top_level_cache_control(record: dict[str, Any] | None, settings: dict[str, Any] | None) -> bool:
     """Check if top-level cache_control should be added for the model."""
     if not isinstance(record, dict):
         return False

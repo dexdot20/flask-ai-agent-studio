@@ -1537,7 +1537,7 @@ def _build_sub_agent_messages(
         "If the task text is not in English, first rewrite it into clear English working notes for yourself, then continue in English.",
         "Use English for tool planning, reasoning, status updates, and the final answer unless told otherwise.",
         f"When using read-only search tools like search_web or search_news, batch queries between 1 and {normalized_search_tool_query_limit} items per list and split broader searches into multiple calls.",
-        "You may batch independent read-only tool calls into the same turn when they do not depend on each other.",
+        "Default to batching independent read-only tool calls into the same turn when they do not depend on each other; avoid one-by-one fan-out unless a later tool truly needs an earlier result.",
         "Synthesize your findings and return a concise, definitive final answer that directly helps the parent assistant continue.",
     ]
     parts.append(build_current_time_context(now))
@@ -1549,7 +1549,7 @@ def _build_sub_agent_messages(
         )
         parts.append(
             f"At most {normalized_parallel_tools} tool call(s) can execute in parallel in one turn. "
-            f"If you need more independent reads than that, prioritize the most relevant first."
+            f"If you need more independent reads than that, prioritize the best {normalized_parallel_tools} first and avoid low-value fan-out."
         )
 
     user_parts = [f"Delegated task from the parent assistant:\n{_clean_tool_text(task, limit=2_000)}"]
@@ -1817,34 +1817,15 @@ def _count_exchange_blocks(messages: list[dict]) -> int:
 
 
 def _compact_exchange_to_message(block: dict) -> dict:
-    """Compact an exchange block into a single summary message.
-
-    Preserves original role hierarchy in metadata per Coding Principles.md:
-    - Chronological Integrity: step_index maintained
-    - Metadata Preservation: original roles and tool calls stored in metadata
-    """
     tool_previews: list[str] = []
     result_parts: list[str] = []
     recovery_hints: list[str] = []
     assistant_intent = ""
-    reasoning_content = ""
-    original_roles: list[str] = []
-    original_tool_call_count = 0
-    original_tool_result_count = 0
-
     for message in block.get("messages") or []:
         role = str(message.get("role") or "").strip()
-        if role not in original_roles:
-            original_roles.append(role)
         if role == "assistant":
             assistant_intent = assistant_intent or _extract_compaction_assistant_intent(message)
-            # Extract reasoning_content from metadata for preservation
-            if not reasoning_content:
-                metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
-                reasoning_content = str(metadata.get("reasoning_content") or "").strip()
-            tool_calls = message.get("tool_calls") or []
-            original_tool_call_count += len(tool_calls)
-            for tool_call in tool_calls:
+            for tool_call in message.get("tool_calls") or []:
                 preview = _extract_compaction_tool_call_preview(tool_call)
                 if preview and preview not in tool_previews:
                     tool_previews.append(preview)
@@ -1856,40 +1837,20 @@ def _compact_exchange_to_message(block: dict) -> dict:
                 if recovery_hint and recovery_hint not in recovery_hints:
                     recovery_hints.append(recovery_hint)
         elif role == "tool" or _is_tool_execution_result_message(message):
-            original_tool_result_count += 1
             content = _extract_compaction_tool_result_preview(message)
             if content:
                 result_parts.append(content)
 
-    # Build content with clear section headers per Coding Principles.md
     parts = [f"[Context: compacted tool step {block.get('step_index') or '?'}]"]
     if assistant_intent:
         parts.append(f"Assistant intent: {assistant_intent}")
-    if reasoning_content:
-        if len(reasoning_content) > 500:
-            parts.append(f"Reasoning: {reasoning_content[:497]}...")
-        else:
-            parts.append(f"Reasoning: {reasoning_content}")
     if tool_previews:
         parts.append("Actions:\n- " + "\n- ".join(tool_previews[:4]))
     if result_parts:
         parts.append("Outcomes:\n- " + "\n- ".join(result_parts[:3]))
     if recovery_hints:
         parts.append("Recovery:\n- " + "\n- ".join(recovery_hints[:2]))
-
-    # Preserve metadata per Coding Principles.md — Metadata Preservation
-    # This ensures original role hierarchy is not lost during compaction
-    return {
-        "role": "user",
-        "content": "\n".join(parts),
-        "metadata": {
-            "compacted": True,
-            "step_index": block.get("step_index"),
-            "original_roles": original_roles,
-            "original_tool_call_count": original_tool_call_count,
-            "original_tool_result_count": original_tool_result_count,
-        },
-    }
+    return {"role": "user", "content": "\n".join(parts)}
 
 
 def _try_compact_messages(messages: list[dict], budget: int, keep_recent: int = 2) -> list[dict] | None:
@@ -3229,13 +3190,6 @@ def _extract_reasoning_text(value) -> str:
     if reasoning_text:
         return reasoning_text
 
-    # Check metadata.reasoning_content for stored messages (loaded from DB)
-    metadata = _read_api_field(value, "metadata", {})
-    if isinstance(metadata, dict):
-        reasoning_text = _coerce_text(metadata.get("reasoning_content", ""))
-        if reasoning_text:
-            return reasoning_text
-
     return _extract_reasoning_details_text(_read_api_field(value, "reasoning_details", []))
 
 
@@ -4135,13 +4089,6 @@ def _validate_tool_arguments(tool_name: str, tool_args: dict) -> str | None:
                 value = normalized_items
                 tool_args[key] = value
             if item_type and any(not _validate_scalar_type(item, item_type) for item in value):
-                if tool_name == "batch_canvas_edits" and key == "targets":
-                    return (
-                        "Invalid 'targets' format for batch_canvas_edits: every item in 'targets' must be a JSON object, "
-                        "not a plain string or document ID. "
-                        'Correct format: [{"document_path": "src/foo.py", "operations": [{"action": "replace", "start_line": 1, "end_line": 1, "lines": ["new"]}]}]. '
-                        "Use 'operations' (not 'targets') when editing a single document."
-                    )
                 return f"Invalid array item type for '{key}' in {tool_name}: expected {item_type}"
             min_items = property_schema.get("minItems")
             max_items = property_schema.get("maxItems")
@@ -8652,7 +8599,7 @@ def run_agent_stream(
 
             if tool_name not in enabled_tool_names:
                 slot["kind"] = "error"
-                slot["error"] = f"Tool not available in current context: {tool_name}"
+                slot["error"] = f"Tool disabled: {tool_name}"
                 slots.append(slot)
                 continue
 

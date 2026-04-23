@@ -4,13 +4,7 @@ Provides a single, normalized entry point for recording every outbound LLM
 provider call to the model_invocations Activity log. All call-paths
 (agent loop, prune, image, summarize, title generation, …) route through
 ``log_activity_call`` so the Activity table always contains comparable rows.
-
-## Data Layer Architecture (per Coding Principles.md)
-- **Source Layer:** Raw request/response payloads passed to log_activity_call
-- **Interpretation Layer:** extract_usage_from_response normalizes token/cost fields
-- **Action Layer:** insert_model_invocation persists the normalized record to SQLite
 """
-
 from __future__ import annotations
 
 import logging
@@ -18,10 +12,6 @@ import time
 from typing import Any
 
 LOGGER = logging.getLogger(__name__)
-
-# Retry configuration for non-fatal activity logging failures
-_ACTIVITY_LOG_MAX_RETRIES = 2
-_ACTIVITY_LOG_RETRY_DELAY_SECONDS = 0.05
 
 
 # ---------------------------------------------------------------------------
@@ -36,7 +26,6 @@ STATUS_CANCELLED = "cancelled"
 # ---------------------------------------------------------------------------
 # Public helper
 # ---------------------------------------------------------------------------
-
 
 def log_activity_call(
     *,
@@ -68,89 +57,52 @@ def log_activity_call(
     sub_agent_depth: int = 0,
     conn=None,
 ) -> int | None:
-    """Insert a normalized activity record with retry on transient failures.
+    """Insert a normalized activity record.
 
-    Returns the new row id, or None if logging fails after all retries.
+    Returns the new row id, or None if logging fails (non-fatal).
     If *conn* is provided the insert runs inside the caller's transaction;
     otherwise a new connection is obtained from ``get_db()``.
-
-    ## Retry Behavior (Validity Filtering)
-    Transient failures (DB lock, timeout) trigger up to 2 retries with
-    brief delays. Permanent failures (schema, data) fail immediately.
     """
-    last_error: Exception | None = None
+    try:
+        from db import get_db, insert_model_invocation  # local to avoid circular imports
 
-    for attempt in range(_ACTIVITY_LOG_MAX_RETRIES):
-        try:
-            from db import get_db, insert_model_invocation  # local to avoid circular imports
+        kwargs = dict(
+            provider=provider,
+            api_model=api_model,
+            operation=operation,
+            call_type=call_type,
+            request_payload=request_payload or {},
+            response_summary=response_summary or {},
+            response_status=response_status,
+            error_type=error_type,
+            error_message=error_message,
+            latency_ms=latency_ms,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            estimated_input_tokens=estimated_input_tokens,
+            prompt_cache_hit_tokens=prompt_cache_hit_tokens,
+            prompt_cache_miss_tokens=prompt_cache_miss_tokens,
+            prompt_cache_write_tokens=prompt_cache_write_tokens,
+            cost=cost,
+            assistant_message_id=assistant_message_id,
+            source_message_id=source_message_id,
+            step=step,
+            call_index=call_index,
+            is_retry=is_retry,
+            retry_reason=retry_reason,
+            sub_agent_depth=sub_agent_depth,
+        )
 
-            kwargs = dict(
-                provider=provider,
-                api_model=api_model,
-                operation=operation,
-                call_type=call_type,
-                request_payload=request_payload or {},
-                response_summary=response_summary or {},
-                response_status=response_status,
-                error_type=error_type,
-                error_message=error_message,
-                latency_ms=latency_ms,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=total_tokens,
-                estimated_input_tokens=estimated_input_tokens,
-                prompt_cache_hit_tokens=prompt_cache_hit_tokens,
-                prompt_cache_miss_tokens=prompt_cache_miss_tokens,
-                prompt_cache_write_tokens=prompt_cache_write_tokens,
-                cost=cost,
-                assistant_message_id=assistant_message_id,
-                source_message_id=source_message_id,
-                step=step,
-                call_index=call_index,
-                is_retry=is_retry,
-                retry_reason=retry_reason,
-                sub_agent_depth=sub_agent_depth,
-            )
+        if conn is not None:
+            return insert_model_invocation(conn, conversation_id, **kwargs)
 
-            if conn is not None:
-                return insert_model_invocation(conn, conversation_id, **kwargs)
+        with get_db() as _conn:
+            return insert_model_invocation(_conn, conversation_id, **kwargs)
 
-            with get_db() as _conn:
-                return insert_model_invocation(_conn, conversation_id, **kwargs)
-
-        except Exception as exc:
-            last_error = exc
-            error_text = str(exc).lower()
-
-            # Transient failures: DB lock, timeout, busy, transient errors
-            # Permanent failures: schema errors, data integrity, programming errors
-            transient_markers = ("locked", "busy", "timeout", "transient", "retry")
-            is_transient = any(marker in error_text for marker in transient_markers)
-
-            if not is_transient or attempt >= _ACTIVITY_LOG_MAX_RETRIES - 1:
-                # Log permanent failures or final retry failure with full context
-                LOGGER.exception(
-                    "activity_service: failed to log activity call after %d attempt(s) "
-                    "(non-fatal, conversation_id=%d, provider=%s, operation=%s): %s",
-                    attempt + 1,
-                    conversation_id,
-                    provider,
-                    operation,
-                    exc,
-                )
-                return None
-
-            # Brief delay before retry for transient failures
-            time.sleep(_ACTIVITY_LOG_RETRY_DELAY_SECONDS * (attempt + 1))
-
-    LOGGER.error(
-        "activity_service: exhausted %d retries for activity logging (conversation_id=%d, provider=%s, operation=%s)",
-        _ACTIVITY_LOG_MAX_RETRIES,
-        conversation_id,
-        provider,
-        operation,
-    )
-    return None
+    except Exception:
+        LOGGER.exception("activity_service: failed to log activity call (non-fatal)")
+        return None
 
 
 def extract_usage_from_response(response) -> dict:

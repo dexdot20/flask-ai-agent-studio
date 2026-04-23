@@ -49,6 +49,7 @@ def block_external_network(monkeypatch):
 def isolate_test_state(monkeypatch):
     import agent
     import model_registry
+    import prune_service
     import rag.store as rag_store
     import routes.conversations
 
@@ -60,6 +61,7 @@ def isolate_test_state(monkeypatch):
     model_registry.get_provider_client.cache_clear()
     deepseek_client = model_registry.get_provider_client(model_registry.DEEPSEEK_PROVIDER)
     monkeypatch.setattr(agent, "client", deepseek_client)
+    monkeypatch.setattr(prune_service, "client", deepseek_client)
     monkeypatch.setattr(routes.conversations, "client", deepseek_client)
     yield
     rag_store._client = None
