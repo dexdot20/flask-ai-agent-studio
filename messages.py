@@ -40,6 +40,7 @@ from config import (
 )
 from config import (
     CANVAS_PROMPT_TEXT_LINE_MAX_CHARS as CANVAS_PROMPT_DEFAULT_TEXT_LINE_MAX_CHARS,
+    FORCE_MEMORY_CLEANUP_AT_PERCENT,
 )
 from db import (
     extract_clarification_response,
@@ -2605,16 +2606,62 @@ def _build_runtime_volatile_parts(
         volatile_parts.append(_build_current_time_context(now))
 
     remaining_context_budget = None
+    prompt_budget = None
     if isinstance(runtime_budget_stats, dict):
         try:
             remaining_context_budget = max(0, int(runtime_budget_stats.get("remaining_context_budget") or 0))
         except (TypeError, ValueError):
             remaining_context_budget = None
+        try:
+            prompt_budget = max(1, int(runtime_budget_stats.get("prompt_budget") or 0))
+        except (TypeError, ValueError):
+            prompt_budget = None
     if remaining_context_budget is not None:
         volatile_parts.append("## Prompt Budget Status")
         volatile_parts.append(
             f"- Remaining context budget ≈ {remaining_context_budget} tokens. Keep optional tool calls, excerpts, and verbosity proportional to this remaining space."
         )
+        volatile_parts.append("")
+
+    # Inject memory cleanup reminder when context usage exceeds threshold
+    # Compute usage ratio from remaining_context_budget and prompt_budget
+    force_cleanup = False
+    if remaining_context_budget is not None and prompt_budget is not None and prompt_budget > 0:
+        usage_ratio = (prompt_budget - remaining_context_budget) / prompt_budget
+        force_cleanup = usage_ratio >= FORCE_MEMORY_CLEANUP_AT_PERCENT
+    if force_cleanup and "delete_tool_result" in set(active_tool_names or []):
+        volatile_parts.append("## Memory Cleanup Reminder")
+        volatile_parts.append(
+            "*Context is approaching its token limit. Consider using `delete_tool_result` to remove tool results that are no longer actively needed from the conversation context.*\n"
+        )
+        volatile_parts.append(
+            "- Review accumulated tool results and delete those that are no longer relevant to the current task."
+        )
+        volatile_parts.append("- Deleted tool results are stored in tool memory and can be searched later if needed.")
+        volatile_parts.append("- Focus on removing large or obsolete tool results to free up context space.")
+        volatile_parts.append("")
+
+    # Add tool memory management guidance when delete_tool_result is available
+    if "delete_tool_result" in set(active_tool_names or []):
+        volatile_parts.append("## Tool Memory Management")
+        volatile_parts.append(
+            "*Use `delete_tool_result` when tool results accumulate in context and are no longer actively needed. This prevents context bloat while preserving the ability to reason about past tool usage.*\n"
+        )
+        volatile_parts.append("- Always provide `reason_for_deletion`: Why the content is no longer needed in context")
+        volatile_parts.append(
+            "- Always provide `about_the_content`: Brief description of what the content was about (e.g. 'weather for NYC', 'Python error trace', 'search results for X')"
+        )
+        volatile_parts.append(
+            "- Optionally provide `context_before_deletion`: Brief context about when/why this was used"
+        )
+        volatile_parts.append("- Prefer deleting older tool results that are no longer relevant to the current task")
+        volatile_parts.append(
+            "- Do NOT delete tool results that are still being referenced or needed for the current reasoning chain"
+        )
+        if "list_tool_memory" in set(active_tool_names or []):
+            volatile_parts.append(
+                "- Use `list_tool_memory` to recall what was previously deleted if you need to reference it again"
+            )
         volatile_parts.append("")
 
     if is_first_turn and "set_conversation_title" in set(active_tool_names or []):

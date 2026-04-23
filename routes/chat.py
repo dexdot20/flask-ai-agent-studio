@@ -38,6 +38,7 @@ from canvas_service import (
 from config import (
     CHAT_SUMMARY_MODEL,
     CONVERSATION_MEMORY_ENABLED,
+    FORCE_MEMORY_CLEANUP_AT_PERCENT,
     IMAGE_UPLOADS_DISABLED_FEATURE_ERROR,
     IMAGE_UPLOADS_ENABLED,
     OCR_ENABLED,
@@ -3025,8 +3026,11 @@ def _build_budgeted_prompt_messages(
         tool_memory_context,
         min(tool_memory_budget_cap, remaining_context_budget),
     )
+    # Pass prompt_budget to runtime_budget_stats so messages.py can compute
+    # the actual usage ratio after current_context_injection is built
     runtime_budget_stats = {
         "remaining_context_budget": remaining_context_budget,
+        "prompt_budget": prompt_budget,
     }
 
     current_context_injection = build_runtime_context_injection(
