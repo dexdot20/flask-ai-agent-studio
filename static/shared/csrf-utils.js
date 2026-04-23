@@ -22,8 +22,7 @@
   var CSRF_SAFE_HTTP_METHODS = new Set(["GET", "HEAD", "OPTIONS", "TRACE"]);
 
   // Track if we're currently fetching a token to avoid infinite loops
-  var _csrfFetchInProgress = false;
-  var _csrfTokenPromise = null;
+  var _csrfFetchPromise = null;
 
   function resolveFetchMethod(input, init) {
     var explicitMethod = String(init && init.method || "").trim();
@@ -43,16 +42,7 @@
     return String(input || "").trim();
   }
 
-  function shouldAttachCsrfHeader(input, init) {
-    var csrfTok = window.__csrfToken;
-    if (!csrfTok) {
-      return false;
-    }
-    var method = resolveFetchMethod(input, init);
-    if (CSRF_SAFE_HTTP_METHODS.has(method)) {
-      return false;
-    }
-    var rawUrl = resolveFetchUrl(input);
+  function isSameOriginUrl(rawUrl) {
     if (!rawUrl) {
       return true;
     }
@@ -64,16 +54,20 @@
     }
   }
 
+  function shouldAttachCsrfHeader(input, init) {
+    var method = resolveFetchMethod(input, init);
+    if (CSRF_SAFE_HTTP_METHODS.has(method)) {
+      return false;
+    }
+    return isSameOriginUrl(resolveFetchUrl(input));
+  }
+
   // Fetch a fresh CSRF token from the server
   function fetchCsrfToken() {
-    if (_csrfTokenPromise) {
-      return _csrfTokenPromise;
+    if (_csrfFetchPromise) {
+      return _csrfFetchPromise;
     }
-    if (_csrfFetchInProgress) {
-      return Promise.reject(new Error("CSRF token fetch already in progress"));
-    }
-    _csrfFetchInProgress = true;
-    _csrfTokenPromise = fetch("/api/csrf-token", { method: "GET" })
+    _csrfFetchPromise = fetch("/api/csrf-token", { method: "GET" })
       .then(function (response) {
         if (!response.ok) {
           throw new Error("Failed to fetch CSRF token");
@@ -91,47 +85,53 @@
         throw err;
       })
       .finally(function () {
-        _csrfFetchInProgress = false;
-        _csrfTokenPromise = null;
+        _csrfFetchPromise = null;
       });
-    return _csrfTokenPromise;
+    return _csrfFetchPromise;
   }
 
   // Override global fetch to attach CSRF token automatically
   var nativeFetch = typeof globalThis.fetch === "function" ? globalThis.fetch.bind(globalThis) : null;
   if (nativeFetch) {
     globalThis.fetch = function (input, init) {
-      // Determine if this request needs CSRF protection
-      var needsCsrf = shouldAttachCsrfHeader(input, init);
+      var method = resolveFetchMethod(input, init);
 
-      // If CSRF token is missing but needed, fetch a fresh one first
-      if (needsCsrf && !window.__csrfToken) {
-        var _self = this;
-        return fetchCsrfToken().then(function () {
-          // Retry the original request with the new token
-          var headers = new Headers(
-            init && init.headers ? init.headers : (input instanceof Request ? input.headers : undefined)
-          );
-          if (!headers.has("X-CSRF-Token")) {
-            headers.set("X-CSRF-Token", window.__csrfToken);
-          }
-          return nativeFetch(input, Object.assign({}, init || {}, { headers: headers }));
-        }).catch(function () {
-          // If token fetch fails, proceed without CSRF (will fail on server but at least we tried)
-          return nativeFetch(input, init);
-        });
-      }
-
-      if (!needsCsrf) {
+      // Safe methods don't need CSRF
+      if (CSRF_SAFE_HTTP_METHODS.has(method)) {
         return nativeFetch(input, init);
       }
-      var headers = new Headers(
-        init && init.headers ? init.headers : (input instanceof Request ? input.headers : undefined)
-      );
-      if (!headers.has("X-CSRF-Token")) {
-        headers.set("X-CSRF-Token", window.__csrfToken);
+
+      // Non-same-origin requests don't need CSRF (browser handles CORS)
+      if (!isSameOriginUrl(resolveFetchUrl(input))) {
+        return nativeFetch(input, init);
       }
-      return nativeFetch(input, Object.assign({}, init || {}, { headers: headers }));
+
+      // If we have a token, use it
+      if (window.__csrfToken) {
+        var headers = new Headers(
+          init && init.headers ? init.headers : (input instanceof Request ? input.headers : undefined)
+        );
+        if (!headers.has("X-CSRF-Token")) {
+          headers.set("X-CSRF-Token", window.__csrfToken);
+        }
+        return nativeFetch(input, Object.assign({}, init || {}, { headers: headers }));
+      }
+
+      // No token available - fetch one first, then retry the request
+      var _self = this;
+      return fetchCsrfToken().then(function () {
+        var headers = new Headers(
+          init && init.headers ? init.headers : (input instanceof Request ? input.headers : undefined)
+        );
+        if (!headers.has("X-CSRF-Token")) {
+          headers.set("X-CSRF-Token", window.__csrfToken);
+        }
+        return nativeFetch(input, Object.assign({}, init || {}, { headers: headers }));
+      }).catch(function (err) {
+        console.error("CSRF token fetch failed, proceeding without token:", err);
+        // Fallback: proceed without CSRF token (will likely fail with 403, but at least we tried)
+        return nativeFetch(input, init);
+      });
     };
   }
 
