@@ -4139,7 +4139,7 @@ def _validate_tool_arguments(tool_name: str, tool_args: dict) -> str | None:
                     return (
                         "Invalid 'targets' format for batch_canvas_edits: every item in 'targets' must be a JSON object, "
                         "not a plain string or document ID. "
-                        "Correct format: [{\"document_path\": \"src/foo.py\", \"operations\": [{\"action\": \"replace\", \"start_line\": 1, \"end_line\": 1, \"lines\": [\"new\"]}]}]. "
+                        'Correct format: [{"document_path": "src/foo.py", "operations": [{"action": "replace", "start_line": 1, "end_line": 1, "lines": ["new"]}]}]. '
                         "Use 'operations' (not 'targets') when editing a single document."
                     )
                 return f"Invalid array item type for '{key}' in {tool_name}: expected {item_type}"

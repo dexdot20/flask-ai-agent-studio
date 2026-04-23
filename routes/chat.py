@@ -6347,6 +6347,7 @@ def register_chat_routes(app) -> None:
                     )
                     event_queue.put(json.dumps({"type": "done"}, ensure_ascii=False) + "\n")
             finally:
+                logger_bg.info(f"[BACKGROUND] Finished for stream_request_id={stream_request_id}")
                 if chat_run_state.get("attached"):
                     event_queue.put(_CHAT_RUN_STREAM_SENTINEL)
                 _unregister_chat_run(stream_request_id)

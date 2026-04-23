@@ -6400,22 +6400,34 @@ function renderBubbleWithCursor(bubbleEl, text) {
 
   const findStreamingCursorContainer = (rootEl) => {
     let cursorHost = rootEl;
-    while (cursorHost instanceof Element && cursorHost.lastChild) {
-      const lastChild = cursorHost.lastChild;
-      if (lastChild.nodeType === Node.TEXT_NODE) {
-        if (String(lastChild.textContent || "").trim()) {
-          return cursorHost;
-        }
-        cursorHost = cursorHost.parentElement || rootEl;
-        continue;
+    while (cursorHost instanceof Element) {
+      let node = cursorHost.lastChild;
+
+      // Skip trailing empty text nodes and comments safely
+      while (node && (
+        (node.nodeType === Node.TEXT_NODE && !String(node.textContent || "").trim()) ||
+        node.nodeType === Node.COMMENT_NODE
+      )) {
+        node = node.previousSibling;
       }
-      if (!(lastChild instanceof Element)) {
+
+      // If nothing meaningful left, return current host
+      if (!node) {
         return cursorHost;
       }
-      if (["BR", "HR", "IMG", "INPUT"].includes(lastChild.tagName)) {
+
+      if (node.nodeType === Node.TEXT_NODE) {
         return cursorHost;
       }
-      cursorHost = lastChild;
+      if (!(node instanceof Element)) {
+        return cursorHost;
+      }
+      if (["BR", "HR", "IMG", "INPUT"].includes(node.tagName)) {
+        return cursorHost;
+      }
+
+      // Descend into element
+      cursorHost = node;
     }
     return rootEl;
   };
@@ -7724,7 +7736,11 @@ async function streamNdjsonResponse(response, onEvent) {
       if (event.type === "ping") {
         return;
       }
-      onEvent(event);
+      try {
+        onEvent(event);
+      } catch (err) {
+        console.error("[stream] Event handler error:", err, "Event:", event);
+      }
     } catch (_) {
       // Ignore malformed partial chunks.
     }
