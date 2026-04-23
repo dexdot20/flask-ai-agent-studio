@@ -96,11 +96,6 @@ from db import (
     get_prompt_tool_memory_max_tokens,
     get_prompt_tool_trace_max_tokens,
     get_proxy_enabled_operations,
-    get_pruning_batch_size,
-    get_pruning_enabled,
-    get_pruning_min_target_tokens,
-    get_pruning_target_reduction_ratio,
-    get_pruning_token_threshold,
     get_reasoning_auto_collapse,
     get_rag_auto_inject_enabled,
     get_rag_auto_inject_source_types,
@@ -176,9 +171,7 @@ from proxy_settings import (
 )
 from tool_registry import TOOL_SPEC_BY_NAME, get_tool_runtime_metadata
 
-SETTINGS_VISIBLE_OPERATION_MODEL_KEYS = tuple(
-    key for key in MODEL_OPERATION_KEYS if key not in {"prune", "generate_title"}
-)
+SETTINGS_VISIBLE_OPERATION_MODEL_KEYS = tuple(key for key in MODEL_OPERATION_KEYS if key not in {"generate_title"})
 
 
 def _filter_visible_operation_model_preferences(preferences: dict | None) -> dict:
@@ -634,11 +627,6 @@ def build_settings_payload() -> dict:
         "entropy_protect_tool_results": get_entropy_protect_tool_results_enabled(raw),
         "entropy_reference_boost": get_entropy_reference_boost_enabled(raw),
         "reasoning_auto_collapse": get_reasoning_auto_collapse(raw),
-        "pruning_enabled": get_pruning_enabled(raw),
-        "pruning_token_threshold": get_pruning_token_threshold(raw),
-        "pruning_batch_size": get_pruning_batch_size(raw),
-        "pruning_target_reduction_ratio": get_pruning_target_reduction_ratio(raw),
-        "pruning_min_target_tokens": get_pruning_min_target_tokens(raw),
         "fetch_url_token_threshold": get_fetch_url_token_threshold(raw),
         "fetch_url_clip_aggressiveness": get_fetch_url_clip_aggressiveness(raw),
         "fetch_html_converter_mode": get_fetch_html_converter_mode(raw),
@@ -769,11 +757,6 @@ def register_page_routes(app) -> None:
         context_compaction_threshold_raw = data.get("context_compaction_threshold")
         context_compaction_keep_recent_rounds_raw = data.get("context_compaction_keep_recent_rounds")
         reasoning_auto_collapse_raw = data.get("reasoning_auto_collapse")
-        pruning_enabled_raw = data.get("pruning_enabled")
-        pruning_token_threshold_raw = data.get("pruning_token_threshold")
-        pruning_batch_size_raw = data.get("pruning_batch_size")
-        pruning_target_reduction_ratio_raw = data.get("pruning_target_reduction_ratio")
-        pruning_min_target_tokens_raw = data.get("pruning_min_target_tokens")
         fetch_url_token_threshold_raw = data.get("fetch_url_token_threshold")
         fetch_url_clip_aggressiveness_raw = data.get("fetch_url_clip_aggressiveness")
         fetch_html_converter_mode_raw = data.get("fetch_html_converter_mode")
@@ -878,11 +861,6 @@ def register_page_routes(app) -> None:
             context_compaction_threshold_raw,
             context_compaction_keep_recent_rounds_raw,
             reasoning_auto_collapse_raw,
-            pruning_enabled_raw,
-            pruning_token_threshold_raw,
-            pruning_batch_size_raw,
-            pruning_target_reduction_ratio_raw,
-            pruning_min_target_tokens_raw,
             fetch_url_token_threshold_raw,
             fetch_url_clip_aggressiveness_raw,
             fetch_html_converter_mode_raw,
@@ -1753,50 +1731,6 @@ def register_page_routes(app) -> None:
                     if str(reasoning_auto_collapse_raw).strip().lower() in {"1", "true", "yes", "on"}
                     else "false"
                 )
-
-        if pruning_enabled_raw is not None:
-            if isinstance(pruning_enabled_raw, bool):
-                settings["pruning_enabled"] = "true" if pruning_enabled_raw else "false"
-            else:
-                settings["pruning_enabled"] = (
-                    "true" if str(pruning_enabled_raw).strip().lower() in {"1", "true", "yes", "on"} else "false"
-                )
-
-        if pruning_token_threshold_raw is not None:
-            try:
-                pruning_token_threshold = int(pruning_token_threshold_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "pruning_token_threshold must be an integer."}), 400
-            if not (1_000 <= pruning_token_threshold <= 200_000):
-                return jsonify({"error": "pruning_token_threshold must be between 1000 and 200000."}), 400
-            settings["pruning_token_threshold"] = str(pruning_token_threshold)
-
-        if pruning_batch_size_raw is not None:
-            try:
-                pruning_batch_size = int(pruning_batch_size_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "pruning_batch_size must be an integer."}), 400
-            if not (1 <= pruning_batch_size <= 50):
-                return jsonify({"error": "pruning_batch_size must be between 1 and 50."}), 400
-            settings["pruning_batch_size"] = str(pruning_batch_size)
-
-        if pruning_target_reduction_ratio_raw is not None:
-            try:
-                pruning_target_reduction_ratio = float(pruning_target_reduction_ratio_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "pruning_target_reduction_ratio must be a number."}), 400
-            if not (0.1 <= pruning_target_reduction_ratio <= 0.9):
-                return jsonify({"error": "pruning_target_reduction_ratio must be between 0.1 and 0.9."}), 400
-            settings["pruning_target_reduction_ratio"] = str(pruning_target_reduction_ratio)
-
-        if pruning_min_target_tokens_raw is not None:
-            try:
-                pruning_min_target_tokens = int(pruning_min_target_tokens_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "pruning_min_target_tokens must be an integer."}), 400
-            if not (50 <= pruning_min_target_tokens <= 5_000):
-                return jsonify({"error": "pruning_min_target_tokens must be between 50 and 5000."}), 400
-            settings["pruning_min_target_tokens"] = str(pruning_min_target_tokens)
 
         effective_prompt_max_input_tokens = get_prompt_max_input_tokens(settings)
         configured_prompt_response_token_reserve = int(

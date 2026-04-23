@@ -83,9 +83,7 @@
     <button class="mobile-tools-action" id="mobile-canvas-btn" type="button">Canvas panel</button>
     <button class="mobile-tools-action" id="mobile-memory-btn" type="button">Conversation memory</button>
     <button class="mobile-tools-action" id="mobile-export-btn" type="button">Export chat</button>
-    <button class="mobile-tools-action" id="mobile-prune-btn" type="button">Prune history</button>
     <button class="mobile-tools-action" id="mobile-conv-tools-btn" type="button">Tool permissions</button>
-    <button class="mobile-tools-action" id="mobile-params-btn" type="button">Set Parameters</button>
     <button class="mobile-tools-action" id="mobile-uploaded-files-btn" type="button">Uploaded Files</button>
     <button class="mobile-tools-action" id="mobile-tool-memory-btn" type="button">Tool Memory</button>
     <a class="mobile-tools-action" id="mobile-settings-btn" href="/settings">Settings</a>
@@ -202,56 +200,6 @@
 </div>
 <div id="summary-overlay" class="summary-overlay"></div>
 
-<div id="prune-panel" class="summary-panel prune-panel" aria-hidden="true" aria-labelledby="prune-panel-title">
-  <div class="summary-panel__header">
-    <div>
-      <span id="prune-panel-title">Prune Conversation History</span>
-      <p id="prune-panel-subtitle" class="summary-panel__subtitle">Entropy + RAG scores help surface lower-value history first.</p>
-    </div>
-    <button id="prune-close" title="Close" type="button">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-      </svg>
-    </button>
-  </div>
-  <div class="summary-panel__body">
-    <section class="summary-card">
-      <div class="summary-card__header">
-        <div>
-          <span>Selection</span>
-          <p>Tick exact messages in the conversation, or let the recommended list do the heavy lifting.</p>
-        </div>
-      </div>
-      <div class="summary-selection-actions">
-        <button class="btn-ghost" id="prune-select-recommended-btn" type="button">Select recommended</button>
-        <button class="btn-ghost" id="prune-clear-selection-btn" type="button">Clear selection</button>
-      </div>
-      <p id="prune-selection-count" class="summary-support-copy">No messages selected yet. Use the ticks in the conversation or the recommended list.</p>
-      <p id="prune-status" class="summary-support-copy">Open a conversation to inspect prune candidates. Tick messages in the chat or click a message bubble while this panel is open.</p>
-    </section>
-
-    <section class="summary-card">
-      <div class="summary-card__header">
-        <div>
-          <span>Entropy + RAG scores</span>
-          <p>Higher scores are stronger prune candidates. Scores load in the background.</p>
-        </div>
-        <button class="btn-ghost" id="prune-refresh-btn" type="button">Refresh</button>
-      </div>
-      <div id="prune-score-loading" class="prune-score-loading" hidden>
-        <span class="summary-spinner" aria-hidden="true"></span>
-        <span>Loading prune scores…</span>
-      </div>
-      <div id="prune-score-list" class="prune-score-list"></div>
-    </section>
-  </div>
-  <div class="summary-panel__actions">
-    <button class="btn-ghost" id="prune-apply-recommended-btn" type="button">Prune recommended</button>
-    <button class="btn-primary" id="prune-apply-selected-btn" type="button">Prune selected</button>
-  </div>
-</div>
-<div id="prune-overlay" class="summary-overlay"></div>
-
 <div id="memory-panel" class="summary-panel memory-panel" aria-hidden="true" aria-labelledby="memory-panel-title">
   <div class="summary-panel__header">
     <div>
@@ -338,56 +286,6 @@
   </div>
 </div>
 <div id="conv-tools-overlay" class="summary-overlay"></div>
-
-<div id="params-panel" class="summary-panel params-panel" aria-hidden="true" aria-labelledby="params-panel-title">
-  <div class="summary-panel__header">
-    <div>
-      <span id="params-panel-title">Set Parameters</span>
-      <p class="summary-panel__subtitle">Adjust safe chat-generation parameters for only this conversation.</p>
-    </div>
-    <button id="params-close" title="Close" type="button">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-      </svg>
-    </button>
-  </div>
-  <div class="summary-panel__body">
-    <section class="summary-card">
-      <div id="params-status" class="params-status">Open a conversation to configure reply parameters.</div>
-      <p class="summary-support-copy">These settings affect chat replies in this conversation only. Helper operations like pruning, export formatting, and image analysis keep their own fixed settings.</p>
-      <label class="conv-tools-toggle-row">
-        <input type="checkbox" id="params-use-global" />
-        <span>Use global defaults for this conversation</span>
-      </label>
-    </section>
-
-    <section class="summary-card" id="params-form-section" hidden>
-      <div class="params-grid">
-        <label class="summary-field">
-          <span>Temperature</span>
-          <input id="params-temperature-input" class="summary-input" type="number" min="0" max="2" step="0.1" placeholder="Global default" />
-          <small class="params-field-note">Lower is steadier for coding/math; higher is more varied and creative.</small>
-        </label>
-        <label class="summary-field">
-          <span>Top P</span>
-          <input id="params-top-p-input" class="summary-input" type="number" min="0" max="1" step="0.05" placeholder="Provider default" />
-          <small class="params-field-note">Limits sampling to the most likely probability mass. Lower values make outputs more predictable.</small>
-        </label>
-        <label class="summary-field">
-          <span>Max Tokens</span>
-          <input id="params-max-tokens-input" class="summary-input" type="number" min="1" max="131072" step="1" placeholder="Provider default" />
-          <small class="params-field-note">Caps how long the next replies may be. Leave blank to let the provider decide.</small>
-        </label>
-      </div>
-      <p class="summary-support-copy">OpenRouter may ignore unsupported parameters per model/provider. DeepSeek supports temperature well; the shared fields here stay on the safest common path.</p>
-    </section>
-  </div>
-  <div class="summary-panel__actions">
-    <button class="btn-ghost" id="params-reset-btn" type="button">Reset fields</button>
-    <button class="btn-primary" id="params-save-btn" type="button">Save Parameters</button>
-  </div>
-</div>
-<div id="params-overlay" class="summary-overlay"></div>
 
 <div id="export-panel" class="export-panel" aria-hidden="true" aria-labelledby="export-panel-title">
   <div class="export-panel-header">

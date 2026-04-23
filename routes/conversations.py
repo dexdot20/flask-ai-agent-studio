@@ -52,8 +52,6 @@ from db import (
     get_app_settings,
     get_default_persona_id,
     get_persona,
-    get_pruning_batch_size,
-    get_pruning_token_threshold,
     get_conversation_persona,
     get_persona_memory,
     get_persona_memory_entry,
@@ -102,7 +100,6 @@ from model_registry import (
     get_provider_client,
     resolve_model_target,
 )
-from prune_service import prune_message, prune_conversation_batch, score_conversation_messages_for_prune
 from rag import delete_source as rag_delete_source
 from rag_service import (
     delete_rag_document_record,
@@ -1530,57 +1527,6 @@ def register_conversation_routes(app) -> None:
             }
         )
 
-    @app.route("/api/messages/<int:message_id>/prune", methods=["POST"])
-    def prune_conversation_message(message_id):
-        data = request.get_json(silent=True) or {}
-        conversation_id_raw = data.get("conversation_id")
-        conversation_id = None
-        if conversation_id_raw not in (None, ""):
-            try:
-                conversation_id = int(conversation_id_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "conversation_id must be an integer."}), 400
-
-        with get_db() as conn:
-            row = conn.execute(
-                "SELECT conversation_id, metadata FROM messages WHERE id = ? AND deleted_at IS NULL",
-                (message_id,),
-            ).fetchone()
-            if not row:
-                return jsonify({"error": "Message not found."}), 404
-
-            if conversation_id is not None and int(row["conversation_id"] or 0) != conversation_id:
-                return jsonify({"error": "Message does not belong to the provided conversation."}), 400
-
-            metadata = parse_message_metadata(row["metadata"])
-            if metadata.get("is_pruned") is True:
-                updated_row = conn.execute(
-                    """SELECT id, position, role, content, metadata, tool_calls, tool_call_id,
-                              prompt_tokens, completion_tokens, total_tokens, created_at, deleted_at
-                       FROM messages WHERE id = ?""",
-                    (message_id,),
-                ).fetchone()
-                return jsonify({"message": message_row_to_dict(updated_row), "pruned": False, "skipped": True})
-
-        try:
-            pruned_message = prune_message(message_id)
-        except ValueError as exc:
-            return jsonify({"error": str(exc)}), 400
-
-        if not pruned_message:
-            return jsonify({"error": "Message could not be pruned."}), 400
-
-        with get_db() as conn:
-            conn.execute(
-                "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
-                (pruned_message["conversation_id"],),
-            )
-
-        if RAG_ENABLED:
-            sync_conversations_to_rag_safe(conversation_id=pruned_message["conversation_id"])
-
-        return jsonify({"message": pruned_message, "pruned": True})
-
     @app.route("/api/messages/<int:message_id>", methods=["PATCH"])
     def update_conversation_message(message_id):
         data = request.get_json(silent=True) or {}
@@ -1703,97 +1649,6 @@ def register_conversation_routes(app) -> None:
                 "messages": updated_messages,
             }
         )
-
-    @app.route("/api/conversations/<int:conv_id>/prune-batch", methods=["POST"])
-    def prune_conversation_batch_route(conv_id):
-        with get_db() as conn:
-            conv = conn.execute("SELECT id FROM conversations WHERE id = ?", (conv_id,)).fetchone()
-            if not conv:
-                return jsonify({"error": "Not found."}), 404
-
-        data = request.get_json(silent=True) or {}
-        try:
-            count = max(1, min(50, int(data.get("count", 1))))
-        except (TypeError, ValueError):
-            return jsonify({"error": "count must be an integer between 1 and 50."}), 400
-
-        pruned_count = prune_conversation_batch(conv_id, count)
-        messages = get_conversation_messages(conv_id)
-
-        if RAG_ENABLED:
-            sync_conversations_to_rag_safe(conversation_id=conv_id)
-
-        return jsonify({"pruned_count": pruned_count, "messages": messages})
-
-    @app.route("/api/conversations/<int:conv_id>/prune-scores", methods=["POST"])
-    def prune_conversation_scores_route(conv_id):
-        with get_db() as conn:
-            conv = conn.execute("SELECT id FROM conversations WHERE id = ?", (conv_id,)).fetchone()
-            if not conv:
-                return jsonify({"error": "Not found."}), 404
-
-        settings = get_app_settings()
-        scores = score_conversation_messages_for_prune(conv_id)
-        prunable_token_count = sum(max(0, int(score.get("estimated_tokens") or 0)) for score in scores)
-
-        return jsonify(
-            {
-                "scores": scores,
-                "prunable_message_count": len(scores),
-                "prunable_token_count": prunable_token_count,
-                "threshold": get_pruning_token_threshold(settings),
-                "batch_size": get_pruning_batch_size(settings),
-                "rag_enabled": RAG_ENABLED,
-            }
-        )
-
-    @app.route("/api/conversations/<int:conv_id>/prune-selected", methods=["POST"])
-    def prune_selected_conversation_messages_route(conv_id):
-        with get_db() as conn:
-            conv = conn.execute("SELECT id FROM conversations WHERE id = ?", (conv_id,)).fetchone()
-            if not conv:
-                return jsonify({"error": "Not found."}), 404
-
-        data = request.get_json(silent=True) or {}
-        message_ids = _parse_message_id_list(data.get("message_ids"), limit=50)
-        if not message_ids:
-            return jsonify({"error": "message_ids must be a non-empty list of up to 50 integer ids."}), 400
-
-        scored_messages = score_conversation_messages_for_prune(conv_id, message_ids)
-        scored_by_id = {int(score.get("id") or 0): score for score in scored_messages if int(score.get("id") or 0) > 0}
-        missing_ids = [message_id for message_id in message_ids if message_id not in scored_by_id]
-        if missing_ids:
-            return jsonify(
-                {"error": "One or more selected messages cannot be pruned.", "message_ids": missing_ids}
-            ), 400
-
-        pruned_count = 0
-        results = []
-        for message_id in sorted(message_ids, key=lambda value: int(scored_by_id[value].get("position") or 0)):
-            try:
-                pruned_message = prune_message(message_id)
-                results.append({"id": message_id, "pruned": True, "message": pruned_message})
-                pruned_count += 1
-            except ValueError as exc:
-                results.append({"id": message_id, "pruned": False, "error": str(exc)})
-            except Exception:
-                current_app.logger.exception(
-                    "Failed to prune selected message %s in conversation %s.", message_id, conv_id
-                )
-                results.append({"id": message_id, "pruned": False, "error": "Message could not be pruned."})
-
-        if pruned_count:
-            with get_db() as conn:
-                conn.execute(
-                    "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
-                    (conv_id,),
-                )
-
-        messages = get_conversation_messages(conv_id)
-        if RAG_ENABLED:
-            sync_conversations_to_rag_safe(conversation_id=conv_id)
-
-        return jsonify({"pruned_count": pruned_count, "results": results, "messages": messages})
 
     @app.route("/api/conversations/<int:conv_id>", methods=["DELETE"])
     def delete_conversation(conv_id):

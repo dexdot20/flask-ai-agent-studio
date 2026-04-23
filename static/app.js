@@ -24,7 +24,6 @@ const modelSel = document.getElementById("model-select");
 const mobileModelSel = document.getElementById("mobile-model-select");
 const personaSel = document.getElementById("persona-select");
 const mobilePersonaSel = document.getElementById("mobile-persona-select");
-const paramsToggleBtn = document.getElementById("params-toggle-btn");
 const emptyState = document.getElementById("empty-state");
 const errorArea = document.getElementById("error-area");
 const editBanner = document.getElementById("edit-banner");
@@ -42,7 +41,6 @@ const summaryInspectorLast = document.getElementById("summary-inspector-last");
 const canvasToggleBtn = document.getElementById("canvas-toggle-btn");
 const memoryToggleBtn = document.getElementById("memory-toggle-btn");
 const summaryToggleBtn = document.getElementById("summary-toggle-btn");
-const pruneToggleBtn = document.getElementById("prune-toggle-btn");
 const canvasPanel = document.getElementById("canvas-panel");
 const canvasOverlay = document.getElementById("canvas-overlay");
 const canvasClose = document.getElementById("canvas-close");
@@ -117,9 +115,7 @@ const mobileToolsClose = document.getElementById("mobile-tools-close");
 const mobileCanvasBtn = document.getElementById("mobile-canvas-btn");
 const mobileMemoryBtn = document.getElementById("mobile-memory-btn");
 const mobileExportBtn = document.getElementById("mobile-export-btn");
-const mobilePruneBtn = document.getElementById("mobile-prune-btn");
 const mobileConvToolsBtn = document.getElementById("mobile-conv-tools-btn");
-const mobileParamsBtn = document.getElementById("mobile-params-btn");
 const mobileUploadedFilesBtn = document.getElementById("mobile-uploaded-files-btn");
 const mobileSettingsBtn = document.getElementById("mobile-settings-btn");
 const mobileLogoutBtn = document.getElementById("mobile-logout-btn");
@@ -133,9 +129,6 @@ const exportStatus = document.getElementById("export-status");
 const summaryPanel = document.getElementById("summary-panel");
 const summaryOverlay = document.getElementById("summary-overlay");
 const summaryClose = document.getElementById("summary-close");
-const prunePanel = document.getElementById("prune-panel");
-const pruneOverlay = document.getElementById("prune-overlay");
-const pruneClose = document.getElementById("prune-close");
 const memoryPanel = document.getElementById("memory-panel");
 const memoryOverlay = document.getElementById("memory-overlay");
 const memoryClose = document.getElementById("memory-close");
@@ -150,17 +143,6 @@ const memoryNewValueEl = document.getElementById("memory-new-value");
 const convToolsPanel = document.getElementById("conv-tools-panel");
 const convToolsOverlay = document.getElementById("conv-tools-overlay");
 const convToolsClose = document.getElementById("conv-tools-close");
-const paramsPanel = document.getElementById("params-panel");
-const paramsOverlay = document.getElementById("params-overlay");
-const paramsClose = document.getElementById("params-close");
-const paramsStatusEl = document.getElementById("params-status");
-const paramsUseGlobalToggle = document.getElementById("params-use-global");
-const paramsFormSection = document.getElementById("params-form-section");
-const paramsTemperatureInput = document.getElementById("params-temperature-input");
-const paramsTopPInput = document.getElementById("params-top-p-input");
-const paramsMaxTokensInput = document.getElementById("params-max-tokens-input");
-const paramsResetBtn = document.getElementById("params-reset-btn");
-const paramsSaveBtn = document.getElementById("params-save-btn");
 const summaryFocusPresetGrid = document.getElementById("summary-focus-presets");
 const summaryFocusInput = document.getElementById("summary-focus-input");
 const summaryDetailSelect = document.getElementById("summary-detail-select");
@@ -182,16 +164,6 @@ const summaryPreviewCard = document.getElementById("summary-preview-card");
 const summaryPreviewMeta = document.getElementById("summary-preview-meta");
 const summaryPreviewList = document.getElementById("summary-preview-list");
 const summaryHistoryList = document.getElementById("summary-history-list");
-const pruneSubtitle = document.getElementById("prune-panel-subtitle");
-const pruneStatus = document.getElementById("prune-status");
-const pruneSelectionCount = document.getElementById("prune-selection-count");
-const pruneRefreshBtn = document.getElementById("prune-refresh-btn");
-const pruneSelectRecommendedBtn = document.getElementById("prune-select-recommended-btn");
-const pruneClearSelectionBtn = document.getElementById("prune-clear-selection-btn");
-const pruneScoreLoading = document.getElementById("prune-score-loading");
-const pruneScoreList = document.getElementById("prune-score-list");
-const pruneApplyRecommendedBtn = document.getElementById("prune-apply-recommended-btn");
-const pruneApplySelectedBtn = document.getElementById("prune-apply-selected-btn");
 const mobileSummaryBtn = document.getElementById("mobile-summary-btn");
 const conversationExportMdBtn = document.getElementById("conversation-export-md-btn");
 const conversationExportJsonBtn = document.getElementById("conversation-export-json-btn");
@@ -357,323 +329,6 @@ function renderSummaryDetailOptions() {
 
 function syncSummaryToggleButton() {
   summaryToggleBtn?.setAttribute("aria-expanded", String(isSummaryPanelOpen()));
-}
-
-function syncPruneToggleButton() {
-  pruneToggleBtn?.setAttribute("aria-expanded", String(isPrunePanelOpen()));
-}
-
-function setPruneBusyState(isBusy) {
-  isPruneOperationInFlight = Boolean(isBusy);
-}
-
-function formatPruneScorePercent(value) {
-  const normalized = Math.max(0, Math.min(1, Number(value) || 0));
-  return `${Math.round(normalized * 100)}%`;
-}
-
-function renderPruneScoreList() {
-  if (!pruneScoreList) {
-    return;
-  }
-
-  if (!currentConvId) {
-    pruneScoreList.innerHTML = '<div class="summary-history-empty">Open a conversation to inspect prune candidates.</div>';
-    return;
-  }
-
-  if (pruneScoresError) {
-    pruneScoreList.innerHTML = `<div class="summary-history-empty">${escHtml(pruneScoresError)}</div>`;
-    return;
-  }
-
-  if (pruneScoresLoading && !pruneScores.length) {
-    pruneScoreList.innerHTML = '<div class="summary-history-empty">Loading prune scores…</div>';
-    return;
-  }
-
-  if (!pruneScores.length) {
-    pruneScoreList.innerHTML = '<div class="summary-history-empty">No prune candidates are currently available.</div>';
-    return;
-  }
-
-  const selectedIds = new Set(getSelectedMessageIds("prune"));
-  const fragment = document.createDocumentFragment();
-  pruneScores.forEach((score, index) => {
-    const messageId = Number(score?.id || 0);
-    const isSelected = selectedIds.has(messageId);
-    const article = document.createElement("article");
-    article.className = "prune-score-item prune-score-item--interactive";
-    article.dataset.messageId = String(messageId || "");
-    if (isSelected) {
-      article.classList.add("is-selected");
-    }
-    article.addEventListener("click", (event) => {
-      if (isHistorySelectionInteractionTarget(event.target) || hasLiveHistoryTextSelection()) {
-        return;
-      }
-      toggleHistoryMessageSelection(messageId, "prune");
-    });
-
-    const header = document.createElement("div");
-    header.className = "prune-score-item__header";
-
-    const copy = document.createElement("div");
-    copy.className = "prune-score-item__copy";
-
-    const title = document.createElement("div");
-    title.className = "prune-score-item__title";
-    const roleLabel = String(score?.role || "message").trim().toUpperCase() || "MESSAGE";
-    const position = Number(score?.position || 0);
-    title.textContent = position > 0 ? `${roleLabel} #${position}` : roleLabel;
-    copy.appendChild(title);
-
-    const meta = document.createElement("div");
-    meta.className = "prune-score-item__meta";
-    const metaValues = [
-      `${fmt(Number(score?.estimated_tokens || 0))} tok`,
-      `Entropy ${formatPruneScorePercent(1 - Number(score?.entropy_score || 0))}`,
-      `RAG ${formatPruneScorePercent(score?.rag_coverage_score || 0)}`,
-      `Age ${formatPruneScorePercent(score?.recency_score || 0)}`,
-    ];
-    metaValues.forEach((value) => {
-      const chip = document.createElement("span");
-      chip.className = "summary-history-item__chip";
-      chip.textContent = value;
-      meta.appendChild(chip);
-    });
-    copy.appendChild(meta);
-    header.appendChild(copy);
-
-    const scoreChip = document.createElement("span");
-    scoreChip.className = "prune-score-item__score";
-    scoreChip.textContent = formatPruneScorePercent(score?.prune_score || 0);
-    header.appendChild(scoreChip);
-
-    const preview = document.createElement("p");
-    preview.className = "prune-score-item__preview";
-    preview.textContent = String(score?.content_preview || "").trim() || "(empty)";
-
-    const actions = document.createElement("div");
-    actions.className = "prune-score-item__actions";
-
-    const selectButton = document.createElement("button");
-    selectButton.type = "button";
-    selectButton.className = "msg-action-btn msg-action-btn--with-label";
-    selectButton.setAttribute("aria-pressed", String(isSelected));
-    selectButton.textContent = isSelected ? "In selection" : (index < pruneRecommendedBatchSize ? "Add recommended" : "Add to selection");
-    selectButton.addEventListener("click", () => {
-      toggleHistoryMessageSelection(messageId, "prune");
-    });
-    actions.appendChild(selectButton);
-
-    article.append(header, preview, actions);
-    fragment.appendChild(article);
-  });
-
-  pruneScoreList.replaceChildren(fragment);
-}
-
-function updatePrunePanelUi() {
-  if (!prunePanel) {
-    return;
-  }
-
-  const selectedCount = getSelectedMessageIds("prune").length;
-  const recommendedIds = getRecommendedPruneMessageIds();
-
-  if (pruneSubtitle) {
-    pruneSubtitle.textContent = currentConvId
-      ? `Conversation: ${getCurrentConversationDisplayTitle() || `Chat #${currentConvId}`} · threshold ${fmt(pruneTokenThreshold)} tokens · recommended batch ${fmt(pruneRecommendedBatchSize)}`
-      : "Entropy + RAG scores help surface lower-value history first.";
-  }
-
-  if (pruneSelectionCount) {
-    pruneSelectionCount.textContent = selectedCount
-      ? `${fmt(selectedCount)} message${selectedCount === 1 ? " is" : "s are"} selected for pruning. Use the ticks next to messages or click a message bubble to adjust the selection.`
-      : "No messages selected yet. Use the ticks next to messages or the recommended list.";
-  }
-
-  if (pruneStatus) {
-    if (!currentConvId) {
-      pruneStatus.textContent = "Open a conversation to inspect prune candidates. Tick messages in the chat or click a message bubble while this panel is open.";
-    } else if (pruneScoresLoading) {
-      pruneStatus.textContent = "Loading prune scores in the background…";
-    } else if (pruneScoresError) {
-      pruneStatus.textContent = pruneScoresError;
-    } else if (pruneScores.length) {
-      pruneStatus.textContent = `${fmt(pruneScores.length)} prunable messages scored. Higher scores are better prune candidates. Use the ticks next to messages or click a message bubble to build your exact prune set.`;
-    } else {
-      pruneStatus.textContent = "No prune candidates are currently available.";
-    }
-  }
-
-  if (pruneScoreLoading) {
-    pruneScoreLoading.hidden = !pruneScoresLoading;
-  }
-
-  if (pruneRefreshBtn) {
-    pruneRefreshBtn.disabled = !currentConvId || pruneScoresLoading || isPruneOperationInFlight;
-  }
-  if (pruneSelectRecommendedBtn) {
-    pruneSelectRecommendedBtn.disabled = !currentConvId || !recommendedIds.length || pruneScoresLoading || isPruneOperationInFlight;
-  }
-  if (pruneClearSelectionBtn) {
-    pruneClearSelectionBtn.disabled = selectedCount === 0 || isPruneOperationInFlight;
-  }
-  if (pruneApplyRecommendedBtn) {
-    pruneApplyRecommendedBtn.disabled = !currentConvId || !recommendedIds.length || pruneScoresLoading || isPruneOperationInFlight;
-  }
-  if (pruneApplySelectedBtn) {
-    pruneApplySelectedBtn.disabled = !currentConvId || selectedCount === 0 || pruneScoresLoading || isPruneOperationInFlight;
-  }
-  if (mobilePruneBtn) {
-    mobilePruneBtn.disabled = pruneScoresLoading || isPruneOperationInFlight;
-  }
-  if (pruneToggleBtn) {
-    pruneToggleBtn.disabled = isPruneOperationInFlight;
-  }
-
-  renderPruneScoreList();
-}
-
-async function loadPruneScores({ silent = false } = {}) {
-  if (!currentConvId) {
-    pruneScores = [];
-    pruneScoresError = "";
-    pruneScoresLoading = false;
-    pruneRecommendedBatchSize = 5;
-    pruneTokenThreshold = 0;
-    updatePrunePanelUi();
-    return;
-  }
-
-  const requestNonce = ++pruneScoreRequestNonce;
-  pruneScoresLoading = true;
-  pruneScoresError = "";
-  updatePrunePanelUi();
-
-  try {
-    const response = await fetch(`/api/conversations/${currentConvId}/prune-scores`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    const data = await response.json().catch(() => null);
-    if (!response.ok) {
-      throw new Error(data?.error || "Prune scores could not be loaded.");
-    }
-    if (requestNonce !== pruneScoreRequestNonce) {
-      return;
-    }
-    pruneScores = Array.isArray(data?.scores) ? data.scores : [];
-    pruneRecommendedBatchSize = Math.max(1, Math.min(50, Number(data?.batch_size || 5) || 5));
-    pruneTokenThreshold = Math.max(0, Number(data?.threshold || 0) || 0);
-    pruneScoresError = "";
-  } catch (error) {
-    if (requestNonce !== pruneScoreRequestNonce) {
-      return;
-    }
-    pruneScores = [];
-    pruneScoresError = error.message || "Prune scores could not be loaded.";
-    if (!silent) {
-      showError(pruneScoresError);
-    }
-  } finally {
-    if (requestNonce === pruneScoreRequestNonce) {
-      pruneScoresLoading = false;
-      updatePrunePanelUi();
-    }
-  }
-}
-
-async function applyPruneSelection(messageIds, { label = "selected" } = {}) {
-  const normalizedIds = Array.from(new Set((messageIds || []).map((messageId) => Number(messageId)))).filter(
-    (messageId) => Number.isInteger(messageId) && messageId > 0
-  );
-  if (!currentConvId) {
-    showToast("No active conversation.", "warning");
-    return;
-  }
-  if (!normalizedIds.length) {
-    showToast(`Choose at least one message to prune.`, "warning");
-    return;
-  }
-
-  setPruneBusyState(true);
-  updatePrunePanelUi();
-
-  try {
-    const response = await fetch(`/api/conversations/${currentConvId}/prune-selected`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message_ids: normalizedIds }),
-    });
-    const data = await response.json().catch(() => null);
-    if (!response.ok) {
-      throw new Error(data?.error || "Pruning failed.");
-    }
-
-    if (Array.isArray(data?.messages)) {
-      history = data.messages.map(normalizeHistoryEntry);
-      rebuildTokenStatsFromHistory();
-      renderConversationHistory();
-      renderCanvasPanel();
-    }
-
-    replaceSelectionSet(
-      "prune",
-      getSelectedMessageIds("prune").filter((messageId) => !normalizedIds.includes(messageId))
-    );
-    await loadPruneScores({ silent: true });
-    void loadSidebar();
-
-    const prunedCount = Number(data?.pruned_count || 0);
-    showToast(
-      prunedCount > 0
-        ? `${prunedCount} ${label} message${prunedCount === 1 ? " was" : "s were"} pruned.`
-        : "No eligible messages were pruned.",
-      prunedCount > 0 ? "success" : "warning"
-    );
-  } catch (error) {
-    pruneScoresError = error.message || "Pruning failed.";
-    showError(pruneScoresError);
-  } finally {
-    setPruneBusyState(false);
-    updatePrunePanelUi();
-  }
-}
-
-function openPrunePanel(triggerEl = null) {
-  closeMobileTools();
-  closeStats();
-  closeCanvas();
-  closeExportPanel();
-  closeParamsPanel({ restoreFocus: false });
-  closeSummaryPanel({ restoreFocus: false });
-  closeMemoryPanel();
-  prunePanel?.classList.add("open");
-  pruneOverlay?.classList.add("open");
-  prunePanel?.setAttribute("aria-hidden", "false");
-  lastPruneTriggerEl = triggerEl instanceof HTMLElement
-    ? triggerEl
-    : (document.activeElement instanceof HTMLElement ? document.activeElement : (pruneToggleBtn || mobilePruneBtn));
-  syncPruneToggleButton();
-  syncMessageSelectionMode({ render: true });
-  updatePrunePanelUi();
-  void loadPruneScores({ silent: true });
-  window.setTimeout(() => pruneClose?.focus({ preventScroll: true }), 0);
-}
-
-function closePrunePanel({ restoreFocus = true } = {}) {
-  prunePanel?.classList.remove("open");
-  pruneOverlay?.classList.remove("open");
-  prunePanel?.setAttribute("aria-hidden", "true");
-  syncPruneToggleButton();
-  syncMessageSelectionMode({ render: true });
-  if (restoreFocus && lastPruneTriggerEl && typeof lastPruneTriggerEl.focus === "function") {
-    lastPruneTriggerEl.focus();
-  }
 }
 
 function getSummaryDetailLabel(value) {
@@ -939,7 +594,6 @@ let currentConversationTitleOverridden = false;
 let conversationMemoryEntries = [];
 let conversationMemoryEnabled = false;
 let currentConversationToolOverrides = null;
-let currentConversationParameterOverrides = null;
 let activeAbortController = null;
 let activeChatRunId = null;
 let activeUserCancelRequested = false;
@@ -971,9 +625,7 @@ let lastCanvasTriggerEl = null;
 let lastCanvasConfirmTriggerEl = null;
 let lastExportTriggerEl = null;
 let lastSummaryTriggerEl = null;
-let lastPruneTriggerEl = null;
 let lastMemoryTriggerEl = null;
-let lastParamsTriggerEl = null;
 let streamingCanvasPreviews = new Map();
 let pendingCanvasPreviewTimer = 0;
 let pendingCanvasEditorPreviewTimer = 0;
@@ -986,19 +638,11 @@ let pendingDeferredCanvasRenderFlushTimer = 0;
 let lastCanvasPreviewRenderAt = 0;
 let latestSummaryStatus = null;
 let isSummaryOperationInFlight = false;
-let isPruneOperationInFlight = false;
 let summaryProgressTimer = 0;
 let summaryProgressCurrentValue = 0;
 let summaryPreviewConversationId = null;
 let messageSelectionMode = null;
 let selectedSummaryMessageIds = new Set();
-let selectedPruneMessageIds = new Set();
-let pruneScores = [];
-let pruneScoreRequestNonce = 0;
-let pruneScoresLoading = false;
-let pruneScoresError = "";
-let pruneRecommendedBatchSize = 5;
-let pruneTokenThreshold = 0;
 let conversationRefreshGeneration = 0;
 let pendingConversationRefreshTimers = new Set();
 let lastConversationSignature = "";
@@ -1309,240 +953,6 @@ function applyConversationToolOverridesState(data) {
   currentConversationToolOverrides = Array.isArray(data?.conversation?.tool_overrides) ? data.conversation.tool_overrides : null;
 }
 
-function normalizeConversationParameterOverrides(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  const normalized = {};
-  if (value.temperature !== undefined && value.temperature !== null && value.temperature !== "") {
-    const parsed = Number(value.temperature);
-    if (Number.isFinite(parsed)) {
-      normalized.temperature = parsed;
-    }
-  }
-  if (value.top_p !== undefined && value.top_p !== null && value.top_p !== "") {
-    const parsed = Number(value.top_p);
-    if (Number.isFinite(parsed)) {
-      normalized.top_p = parsed;
-    }
-  }
-  if (value.max_tokens !== undefined && value.max_tokens !== null && value.max_tokens !== "") {
-    const parsed = Number(value.max_tokens);
-    if (Number.isInteger(parsed) && parsed > 0) {
-      normalized.max_tokens = parsed;
-    }
-  }
-  return Object.keys(normalized).length ? normalized : null;
-}
-
-function applyConversationParameterOverridesState(data) {
-  currentConversationParameterOverrides = normalizeConversationParameterOverrides(data?.conversation?.parameter_overrides);
-}
-
-function getConversationParameterOverridesFromResponse(data) {
-  if (!data || typeof data !== "object") {
-    return undefined;
-  }
-  if (data.conversation && typeof data.conversation === "object" && Object.prototype.hasOwnProperty.call(data.conversation, "parameter_overrides")) {
-    return data.conversation.parameter_overrides;
-  }
-  if (Object.prototype.hasOwnProperty.call(data, "parameter_overrides")) {
-    return data.parameter_overrides;
-  }
-  return undefined;
-}
-
-function getDefaultConversationParameterDraft() {
-  return {
-    temperature: appSettings?.temperature ?? "",
-    top_p: "",
-    max_tokens: "",
-  };
-}
-
-function setParameterPanelStatus(message, tone = "muted") {
-  if (!paramsStatusEl) {
-    return;
-  }
-  paramsStatusEl.textContent = String(message || "").trim() || "Open a conversation to configure reply parameters.";
-  paramsStatusEl.dataset.tone = tone;
-}
-
-function setConversationParameterFormValues(overrides = null) {
-  const source = overrides && typeof overrides === "object"
-    ? overrides
-    : getDefaultConversationParameterDraft();
-  if (paramsTemperatureInput) {
-    paramsTemperatureInput.value = source.temperature ?? "";
-  }
-  if (paramsTopPInput) {
-    paramsTopPInput.value = source.top_p ?? "";
-  }
-  if (paramsMaxTokensInput) {
-    paramsMaxTokensInput.value = source.max_tokens ?? "";
-  }
-}
-
-function setConversationParameterControlsDisabled(disabled) {
-  [
-    paramsUseGlobalToggle,
-    paramsTemperatureInput,
-    paramsTopPInput,
-    paramsMaxTokensInput,
-    paramsResetBtn,
-    paramsSaveBtn,
-  ].forEach((element) => {
-    if (element) {
-      element.disabled = Boolean(disabled);
-    }
-  });
-}
-
-function isParamsPanelOpen() {
-  return Boolean(paramsPanel?.classList.contains("open"));
-}
-
-function syncParamsToggleButton() {
-  paramsToggleBtn?.setAttribute("aria-expanded", String(isParamsPanelOpen()));
-  mobileParamsBtn?.classList.toggle("active", isParamsPanelOpen());
-}
-
-function renderParamsPanel() {
-  if (!paramsPanel || !paramsUseGlobalToggle || !paramsFormSection) {
-    return;
-  }
-
-  const hasConversation = Boolean(currentConvId);
-  const usingGlobalDefaults = currentConversationParameterOverrides === null;
-  paramsUseGlobalToggle.checked = usingGlobalDefaults;
-
-  if (!hasConversation) {
-    setParameterPanelStatus("Open a conversation to configure reply parameters.", "muted");
-    paramsFormSection.hidden = true;
-    setConversationParameterFormValues(null);
-    setConversationParameterControlsDisabled(true);
-    return;
-  }
-
-  setConversationParameterControlsDisabled(false);
-  if (usingGlobalDefaults) {
-    setParameterPanelStatus("This conversation currently uses global defaults.", "muted");
-    paramsFormSection.hidden = true;
-    setConversationParameterFormValues(currentConversationParameterOverrides);
-  } else {
-    const overrideLabels = [];
-    if (currentConversationParameterOverrides?.temperature !== undefined) {
-      overrideLabels.push(`temperature ${currentConversationParameterOverrides.temperature}`);
-    }
-    if (currentConversationParameterOverrides?.top_p !== undefined) {
-      overrideLabels.push(`top_p ${currentConversationParameterOverrides.top_p}`);
-    }
-    if (currentConversationParameterOverrides?.max_tokens !== undefined) {
-      overrideLabels.push(`max_tokens ${currentConversationParameterOverrides.max_tokens}`);
-    }
-    setParameterPanelStatus(
-      overrideLabels.length
-        ? `Saved overrides: ${overrideLabels.join(" • ")}`
-        : "Custom parameters are enabled for this conversation.",
-      "success"
-    );
-    paramsFormSection.hidden = false;
-    setConversationParameterFormValues(currentConversationParameterOverrides);
-  }
-}
-
-function openParamsPanel(triggerEl = null) {
-  closeMobileTools();
-  closeStats();
-  closeCanvas();
-  closeExportPanel();
-  closeSummaryPanel({ restoreFocus: false });
-  closePrunePanel({ restoreFocus: false });
-  closeMemoryPanel({ restoreFocus: false });
-  closeConvToolsPanel({ restoreFocus: false });
-  paramsPanel?.classList.add("open");
-  paramsOverlay?.classList.add("open");
-  paramsPanel?.setAttribute("aria-hidden", "false");
-  lastParamsTriggerEl = triggerEl instanceof HTMLElement
-    ? triggerEl
-    : (document.activeElement instanceof HTMLElement ? document.activeElement : paramsToggleBtn);
-  syncParamsToggleButton();
-  renderParamsPanel();
-  window.setTimeout(() => {
-    if (!paramsUseGlobalToggle?.checked && paramsTemperatureInput && !paramsTemperatureInput.disabled) {
-      paramsTemperatureInput.focus({ preventScroll: true });
-      paramsTemperatureInput.select();
-    } else {
-      paramsClose?.focus();
-    }
-  }, 0);
-}
-
-function closeParamsPanel({ restoreFocus = true } = {}) {
-  paramsPanel?.classList.remove("open");
-  paramsOverlay?.classList.remove("open");
-  paramsPanel?.setAttribute("aria-hidden", "true");
-  syncParamsToggleButton();
-  if (restoreFocus && lastParamsTriggerEl && typeof lastParamsTriggerEl.focus === "function") {
-    lastParamsTriggerEl.focus();
-  }
-}
-
-function resetConversationParameterDraft() {
-  if (paramsUseGlobalToggle?.checked) {
-    setConversationParameterFormValues(null);
-    return;
-  }
-  setConversationParameterFormValues(currentConversationParameterOverrides);
-}
-
-function collectConversationParameterOverridesFromForm() {
-  const draft = {};
-  if (paramsTemperatureInput && String(paramsTemperatureInput.value || "").trim()) {
-    draft.temperature = Number(paramsTemperatureInput.value);
-  }
-  if (paramsTopPInput && String(paramsTopPInput.value || "").trim()) {
-    draft.top_p = Number(paramsTopPInput.value);
-  }
-  if (paramsMaxTokensInput && String(paramsMaxTokensInput.value || "").trim()) {
-    draft.max_tokens = Number(paramsMaxTokensInput.value);
-  }
-  return normalizeConversationParameterOverrides(draft);
-}
-
-async function persistConversationParameterOverrides() {
-  if (!currentConvId) {
-    showToast("Open a conversation first to set parameters.", "warning");
-    return;
-  }
-
-  const parameterOverrides = paramsUseGlobalToggle?.checked ? null : collectConversationParameterOverridesFromForm();
-  setConversationParameterControlsDisabled(true);
-  try {
-    const response = await fetch(`/api/conversations/${currentConvId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ parameter_overrides: parameterOverrides }),
-    });
-    const data = await response.json().catch(() => null);
-    if (!response.ok) {
-      throw new Error(data?.error || "Could not save conversation parameters.");
-    }
-    const responseParameterOverrides = getConversationParameterOverridesFromResponse(data);
-    currentConversationParameterOverrides = normalizeConversationParameterOverrides(responseParameterOverrides);
-    renderParamsPanel();
-    showToast(
-      currentConversationParameterOverrides
-        ? "Conversation parameters saved."
-        : "Conversation parameters reset to global defaults.",
-      "success"
-    );
-  } catch (error) {
-    renderParamsPanel();
-    showError(error.message || "Could not save conversation parameters.");
-  }
-}
-
 function isConvToolsPanelOpen() {
   return Boolean(convToolsPanel?.classList.contains("open"));
 }
@@ -1552,7 +962,6 @@ function openConvToolsPanel(triggerEl = null) {
   closeStats();
   closeCanvas();
   closeExportPanel();
-  closeParamsPanel({ restoreFocus: false });
   closeSummaryPanel();
   closePrunePanel({ restoreFocus: false });
   closeMemoryPanel();
@@ -1668,7 +1077,6 @@ function openMemoryPanel(triggerEl = null) {
   closeStats();
   closeCanvas();
   closeExportPanel();
-  closeParamsPanel({ restoreFocus: false });
   closeSummaryPanel();
   closePrunePanel({ restoreFocus: false });
   memoryPanel?.classList.add("open");
@@ -6199,7 +5607,6 @@ function renderCanvasPanel() {
 
 function openCanvas(triggerEl = null, options = {}) {
   const shouldFocusPanel = options.focusPanel !== false;
-  closeParamsPanel({ restoreFocus: false });
   closeMemoryPanel();
   closeSummaryPanel();
   closePrunePanel({ restoreFocus: false });
@@ -6362,7 +5769,6 @@ function openExportPanel(triggerEl = null) {
   closeMobileTools();
   closeStats();
   closeCanvas();
-  closeParamsPanel({ restoreFocus: false });
   closeSummaryPanel();
   closePrunePanel({ restoreFocus: false });
   closeMemoryPanel();
@@ -6376,10 +5782,6 @@ function openExportPanel(triggerEl = null) {
   exportClose?.focus();
 }
 
-async function pruneConversationHistory() {
-  openPrunePanel(pruneToggleBtn || mobilePruneBtn || mobileToolsBtn || null);
-}
-
 function closeExportPanel() {
   exportPanel?.classList.remove("open");
   exportOverlay?.classList.remove("open");
@@ -6387,10 +5789,6 @@ function closeExportPanel() {
   if (lastExportTriggerEl && typeof lastExportTriggerEl.focus === "function") {
     lastExportTriggerEl.focus();
   }
-}
-
-function isPrunePanelOpen() {
-  return Boolean(prunePanel?.classList.contains("open"));
 }
 
 function getHistoryMessageSortValue(message) {
@@ -6412,16 +5810,9 @@ function sortHistoryMessagesByPosition(entries = []) {
   });
 }
 
-function getPruneEligibleMessages(entries = history) {
-  return sortHistoryMessagesByPosition((entries || []).filter(isPrunableHistoryMessage));
-}
-
 function getSelectionSetForMode(mode = messageSelectionMode) {
   if (mode === "summary") {
     return selectedSummaryMessageIds;
-  }
-  if (mode === "prune") {
-    return selectedPruneMessageIds;
   }
   return null;
 }
@@ -6430,33 +5821,7 @@ function getSelectableMessagesForMode(mode, entries = history) {
   if (mode === "summary") {
     return getSummaryEligibleMessages(entries);
   }
-  if (mode === "prune") {
-    return getPruneEligibleMessages(entries);
-  }
-  return [];
-}
-
-function getSelectableMessageIdSet(mode, entries = history) {
-  return new Set(
-    getSelectableMessagesForMode(mode, entries)
-      .map((message) => Number(message?.id || 0))
-      .filter((messageId) => Number.isInteger(messageId) && messageId > 0)
-  );
-}
-
-function replaceSelectionSet(mode, messageIds) {
-  const eligibleIds = getSelectableMessageIdSet(mode);
-  const nextSet = new Set(
-    Array.from(messageIds || [])
-      .map((messageId) => Number(messageId))
-      .filter((messageId) => Number.isInteger(messageId) && messageId > 0 && eligibleIds.has(messageId))
-  );
-
-  if (mode === "summary") {
-    selectedSummaryMessageIds = nextSet;
-  } else if (mode === "prune") {
-    selectedPruneMessageIds = nextSet;
-  }
+  return null;
 }
 
 function getSelectedMessageIds(mode = messageSelectionMode) {
@@ -6476,12 +5841,9 @@ function getSelectedMessageIds(mode = messageSelectionMode) {
 
 function pruneStaleMessageSelections() {
   const summaryEligibleIds = getSelectableMessageIdSet("summary");
-  const pruneEligibleIds = getSelectableMessageIdSet("prune");
   const nextSummaryIds = new Set([...selectedSummaryMessageIds].filter((messageId) => summaryEligibleIds.has(messageId)));
-  const nextPruneIds = new Set([...selectedPruneMessageIds].filter((messageId) => pruneEligibleIds.has(messageId)));
-  const changed = nextSummaryIds.size !== selectedSummaryMessageIds.size || nextPruneIds.size !== selectedPruneMessageIds.size;
+  const changed = nextSummaryIds.size !== selectedSummaryMessageIds.size;
   selectedSummaryMessageIds = nextSummaryIds;
-  selectedPruneMessageIds = nextPruneIds;
   return changed;
 }
 
@@ -6526,31 +5888,24 @@ function renderHistorySelectionBar() {
   }
 
   const selectedCount = getSelectedMessageIds(messageSelectionMode).length;
-  const modeLabel = messageSelectionMode === "prune" ? "Prune selection" : "Summary selection";
+  const modeLabel = "Summary selection";
   historySelectionLabel.textContent = selectedCount ? `${modeLabel} · ${fmt(selectedCount)}` : modeLabel;
-  historySelectionDetail.textContent = messageSelectionMode === "prune"
-    ? (
-      selectedCount
-        ? `${fmt(selectedCount)} message${selectedCount === 1 ? " is" : "s are"} ready for pruning. Use the tick next to each message or click the message bubble to adjust the selection, then apply it from the Prune panel.`
-        : "Tick messages in the conversation or click a message bubble, then use the panel actions or the recommended prune list."
-    )
-    : (
-      selectedCount
-        ? `${fmt(selectedCount)} message${selectedCount === 1 ? " is" : "s are"} selected for summary. Use the tick next to each message or click the message bubble to adjust the selection. Clear it to return to automatic rules.`
-        : "Tick eligible messages in the conversation or click a message bubble to build a custom summary selection. Leaving it empty falls back to automatic rules."
-    );
+  historySelectionDetail.textContent =
+    selectedCount
+      ? `${fmt(selectedCount)} message${selectedCount === 1 ? " is" : "s are"} selected for summary. Use the tick next to each message or click the message bubble to adjust the selection. Clear it to return to automatic rules.`
+      : "Tick eligible messages in the conversation or click a message bubble to build a custom summary selection. Leaving it empty falls back to automatic rules.";
 
   if (historySelectionClear) {
     historySelectionClear.disabled = selectedCount === 0;
   }
   if (historySelectionCancel) {
-    historySelectionCancel.textContent = messageSelectionMode === "prune" ? "Close prune" : "Close summary";
+    historySelectionCancel.textContent = "Close summary";
   }
   historySelectionBar.hidden = false;
 }
 
 function syncMessageSelectionMode({ render = false } = {}) {
-  const nextMode = isPrunePanelOpen() ? "prune" : isSummaryPanelOpen() ? "summary" : null;
+  const nextMode = isSummaryPanelOpen() ? "summary" : null;
   const changed = nextMode !== messageSelectionMode;
   messageSelectionMode = nextMode;
   renderHistorySelectionBar();
@@ -6563,7 +5918,6 @@ function refreshSelectionUi({ render = true } = {}) {
   pruneStaleMessageSelections();
   renderHistorySelectionBar();
   updateSummarySelectionUi();
-  updatePrunePanelUi();
   if (render) {
     renderConversationHistory({ preserveScroll: true });
   }
@@ -6572,13 +5926,11 @@ function refreshSelectionUi({ render = true } = {}) {
 function clearMessageSelection(mode = messageSelectionMode, { render = true } = {}) {
   if (!mode) {
     selectedSummaryMessageIds = new Set();
-    selectedPruneMessageIds = new Set();
   } else {
     replaceSelectionSet(mode, []);
   }
   renderHistorySelectionBar();
   updateSummarySelectionUi();
-  updatePrunePanelUi();
   if (render) {
     renderConversationHistory({ preserveScroll: true });
   }
@@ -6602,7 +5954,6 @@ function toggleHistoryMessageSelection(messageId, mode = messageSelectionMode) {
   replaceSelectionSet(mode, nextSelection);
   renderHistorySelectionBar();
   updateSummarySelectionUi();
-  updatePrunePanelUi();
   renderConversationHistory({ preserveScroll: true });
 }
 
@@ -6618,20 +5969,6 @@ function selectEligibleSummaryMessages() {
   renderConversationHistory({ preserveScroll: true });
 }
 
-function getRecommendedPruneMessageIds(limit = pruneRecommendedBatchSize) {
-  return pruneScores
-    .slice(0, Math.max(1, Number(limit) || 1))
-    .map((score) => Number(score?.id || 0))
-    .filter((messageId) => Number.isInteger(messageId) && messageId > 0);
-}
-
-function selectRecommendedPruneMessages() {
-  replaceSelectionSet("prune", getRecommendedPruneMessageIds());
-  renderHistorySelectionBar();
-  updatePrunePanelUi();
-  renderConversationHistory({ preserveScroll: true });
-}
-
 function isSummaryPanelOpen() {
   return Boolean(summaryPanel?.classList.contains("open"));
 }
@@ -6641,7 +5978,6 @@ function openSummaryPanel(triggerEl = null) {
   closeStats();
   closeCanvas();
   closeExportPanel();
-  closeParamsPanel({ restoreFocus: false });
   closePrunePanel({ restoreFocus: false });
   closeMemoryPanel();
   summaryPanel?.classList.add("open");
@@ -8685,7 +8021,6 @@ function createMessageActions(message, options = {}) {
   const messageId = message.id;
   const isDeletingThisMessage = messageId !== null && deletingMessageId !== null && Number(deletingMessageId) === Number(messageId);
   const isDeleteConfirmationOpen = messageId !== null && pendingDeleteMessageId !== null && Number(pendingDeleteMessageId) === Number(messageId);
-  const showInlinePruneButton = isPrunePanelOpen() && isPrunableHistoryMessage(message);
   if (message.role === "user" || message.role === "assistant") {
     if (options.editable && isEditableHistoryMessage(message)) {
       const editBtn = createMessageActionButton({
@@ -8710,20 +8045,6 @@ function createMessageActions(message, options = {}) {
       disabled: !String(message.content || "").trim() || isDeletingThisMessage,
     });
     actions.appendChild(copyButton);
-
-    if (showInlinePruneButton) {
-      const pruneButton = createMessageActionButton({
-        label: "Prune",
-        title: "Prune this message now",
-        icon: MESSAGE_ACTION_ICONS.prune,
-        showLabel: true,
-        onClick: () => {
-          void pruneMessage(messageId);
-        },
-        disabled: !isPersistedMessageId(messageId) || isDeletingThisMessage || isStreaming || isFixing || isPruneOperationInFlight,
-      });
-      actions.appendChild(pruneButton);
-    }
 
     const deleteButton = createMessageActionButton({
       label: isDeleteConfirmationOpen ? "Cancel delete" : "Delete",
@@ -8834,15 +8155,6 @@ const MESSAGE_ACTION_ICONS = {
       <path d="M17 4h4v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
       <path d="M21 12a9 9 0 0 1-15.3 6.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
       <path d="M7 20H3v-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-    </svg>
-  `,
-  prune: `
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
-      <path d="M5 7h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
-      <path d="M8 7V5.8A1.8 1.8 0 0 1 9.8 4h4.4A1.8 1.8 0 0 1 16 5.8V7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-      <path d="M8 11.5h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
-      <path d="M10 15h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
-      <path d="M7 7l1 11a2 2 0 0 0 2 1.8h4a2 2 0 0 0 2-1.8L17 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
     </svg>
   `,
   delete: `
@@ -9149,9 +8461,7 @@ function createHistorySelectionToggle(message, mode) {
   }
 
   const isSelected = isMessageSelectedForMode(messageId, mode);
-  const selectionAction = mode === "prune"
-    ? (isSelected ? "Remove message from prune selection" : "Add message to prune selection")
-    : (isSelected ? "Remove message from summary selection" : "Add message to summary selection");
+  const selectionAction = isSelected ? "Remove message from summary selection" : "Add message to summary selection";
   const button = document.createElement("button");
   button.type = "button";
   button.className = "msg-selection-toggle";
@@ -9260,43 +8570,6 @@ function createInlineMessageEditor(message) {
   return form;
 }
 
-async function pruneMessage(messageId) {
-  if (isStreaming || isFixing) {
-    return;
-  }
-
-  const message = getHistoryMessage(messageId);
-  if (!isPrunableHistoryMessage(message)) {
-    return;
-  }
-
-  try {
-    const response = await fetch(`/api/messages/${messageId}/prune`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ conversation_id: currentConvId }),
-    });
-    const data = await response.json().catch(() => null);
-    if (!response.ok) {
-      throw new Error(data?.error || "Message could not be pruned.");
-    }
-    if (!data?.message) {
-      throw new Error("Pruned message payload is missing.");
-    }
-
-    const index = getHistoryMessageIndex(messageId);
-    if (index >= 0) {
-      history[index] = normalizeHistoryEntry(data.message);
-      renderConversationHistory();
-    } else {
-      await refreshConversationFromServer();
-    }
-    showToast("Message pruned.", "success");
-  } catch (error) {
-    showError(error.message || "Message could not be pruned.");
-  }
-}
-
 function renderConversationHistory(options = {}) {
   pruneStaleMessageSelections();
   const activeInlineMessage = getHistoryMessage(inlineEditingMessageId);
@@ -9317,7 +8590,6 @@ function renderConversationHistory(options = {}) {
     scrollToBottom();
     renderHistorySelectionBar();
     renderSummaryInspector();
-    updatePrunePanelUi();
     return;
   }
 
@@ -9355,7 +8627,6 @@ function renderConversationHistory(options = {}) {
   }
   renderHistorySelectionBar();
   renderSummaryInspector();
-  updatePrunePanelUi();
 }
 
 async function refreshConversationFromServer() {
@@ -10158,7 +9429,6 @@ function openStats() {
   closeMobileTools();
   closeCanvas();
   closeExportPanel();
-  closeParamsPanel({ restoreFocus: false });
   closeSummaryPanel();
   closePrunePanel({ restoreFocus: false });
   closeMemoryPanel();
@@ -10175,7 +9445,6 @@ function openMobileTools() {
   closeStats();
   closeCanvas();
   closeExportPanel();
-  closeParamsPanel({ restoreFocus: false });
   closeSummaryPanel();
   closePrunePanel({ restoreFocus: false });
   closeMemoryPanel();
@@ -10579,22 +9848,11 @@ if (summaryToggleBtn) {
     }
   });
 }
-if (pruneToggleBtn) {
-  pruneToggleBtn.addEventListener("click", () => {
-    void pruneConversationHistory();
-  });
-}
 if (mobileExportBtn) {
   mobileExportBtn.addEventListener("click", () => openExportPanel(mobileToolsBtn || mobileExportBtn));
 }
 if (mobileMemoryBtn) {
   mobileMemoryBtn.addEventListener("click", () => openMemoryPanel(mobileToolsBtn || mobileMemoryBtn));
-}
-if (mobilePruneBtn) {
-  mobilePruneBtn.addEventListener("click", () => {
-    closeMobileTools();
-    void pruneConversationHistory();
-  });
 }
 if (mobileConvToolsBtn) {
   mobileConvToolsBtn.addEventListener("click", () => {
@@ -10808,12 +10066,6 @@ async function loadUploadedFilesPanelInPanel() {
     body.innerHTML = '<p class="sidebar-empty">Could not load files.</p>';
   }
 }
-if (paramsClose) {
-  paramsClose.addEventListener("click", () => closeParamsPanel());
-}
-if (paramsOverlay) {
-  paramsOverlay.addEventListener("click", () => closeParamsPanel());
-}
 if (convToolsClose) {
   convToolsClose.addEventListener("click", () => closeConvToolsPanel());
 }
@@ -10828,30 +10080,6 @@ if (convToolsUseGlobalToggle) {
       toolsSection.style.display = convToolsUseGlobalToggle.checked ? "none" : "";
     }
     persistConversationToolOverrides();
-  });
-}
-if (paramsUseGlobalToggle) {
-  paramsUseGlobalToggle.addEventListener("change", () => {
-    if (paramsFormSection) {
-      paramsFormSection.hidden = paramsUseGlobalToggle.checked;
-    }
-    if (paramsUseGlobalToggle.checked) {
-      setConversationParameterFormValues(null);
-      setParameterPanelStatus("This conversation currently uses global defaults.", "muted");
-    } else {
-      setConversationParameterFormValues(currentConversationParameterOverrides);
-      setParameterPanelStatus("Edit the fields below, then save to apply to this conversation.", "muted");
-    }
-  });
-}
-if (paramsResetBtn) {
-  paramsResetBtn.addEventListener("click", () => {
-    resetConversationParameterDraft();
-  });
-}
-if (paramsSaveBtn) {
-  paramsSaveBtn.addEventListener("click", () => {
-    void persistConversationParameterOverrides();
   });
 }
 if (exportClose) {
@@ -11104,8 +10332,6 @@ if (mobilePersonaSel) {
 }
 summaryClose?.addEventListener("click", closeSummaryPanel);
 summaryOverlay?.addEventListener("click", closeSummaryPanel);
-pruneClose?.addEventListener("click", closePrunePanel);
-pruneOverlay?.addEventListener("click", closePrunePanel);
 memoryClose?.addEventListener("click", closeMemoryPanel);
 memoryOverlay?.addEventListener("click", closeMemoryPanel);
 summarySelectEligibleBtn?.addEventListener("click", selectEligibleSummaryMessages);
@@ -11116,23 +10342,8 @@ summarySubmitBtn?.addEventListener("click", () => {
 summaryPreviewBtn?.addEventListener("click", () => {
   void previewConversationSummary({ triggerButton: summaryPreviewBtn });
 });
-pruneRefreshBtn?.addEventListener("click", () => {
-  void loadPruneScores();
-});
-pruneSelectRecommendedBtn?.addEventListener("click", selectRecommendedPruneMessages);
-pruneClearSelectionBtn?.addEventListener("click", () => clearMessageSelection("prune"));
-pruneApplyRecommendedBtn?.addEventListener("click", () => {
-  void applyPruneSelection(getRecommendedPruneMessageIds(), { label: "recommended" });
-});
-pruneApplySelectedBtn?.addEventListener("click", () => {
-  void applyPruneSelection(getSelectedMessageIds("prune"), { label: "selected" });
-});
 historySelectionClear?.addEventListener("click", () => clearMessageSelection(messageSelectionMode));
 historySelectionCancel?.addEventListener("click", () => {
-  if (messageSelectionMode === "prune") {
-    closePrunePanel();
-    return;
-  }
   if (messageSelectionMode === "summary") {
     closeSummaryPanel();
   }
@@ -11655,32 +10866,19 @@ async function openConversation(id) {
   clearEditTarget();
   clearInlineEditingTarget();
   selectedSummaryMessageIds = new Set();
-  selectedPruneMessageIds = new Set();
-  pruneScores = [];
-  pruneScoresError = "";
-  pruneScoresLoading = false;
-  pruneRecommendedBatchSize = 5;
-  pruneTokenThreshold = 0;
   resetCanvasWorkspaceState();
 
   history = Array.isArray(data.messages) ? data.messages.map(normalizeHistoryEntry) : [];
   applyConversationMemoryState(data);
   applyConversationToolOverridesState(data);
-  applyConversationParameterOverridesState(data);
   streamingCanvasDocuments = [];
   resetStreamingCanvasPreview();
   activeCanvasDocumentId = getActiveCanvasDocument(history)?.id || null;
   lastConversationSignature = getConversationSignature(history);
   renderConversationHistory();
   renderCanvasPanel();
-  renderParamsPanel();
   updateExportPanel();
   rebuildTokenStatsFromHistory();
-  if (isPrunePanelOpen()) {
-    void loadPruneScores({ silent: true });
-  } else {
-    updatePrunePanelUi();
-  }
 
   loadSidebar();
   loadUploadedFilesPanel();
@@ -11717,15 +10915,8 @@ function startNewChat() {
   conversationMemoryEntries = [];
   conversationMemoryEnabled = featureFlags.conversation_memory_enabled !== false;
   currentConversationToolOverrides = null;
-  currentConversationParameterOverrides = null;
   latestSummaryStatus = null;
   selectedSummaryMessageIds = new Set();
-  selectedPruneMessageIds = new Set();
-  pruneScores = [];
-  pruneScoresError = "";
-  pruneScoresLoading = false;
-  pruneRecommendedBatchSize = 5;
-  pruneTokenThreshold = 0;
   streamingCanvasDocuments = [];
   resetStreamingCanvasPreview();
   activeCanvasDocumentId = null;
@@ -11739,7 +10930,6 @@ function startNewChat() {
   renderConversationHistory();
   renderCanvasPanel();
   renderConversationMemoryPanel();
-  renderParamsPanel();
   updateExportPanel();
   const preferredModelId = resolvePreferredModelSelection(modelSel ? modelSel.value : "");
   if (preferredModelId) {
@@ -12343,9 +11533,6 @@ function setStreaming(active) {
   attachBtn.disabled = active;
   if (youtubeUrlBtn) {
     youtubeUrlBtn.disabled = active;
-  }
-  if (mobilePruneBtn) {
-    mobilePruneBtn.disabled = active;
   }
 }
 
@@ -14946,10 +14133,8 @@ applyCanvasPanelWidth(readCanvasWidthPreference(), false);
 syncCanvasToggleButton();
 syncCanvasViewportControls();
 syncSummaryToggleButton();
-syncPruneToggleButton();
 renderHistorySelectionBar();
 updateSummarySelectionUi();
-updatePrunePanelUi();
 const initialSidebarPref = readSidebarPreference();
 setSidebarOpen(initialSidebarPref === null ? !isMobileViewport() : initialSidebarPref, false);
 const initialModelId = resolvePreferredModelSelection(modelSel ? modelSel.value : "");

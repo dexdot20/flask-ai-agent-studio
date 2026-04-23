@@ -105,9 +105,6 @@ from db import (
     get_file_asset,
     get_max_parallel_tools,
     get_model_temperature,
-    get_pruning_batch_size,
-    get_pruning_enabled,
-    get_pruning_token_threshold,
     get_persona_memory,
     get_prompt_max_input_tokens,
     get_prompt_preflight_summary_token_count,
@@ -204,7 +201,6 @@ from video_transcript_service import (
     read_youtube_video_reference,
     transcribe_youtube_video,
 )
-from prune_service import prune_conversation_batch
 
 
 TITLE_MAX_WORDS = 5
@@ -2115,23 +2111,6 @@ def _trim_text_sections_to_token_budget(text: str | None, max_tokens: int) -> st
             return _clip_text_to_token_budget(section, max_tokens)
         kept.append(section)
     return "\n\n".join(kept) if kept else None
-
-
-def _count_prunable_message_tokens(messages: list[dict]) -> int:
-    total = 0
-    for message in messages:
-        if not isinstance(message, dict):
-            continue
-        role = str(message.get("role") or "").strip()
-        if role not in {"user", "assistant"}:
-            continue
-        if role == "assistant" and message.get("tool_calls"):
-            continue
-        metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
-        if metadata.get("is_summary") is True or metadata.get("is_pruned") is True:
-            continue
-        total += estimate_text_tokens(str(message.get("content") or ""))
-    return total
 
 
 def _trim_rag_context_to_token_budget(retrieved_context: dict | None, max_tokens: int) -> dict | None:
@@ -4299,37 +4278,14 @@ def _run_chat_post_response_tasks(
     except Exception:
         LOGGER.exception("Background summary task failed for conversation_id=%s", conversation_id)
 
-    if not (isinstance(summary_outcome, dict) and summary_outcome.get("applied") is True):
-        _maybe_run_conversation_pruning(conversation_id, settings)
-    else:
-        LOGGER.debug(
-            "Background pruning skipped because summarization already applied for conversation_id=%s", conversation_id
-        )
+    if isinstance(summary_outcome, dict) and summary_outcome.get("applied") is True:
+        LOGGER.debug("Background summarization already applied for conversation_id=%s", conversation_id)
 
     if RAG_ENABLED and conversation_id:
         try:
             sync_conversations_to_rag_background(app_obj, conversation_id=conversation_id)
         except Exception:
             LOGGER.exception("Background RAG sync failed for conversation_id=%s", conversation_id)
-
-
-def _maybe_run_conversation_pruning(conversation_id: int, settings: dict) -> None:
-    if not conversation_id or not get_pruning_enabled(settings):
-        return
-
-    try:
-        conversation_messages = get_conversation_messages(conversation_id)
-        visible_token_count = count_visible_message_tokens(
-            conversation_messages,
-            include_context_injections=False,
-        )
-        legacy_prunable_token_count = _count_prunable_message_tokens(conversation_messages)
-        effective_token_count = max(visible_token_count, legacy_prunable_token_count)
-        if effective_token_count < get_pruning_token_threshold(settings):
-            return
-        prune_conversation_batch(conversation_id, get_pruning_batch_size(settings))
-    except Exception:
-        LOGGER.exception("Background pruning task failed for conversation_id=%s", conversation_id)
 
 
 def _parse_request_bool(value) -> bool:
@@ -5193,12 +5149,8 @@ def register_chat_routes(app) -> None:
                 _saw_user_after_clar = False
                 if _last_clar_idx is not None:
                     _msgs_after_clar = _conv_msgs_clar[_last_clar_idx + 1 :]
-                    _has_assistant_after = any(
-                        str(_m.get("role") or "") == "assistant" for _m in _msgs_after_clar
-                    )
-                    _has_user_after = any(
-                        str(_m.get("role") or "") == "user" for _m in _msgs_after_clar
-                    )
+                    _has_assistant_after = any(str(_m.get("role") or "") == "assistant" for _m in _msgs_after_clar)
+                    _has_user_after = any(str(_m.get("role") or "") == "user" for _m in _msgs_after_clar)
                     _saw_user_after_clar = _has_user_after and not _has_assistant_after
                 if _saw_user_after_clar:
                     _fb_freeform = extract_freeform_clarification_user_content(
@@ -6323,8 +6275,6 @@ def register_chat_routes(app) -> None:
                         )
                         if RAG_ENABLED and conv_id:
                             _schedule_rag_conversation_sync(conversation_id=conv_id)
-
-                    _maybe_run_conversation_pruning(conv_id, settings)
 
             finalize_edited_replay_snapshot()
 

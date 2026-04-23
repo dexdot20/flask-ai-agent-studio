@@ -608,7 +608,7 @@ function renderPersonaMemoryList() {
   if (!normalizedPersonaId) {
     personaMemoryListEl.innerHTML = '<p class="settings-copy">Create or select a saved persona before editing shared persona memory.</p>';
     if (personaMemoryNoteEl) {
-      personaMemoryNoteEl.textContent = "Use this for stable persona-scoped facts shared across conversations. Stored entries are not auto-pruned.";
+      personaMemoryNoteEl.textContent = "Use this for stable persona-scoped facts shared across conversations.";
     }
     return;
   }
@@ -617,13 +617,13 @@ function renderPersonaMemoryList() {
   if (!entries.length) {
     personaMemoryListEl.innerHTML = '<p class="settings-copy">No persona memory yet. Add short key-value entries that should follow this persona across conversations.</p>';
     if (personaMemoryNoteEl) {
-      personaMemoryNoteEl.textContent = "Use this for stable persona-scoped facts shared across conversations. Stored entries are not auto-pruned.";
+      personaMemoryNoteEl.textContent = "Use this for stable persona-scoped facts shared across conversations.";
     }
     return;
   }
 
   if (personaMemoryNoteEl) {
-    personaMemoryNoteEl.textContent = `${entries.length} shared persona memory entr${entries.length === 1 ? "y" : "ies"} currently stored. These entries are not auto-pruned.`;
+    personaMemoryNoteEl.textContent = `${entries.length} shared persona memory entr${entries.length === 1 ? "y" : "ies"} currently stored.`;
   }
 
   entries.forEach((entry) => {

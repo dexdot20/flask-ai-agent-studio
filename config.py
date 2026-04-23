@@ -280,12 +280,6 @@ AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS = max(
     0,
     min(6, _parse_int_env("AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS", 2)),
 )
-PRUNING_TARGET_REDUCTION_RATIO = max(0.1, min(0.9, _parse_float_env("PRUNING_TARGET_REDUCTION_RATIO", 0.65)))
-PRUNING_MIN_TARGET_TOKENS = max(50, min(5_000, _parse_int_env("PRUNING_MIN_TARGET_TOKENS", 160)))
-PRUNE_WEIGHT_ENTROPY = max(0.0, min(1.0, _parse_float_env("PRUNE_WEIGHT_ENTROPY", 0.35)))
-PRUNE_WEIGHT_RAG = max(0.0, min(1.0, _parse_float_env("PRUNE_WEIGHT_RAG", 0.30)))
-PRUNE_WEIGHT_STALENESS = max(0.0, min(1.0, _parse_float_env("PRUNE_WEIGHT_STALENESS", 0.25)))
-PRUNE_WEIGHT_TOKEN = max(0.0, min(1.0, _parse_float_env("PRUNE_WEIGHT_TOKEN", 0.10)))
 AGENT_TOOL_RESULT_TRANSCRIPT_MAX_CHARS = max(
     8_000,
     min(CONTENT_MAX_CHARS, _parse_int_env("AGENT_TOOL_RESULT_TRANSCRIPT_MAX_CHARS", 16_000)),
@@ -619,11 +613,6 @@ DEFAULT_SETTINGS = {
     "entropy_protect_tool_results": "true",
     "entropy_reference_boost": "true",
     "reasoning_auto_collapse": "false",
-    "pruning_enabled": "false",
-    "pruning_token_threshold": str(CHAT_SUMMARY_TRIGGER_TOKEN_COUNT),
-    "pruning_batch_size": "10",
-    "pruning_target_reduction_ratio": str(PRUNING_TARGET_REDUCTION_RATIO),
-    "pruning_min_target_tokens": str(PRUNING_MIN_TARGET_TOKENS),
     "tool_memory_ttl_default_seconds": str(TOOL_MEMORY_TTL_DEFAULT_SECONDS),
     "tool_memory_ttl_web_seconds": str(TOOL_MEMORY_TTL_WEB_SECONDS),
     "tool_memory_ttl_news_seconds": str(TOOL_MEMORY_TTL_NEWS_SECONDS),
@@ -906,7 +895,6 @@ _RUNTIME_PROPAGATION_MODULES = (
     "image_service",
     "messages",
     "ocr_service",
-    "prune_service",
     "rag_service",
     "routes.chat",
     "routes.conversations",
@@ -942,7 +930,7 @@ def propagate_runtime_settings_to_loaded_modules() -> None:
                 refreshed_deepseek_client = None
 
     if refreshed_deepseek_client is not None:
-        for module_name in ("agent", "prune_service", "routes.conversations"):
+        for module_name in ("agent", "routes.conversations"):
             module = sys.modules.get(module_name)
             if module is not None and hasattr(module, "client"):
                 setattr(module, "client", refreshed_deepseek_client)
