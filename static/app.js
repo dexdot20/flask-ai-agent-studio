@@ -29,15 +29,6 @@ const errorArea = document.getElementById("error-area");
 const editBanner = document.getElementById("edit-banner");
 const editBannerText = document.getElementById("edit-banner-text");
 const editBannerCancelBtn = document.getElementById("edit-banner-cancel");
-const summaryInspectorBadge = document.getElementById("summary-inspector-badge");
-const summaryInspectorHeadline = document.getElementById("summary-inspector-headline");
-const summaryInspectorCurrent = document.getElementById("summary-inspector-current");
-const summaryInspectorTrigger = document.getElementById("summary-inspector-trigger");
-const summaryInspectorGap = document.getElementById("summary-inspector-gap");
-const summaryInspectorDetail = document.getElementById("summary-inspector-detail");
-const summaryInspectorToolMessages = document.getElementById("summary-inspector-tool-messages");
-const summaryInspectorReason = document.getElementById("summary-inspector-reason");
-const summaryInspectorLast = document.getElementById("summary-inspector-last");
 const canvasToggleBtn = document.getElementById("canvas-toggle-btn");
 const memoryToggleBtn = document.getElementById("memory-toggle-btn");
 const summaryToggleBtn = document.getElementById("summary-toggle-btn");
@@ -545,7 +536,6 @@ async function refreshSummarySettingsFromServer() {
       summary_retry_min_source_tokens: data.summary_retry_min_source_tokens,
     });
     setSummaryDetailLevel(String(appSettings.chat_summary_detail_level || "balanced").trim() || "balanced");
-    renderSummaryInspector();
   } catch (_) {
     // Ignore settings refresh failures and keep the bootstrapped values.
   }
@@ -694,12 +684,13 @@ function renderConversationMemoryTypeOptions() {
 }
 
 function normalizeConversationMemoryEntry(entry) {
-  const normalizedId = Number(entry?.id);
-  const normalizedMessageId = Number(entry?.message_id);
+  const id = entry?.id;
+  const messageId = entry?.message_id;
+  const convId = entry?.conversation_id;
   return {
-    id: Number.isInteger(normalizedId) && normalizedId > 0 ? normalizedId : null,
-    conversation_id: Number.isInteger(Number(entry?.conversation_id)) ? Number(entry?.conversation_id) : null,
-    message_id: Number.isInteger(normalizedMessageId) && normalizedMessageId > 0 ? normalizedMessageId : null,
+    id: isValidId(id) ? Number(id) : null,
+    conversation_id: isValidId(convId) ? Number(convId) : null,
+    message_id: isValidId(messageId) ? Number(messageId) : null,
     entry_type: String(entry?.entry_type || "").trim().toLowerCase(),
     key: String(entry?.key || "").trim(),
     value: String(entry?.value || "").trim(),
@@ -715,11 +706,11 @@ function getConversationMemoryEntryLabel(entryType) {
 function getConversationMemorySignature(entries) {
   return JSON.stringify(
     (Array.isArray(entries) ? entries : []).map((entry) => [
-      Number.isInteger(Number(entry?.id)) ? Number(entry.id) : null,
+      isValidId(entry?.id) ? Number(entry.id) : null,
       String(entry?.entry_type || "").trim().toLowerCase(),
       String(entry?.key || "").trim(),
       String(entry?.value || "").trim(),
-      Number.isInteger(Number(entry?.message_id)) ? Number(entry.message_id) : null,
+      isValidId(entry?.message_id) ? Number(entry.message_id) : null,
       String(entry?.created_at || "").trim(),
     ])
   );
@@ -963,7 +954,6 @@ function openConvToolsPanel(triggerEl = null) {
   closeCanvas();
   closeExportPanel();
   closeSummaryPanel();
-  closePrunePanel({ restoreFocus: false });
   closeMemoryPanel();
   convToolsPanel?.classList.add("open");
   convToolsOverlay?.classList.add("open");
@@ -1078,7 +1068,6 @@ function openMemoryPanel(triggerEl = null) {
   closeCanvas();
   closeExportPanel();
   closeSummaryPanel();
-  closePrunePanel({ restoreFocus: false });
   memoryPanel?.classList.add("open");
   memoryOverlay?.classList.add("open");
   memoryPanel?.setAttribute("aria-hidden", "false");
@@ -1891,7 +1880,7 @@ function appendSlashCommandFormData(formData, slashCommandResolution) {
     return;
   }
   Object.entries(getSlashCommandRequestPayload(slashCommandResolution)).forEach(([key, value]) => {
-    formData.append(key, typeof value === "boolean" ? String(value) : String(value));
+    formData.append(key, String(value));
   });
 }
 
@@ -2208,9 +2197,9 @@ function normalizeCanvasDocument(document) {
     format: normalizedFormat,
     language: String(document.language || "").trim().toLowerCase(),
     content,
-    line_count: Number.isInteger(Number(document.line_count)) ? Number(document.line_count) : content.split("\n").length,
+    line_count: isValidNonNegativeId(document.line_count) ? Number(document.line_count) : content.split("\n").length,
     page_count: Number.isFinite(rawPageCount) && rawPageCount > 0 ? rawPageCount : 0,
-    source_message_id: Number.isInteger(Number(document.source_message_id)) ? Number(document.source_message_id) : null,
+    source_message_id: isValidId(document.source_message_id) ? Number(document.source_message_id) : null,
     content_mode: contentMode === "visual" || contentMode === "hybrid" ? contentMode : "text",
     canvas_mode: canvasMode === "preview_only" ? "preview_only" : "editable",
     source_file_id: String(document.source_file_id || "").trim(),
@@ -5326,6 +5315,9 @@ function escapeRegExp(text) {
   return String(text || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+const isValidId = (v) => v !== null && v !== undefined && v !== "" && Number.isFinite(Number(v)) && Number.isInteger(Number(v)) && Number(v) > 0;
+const isValidNonNegativeId = (v) => v !== null && v !== undefined && v !== "" && Number.isFinite(Number(v)) && Number.isInteger(Number(v)) && Number(v) >= 0;
+
 function promptDocumentCanvasAction(files) {
   const documentItems = getDocumentCanvasPromptItems(files);
   if (!documentItems.length) {
@@ -5523,10 +5515,10 @@ function applyCanvasSearchHighlight(query) {
   }
 
   let matchCount = 0;
+  const highlightMatcher = new RegExp(pattern, "gi");
   textNodes.forEach((textNode) => {
     const source = textNode.textContent || "";
     const fragment = document.createDocumentFragment();
-    const highlightMatcher = new RegExp(pattern, "gi");
     let lastIndex = 0;
 
     source.replace(highlightMatcher, (matched, offset) => {
@@ -5608,7 +5600,6 @@ function openCanvas(triggerEl = null, options = {}) {
   const shouldFocusPanel = options.focusPanel !== false;
   closeMemoryPanel();
   closeSummaryPanel();
-  closePrunePanel({ restoreFocus: false });
   closeMobileTools();
   closeCanvasConfirmModal("cancel", false);
   closeStats();
@@ -5769,7 +5760,6 @@ function openExportPanel(triggerEl = null) {
   closeStats();
   closeCanvas();
   closeSummaryPanel();
-  closePrunePanel({ restoreFocus: false });
   closeMemoryPanel();
   updateExportPanel();
   exportPanel?.classList.add("open");
@@ -5832,7 +5822,7 @@ function getSelectableMessageIdSet(mode = messageSelectionMode) {
 function getSelectedMessageIds(mode = messageSelectionMode) {
   const selectedIds = Array.from(getSelectionSetForMode(mode) || []);
   return selectedIds
-    .filter((messageId) => Number.isInteger(Number(messageId)) && Number(messageId) > 0)
+    .filter((messageId) => isValidId(messageId))
     .sort((left, right) => {
       const leftMessage = getHistoryMessage(left);
       const rightMessage = getHistoryMessage(right);
@@ -5983,7 +5973,6 @@ function openSummaryPanel(triggerEl = null) {
   closeStats();
   closeCanvas();
   closeExportPanel();
-  closePrunePanel({ restoreFocus: false });
   closeMemoryPanel();
   summaryPanel?.classList.add("open");
   summaryOverlay?.classList.add("open");
@@ -5998,7 +5987,6 @@ function openSummaryPanel(triggerEl = null) {
   if (summaryPreviewConversationId !== currentConvId) {
     resetSummaryPreview({ hide: true });
   }
-  renderSummaryInspector();
   setSummaryBusyState(isSummaryOperationInFlight);
   syncMessageSelectionMode({ render: true });
   void refreshSummarySettingsFromServer();
@@ -6069,7 +6057,6 @@ async function runConversationSummary({ triggerButton = null, closePanel = false
       showToast(data.failure_detail || data.reason || "Summary was not applied.", "warning");
       latestSummaryStatus = { applied: false, reason: data.reason, failure_detail: data.failure_detail };
     }
-    renderSummaryInspector();
   } catch (error) {
     failSummaryProgress(error.message || "Failed to summarize.");
     showToast(error.message, "error");
@@ -6082,7 +6069,6 @@ async function runConversationSummary({ triggerButton = null, closePanel = false
         triggerButton.focus();
       }
     }
-    renderSummaryInspector();
   }
 }
 
@@ -6420,7 +6406,7 @@ function renderBubbleWithCursor(bubbleEl, text) {
         if (String(lastChild.textContent || "").trim()) {
           return cursorHost;
         }
-        lastChild.remove();
+        cursorHost = cursorHost.parentElement || rootEl;
         continue;
       }
       if (!(lastChild instanceof Element)) {
@@ -7525,8 +7511,8 @@ function updateClarificationFieldVisibility(form, clarification) {
 }
 
 function getClarificationDraftStorageKey(messageId) {
-  const normalizedConvId = Number.isInteger(Number(currentConvId)) ? String(Number(currentConvId)) : "conversation";
-  const normalizedMessageId = Number.isInteger(Number(messageId)) ? String(Number(messageId)) : "message";
+  const normalizedConvId = isValidId(currentConvId) ? String(currentConvId) : "conversation";
+  const normalizedMessageId = isValidId(messageId) ? String(messageId) : "message";
   return `${CLARIFICATION_DRAFT_STORAGE_PREFIX}.${normalizedConvId}.${normalizedMessageId}`;
 }
 
@@ -8594,7 +8580,6 @@ function renderConversationHistory(options = {}) {
     messagesEl.replaceChildren(fragment);
     scrollToBottom();
     renderHistorySelectionBar();
-    renderSummaryInspector();
     return;
   }
 
@@ -8631,7 +8616,6 @@ function renderConversationHistory(options = {}) {
     scrollToBottom();
   }
   renderHistorySelectionBar();
-  renderSummaryInspector();
 }
 
 async function refreshConversationFromServer() {
@@ -8662,7 +8646,7 @@ async function refreshConversationFromServer() {
   if (messagesChanged) {
     history = serverHistory;
     currentConvTitle = String(data.conversation?.title || currentConvTitle || "New Chat").trim() || "New Chat";
-    currentConversationTitleSource = String(data.conversation?.title_source || currentConversationTitleSource || "system").trim().toLowerCase() || "system";
+    currentConversationTitleSource = String(data.conversation?.title_source || currentConversationTitleSource || "system").trim().toLowerCase();
     currentConversationTitleOverridden = data.conversation?.title_overridden === true || Number(data.conversation?.title_overridden || 0) === 1;
     currentConversationPersonaName = resolveConversationPersonaName(data.conversation?.persona_id, data.conversation?.persona?.name || "");
     latestSummaryStatus = null;
@@ -8675,9 +8659,6 @@ async function refreshConversationFromServer() {
     renderCanvasPanel();
     updateExportPanel();
     rebuildTokenStatsFromHistory();
-    if (isPrunePanelOpen()) {
-      void loadPruneScores({ silent: true });
-    }
   }
 
   if (memoryChanged) {
@@ -8977,26 +8958,32 @@ function parseSummaryMessageCount() {
 }
 
 function getSummaryHistoryEntries(entries = history) {
-  return (entries || [])
+  const parsedEntries = (entries || [])
     .filter((entry) => entry?.role === "summary")
-    .slice()
-    .sort((left, right) => {
-      const leftMeta = left?.metadata && typeof left.metadata === "object" ? left.metadata : null;
-      const rightMeta = right?.metadata && typeof right.metadata === "object" ? right.metadata : null;
-      const leftGeneratedAt = String(leftMeta?.generated_at || "").trim();
-      const rightGeneratedAt = String(rightMeta?.generated_at || "").trim();
-      const leftTime = leftGeneratedAt ? Date.parse(leftGeneratedAt) : Number.NaN;
-      const rightTime = rightGeneratedAt ? Date.parse(rightGeneratedAt) : Number.NaN;
-      if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
-        return rightTime - leftTime;
-      }
-      const leftPosition = Number(left?.position || 0);
-      const rightPosition = Number(right?.position || 0);
-      if (leftPosition !== rightPosition) {
-        return rightPosition - leftPosition;
-      }
-      return Number(right?.id || 0) - Number(left?.id || 0);
+    .map((entry) => {
+      const meta = entry?.metadata && typeof entry.metadata === "object" ? entry.metadata : null;
+      const generatedAt = String(meta?.generated_at || "").trim();
+      return {
+        entry,
+        parsedTime: generatedAt ? Date.parse(generatedAt) : Number.NaN,
+      };
     });
+
+  parsedEntries.sort((a, b) => {
+    const leftTime = a.parsedTime;
+    const rightTime = b.parsedTime;
+    if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
+      return rightTime - leftTime;
+    }
+    const leftPosition = Number(a.entry?.position || 0);
+    const rightPosition = Number(b.entry?.position || 0);
+    if (leftPosition !== rightPosition) {
+      return rightPosition - leftPosition;
+    }
+    return Number(b.entry?.id || 0) - Number(a.entry?.id || 0);
+  });
+
+  return parsedEntries.map((p) => p.entry);
 }
 
 function renderSummaryHistoryList() {
@@ -9266,168 +9253,15 @@ async function undoConversationSummary(summaryId, { triggerButton = null } = {})
         : "Summary was undone.",
       "success"
     );
-    renderSummaryInspector();
   } catch (error) {
     failSummaryProgress(error.message || "Failed to undo summary.");
     showToast(error.message || "Failed to undo summary.", "error");
-    renderSummaryInspector();
   } finally {
     setSummaryBusyState(false);
     if (triggerButton) {
       triggerButton.textContent = originalButtonText || "Undo";
     }
-    renderSummaryInspector();
   }
-}
-
-function renderSummaryInspector() {
-  if (!summaryInspectorBadge || !summaryInspectorHeadline) {
-    return;
-  }
-
-  const mode = getSummaryModeValue();
-  const effectiveTrigger = getEffectiveSummaryTriggerValue();
-  const currentEstimate = estimateSummaryTriggerTokens(history);
-  const latestSummary = findLatestSummaryEntry(history);
-  const lastSummaryMeta = latestSummary?.metadata && typeof latestSummary.metadata === "object"
-    ? latestSummary.metadata
-    : null;
-  const canUndoLatestSummary = Boolean(currentConvId && Number.isInteger(Number(latestSummary?.id)) && lastSummaryMeta?.is_summary);
-  const remaining = Math.max(0, effectiveTrigger - currentEstimate);
-  const overBy = Math.max(0, currentEstimate - effectiveTrigger);
-  const latestServerCheck = Number(latestSummaryStatus?.visible_token_count || 0);
-  const mergedAssistantCount = Number(latestSummaryStatus?.merged_assistant_message_count || 0);
-  const skippedErrorCount = Number(latestSummaryStatus?.skipped_error_message_count || 0);
-
-  let badgeTone = "muted";
-  let badgeText = "Waiting";
-  let headline = "Start chatting to see when automatic summary will run.";
-
-  if (mode === "never") {
-    badgeTone = "warning";
-    badgeText = "Disabled";
-    headline = "Auto summary is disabled. Long chats will keep growing until you re-enable it.";
-  } else if (mode === "conservative") {
-    badgeTone = "muted";
-    badgeText = "Conservative";
-    headline = "Auto summary is using a higher threshold, so it will compress less often.";
-  } else if (!currentConvId) {
-    badgeTone = "muted";
-    badgeText = "Idle";
-    headline = "Auto summary watches each conversation after messages are saved.";
-  } else if (latestSummaryStatus?.reason === "summary_generation_failed") {
-    badgeTone = "error";
-    badgeText = "Failed";
-    headline = describeSummaryFailure(latestSummaryStatus);
-  } else if (latestSummaryStatus?.reason === "locked") {
-    badgeTone = "warning";
-    badgeText = "Busy";
-    headline = "A summary pass was already in progress for this conversation, so this turn skipped a duplicate run.";
-  } else if (currentEstimate >= effectiveTrigger) {
-    badgeTone = "accent";
-    badgeText = "Ready";
-    headline = "This conversation is large enough for auto summary. The next completed turn can compress older user and assistant messages.";
-  } else if (latestSummary) {
-    badgeTone = "success";
-    badgeText = "Tracked";
-    headline = "This conversation has already been summarized before and is being monitored for the next pass.";
-  } else {
-    badgeTone = "muted";
-    badgeText = "Tracking";
-    headline = `Current conversation is ${fmt(remaining)} estimated tokens below the next auto-summary pass.`;
-  }
-
-  summaryInspectorBadge.dataset.tone = badgeTone;
-  summaryInspectorBadge.textContent = badgeText;
-  summaryInspectorHeadline.textContent = headline;
-  summaryInspectorCurrent.textContent = fmt(currentEstimate);
-  summaryInspectorTrigger.textContent = fmt(effectiveTrigger);
-  summaryInspectorGap.textContent = overBy > 0 ? `${fmt(overBy)} over` : `${fmt(remaining)} left`;
-
-  const detailParts = [
-    "Counts user, assistant, tool, and summary history toward the summary trigger, while ignoring assistant tool-call placeholders and stored context-injection metadata.",
-    "Does not count runtime system prompt, RAG context, or final-answer instructions.",
-  ];
-  if (latestServerCheck > 0) {
-    detailParts.push(`Last server-side check saw ${fmt(latestServerCheck)} counted tokens.`);
-  }
-  if (mergedAssistantCount > 0) {
-    detailParts.push(`Merged ${fmt(mergedAssistantCount)} consecutive assistant blocks before sending the summary prompt.`);
-  }
-  if (skippedErrorCount > 0) {
-    detailParts.push(`Skipped ${fmt(skippedErrorCount)} assistant error placeholders during prompt cleanup.`);
-  }
-  summaryInspectorDetail.textContent = detailParts.join(" ");
-
-  if (summaryInspectorToolMessages) {
-    const toolMessageParts = [
-      "Assistant tool-call placeholders are excluded from the trigger estimate.",
-      "Tool outputs and cleaned assistant content still count toward summary readiness.",
-    ];
-    if (mergedAssistantCount > 0) {
-      toolMessageParts.push(`${fmt(mergedAssistantCount)} assistant blocks were merged during the latest cleanup pass.`);
-    }
-    if (skippedErrorCount > 0) {
-      toolMessageParts.push(`${fmt(skippedErrorCount)} assistant error placeholders were skipped.`);
-    }
-    summaryInspectorToolMessages.textContent = toolMessageParts.join(" ");
-  }
-
-  if (summaryInspectorReason) {
-    let reasonText = "The latest summary decision will appear here after each completed assistant turn.";
-    if (latestSummaryStatus) {
-      if (latestSummaryStatus.reason === "summary_generation_failed" || latestSummaryStatus.reason === "locked" || latestSummaryStatus.reason === "below_threshold" || latestSummaryStatus.reason === "mode_never") {
-        reasonText = describeSummaryFailure(latestSummaryStatus);
-      } else if (latestSummaryStatus.applied) {
-        reasonText = "Latest summary pass completed successfully.";
-      } else {
-        reasonText = "Latest summary check completed.";
-      }
-      const failureDetail = String(latestSummaryStatus.failure_detail || "").trim();
-      const failureSummary = describeSummaryFailure(latestSummaryStatus);
-      if (failureDetail && failureDetail !== failureSummary) {
-        reasonText = `${reasonText} ${failureDetail}`;
-      }
-    }
-    summaryInspectorReason.textContent = reasonText;
-  }
-
-  if (lastSummaryMeta?.is_summary) {
-    const generatedAt = formatSummaryTimestamp(lastSummaryMeta.generated_at);
-    const coveredCount = Number(lastSummaryMeta.covered_message_count || 0);
-    const summaryModel = String(lastSummaryMeta.summary_model || latestSummaryStatus?.summary_model || "—").trim() || "—";
-    summaryInspectorLast.textContent = `Last pass: ${fmt(coveredCount)} messages compressed on ${generatedAt} using ${summaryModel}.`;
-  } else if (latestSummaryStatus?.reason === "summary_generation_failed") {
-    const checkedAt = formatSummaryTimestamp(latestSummaryStatus.checked_at);
-    summaryInspectorLast.textContent = `Last attempt: failed on ${checkedAt}. No messages were deleted because failed summaries are never applied.`;
-  } else if (latestSummaryStatus?.reason === "below_threshold") {
-    summaryInspectorLast.textContent = "No summary pass was needed on the latest turn because the conversation stayed below the trigger.";
-  } else if (latestSummaryStatus?.reason === "mode_never") {
-    summaryInspectorLast.textContent = "No summary pass will run while summary mode is set to Never.";
-  } else {
-    summaryInspectorLast.textContent = "No summary pass has run in this conversation yet.";
-  }
-
-  if (summaryUndoBtn) {
-    summaryUndoBtn.disabled = isSummaryOperationInFlight || !canUndoLatestSummary;
-    summaryUndoBtn.title = canUndoLatestSummary
-      ? "Restore the messages covered by the latest summary."
-      : "No summary is available to undo in this conversation.";
-  }
-  if (summaryNowBtn) {
-    summaryNowBtn.disabled = isSummaryOperationInFlight || !currentConvId;
-    summaryNowBtn.title = currentConvId
-      ? "Run a manual summary using the current panel settings."
-      : "Open a conversation before running a summary.";
-  }
-  if (summaryPreviewBtn) {
-    summaryPreviewBtn.disabled = isSummaryOperationInFlight || !currentConvId;
-    summaryPreviewBtn.title = currentConvId
-      ? "Preview which messages will be summarized without applying changes."
-      : "Open a conversation before running a preview.";
-  }
-  updateSummarySelectionUi();
-  renderSummaryHistoryList();
 }
 
 function openStats() {
@@ -9435,7 +9269,6 @@ function openStats() {
   closeCanvas();
   closeExportPanel();
   closeSummaryPanel();
-  closePrunePanel({ restoreFocus: false });
   closeMemoryPanel();
   statsPanel.classList.add("open");
   statsOverlay.classList.add("open");
@@ -9451,7 +9284,6 @@ function openMobileTools() {
   closeCanvas();
   closeExportPanel();
   closeSummaryPanel();
-  closePrunePanel({ restoreFocus: false });
   closeMemoryPanel();
   mobileToolsPanel?.classList.add("open");
   mobileToolsOverlay?.classList.add("open");
@@ -9594,7 +9426,7 @@ function resolveConversationPersonaName(personaId, fallbackName = "") {
 function getConversationDisplayTitle(conversation) {
   const source = conversation && typeof conversation === "object" ? conversation : {};
   const rawTitle = String(source.title || "").trim() || "New Chat";
-  const titleSource = String(source.title_source || "system").trim().toLowerCase() || "system";
+  const titleSource = String(source.title_source || "system").trim().toLowerCase();
   const titleOverridden = source.title_overridden === true || Number(source.title_overridden || 0) === 1;
   const personaName = resolveConversationPersonaName(source.persona_id, source.persona_name || source.persona?.name || "");
 
@@ -9687,7 +9519,7 @@ async function persistConversationPersona(personaId) {
     throw new Error(data.error || "Unable to update conversation persona.");
   }
   currentConvTitle = String(data.title || currentConvTitle || "New Chat").trim() || "New Chat";
-  currentConversationTitleSource = String(data.title_source || currentConversationTitleSource || "system").trim().toLowerCase() || "system";
+  currentConversationTitleSource = String(data.title_source || currentConversationTitleSource || "system").trim().toLowerCase();
   currentConversationTitleOverridden = data.title_overridden === true || Number(data.title_overridden || 0) === 1;
   applyConversationPersonaSelection(data.persona_id);
   currentConversationPersonaName = resolveConversationPersonaName(data.persona_id, "");
@@ -10410,10 +10242,6 @@ window.addEventListener("keydown", (event) => {
     closeMemoryPanel();
     return;
   }
-  if (event.key === "Escape" && isPrunePanelOpen()) {
-    closePrunePanel();
-    return;
-  }
   if (event.key === "Escape" && isSummaryPanelOpen()) {
     closeSummaryPanel();
     return;
@@ -10602,7 +10430,7 @@ async function loadSidebar() {
       conversations.forEach((conversation) => {
         if (conversation.id === currentConvId) {
           currentConvTitle = String(conversation.title || "New Chat").trim() || "New Chat";
-          currentConversationTitleSource = String(conversation.title_source || currentConversationTitleSource || "system").trim().toLowerCase() || "system";
+          currentConversationTitleSource = String(conversation.title_source || currentConversationTitleSource || "system").trim().toLowerCase();
           currentConversationTitleOverridden = conversation.title_overridden === true || Number(conversation.title_overridden || 0) === 1;
           currentConversationPersonaName = resolveConversationPersonaName(conversation.persona_id, conversation.persona_name || "");
         }
@@ -10855,7 +10683,7 @@ async function openConversation(id) {
   userScrolledUp = false;
   currentConvId = id;
   currentConvTitle = String(data.conversation?.title || "New Chat").trim() || "New Chat";
-  currentConversationTitleSource = String(data.conversation?.title_source || "system").trim().toLowerCase() || "system";
+  currentConversationTitleSource = String(data.conversation?.title_source || "system").trim().toLowerCase();
   currentConversationTitleOverridden = data.conversation?.title_overridden === true || Number(data.conversation?.title_overridden || 0) === 1;
   currentConversationPersonaId = normalizePersonaId(data.conversation?.persona_id);
   currentConversationPersonaName = resolveConversationPersonaName(currentConversationPersonaId, data.conversation?.persona?.name || "");
@@ -12720,7 +12548,7 @@ function appendClarificationPanel(group, metadata, options = {}) {
     panel.appendChild(intro);
   }
 
-  const isInteractive = Boolean(options.isLatestVisible && Number.isInteger(Number(options.messageId)));
+  const isInteractive = Boolean(options.isLatestVisible && isValidId(options.messageId));
   if (!isInteractive) {
     const state = document.createElement("div");
     state.className = "clarification-card__state";
@@ -12922,7 +12750,7 @@ function createMessageGroup(role, text, metadata = null, options = {}) {
 
   const group = document.createElement("div");
   group.className = `msg-group ${role}`;
-  if (Number.isInteger(Number(options.messageId))) {
+  if (isValidId(options.messageId)) {
     group.dataset.messageId = String(options.messageId);
   }
   if (options.isEditingTarget) {
@@ -13020,7 +12848,7 @@ function createMessageGroup(role, text, metadata = null, options = {}) {
     summaryUndoButton.type = "button";
     summaryUndoButton.className = "msg-action-btn msg-action-btn--with-label";
     summaryUndoButton.textContent = "Undo";
-    const canUndoSummary = Number.isInteger(Number(options.messageId)) && Number(options.messageId) > 0 && Boolean(currentConvId);
+    const canUndoSummary = isValidId(options.messageId) && Boolean(currentConvId);
     summaryUndoButton.disabled = isSummaryOperationInFlight || !canUndoSummary;
     summaryUndoButton.addEventListener("click", () => {
       void undoConversationSummary(Number(options.messageId || 0), { triggerButton: summaryUndoButton });
@@ -13285,7 +13113,7 @@ async function sendMessage(options = {}) {
     if (!response.ok) {
       throw new Error(String(conversation?.error || "Unable to create a conversation."));
     }
-    if (!Number.isInteger(Number(conversation?.id))) {
+    if (!isValidId(conversation?.id)) {
       throw new Error("Unable to create a conversation.");
     }
     currentConvId = conversation.id;
@@ -13358,7 +13186,6 @@ async function sendMessage(options = {}) {
 
   const { asstGroup, stepLog, asstBubble } = createAssistantStreamingGroup();
 
-  let rawAnswer = "";
   let rawReasoning = "";
   let fullAnswer = "";
   let latestUsage = null;
@@ -13793,8 +13620,7 @@ async function sendMessage(options = {}) {
         if (!syncedAnswer) {
           return;
         }
-        rawAnswer = syncedAnswer;
-        fullAnswer = rawAnswer;
+        fullAnswer = syncedAnswer;
         activeAssistantStreamingHasVisibleAnswer = true;
         flushAnswerRender();
         asstBubble.classList.remove("thinking");
@@ -13802,16 +13628,14 @@ async function sendMessage(options = {}) {
         renderBubbleMarkdown(asstBubble, fullAnswer);
         scrollToBottom();
       } else if (event.type === "answer_delta") {
-        rawAnswer += event.text || "";
-        fullAnswer = rawAnswer;
+        fullAnswer += event.text || "";
         if (String(fullAnswer || "").trim()) {
           activeAssistantStreamingHasVisibleAnswer = true;
         }
         scheduleAnswerRender();
       } else if (event.type === "clarification_request") {
         pendingClarification = event.clarification && typeof event.clarification === "object" ? event.clarification : null;
-        rawAnswer = String(event.text || "").trim();
-        fullAnswer = rawAnswer;
+        fullAnswer = String(event.text || "").trim();
         if (String(fullAnswer || "").trim()) {
           activeAssistantStreamingHasVisibleAnswer = true;
         }
@@ -13959,7 +13783,6 @@ async function sendMessage(options = {}) {
         renderCanvasPanel();
       } else if (event.type === "conversation_summary_status") {
         latestSummaryStatus = event && typeof event === "object" ? { ...event } : null;
-        renderSummaryInspector();
       } else if (event.type === "conversation_summary_applied") {
         latestSummaryStatus = event && typeof event === "object"
           ? { ...event, applied: true, reason: "applied", failure_stage: null, failure_detail: "Summary completed successfully." }
@@ -14021,7 +13844,6 @@ async function sendMessage(options = {}) {
         : assistantEntry
     );
     clearEditTarget();
-    renderSummaryInspector();
 
     if (shouldGenerateConversationTitle()) {
       generateTitle(currentConvId);
@@ -14074,7 +13896,6 @@ async function sendMessage(options = {}) {
           : assistantEntry
       );
       clearEditTarget();
-      renderSummaryInspector();
       loadSidebar();
 
       if (wasCancelledByUser) {
