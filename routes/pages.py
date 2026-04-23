@@ -35,6 +35,7 @@ from config import (
     WEB_CACHE_TTL_HOURS_MIN,
     get_feature_flags,
 )
+from request_security import get_csrf_token
 from routes.auth import is_login_pin_enabled
 from db import (
     build_persona_preferences,
@@ -706,6 +707,10 @@ def register_page_routes(app) -> None:
     @app.route("/api/settings", methods=["GET"])
     def get_settings():
         return jsonify(build_settings_payload())
+
+    @app.route("/api/csrf-token", methods=["GET"])
+    def get_csrf_token_endpoint():
+        return jsonify({"csrf_token": get_csrf_token()})
 
     @app.route("/api/settings", methods=["PATCH"])
     def update_settings():
