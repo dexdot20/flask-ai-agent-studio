@@ -1253,7 +1253,7 @@ let chatDragDepth = 0;
 let isCanvasMobileTreeOpen = false;
 let isCanvasFullscreen = false;
 let canvasZoomLevelIndex = 0;
-const featureFlags = bootstrapData.features || appSettings.features || {};
+const featureFlags = window.__bootstrapData?.features || appSettings.features || {};
 conversationMemoryEnabled = featureFlags.conversation_memory_enabled !== false;
 if (youtubeUrlBtn && !Boolean(featureFlags.youtube_transcripts_enabled)) {
   youtubeUrlBtn.hidden = true;
@@ -5821,6 +5821,12 @@ function getSelectableMessagesForMode(mode, entries = history) {
     return getSummaryEligibleMessages(entries);
   }
   return null;
+}
+
+function getSelectableMessageIdSet(mode = messageSelectionMode) {
+  const messages = getSelectableMessagesForMode(mode, history);
+  if (!messages) return null;
+  return new Set(messages.map((m) => Number(m.id)));
 }
 
 function getSelectedMessageIds(mode = messageSelectionMode) {
