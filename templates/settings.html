@@ -790,6 +790,15 @@
                   </div>
 
                   <div class="rag-setting-group rag-setting-group--full">
+                    <div class="settings-label">Auto-inject configuration</div>
+                    <label class="tool-toggle" for="rag-auto-inject-enabled-toggle">
+                      <input type="checkbox" id="rag-auto-inject-enabled-toggle" />
+                      <span>Enable automatic RAG injection</span>
+                    </label>
+                    <p class="settings-copy">When enabled, the assistant automatically retrieves and injects relevant context from selected source pools into the prompt. When disabled, retrieval only happens through explicit tool usage (search_knowledge_base).</p>
+                  </div>
+
+                  <div class="rag-setting-group rag-setting-group--full">
                     <div class="settings-label">RAG source pools</div>
                     <p class="settings-copy">Each row maps one memory pool. Search controls whether the assistant may retrieve from that pool during normal RAG lookup. Tool outputs come from executed tools inside chats, while saved web/fetches are remembered external results kept separately for reuse.</p>
                     <div class="rag-source-matrix" role="group" aria-label="RAG source pool controls">

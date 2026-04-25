@@ -129,6 +129,7 @@ const ragInjectOptionsEl = document.getElementById("rag-inject-options");
 const ragSensitivityEl = document.getElementById("rag-sensitivity-select");
 const ragSensitivityHintEl = document.getElementById("rag-sensitivity-hint");
 const ragContextSizeEl = document.getElementById("rag-context-size-select");
+const ragAutoInjectEnabledEl = document.getElementById("rag-auto-inject-enabled-toggle");
 const ragEnabledEl = document.getElementById("rag-enabled-toggle");
 const ragChunkSizeEl = document.getElementById("rag-chunk-size-input");
 const ragChunkOverlapEl = document.getElementById("rag-chunk-overlap-input");
@@ -2586,6 +2587,12 @@ function updateRagAutoInjectSourceSummary() {
     return;
   }
 
+  const autoInjectEnabled = ragAutoInjectEnabledEl ? ragAutoInjectEnabledEl.checked : false;
+  if (!autoInjectEnabled) {
+    ragAutoInjectSourceSummaryEl.textContent = "Auto-inject is disabled. Enable the master toggle above to allow automatic RAG injection, even if source pools are configured.";
+    return;
+  }
+
   const selected = getSelectedRagAutoInjectSourceTypes();
   if (!selected.length) {
     ragAutoInjectSourceSummaryEl.textContent = "No source pool is marked for Auto inject. Retrieved context can still be searched manually, but nothing will be inserted automatically.";
@@ -2609,10 +2616,15 @@ function formatRagSourceLabels(selectedValues) {
 
 function syncRagAutoInjectSourceAvailability() {
   const ragEnabled = Boolean(featureFlags.rag_enabled);
+  const autoInjectEnabled = ragAutoInjectEnabledEl ? ragAutoInjectEnabledEl.checked : false;
+
+  if (ragAutoInjectEnabledEl) {
+    ragAutoInjectEnabledEl.disabled = !ragEnabled;
+  }
 
   ragAutoInjectSourceTypeEls.forEach((element) => {
-    element.disabled = !ragEnabled;
-    getRagSourceControlContainer(element)?.classList.toggle("is-muted", !ragEnabled);
+    element.disabled = !ragEnabled || !autoInjectEnabled;
+    getRagSourceControlContainer(element)?.classList.toggle("is-muted", !ragEnabled || !autoInjectEnabled);
   });
 
   updateRagAutoInjectSourceSummary();
@@ -2782,6 +2794,9 @@ function applySettingsToForm() {
   }
   if (ragContextSizeEl) {
     ragContextSizeEl.value = appSettings.rag_context_size || "medium";
+  }
+  if (ragAutoInjectEnabledEl) {
+    ragAutoInjectEnabledEl.checked = Boolean(appSettings.rag_auto_inject);
   }
   applySelectedRagSourceTypes(appSettings.rag_source_types || []);
   applySelectedRagAutoInjectSourceTypes(appSettings.rag_auto_inject_source_types || appSettings.rag_source_types || []);
@@ -3107,7 +3122,7 @@ async function saveSettings() {
     active_tools: getSelectedTools(),
     sub_agent_allowed_tool_names: getSelectedSubAgentTools(),
     proxy_enabled_operations: getSelectedProxyOperations(),
-    rag_auto_inject: isRagEnabledDraft ? getSelectedRagAutoInjectSourceTypes().length > 0 : false,
+    rag_auto_inject: isRagEnabledDraft && ragAutoInjectEnabledEl ? ragAutoInjectEnabledEl.checked : false,
     rag_sensitivity: ragSensitivityEl?.value || "normal",
     rag_context_size: ragContextSizeEl?.value || "medium",
     rag_source_types: isRagEnabledDraft ? getSelectedRagSourceTypes() : [],
@@ -3578,6 +3593,10 @@ function registerDirtyListeners() {
     markDirty();
   });
   ragContextSizeEl?.addEventListener("change", markDirty);
+  ragAutoInjectEnabledEl?.addEventListener("change", () => {
+    syncRagAutoInjectSourceAvailability();
+    markDirty();
+  });
   ragSourceTypeEls.forEach((element) => {
     element.addEventListener("change", () => {
       syncRagAutoInjectSourceAvailability();

@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime
 import json
+import logging
 import os
 import re
 
 from flask import Response, current_app, jsonify, request
+
+logger = logging.getLogger(__name__)
 
 from canvas_service import (
     build_html_download,
@@ -1804,7 +1807,11 @@ def register_conversation_routes(app) -> None:
     def list_rag_documents():
         if not RAG_ENABLED:
             return jsonify({"error": RAG_DISABLED_FEATURE_ERROR}), 410
-        return jsonify(list_rag_documents_db())
+        try:
+            return jsonify(list_rag_documents_db())
+        except Exception as exc:
+            logger.exception("Failed to list RAG documents: %s", exc)
+            return jsonify({"error": "Failed to retrieve RAG documents. The vector store may be temporarily unavailable."}), 503
 
     @app.route("/api/rag/search", methods=["GET"])
     def rag_search():

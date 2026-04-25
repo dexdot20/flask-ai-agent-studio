@@ -379,9 +379,16 @@ def purge_expired_rag_documents() -> int:
         return 0
 
     removed = 0
+    deleted_keys = []
     for source_key in expired_source_keys:
-        removed += rag_delete_source(source_key)
-    delete_rag_document_records(expired_source_keys)
+        try:
+            rag_delete_source(source_key)
+            deleted_keys.append(source_key)
+            removed += 1
+        except Exception as exc:
+            logger.warning("Failed to delete expired RAG source %s from ChromaDB: %s", source_key, exc)
+    if deleted_keys:
+        delete_rag_document_records(deleted_keys)
     return removed
 
 
@@ -448,7 +455,11 @@ def ensure_supported_rag_sources(force: bool = False) -> int:
     _require_rag_enabled()
     global _rag_sources_verified, _rag_sources_last_verified_at
     now = time.time()
-    removed = purge_expired_rag_documents()
+    try:
+        removed = purge_expired_rag_documents()
+    except Exception as exc:
+        logger.warning("Failed to purge expired RAG documents: %s", exc)
+        removed = 0
     if (
         _rag_sources_verified
         and not force
@@ -463,9 +474,16 @@ def ensure_supported_rag_sources(force: bool = False) -> int:
     for row in rows:
         if _is_supported_rag_source_type(row["source_type"]):
             continue
-        rag_delete_source(row["source_key"])
-        delete_rag_document_record(row["source_key"])
-        removed_invalid += 1
+        try:
+            rag_delete_source(row["source_key"])
+        except Exception as exc:
+            logger.warning("Failed to delete unsupported RAG source %s from ChromaDB: %s", row["source_key"], exc)
+            continue
+        try:
+            delete_rag_document_record(row["source_key"])
+            removed_invalid += 1
+        except Exception as exc:
+            logger.warning("Failed to delete unsupported RAG source record from DB: %s: %s", row["source_key"], exc)
 
     _rag_sources_verified = True
     _rag_sources_last_verified_at = now
