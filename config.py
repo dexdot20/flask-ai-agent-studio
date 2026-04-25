@@ -244,6 +244,21 @@ FETCH_SUMMARY_GENERAL_TOP_K = max(1, min(6, _parse_int_env("FETCH_SUMMARY_GENERA
 FETCH_SUMMARY_QUERY_TOP_K = max(1, min(8, _parse_int_env("FETCH_SUMMARY_QUERY_TOP_K", 4)))
 FETCH_SUMMARY_EXCERPT_MAX_CHARS = max(200, min(1200, _parse_int_env("FETCH_SUMMARY_EXCERPT_MAX_CHARS", 500)))
 CHAT_SUMMARY_TRIGGER_TOKEN_COUNT = max(1_000, min(200_000, _parse_int_env("CHAT_SUMMARY_TRIGGER_TOKEN_COUNT", 120_000)))
+CHAT_SUMMARY_STAGE_AWARE_ENABLED = _parse_bool_env("CHAT_SUMMARY_STAGE_AWARE_ENABLED", False)
+CHAT_SUMMARY_STAGES = {
+    "early": {  # First 3 exchanges
+        "trigger_ratio": 0.95,  # Trigger when 95% of budget is used
+        "target_ratio": 0.70,   # Target to reduce to 70%
+    },
+    "mid": {  # 4-10 exchanges
+        "trigger_ratio": 0.85,
+        "target_ratio": 0.65,
+    },
+    "late": {  # 10+ exchanges
+        "trigger_ratio": 0.75,
+        "target_ratio": 0.55,
+    },
+}
 CHAT_SUMMARY_MODE = (os.getenv("CHAT_SUMMARY_MODE") or "auto").strip().lower()
 CHAT_SUMMARY_MODEL = (os.getenv("CHAT_SUMMARY_MODEL") or DEFAULT_CHAT_MODEL).strip() or DEFAULT_CHAT_MODEL
 CHAT_SUMMARY_ALLOWED_MODES = {"auto", "conservative", "never", "aggressive"}

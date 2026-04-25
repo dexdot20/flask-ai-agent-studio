@@ -1903,9 +1903,66 @@ def _resolve_summary_model(settings: dict | None = None, fallback_model: str | N
     return get_operation_model("summarize", current_settings, fallback_model_id=fallback)
 
 
-def _get_effective_summary_trigger_token_count(settings: dict) -> int:
+def _count_exchange_blocks_from_messages(messages: list[dict]) -> int:
+    """
+    Count exchange blocks (assistant message + tool results) from messages.
+
+    Only counts assistant messages that have either:
+    - tool_calls (indicating a tool-using exchange)
+    - non-empty content (indicating a meaningful response)
+
+    Excludes summary messages and empty assistant placeholders.
+    """
+    if not messages:
+        return 0
+    count = 0
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "").strip()
+        if role != "assistant":
+            continue
+        # Only count if has tool_calls or meaningful content
+        if message.get("tool_calls") or str(message.get("content") or "").strip():
+            count += 1
+    return count
+
+
+def _determine_conversation_stage(messages: list[dict], settings: dict | None = None) -> str:
+    """
+    Determine the conversation stage based on exchange count.
+
+    Stages:
+    - early: First 3 exchanges (conversations just started)
+    - mid: 4-10 exchanges (conversation in progress)
+    - late: 10+ exchanges (long conversation)
+    """
+    exchange_count = _count_exchange_blocks_from_messages(messages)
+
+    if exchange_count <= 3:
+        return "early"
+    elif exchange_count <= 10:
+        return "mid"
+    return "late"
+
+
+def _get_effective_summary_trigger_token_count(settings: dict, stage: str | None = None) -> int:
     base_threshold = get_chat_summary_trigger_token_count(settings)
     summary_mode = get_chat_summary_mode(settings)
+
+    # Stage-aware trigger threshold: derive from user's configured threshold
+    if CHAT_SUMMARY_STAGE_AWARE_ENABLED and stage and stage in CHAT_SUMMARY_STAGES:
+        stage_config = CHAT_SUMMARY_STAGES[stage]
+        # Use user's configured threshold as the base for stage calculations
+        stage_threshold = int(base_threshold * stage_config["trigger_ratio"])
+        # For aggressive/conservative modes, apply the multiplier to stage threshold
+        if summary_mode == "aggressive":
+            return max(1_000, stage_threshold // 2)
+        if summary_mode == "conservative":
+            return min(200_000, max(1_000, math.ceil(stage_threshold * 1.5)))
+        return max(1_000, min(200_000, stage_threshold))
+
+    # Fallback to original behavior
     if summary_mode == "aggressive":
         return max(1_000, base_threshold // 2)
     if summary_mode == "conservative":
@@ -3814,7 +3871,9 @@ def maybe_create_conversation_summary(
             canonical_messages,
             include_context_injections=False,
         )
-        trigger_token_count = _get_effective_summary_trigger_token_count(settings)
+        # Determine conversation stage for stage-aware trigger
+        conversation_stage = _determine_conversation_stage(canonical_messages, settings) if CHAT_SUMMARY_STAGE_AWARE_ENABLED else None
+        trigger_token_count = _get_effective_summary_trigger_token_count(settings, stage=conversation_stage)
         checked_at = datetime.now().astimezone().isoformat(timespec="seconds")
         token_breakdown = _get_summary_token_breakdown(canonical_messages)
         resolved_continuation_focus = re.sub(
@@ -3835,6 +3894,7 @@ def maybe_create_conversation_summary(
             return {
                 "messages": canonical_messages,
                 "mode": summary_mode,
+                "conversation_stage": conversation_stage,
                 "visible_token_count": visible_token_count,
                 "trigger_token_count": trigger_token_count,
                 "checked_at": checked_at,

@@ -278,6 +278,11 @@ INPUT_BREAKDOWN_KEYS = (
     "tool_results",
     "unknown_provider_overhead",
 )
+# Context overflow recovery constants
+MAX_COMPACTION_ATTEMPTS = 3
+EMERGENCY_TRUNCATION_MIN_TOKENS = 1500
+EMERGENCY_TRUNCATION_TARGET_RATIO = 0.60
+
 _AGENT_TRACE_LOGGER = None
 _AGENT_TRACE_LOGGER_LOCK = threading.Lock()
 
@@ -1802,6 +1807,105 @@ def _extract_compaction_tool_result_preview(message: dict) -> str:
 
 def _count_exchange_blocks(messages: list[dict]) -> int:
     return sum(1 for block in _iter_agent_exchange_blocks(messages) if block.get("type") == "exchange")
+
+
+def _emergency_truncate_to_budget(
+    messages: list[dict],
+    extra_messages: list[dict],
+    prompt_max_input_tokens: int,
+) -> list[dict] | None:
+    """
+    Emergency truncation when normal compaction fails.
+
+    This is a last-resort mechanism that:
+    1. Keeps system messages and most recent exchanges
+    2. Aggressively compacts oldest exchanges
+    3. Returns None if even this fails (should rarely happen)
+
+    Args:
+        messages: Current message list
+        extra_messages: Additional messages to include (user prompt, etc.)
+        prompt_max_input_tokens: Target budget in tokens
+
+    Returns:
+        Truncated message list, or None if truncation is not possible
+    """
+    blocks = _iter_agent_exchange_blocks(messages)
+    exchange_blocks = [b for b in blocks if b.get("type") == "exchange"]
+
+    if not exchange_blocks:
+        return None
+
+    # Estimate non-exchange message tokens (system, scratchpad, etc.)
+    non_exchange_tokens = 0
+    for block in blocks:
+        if block.get("type") != "exchange":
+            non_exchange_tokens += _estimate_messages_tokens(block.get("messages", []))
+
+    # Calculate target for exchange blocks
+    extra_tokens = _estimate_messages_tokens(extra_messages)
+    system_reserve = max(500, int(prompt_max_input_tokens * 0.05))
+    available_for_exchanges = max(
+        EMERGENCY_TRUNCATION_MIN_TOKENS,
+        prompt_max_input_tokens - extra_tokens - non_exchange_tokens - system_reserve,
+    )
+
+    target_tokens = int(available_for_exchanges * EMERGENCY_TRUNCATION_TARGET_RATIO)
+
+    # Build result: keep system prefix, aggressively truncate oldest exchanges
+    result_blocks: list[dict] = []
+    current_tokens = 0
+    skipped_any = False
+
+    for block in blocks:
+        if block.get("type") != "exchange":
+            # Keep system_prefix and passthrough blocks
+            result_blocks.append(block)
+            continue
+
+        block_messages = block.get("messages", [])
+        block_tokens = _estimate_messages_tokens(block_messages)
+
+        if current_tokens + block_tokens <= target_tokens:
+            # Keep this exchange block
+            result_blocks.append(block)
+            current_tokens += block_tokens
+        else:
+            # Try to compact this exchange to a single summary message
+            compacted = [_compact_exchange_to_message(block)]
+            compacted_tokens = _estimate_messages_tokens(compacted)
+
+            if current_tokens + compacted_tokens <= target_tokens:
+                # Use compacted version
+                result_blocks.append({"type": "exchange", "step_index": block.get("step_index"), "messages": compacted})
+                current_tokens += compacted_tokens
+            else:
+                # Skip this exchange entirely
+                skipped_any = True
+
+    if not result_blocks or skipped_any and _estimate_messages_tokens(
+        [m for b in result_blocks for m in b.get("messages", [])]
+    ) > prompt_max_input_tokens:
+        # Last resort: only keep the most recent exchange
+        recent_exchanges = [b for b in blocks if b.get("type") == "exchange"][-1:]
+        if not recent_exchanges:
+            return None
+
+        minimal_blocks = [b for b in blocks if b.get("type") == "system_prefix"]
+        minimal_blocks.extend(recent_exchanges)
+
+        result = [m for b in minimal_blocks for m in b.get("messages", [])]
+        result.extend(extra_messages)
+
+        if _estimate_messages_tokens(result) <= prompt_max_input_tokens:
+            return result
+        return None
+
+    # Flatten blocks and add extra_messages
+    flattened = [m for b in result_blocks for m in b.get("messages", [])]
+    flattened.extend(extra_messages)
+
+    return flattened
 
 
 def _compact_exchange_to_message(block: dict) -> dict:
@@ -8381,29 +8485,94 @@ def run_agent_stream(
         except Exception as exc:
             fatal_api_error = str(exc)
             if _is_context_overflow_error(fatal_api_error) != "none" and not context_compacted_this_step:
-                _, compacted = apply_context_compaction(extra_messages, reason="reactive_model_turn", force=True)
-                if compacted:
-                    context_compacted_this_step = True
+                compaction_attempts = 0
+                overflow_handled = False
+
+                while compaction_attempts < MAX_COMPACTION_ATTEMPTS:
+                    compaction_attempts += 1
+                    compacted_messages, compacted = apply_context_compaction(
+                        extra_messages, reason=f"reactive_model_turn_attempt_{compaction_attempts}", force=True
+                    )
+
+                    if compacted:
+                        compacted_tokens = _estimate_messages_tokens(compacted_messages)
+                        if compacted_tokens <= configured_prompt_max_input_tokens:
+                            # Compaction successful and within budget
+                            context_compacted_this_step = True
+                            _trace_agent_event(
+                                "context_overflow_recovered",
+                                trace_id=trace_id,
+                                step=step,
+                                phase="main_loop",
+                                source="model_turn_exception",
+                                attempt=compaction_attempts,
+                            )
+                            pending_step_retry_reason = "context_overflow_recovery"
+                            step -= 1
+                            overflow_handled = True
+                            break
+
+                        # Compaction worked but still over budget - try emergency truncation
+                        if compaction_attempts == MAX_COMPACTION_ATTEMPTS:
+                            emergency_result = _emergency_truncate_to_budget(
+                                messages, extra_messages, configured_prompt_max_input_tokens
+                            )
+                            if emergency_result is not None:
+                                # Validate emergency result is within budget
+                                emergency_tokens = _estimate_messages_tokens(
+                                    [*emergency_result, *extra_messages]
+                                )
+                                if emergency_tokens <= configured_prompt_max_input_tokens:
+                                    messages = emergency_result
+                                    runtime_state["_accumulated_messages"] = messages
+                                    context_compacted_this_step = True
+                                    _trace_agent_event(
+                                        "context_overflow_emergency_truncation",
+                                        trace_id=trace_id,
+                                        step=step,
+                                        phase="main_loop",
+                                        source="model_turn_exception",
+                                        attempt=compaction_attempts,
+                                    )
+                                    pending_step_retry_reason = "emergency_truncation"
+                                    step -= 1
+                                    overflow_handled = True
+                                    break
+                                else:
+                                    _trace_agent_event(
+                                        "context_overflow_emergency_truncation_failed",
+                                        trace_id=trace_id,
+                                        step=step,
+                                        phase="main_loop",
+                                        source="model_turn_exception",
+                                        attempt=compaction_attempts,
+                                        emergency_tokens=emergency_tokens,
+                                        budget=configured_prompt_max_input_tokens,
+                                    )
+
+                    # Compaction returned False or still over budget - retry
                     _trace_agent_event(
-                        "context_overflow_recovered",
+                        "context_overflow_compaction_retry",
                         trace_id=trace_id,
                         step=step,
                         phase="main_loop",
                         source="model_turn_exception",
+                        attempt=compaction_attempts,
+                        compacted=compacted,
                     )
-                    pending_step_retry_reason = "context_overflow_recovery"
-                    step -= 1
-                    continue
-                _trace_agent_event(
-                    "context_overflow_unrecoverable",
-                    trace_id=trace_id,
-                    step=step,
-                    phase="main_loop",
-                    source="model_turn_exception",
-                    error=fatal_api_error,
-                    message_count=len(turn_messages),
-                )
-                fatal_api_error = _build_context_overflow_recovery_error(turn_messages)
+
+                if not overflow_handled:
+                    _trace_agent_event(
+                        "context_overflow_unrecoverable",
+                        trace_id=trace_id,
+                        step=step,
+                        phase="main_loop",
+                        source="model_turn_exception",
+                        error=fatal_api_error,
+                        compaction_attempts=compaction_attempts,
+                        message_count=len(turn_messages),
+                    )
+                    fatal_api_error = _build_context_overflow_recovery_error(turn_messages)
             _trace_agent_event("agent_api_error", trace_id=trace_id, step=step, error=fatal_api_error)
             yield {"type": "tool_error", "step": step, "tool": "api", "error": fatal_api_error}
             break
@@ -8463,29 +8632,94 @@ def run_agent_stream(
 
             if stream_error:
                 if _is_context_overflow_error(stream_error) != "none" and not context_compacted_this_step:
-                    _, compacted = apply_context_compaction(extra_messages, reason="reactive_stream_error", force=True)
-                    if compacted:
-                        context_compacted_this_step = True
+                    compaction_attempts = 0
+                    overflow_handled = False
+
+                    while compaction_attempts < MAX_COMPACTION_ATTEMPTS:
+                        compaction_attempts += 1
+                        compacted_messages, compacted = apply_context_compaction(
+                            extra_messages, reason=f"reactive_stream_error_attempt_{compaction_attempts}", force=True
+                        )
+
+                        if compacted:
+                            compacted_tokens = _estimate_messages_tokens(compacted_messages)
+                            if compacted_tokens <= configured_prompt_max_input_tokens:
+                                # Compaction successful and within budget
+                                context_compacted_this_step = True
+                                _trace_agent_event(
+                                    "context_overflow_recovered",
+                                    trace_id=trace_id,
+                                    step=step,
+                                    phase="main_loop",
+                                    source="stream_error",
+                                    attempt=compaction_attempts,
+                                )
+                                pending_step_retry_reason = "context_overflow_recovery"
+                                step -= 1
+                                overflow_handled = True
+                                break
+
+                            # Compaction worked but still over budget - try emergency truncation
+                            if compaction_attempts == MAX_COMPACTION_ATTEMPTS:
+                                emergency_result = _emergency_truncate_to_budget(
+                                    messages, extra_messages, configured_prompt_max_input_tokens
+                                )
+                                if emergency_result is not None:
+                                    # Validate emergency result is within budget
+                                    emergency_tokens = _estimate_messages_tokens(
+                                        [*emergency_result, *extra_messages]
+                                    )
+                                    if emergency_tokens <= configured_prompt_max_input_tokens:
+                                        messages = emergency_result
+                                        runtime_state["_accumulated_messages"] = messages
+                                        context_compacted_this_step = True
+                                        _trace_agent_event(
+                                            "context_overflow_emergency_truncation",
+                                            trace_id=trace_id,
+                                            step=step,
+                                            phase="main_loop",
+                                            source="stream_error",
+                                            attempt=compaction_attempts,
+                                        )
+                                        pending_step_retry_reason = "emergency_truncation"
+                                        step -= 1
+                                        overflow_handled = True
+                                        break
+                                    else:
+                                        _trace_agent_event(
+                                            "context_overflow_emergency_truncation_failed",
+                                            trace_id=trace_id,
+                                            step=step,
+                                            phase="main_loop",
+                                            source="stream_error",
+                                            attempt=compaction_attempts,
+                                            emergency_tokens=emergency_tokens,
+                                            budget=configured_prompt_max_input_tokens,
+                                        )
+
+                        # Compaction returned False or still over budget - retry
                         _trace_agent_event(
-                            "context_overflow_recovered",
+                            "context_overflow_compaction_retry",
                             trace_id=trace_id,
                             step=step,
                             phase="main_loop",
                             source="stream_error",
+                            attempt=compaction_attempts,
+                            compacted=compacted,
                         )
-                        pending_step_retry_reason = "context_overflow_recovery"
-                        step -= 1
-                        continue
-                    _trace_agent_event(
-                        "context_overflow_unrecoverable",
-                        trace_id=trace_id,
-                        step=step,
-                        phase="main_loop",
-                        source="stream_error",
-                        error=stream_error,
-                        message_count=len(turn_messages),
-                    )
-                    fatal_api_error = _build_context_overflow_recovery_error(turn_messages)
+
+                    if not overflow_handled:
+                        _trace_agent_event(
+                            "context_overflow_unrecoverable",
+                            trace_id=trace_id,
+                            step=step,
+                            phase="main_loop",
+                            source="stream_error",
+                            error=stream_error,
+                            compaction_attempts=compaction_attempts,
+                            message_count=len(turn_messages),
+                        )
+                        fatal_api_error = _build_context_overflow_recovery_error(turn_messages)
                 else:
                     fatal_api_error = stream_error
                 _trace_agent_event("agent_api_error", trace_id=trace_id, step=step, error=fatal_api_error)
@@ -9233,21 +9467,81 @@ def run_agent_stream(
             stream_error = turn_result.get("stream_error")
             answer_emitted = bool(turn_result.get("answer_emitted"))
             if stream_error and _is_context_overflow_error(stream_error) != "none" and not final_phase_compaction_used:
-                _, compacted = apply_context_compaction(
-                    final_extra_messages, reason="reactive_final_stream", force=True
-                )
-                if compacted:
-                    final_phase_compaction_used = True
+                compaction_attempts = 0
+                overflow_handled = False
+
+                while compaction_attempts < MAX_COMPACTION_ATTEMPTS:
+                    compaction_attempts += 1
+                    compacted_messages, compacted = apply_context_compaction(
+                        final_extra_messages, reason=f"reactive_final_stream_attempt_{compaction_attempts}", force=True
+                    )
+
+                    if compacted:
+                        compacted_tokens = _estimate_messages_tokens(compacted_messages)
+                        if compacted_tokens <= configured_prompt_max_input_tokens:
+                            # Compaction successful and within budget
+                            final_phase_compaction_used = True
+                            _trace_agent_event(
+                                "context_overflow_recovered",
+                                trace_id=trace_id,
+                                step=step,
+                                phase="final_answer",
+                                source="stream_error",
+                                attempt=compaction_attempts,
+                            )
+                            pending_final_retry_reason = "context_overflow_recovery"
+                            overflow_handled = True
+                            break
+
+                        # Compaction worked but still over budget - try emergency truncation
+                        if compaction_attempts == MAX_COMPACTION_ATTEMPTS:
+                            emergency_result = _emergency_truncate_to_budget(
+                                messages, final_extra_messages, configured_prompt_max_input_tokens
+                            )
+                            if emergency_result is not None:
+                                # Validate emergency result is within budget
+                                emergency_tokens = _estimate_messages_tokens(
+                                    [*emergency_result, *final_extra_messages]
+                                )
+                                if emergency_tokens <= configured_prompt_max_input_tokens:
+                                    messages = emergency_result
+                                    runtime_state["_accumulated_messages"] = messages
+                                    final_phase_compaction_used = True
+                                    _trace_agent_event(
+                                        "context_overflow_emergency_truncation",
+                                        trace_id=trace_id,
+                                        step=step,
+                                        phase="final_answer",
+                                        source="stream_error",
+                                        attempt=compaction_attempts,
+                                    )
+                                    pending_final_retry_reason = "emergency_truncation"
+                                    overflow_handled = True
+                                    break
+                                else:
+                                    _trace_agent_event(
+                                        "context_overflow_emergency_truncation_failed",
+                                        trace_id=trace_id,
+                                        step=step,
+                                        phase="final_answer",
+                                        source="stream_error",
+                                        attempt=compaction_attempts,
+                                        emergency_tokens=emergency_tokens,
+                                        budget=configured_prompt_max_input_tokens,
+                                    )
+
+                    # Compaction returned False or still over budget - retry
                     _trace_agent_event(
-                        "context_overflow_recovered",
+                        "context_overflow_compaction_retry",
                         trace_id=trace_id,
                         step=step,
                         phase="final_answer",
                         source="stream_error",
+                        attempt=compaction_attempts,
+                        compacted=compacted,
                     )
-                    pending_final_retry_reason = "context_overflow_recovery"
-                    continue
-                if final_instruction_builder is _build_final_answer_instruction:
+
+                if not overflow_handled and final_instruction_builder is _build_final_answer_instruction:
                     _trace_agent_event(
                         "context_overflow_minimal_final_instruction",
                         trace_id=trace_id,
@@ -9259,16 +9553,19 @@ def run_agent_stream(
                     final_instruction_builder = _build_minimal_final_answer_instruction
                     pending_final_retry_reason = "minimal_final_instruction"
                     continue
-                _trace_agent_event(
-                    "context_overflow_unrecoverable",
-                    trace_id=trace_id,
-                    step=step,
-                    phase="final_answer",
-                    source="stream_error",
-                    error=stream_error,
-                    message_count=len(final_messages),
-                )
-                stream_error = _build_context_overflow_recovery_error(final_messages)
+
+                if not overflow_handled:
+                    _trace_agent_event(
+                        "context_overflow_unrecoverable",
+                        trace_id=trace_id,
+                        step=step,
+                        phase="final_answer",
+                        source="stream_error",
+                        error=stream_error,
+                        compaction_attempts=compaction_attempts,
+                        message_count=len(final_messages),
+                    )
+                    stream_error = _build_context_overflow_recovery_error(final_messages)
             if tool_calls:
                 if content_text:
                     final_text = content_text
@@ -9299,21 +9596,81 @@ def run_agent_stream(
         except Exception as exc:
             error = str(exc)
             if _is_context_overflow_error(error) != "none" and not final_phase_compaction_used:
-                _, compacted = apply_context_compaction(
-                    final_extra_messages, reason="reactive_final_answer", force=True
-                )
-                if compacted:
-                    final_phase_compaction_used = True
+                compaction_attempts = 0
+                overflow_handled = False
+
+                while compaction_attempts < MAX_COMPACTION_ATTEMPTS:
+                    compaction_attempts += 1
+                    compacted_messages, compacted = apply_context_compaction(
+                        final_extra_messages, reason=f"reactive_final_answer_attempt_{compaction_attempts}", force=True
+                    )
+
+                    if compacted:
+                        compacted_tokens = _estimate_messages_tokens(compacted_messages)
+                        if compacted_tokens <= configured_prompt_max_input_tokens:
+                            # Compaction successful and within budget
+                            final_phase_compaction_used = True
+                            _trace_agent_event(
+                                "context_overflow_recovered",
+                                trace_id=trace_id,
+                                step=step,
+                                phase="final_answer",
+                                source="exception",
+                                attempt=compaction_attempts,
+                            )
+                            pending_final_retry_reason = "context_overflow_recovery"
+                            overflow_handled = True
+                            break
+
+                        # Compaction worked but still over budget - try emergency truncation
+                        if compaction_attempts == MAX_COMPACTION_ATTEMPTS:
+                            emergency_result = _emergency_truncate_to_budget(
+                                messages, final_extra_messages, configured_prompt_max_input_tokens
+                            )
+                            if emergency_result is not None:
+                                # Validate emergency result is within budget
+                                emergency_tokens = _estimate_messages_tokens(
+                                    [*emergency_result, *final_extra_messages]
+                                )
+                                if emergency_tokens <= configured_prompt_max_input_tokens:
+                                    messages = emergency_result
+                                    runtime_state["_accumulated_messages"] = messages
+                                    final_phase_compaction_used = True
+                                    _trace_agent_event(
+                                        "context_overflow_emergency_truncation",
+                                        trace_id=trace_id,
+                                        step=step,
+                                        phase="final_answer",
+                                        source="exception",
+                                        attempt=compaction_attempts,
+                                    )
+                                    pending_final_retry_reason = "emergency_truncation"
+                                    overflow_handled = True
+                                    break
+                                else:
+                                    _trace_agent_event(
+                                        "context_overflow_emergency_truncation_failed",
+                                        trace_id=trace_id,
+                                        step=step,
+                                        phase="final_answer",
+                                        source="exception",
+                                        attempt=compaction_attempts,
+                                        emergency_tokens=emergency_tokens,
+                                        budget=configured_prompt_max_input_tokens,
+                                    )
+
+                    # Compaction returned False or still over budget - retry
                     _trace_agent_event(
-                        "context_overflow_recovered",
+                        "context_overflow_compaction_retry",
                         trace_id=trace_id,
                         step=step,
                         phase="final_answer",
                         source="exception",
+                        attempt=compaction_attempts,
+                        compacted=compacted,
                     )
-                    pending_final_retry_reason = "context_overflow_recovery"
-                    continue
-                if final_instruction_builder is _build_final_answer_instruction:
+
+                if not overflow_handled and final_instruction_builder is _build_final_answer_instruction:
                     _trace_agent_event(
                         "context_overflow_minimal_final_instruction",
                         trace_id=trace_id,
@@ -9325,16 +9682,19 @@ def run_agent_stream(
                     final_instruction_builder = _build_minimal_final_answer_instruction
                     pending_final_retry_reason = "minimal_final_instruction"
                     continue
-                _trace_agent_event(
-                    "context_overflow_unrecoverable",
-                    trace_id=trace_id,
-                    step=step,
-                    phase="final_answer",
-                    source="exception",
-                    error=error,
-                    message_count=len([*messages, *final_extra_messages]),
-                )
-                error = _build_context_overflow_recovery_error([*messages, *final_extra_messages])
+
+                if not overflow_handled:
+                    _trace_agent_event(
+                        "context_overflow_unrecoverable",
+                        trace_id=trace_id,
+                        step=step,
+                        phase="final_answer",
+                        source="exception",
+                        error=error,
+                        compaction_attempts=compaction_attempts,
+                        message_count=len([*messages, *final_extra_messages]),
+                    )
+                    error = _build_context_overflow_recovery_error([*messages, *final_extra_messages])
             yield {"type": "tool_error", "step": step, "tool": "final_answer", "error": error}
             for event in emit_answer(FINAL_ANSWER_ERROR_TEXT):
                 yield event
