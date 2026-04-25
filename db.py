@@ -3223,12 +3223,6 @@ def _normalize_message_usage(value: dict | None) -> dict | None:
     if model_call_count is not None:
         cleaned["model_call_count"] = model_call_count
 
-    cost = value.get("cost")
-    if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost >= 0:
-        cleaned["cost"] = round(float(cost), 6)
-
-    if isinstance(value.get("cost_available"), bool):
-        cleaned["cost_available"] = value["cost_available"]
     if value.get("cache_metrics_estimated") is True:
         cleaned["cache_metrics_estimated"] = True
     if provider_usage_partial:
@@ -4043,64 +4037,6 @@ def _parse_json_value(raw_value, fallback):
         return fallback
 
 
-def _get_activity_pricing(provider: str, api_model: str) -> dict[str, float] | None:
-    normalized_provider = str(provider or "").strip().lower()
-    normalized_api_model = str(api_model or "").strip()
-    if not normalized_provider or not normalized_api_model:
-        return None
-    for record in get_all_models():
-        if str(record.get("provider") or "").strip().lower() != normalized_provider:
-            continue
-        if str(record.get("api_model") or "").strip() != normalized_api_model:
-            continue
-        pricing = record.get("pricing") if isinstance(record.get("pricing"), dict) else {}
-        return {
-            "input": float(pricing.get("input") or 0.0),
-            "input_cache_hit": float(pricing.get("input_cache_hit") or pricing.get("input") or 0.0),
-            "input_cache_write": float(pricing.get("input_cache_write") or pricing.get("input") or 0.0),
-            "output": float(pricing.get("output") or 0.0),
-        }
-    return None
-
-
-def _calculate_activity_cost(
-    provider: str,
-    api_model: str,
-    prompt_tokens: int | None,
-    completion_tokens: int | None,
-    prompt_cache_hit_tokens: int | None = 0,
-    prompt_cache_miss_tokens: int | None = None,
-    prompt_cache_write_tokens: int | None = 0,
-) -> float | None:
-    pricing = _get_activity_pricing(provider, api_model)
-    if not isinstance(pricing, dict):
-        return None
-    if not any(float(pricing.get(key) or 0.0) > 0.0 for key in ("input", "input_cache_hit", "output")):
-        return None
-
-    normalized_prompt_tokens = max(0, int(prompt_tokens or 0))
-    normalized_completion_tokens = max(0, int(completion_tokens or 0))
-    normalized_cache_hit_tokens = max(0, int(prompt_cache_hit_tokens or 0))
-    normalized_cache_write_tokens = max(0, int(prompt_cache_write_tokens or 0))
-    if prompt_cache_miss_tokens is None:
-        normalized_cache_miss_tokens = (
-            normalized_prompt_tokens
-            if normalized_cache_hit_tokens <= 0
-            else max(0, normalized_prompt_tokens - normalized_cache_hit_tokens)
-        )
-    else:
-        normalized_cache_miss_tokens = max(0, int(prompt_cache_miss_tokens or 0))
-        accounted_prompt_tokens = normalized_cache_hit_tokens + normalized_cache_miss_tokens
-        if normalized_prompt_tokens > accounted_prompt_tokens:
-            normalized_cache_miss_tokens += normalized_prompt_tokens - accounted_prompt_tokens
-
-    input_cost = (normalized_cache_hit_tokens / 1_000_000) * float(pricing.get("input_cache_hit") or 0.0)
-    input_cost += (normalized_cache_write_tokens / 1_000_000) * float(pricing.get("input_cache_write") or 0.0)
-    input_cost += (normalized_cache_miss_tokens / 1_000_000) * float(pricing.get("input") or 0.0)
-    output_cost = (normalized_completion_tokens / 1_000_000) * float(pricing.get("output") or 0.0)
-    return round(input_cost + output_cost, 6)
-
-
 def ensure_model_invocations_activity_columns() -> None:
     """Add Activity-logging columns to model_invocations if they are missing."""
     new_columns = {
@@ -4112,7 +4048,6 @@ def ensure_model_invocations_activity_columns() -> None:
         "prompt_cache_hit_tokens": "INTEGER",
         "prompt_cache_miss_tokens": "INTEGER",
         "prompt_cache_write_tokens": "INTEGER",
-        "cost": "REAL",
         "latency_ms": "INTEGER",
         "response_status": "TEXT",
         "error_type": "TEXT",
@@ -4122,6 +4057,12 @@ def ensure_model_invocations_activity_columns() -> None:
     }
     with get_db() as conn:
         existing = {row["name"] for row in conn.execute("PRAGMA table_info(model_invocations)").fetchall()}
+        # Migrate: drop legacy cost column if present
+        if "cost" in existing:
+            try:
+                conn.execute("ALTER TABLE model_invocations DROP COLUMN cost")
+            except sqlite3.OperationalError:
+                pass  # Column already dropped or not supported in this SQLite version
         for col, col_type in new_columns.items():
             if col not in existing:
                 conn.execute(f"ALTER TABLE model_invocations ADD COLUMN {col} {col_type}")
@@ -4186,7 +4127,6 @@ def _model_invocation_row_to_dict(row) -> dict:
         "prompt_cache_hit_tokens": _int_col("prompt_cache_hit_tokens"),
         "prompt_cache_miss_tokens": _int_col("prompt_cache_miss_tokens"),
         "prompt_cache_write_tokens": _int_col("prompt_cache_write_tokens"),
-        "cost": _real_col("cost"),
         "latency_ms": _int_col("latency_ms"),
         "response_status": _text_col("response_status"),
         "error_type": _text_col("error_type"),
@@ -4222,7 +4162,6 @@ def insert_model_invocation(
     prompt_cache_hit_tokens: int | None = None,
     prompt_cache_miss_tokens: int | None = None,
     prompt_cache_write_tokens: int | None = None,
-    cost: float | None = None,
     latency_ms: int | None = None,
     response_status: str | None = None,
     error_type: str | None = None,
@@ -4246,19 +4185,6 @@ def insert_model_invocation(
         and normalized_completion_tokens is not None
     ):
         normalized_total_tokens = normalized_prompt_tokens + normalized_completion_tokens
-    normalized_cost = (
-        float(cost)
-        if cost is not None
-        else _calculate_activity_cost(
-            provider,
-            api_model,
-            normalized_prompt_tokens,
-            normalized_completion_tokens,
-            prompt_cache_hit_tokens=normalized_prompt_cache_hit_tokens,
-            prompt_cache_miss_tokens=normalized_prompt_cache_miss_tokens,
-            prompt_cache_write_tokens=normalized_prompt_cache_write_tokens,
-        )
-    )
 
     raw_payload = _serialize_json_value(request_payload)
     payload_bytes = len(raw_payload.encode("utf-8")) if raw_payload else 0
@@ -4287,14 +4213,13 @@ def insert_model_invocation(
                prompt_cache_hit_tokens,
                prompt_cache_miss_tokens,
                prompt_cache_write_tokens,
-               cost,
                latency_ms,
                response_status,
                error_type,
                error_message,
                request_payload_bytes,
                request_payload_hash
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             int(conversation_id),
             _coerce_positive_int(assistant_message_id),
@@ -4317,7 +4242,6 @@ def insert_model_invocation(
             normalized_prompt_cache_hit_tokens,
             normalized_prompt_cache_miss_tokens,
             normalized_prompt_cache_write_tokens,
-            normalized_cost,
             normalized_latency_ms,
             str(response_status or "").strip() or None,
             str(error_type or "").strip() or None,
@@ -4337,7 +4261,7 @@ def list_conversation_model_invocations(conversation_id: int) -> list[dict]:
                       request_payload, response_summary, operation,
                       prompt_tokens, completion_tokens, total_tokens, estimated_input_tokens,
                       prompt_cache_hit_tokens, prompt_cache_miss_tokens, prompt_cache_write_tokens,
-                      cost, latency_ms, response_status, error_type, error_message,
+                      latency_ms, response_status, error_type, error_message,
                       request_payload_bytes, request_payload_hash, created_at
                FROM model_invocations
                WHERE conversation_id = ?
@@ -4354,7 +4278,6 @@ _ACTIVITY_ALLOWED_SORT = {
     "call_type",
     "response_status",
     "total_tokens",
-    "cost",
     "latency_ms",
 }
 _ACTIVITY_ALLOWED_DIRECTIONS = {"ASC", "DESC"}
@@ -4413,7 +4336,7 @@ def list_activity_records(
                        {payload_col}, response_summary, operation,
                        prompt_tokens, completion_tokens, total_tokens, estimated_input_tokens,
                        prompt_cache_hit_tokens, prompt_cache_miss_tokens, prompt_cache_write_tokens,
-                       cost, latency_ms, response_status, error_type, error_message,
+                       latency_ms, response_status, error_type, error_message,
                        request_payload_bytes, request_payload_hash, created_at
                 FROM model_invocations
                 {where_clause}
@@ -4476,7 +4399,7 @@ def get_activity_record(record_id: int) -> dict | None:
                       request_payload, response_summary, operation,
                       prompt_tokens, completion_tokens, total_tokens, estimated_input_tokens,
                       prompt_cache_hit_tokens, prompt_cache_miss_tokens, prompt_cache_write_tokens,
-                      cost, latency_ms, response_status, error_type, error_message,
+                      latency_ms, response_status, error_type, error_message,
                       request_payload_bytes, request_payload_hash, created_at
                FROM model_invocations WHERE id = ?""",
             (int(record_id),),

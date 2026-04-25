@@ -148,9 +148,7 @@ from model_registry import (
     model_target_supports_native_reasoning_continuation,
     get_operation_model_candidates,
     get_operation_model,
-    get_model_pricing as lookup_model_pricing,
     get_provider_client,
-    has_known_model_pricing as lookup_has_known_model_pricing,
     resolve_model_target,
     should_retry_model_target_tool_choice_with_auto,
 )
@@ -321,16 +319,6 @@ def _get_agent_trace_logger():
         logger.propagate = False
         _AGENT_TRACE_LOGGER = logger
         return logger
-
-
-def get_model_pricing(model_id: str, settings: dict | None = None) -> dict:
-    current_settings = settings if isinstance(settings, dict) else get_app_settings()
-    return lookup_model_pricing(model_id, current_settings)
-
-
-def has_known_model_pricing(model_id: str, settings: dict | None = None) -> bool:
-    current_settings = settings if isinstance(settings, dict) else get_app_settings()
-    return lookup_has_known_model_pricing(model_id, current_settings)
 
 
 def _coerce_usage_int(value) -> int:
@@ -7642,8 +7630,6 @@ def run_agent_stream(
     )
     model_target = resolve_model_target(model, model_settings)
     native_reasoning_continuation = model_target_supports_native_reasoning_continuation(model_target)
-    pricing = get_model_pricing(model, model_settings)
-    pricing_known = has_known_model_pricing(model, model_settings)
 
     def build_tool_capture_event() -> dict:
         current_canvas_snapshot = get_canvas_runtime_snapshot(runtime_state.get("canvas"))
@@ -7736,35 +7722,6 @@ def run_agent_stream(
             "cache_write_present": bool(metrics.get("cache_write_present")),
             "cache_metrics_present": bool(metrics.get("cache_metrics_present")),
         }
-
-    def calculate_cost(
-        prompt_tokens,
-        completion_tokens,
-        prompt_cache_hit_tokens=0,
-        prompt_cache_miss_tokens=None,
-        prompt_cache_write_tokens=0,
-    ):
-        prompt_tokens = _coerce_usage_int(prompt_tokens)
-        completion_tokens = _coerce_usage_int(completion_tokens)
-        prompt_cache_hit_tokens = _coerce_usage_int(prompt_cache_hit_tokens)
-        prompt_cache_write_tokens = _coerce_usage_int(prompt_cache_write_tokens)
-        if prompt_cache_miss_tokens is None:
-            prompt_cache_miss_tokens = (
-                prompt_tokens if prompt_cache_hit_tokens <= 0 else max(0, prompt_tokens - prompt_cache_hit_tokens)
-            )
-        else:
-            prompt_cache_miss_tokens = _coerce_usage_int(prompt_cache_miss_tokens)
-            accounted_prompt_tokens = prompt_cache_hit_tokens + prompt_cache_miss_tokens
-            if prompt_tokens > accounted_prompt_tokens:
-                prompt_cache_miss_tokens += prompt_tokens - accounted_prompt_tokens
-
-        cache_hit_input_rate = pricing.get("input_cache_hit", pricing["input"]) or pricing["input"]
-        cache_write_input_rate = pricing.get("input_cache_write", pricing["input"]) or pricing["input"]
-        input_cost = (prompt_cache_hit_tokens / 1_000_000) * cache_hit_input_rate
-        input_cost += (prompt_cache_write_tokens / 1_000_000) * cache_write_input_rate
-        input_cost += (prompt_cache_miss_tokens / 1_000_000) * pricing["input"]
-        output_cost = (completion_tokens / 1_000_000) * pricing["output"]
-        return round(input_cost + output_cost, 6)
 
     def _filter_deleted_tool_results(msg_list: list[dict]) -> list[dict]:
         deleted_ids = (
@@ -7863,18 +7820,6 @@ def run_agent_stream(
             usage_totals["model_calls"],
             fallback_input_tokens=usage_totals["prompt_tokens"],
         )
-        cache_usage_available = (
-            usage_totals["prompt_cache_hit_tokens"] > 0 or usage_totals["prompt_cache_miss_tokens"] > 0
-        )
-        total_cost = None
-        if pricing_known:
-            total_cost = calculate_cost(
-                usage_totals["prompt_tokens"],
-                usage_totals["completion_tokens"],
-                prompt_cache_hit_tokens=usage_totals["prompt_cache_hit_tokens"],
-                prompt_cache_miss_tokens=usage_totals["prompt_cache_miss_tokens"] if cache_usage_available else None,
-                prompt_cache_write_tokens=usage_totals["prompt_cache_write_tokens"],
-            )
         return {
             "type": "usage",
             "prompt_tokens": prompt_tokens_total,
@@ -7889,9 +7834,9 @@ def run_agent_stream(
             "model_calls": list(usage_totals["model_calls"]),
             "max_input_tokens_per_call": call_usage_summary["max_input_tokens_per_call"],
             "configured_prompt_max_input_tokens": configured_prompt_max_input_tokens,
-            "cost": total_cost,
-            "cost_available": pricing_known,
-            "currency": "USD",
+            "cost": None,
+            "cost_available": None,
+            "currency": None,
             "model": model,
             "provider": model_target["record"]["provider"],
             "cache_metrics_estimated": usage_totals["cache_metrics_estimated"],

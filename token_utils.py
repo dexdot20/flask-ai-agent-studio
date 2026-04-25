@@ -8,7 +8,7 @@ import tiktoken
 
 
 LOGGER = logging.getLogger(__name__)
-TOKEN_ESTIMATION_FALLBACK_MARGIN = 0.90
+TOKEN_ESTIMATION_FALLBACK_MARGIN = 1.0
 _FALLBACK_WARNING_EMITTED = False
 
 
@@ -36,7 +36,8 @@ def estimate_text_tokens(text: str) -> int:
         except Exception:
             LOGGER.exception("Token estimation failed while encoding text; using heuristic fallback.")
 
-    byte_estimate = (len(normalized.encode("utf-8")) + 3) // 4
+    # Use bytes/3 for better accuracy on non-ASCII text (tiktoken underestimates by 3-4x for CJK/Turkish/etc)
+    byte_estimate = (len(normalized.encode("utf-8")) + 2) // 3
     piece_estimate = len(re.findall(r"\w+|[^\w\s]", normalized, re.UNICODE))
     heuristic_estimate = max(1, byte_estimate, piece_estimate)
     return max(1, int(heuristic_estimate / TOKEN_ESTIMATION_FALLBACK_MARGIN))

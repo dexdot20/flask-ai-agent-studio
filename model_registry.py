@@ -44,7 +44,6 @@ MODEL_OPERATION_KEYS = (
 )
 DEFAULT_OPERATION_MODEL_PREFERENCES = {key: "" for key in MODEL_OPERATION_KEYS}
 DEFAULT_OPERATION_MODEL_FALLBACK_PREFERENCES = {key: [] for key in MODEL_OPERATION_KEYS}
-_EMPTY_PRICING = {"input": 0.0, "input_cache_hit": 0.0, "input_cache_write": 0.0, "output": 0.0}
 CHAT_PARAMETER_OVERRIDE_SPECS = {
     "temperature": {
         "type": "float",
@@ -789,7 +788,6 @@ BUILTIN_MODELS = [
         "supports_vision": False,
         "supports_structured_outputs": False,
         "is_custom": False,
-        "pricing": {"input": 0.28, "input_cache_hit": 0.028, "output": 0.42},
     },
     {
         "id": "deepseek-reasoner",
@@ -800,7 +798,6 @@ BUILTIN_MODELS = [
         "supports_vision": False,
         "supports_structured_outputs": False,
         "is_custom": False,
-        "pricing": {"input": 0.28, "input_cache_hit": 0.028, "output": 0.42},
     },
     {
         "id": "MiniMax-M2.7",
@@ -811,7 +808,6 @@ BUILTIN_MODELS = [
         "supports_vision": False,
         "supports_structured_outputs": False,
         "is_custom": False,
-        "pricing": {"input": 0.0, "input_cache_hit": 0.0, "input_cache_write": 0.0, "output": 0.0},
     },
     {
         "id": "MiniMax-M2.7-highspeed",
@@ -822,7 +818,6 @@ BUILTIN_MODELS = [
         "supports_vision": False,
         "supports_structured_outputs": False,
         "is_custom": False,
-        "pricing": {"input": 0.0, "input_cache_hit": 0.0, "input_cache_write": 0.0, "output": 0.0},
     },
     {
         "id": "MiniMax-M2.5",
@@ -833,7 +828,6 @@ BUILTIN_MODELS = [
         "supports_vision": False,
         "supports_structured_outputs": False,
         "is_custom": False,
-        "pricing": {"input": 0.0, "input_cache_hit": 0.0, "input_cache_write": 0.0, "output": 0.0},
     },
     {
         "id": "MiniMax-M2.5-highspeed",
@@ -844,7 +838,6 @@ BUILTIN_MODELS = [
         "supports_vision": False,
         "supports_structured_outputs": False,
         "is_custom": False,
-        "pricing": {"input": 0.0, "input_cache_hit": 0.0, "input_cache_write": 0.0, "output": 0.0},
     },
     {
         "id": "MiniMax-M2.1",
@@ -855,7 +848,6 @@ BUILTIN_MODELS = [
         "supports_vision": False,
         "supports_structured_outputs": False,
         "is_custom": False,
-        "pricing": {"input": 0.0, "input_cache_hit": 0.0, "input_cache_write": 0.0, "output": 0.0},
     },
     {
         "id": "MiniMax-M2.1-highspeed",
@@ -866,7 +858,6 @@ BUILTIN_MODELS = [
         "supports_vision": False,
         "supports_structured_outputs": False,
         "is_custom": False,
-        "pricing": {"input": 0.0, "input_cache_hit": 0.0, "input_cache_write": 0.0, "output": 0.0},
     },
     {
         "id": "MiniMax-M2",
@@ -877,7 +868,6 @@ BUILTIN_MODELS = [
         "supports_vision": False,
         "supports_structured_outputs": False,
         "is_custom": False,
-        "pricing": {"input": 0.0, "input_cache_hit": 0.0, "input_cache_write": 0.0, "output": 0.0},
     },
 ]
 BUILTIN_MODEL_IDS = {model["id"] for model in BUILTIN_MODELS}
@@ -885,11 +875,7 @@ DEFAULT_VISIBLE_CHAT_MODEL_ORDER = [model["id"] for model in BUILTIN_MODELS if m
 
 
 def _copy_model_record(record: dict[str, Any]) -> dict[str, Any]:
-    copied = dict(record)
-    pricing = copied.get("pricing")
-    if isinstance(pricing, dict):
-        copied["pricing"] = dict(pricing)
-    return copied
+    return dict(record)
 
 
 def normalize_chat_parameter_overrides(raw_value: Any) -> dict[str, Any] | None:
@@ -1530,7 +1516,6 @@ def normalize_custom_model_definition(raw_value: Any) -> dict[str, Any] | None:
         "supports_vision": _coerce_bool(supports_vision_input),
         "supports_structured_outputs": _coerce_bool(supports_structured_outputs_input),
         "is_custom": True,
-        "pricing": dict(_EMPTY_PRICING),
     }
 
 
@@ -1927,20 +1912,4 @@ def _get_openrouter_anthropic_ttl(settings: dict[str, Any] | None) -> str:
     return "1h" if raw_ttl == "1h" else "5m"
 
 
-def get_model_pricing(model_id: str, settings: dict | None = None) -> dict[str, float]:
-    record = get_model_record(model_id, settings)
-    if not record:
-        return dict(_EMPTY_PRICING)
-    pricing = record.get("pricing")
-    if isinstance(pricing, dict):
-        return {
-            "input": float(pricing.get("input") or 0.0),
-            "input_cache_hit": float(pricing.get("input_cache_hit") or 0.0),
-            "output": float(pricing.get("output") or 0.0),
-        }
-    return dict(_EMPTY_PRICING)
 
-
-def has_known_model_pricing(model_id: str, settings: dict | None = None) -> bool:
-    pricing = get_model_pricing(model_id, settings)
-    return any(float(pricing.get(key) or 0.0) > 0.0 for key in ("input", "input_cache_hit", "output"))
