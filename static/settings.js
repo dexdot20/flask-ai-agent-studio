@@ -3274,8 +3274,11 @@ function renderKnowledgeBaseDocuments(docs) {
     }
     const autoInjectBadge = document.createElement("span");
     autoInjectBadge.className = "kb-doc-badge";
-    autoInjectBadge.dataset.tone = metadata.auto_inject_enabled === false ? "muted" : "success";
-    autoInjectBadge.textContent = metadata.auto_inject_enabled === false ? "manual only" : "auto inject on";
+    const globalAutoInjectEnabled = Boolean(appSettings.rag_auto_inject);
+    const perDocAutoInjectEnabled = metadata.auto_inject_enabled !== false;
+    const isAutoInjectOn = globalAutoInjectEnabled && perDocAutoInjectEnabled;
+    autoInjectBadge.dataset.tone = isAutoInjectOn ? "success" : "muted";
+    autoInjectBadge.textContent = isAutoInjectOn ? "auto inject on" : "manual only";
     badges.append(autoInjectBadge);
     meta.append(badges);
 
