@@ -1,72 +1,7 @@
-const bootstrapEl = document.getElementById("app-bootstrap");
-const bootstrapData = (() => {
-  if (!bootstrapEl) {
-    return { settings: {} };
-  }
-  try {
-    return JSON.parse(bootstrapEl.textContent || "{}") || { settings: {} };
-  } catch (_) {
-    return { settings: {} };
-  }
-})();
-
-const appSettings = bootstrapData.settings || {};
-const csrfToken = String(bootstrapData.csrf_token || "").trim();
+// CSRF and bootstrap data loaded via /static/shared/csrf-utils.js
+const appSettings = window.__appSettings || {};
+const csrfToken = window.__csrfToken || "";
 const knownModelOptions = Array.isArray(appSettings.available_models) ? appSettings.available_models : [];
-
-const nativeFetch = typeof globalThis.fetch === "function" ? globalThis.fetch.bind(globalThis) : null;
-const CSRF_SAFE_HTTP_METHODS = new Set(["GET", "HEAD", "OPTIONS", "TRACE"]);
-
-function resolveFetchMethod(input, init) {
-  const explicitMethod = String(init?.method || "").trim();
-  if (explicitMethod) {
-    return explicitMethod.toUpperCase();
-  }
-  if (input instanceof Request) {
-    return String(input.method || "GET").trim().toUpperCase() || "GET";
-  }
-  return "GET";
-}
-
-function resolveFetchUrl(input) {
-  if (input instanceof Request) {
-    return input.url;
-  }
-  return String(input || "").trim();
-}
-
-function shouldAttachCsrfHeader(input, init) {
-  if (!nativeFetch || !csrfToken) {
-    return false;
-  }
-  const method = resolveFetchMethod(input, init);
-  if (CSRF_SAFE_HTTP_METHODS.has(method)) {
-    return false;
-  }
-  const rawUrl = resolveFetchUrl(input);
-  if (!rawUrl) {
-    return true;
-  }
-  try {
-    const resolvedUrl = new URL(rawUrl, window.location.href);
-    return resolvedUrl.origin === window.location.origin;
-  } catch (_) {
-    return true;
-  }
-}
-
-if (nativeFetch) {
-  globalThis.fetch = (input, init = undefined) => {
-    if (!shouldAttachCsrfHeader(input, init)) {
-      return nativeFetch(input, init);
-    }
-    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-    if (!headers.has("X-CSRF-Token")) {
-      headers.set("X-CSRF-Token", csrfToken);
-    }
-    return nativeFetch(input, { ...(init || {}), headers });
-  };
-}
 
 const messagesEl = document.getElementById("messages");
 const inputEl = document.getElementById("user-input");
@@ -78,11 +13,6 @@ const youtubeUrlBtn = document.getElementById("youtube-url-btn");
 const attachmentPreviewEl = document.getElementById("attachment-preview");
 const chatAreaEl = document.getElementById("chat-area");
 const chatDropOverlay = document.getElementById("chat-drop-overlay");
-const summaryNowBtn = document.getElementById("summary-now-btn");
-const summaryUndoBtn = document.getElementById("summary-undo-btn");
-const kbSyncBtn = document.getElementById("kb-sync-btn");
-const kbStatusEl = document.getElementById("kb-status");
-const kbDocumentsListEl = document.getElementById("kb-documents-list");
 const cancelBtn = document.getElementById("cancel-btn");
 const fixBtn = document.getElementById("fix-btn");
 const sendBtn = document.getElementById("send-btn");
@@ -96,19 +26,10 @@ const errorArea = document.getElementById("error-area");
 const editBanner = document.getElementById("edit-banner");
 const editBannerText = document.getElementById("edit-banner-text");
 const editBannerCancelBtn = document.getElementById("edit-banner-cancel");
-const summaryInspectorBadge = document.getElementById("summary-inspector-badge");
-const summaryInspectorHeadline = document.getElementById("summary-inspector-headline");
-const summaryInspectorCurrent = document.getElementById("summary-inspector-current");
-const summaryInspectorTrigger = document.getElementById("summary-inspector-trigger");
-const summaryInspectorGap = document.getElementById("summary-inspector-gap");
-const summaryInspectorDetail = document.getElementById("summary-inspector-detail");
-const summaryInspectorToolMessages = document.getElementById("summary-inspector-tool-messages");
-const summaryInspectorReason = document.getElementById("summary-inspector-reason");
-const summaryInspectorLast = document.getElementById("summary-inspector-last");
 const canvasToggleBtn = document.getElementById("canvas-toggle-btn");
 const memoryToggleBtn = document.getElementById("memory-toggle-btn");
 const summaryToggleBtn = document.getElementById("summary-toggle-btn");
-const pruneToggleBtn = document.getElementById("prune-toggle-btn");
+
 const canvasPanel = document.getElementById("canvas-panel");
 const canvasOverlay = document.getElementById("canvas-overlay");
 const canvasClose = document.getElementById("canvas-close");
@@ -128,10 +49,6 @@ const canvasViewportActionsGroupEl = document.getElementById("canvas-actions-vie
 const canvasSubtitle = document.getElementById("canvas-subtitle");
 const canvasStatus = document.getElementById("canvas-status");
 const canvasHint = document.getElementById("canvas-hint");
-const canvasDiffEl = document.getElementById("canvas-diff");
-const canvasDiffModalEl = document.getElementById("canvas-diff-modal");
-const canvasDiffModalBefore = document.getElementById("canvas-diff-modal-before");
-const canvasDiffModalAfter = document.getElementById("canvas-diff-modal-after");
 const canvasEmptyState = document.getElementById("canvas-empty-state");
 const canvasEditorEl = document.getElementById("canvas-editor");
 const canvasDocumentEl = document.getElementById("canvas-document");
@@ -174,9 +91,7 @@ const headerEl = document.querySelector("header");
 const sidebarList = document.getElementById("sidebar-list");
 const sidebarToggleBtn = document.getElementById("sidebar-toggle-btn");
 const sidebarOverlay = document.getElementById("sidebar-overlay");
-const uploadedFilesToggle = document.getElementById("sidebar-uploaded-files-toggle");
-const uploadedFilesPanelClose = document.getElementById("uploaded-files-panel-close");
-const uploadedFilesOverlay = document.getElementById("uploaded-files-overlay");
+
 const toolMemoryPanel = document.getElementById("tool-memory-panel");
 const toolMemoryPanelClose = document.getElementById("tool-memory-panel-close");
 const newChatBtn = document.getElementById("new-chat-btn");
@@ -187,10 +102,9 @@ const mobileToolsClose = document.getElementById("mobile-tools-close");
 const mobileCanvasBtn = document.getElementById("mobile-canvas-btn");
 const mobileMemoryBtn = document.getElementById("mobile-memory-btn");
 const mobileExportBtn = document.getElementById("mobile-export-btn");
-const mobilePruneBtn = document.getElementById("mobile-prune-btn");
+
 const mobileConvToolsBtn = document.getElementById("mobile-conv-tools-btn");
 const mobileParamsBtn = document.getElementById("mobile-params-btn");
-const mobileUploadedFilesBtn = document.getElementById("mobile-uploaded-files-btn");
 const mobileSettingsBtn = document.getElementById("mobile-settings-btn");
 const mobileLogoutBtn = document.getElementById("mobile-logout-btn");
 const mobileTokensBtn = document.getElementById("mobile-tokens-btn");
@@ -203,9 +117,7 @@ const exportStatus = document.getElementById("export-status");
 const summaryPanel = document.getElementById("summary-panel");
 const summaryOverlay = document.getElementById("summary-overlay");
 const summaryClose = document.getElementById("summary-close");
-const prunePanel = document.getElementById("prune-panel");
-const pruneOverlay = document.getElementById("prune-overlay");
-const pruneClose = document.getElementById("prune-close");
+
 const memoryPanel = document.getElementById("memory-panel");
 const memoryOverlay = document.getElementById("memory-overlay");
 const memoryClose = document.getElementById("memory-close");
@@ -252,16 +164,7 @@ const summaryPreviewCard = document.getElementById("summary-preview-card");
 const summaryPreviewMeta = document.getElementById("summary-preview-meta");
 const summaryPreviewList = document.getElementById("summary-preview-list");
 const summaryHistoryList = document.getElementById("summary-history-list");
-const pruneSubtitle = document.getElementById("prune-panel-subtitle");
-const pruneStatus = document.getElementById("prune-status");
-const pruneSelectionCount = document.getElementById("prune-selection-count");
-const pruneRefreshBtn = document.getElementById("prune-refresh-btn");
-const pruneSelectRecommendedBtn = document.getElementById("prune-select-recommended-btn");
-const pruneClearSelectionBtn = document.getElementById("prune-clear-selection-btn");
-const pruneScoreLoading = document.getElementById("prune-score-loading");
-const pruneScoreList = document.getElementById("prune-score-list");
-const pruneApplyRecommendedBtn = document.getElementById("prune-apply-recommended-btn");
-const pruneApplySelectedBtn = document.getElementById("prune-apply-selected-btn");
+
 const mobileSummaryBtn = document.getElementById("mobile-summary-btn");
 const conversationExportMdBtn = document.getElementById("conversation-export-md-btn");
 const conversationExportJsonBtn = document.getElementById("conversation-export-json-btn");
@@ -271,7 +174,6 @@ const historySelectionBar = document.getElementById("history-selection-bar");
 const historySelectionLabel = document.getElementById("history-selection-label");
 const historySelectionDetail = document.getElementById("history-selection-detail");
 const historySelectionClear = document.getElementById("history-selection-clear");
-const historySelectionCancel = document.getElementById("history-selection-cancel");
 
 const SUMMARY_FOCUS_PRESETS = [
   {
@@ -429,323 +331,6 @@ function syncSummaryToggleButton() {
   summaryToggleBtn?.setAttribute("aria-expanded", String(isSummaryPanelOpen()));
 }
 
-function syncPruneToggleButton() {
-  pruneToggleBtn?.setAttribute("aria-expanded", String(isPrunePanelOpen()));
-}
-
-function setPruneBusyState(isBusy) {
-  isPruneOperationInFlight = Boolean(isBusy);
-}
-
-function formatPruneScorePercent(value) {
-  const normalized = Math.max(0, Math.min(1, Number(value) || 0));
-  return `${Math.round(normalized * 100)}%`;
-}
-
-function renderPruneScoreList() {
-  if (!pruneScoreList) {
-    return;
-  }
-
-  if (!currentConvId) {
-    pruneScoreList.innerHTML = '<div class="summary-history-empty">Open a conversation to inspect prune candidates.</div>';
-    return;
-  }
-
-  if (pruneScoresError) {
-    pruneScoreList.innerHTML = `<div class="summary-history-empty">${escHtml(pruneScoresError)}</div>`;
-    return;
-  }
-
-  if (pruneScoresLoading && !pruneScores.length) {
-    pruneScoreList.innerHTML = '<div class="summary-history-empty">Loading prune scores…</div>';
-    return;
-  }
-
-  if (!pruneScores.length) {
-    pruneScoreList.innerHTML = '<div class="summary-history-empty">No prune candidates are currently available.</div>';
-    return;
-  }
-
-  const selectedIds = new Set(getSelectedMessageIds("prune"));
-  const fragment = document.createDocumentFragment();
-  pruneScores.forEach((score, index) => {
-    const messageId = Number(score?.id || 0);
-    const isSelected = selectedIds.has(messageId);
-    const article = document.createElement("article");
-    article.className = "prune-score-item prune-score-item--interactive";
-    article.dataset.messageId = String(messageId || "");
-    if (isSelected) {
-      article.classList.add("is-selected");
-    }
-    article.addEventListener("click", (event) => {
-      if (isHistorySelectionInteractionTarget(event.target) || hasLiveHistoryTextSelection()) {
-        return;
-      }
-      toggleHistoryMessageSelection(messageId, "prune");
-    });
-
-    const header = document.createElement("div");
-    header.className = "prune-score-item__header";
-
-    const copy = document.createElement("div");
-    copy.className = "prune-score-item__copy";
-
-    const title = document.createElement("div");
-    title.className = "prune-score-item__title";
-    const roleLabel = String(score?.role || "message").trim().toUpperCase() || "MESSAGE";
-    const position = Number(score?.position || 0);
-    title.textContent = position > 0 ? `${roleLabel} #${position}` : roleLabel;
-    copy.appendChild(title);
-
-    const meta = document.createElement("div");
-    meta.className = "prune-score-item__meta";
-    const metaValues = [
-      `${fmt(Number(score?.estimated_tokens || 0))} tok`,
-      `Entropy ${formatPruneScorePercent(1 - Number(score?.entropy_score || 0))}`,
-      `RAG ${formatPruneScorePercent(score?.rag_coverage_score || 0)}`,
-      `Age ${formatPruneScorePercent(score?.recency_score || 0)}`,
-    ];
-    metaValues.forEach((value) => {
-      const chip = document.createElement("span");
-      chip.className = "summary-history-item__chip";
-      chip.textContent = value;
-      meta.appendChild(chip);
-    });
-    copy.appendChild(meta);
-    header.appendChild(copy);
-
-    const scoreChip = document.createElement("span");
-    scoreChip.className = "prune-score-item__score";
-    scoreChip.textContent = formatPruneScorePercent(score?.prune_score || 0);
-    header.appendChild(scoreChip);
-
-    const preview = document.createElement("p");
-    preview.className = "prune-score-item__preview";
-    preview.textContent = String(score?.content_preview || "").trim() || "(empty)";
-
-    const actions = document.createElement("div");
-    actions.className = "prune-score-item__actions";
-
-    const selectButton = document.createElement("button");
-    selectButton.type = "button";
-    selectButton.className = "msg-action-btn msg-action-btn--with-label";
-    selectButton.setAttribute("aria-pressed", String(isSelected));
-    selectButton.textContent = isSelected ? "In selection" : (index < pruneRecommendedBatchSize ? "Add recommended" : "Add to selection");
-    selectButton.addEventListener("click", () => {
-      toggleHistoryMessageSelection(messageId, "prune");
-    });
-    actions.appendChild(selectButton);
-
-    article.append(header, preview, actions);
-    fragment.appendChild(article);
-  });
-
-  pruneScoreList.replaceChildren(fragment);
-}
-
-function updatePrunePanelUi() {
-  if (!prunePanel) {
-    return;
-  }
-
-  const selectedCount = getSelectedMessageIds("prune").length;
-  const recommendedIds = getRecommendedPruneMessageIds();
-
-  if (pruneSubtitle) {
-    pruneSubtitle.textContent = currentConvId
-      ? `Conversation: ${getCurrentConversationDisplayTitle() || `Chat #${currentConvId}`} · threshold ${fmt(pruneTokenThreshold)} tokens · recommended batch ${fmt(pruneRecommendedBatchSize)}`
-      : "Entropy + RAG scores help surface lower-value history first.";
-  }
-
-  if (pruneSelectionCount) {
-    pruneSelectionCount.textContent = selectedCount
-      ? `${fmt(selectedCount)} message${selectedCount === 1 ? " is" : "s are"} selected for pruning. Use the ticks next to messages or click a message bubble to adjust the selection.`
-      : "No messages selected yet. Use the ticks next to messages or the recommended list.";
-  }
-
-  if (pruneStatus) {
-    if (!currentConvId) {
-      pruneStatus.textContent = "Open a conversation to inspect prune candidates. Tick messages in the chat or click a message bubble while this panel is open.";
-    } else if (pruneScoresLoading) {
-      pruneStatus.textContent = "Loading prune scores in the background…";
-    } else if (pruneScoresError) {
-      pruneStatus.textContent = pruneScoresError;
-    } else if (pruneScores.length) {
-      pruneStatus.textContent = `${fmt(pruneScores.length)} prunable messages scored. Higher scores are better prune candidates. Use the ticks next to messages or click a message bubble to build your exact prune set.`;
-    } else {
-      pruneStatus.textContent = "No prune candidates are currently available.";
-    }
-  }
-
-  if (pruneScoreLoading) {
-    pruneScoreLoading.hidden = !pruneScoresLoading;
-  }
-
-  if (pruneRefreshBtn) {
-    pruneRefreshBtn.disabled = !currentConvId || pruneScoresLoading || isPruneOperationInFlight;
-  }
-  if (pruneSelectRecommendedBtn) {
-    pruneSelectRecommendedBtn.disabled = !currentConvId || !recommendedIds.length || pruneScoresLoading || isPruneOperationInFlight;
-  }
-  if (pruneClearSelectionBtn) {
-    pruneClearSelectionBtn.disabled = selectedCount === 0 || isPruneOperationInFlight;
-  }
-  if (pruneApplyRecommendedBtn) {
-    pruneApplyRecommendedBtn.disabled = !currentConvId || !recommendedIds.length || pruneScoresLoading || isPruneOperationInFlight;
-  }
-  if (pruneApplySelectedBtn) {
-    pruneApplySelectedBtn.disabled = !currentConvId || selectedCount === 0 || pruneScoresLoading || isPruneOperationInFlight;
-  }
-  if (mobilePruneBtn) {
-    mobilePruneBtn.disabled = pruneScoresLoading || isPruneOperationInFlight;
-  }
-  if (pruneToggleBtn) {
-    pruneToggleBtn.disabled = isPruneOperationInFlight;
-  }
-
-  renderPruneScoreList();
-}
-
-async function loadPruneScores({ silent = false } = {}) {
-  if (!currentConvId) {
-    pruneScores = [];
-    pruneScoresError = "";
-    pruneScoresLoading = false;
-    pruneRecommendedBatchSize = 5;
-    pruneTokenThreshold = 0;
-    updatePrunePanelUi();
-    return;
-  }
-
-  const requestNonce = ++pruneScoreRequestNonce;
-  pruneScoresLoading = true;
-  pruneScoresError = "";
-  updatePrunePanelUi();
-
-  try {
-    const response = await fetch(`/api/conversations/${currentConvId}/prune-scores`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    const data = await response.json().catch(() => null);
-    if (!response.ok) {
-      throw new Error(data?.error || "Prune scores could not be loaded.");
-    }
-    if (requestNonce !== pruneScoreRequestNonce) {
-      return;
-    }
-    pruneScores = Array.isArray(data?.scores) ? data.scores : [];
-    pruneRecommendedBatchSize = Math.max(1, Math.min(50, Number(data?.batch_size || 5) || 5));
-    pruneTokenThreshold = Math.max(0, Number(data?.threshold || 0) || 0);
-    pruneScoresError = "";
-  } catch (error) {
-    if (requestNonce !== pruneScoreRequestNonce) {
-      return;
-    }
-    pruneScores = [];
-    pruneScoresError = error.message || "Prune scores could not be loaded.";
-    if (!silent) {
-      showError(pruneScoresError);
-    }
-  } finally {
-    if (requestNonce === pruneScoreRequestNonce) {
-      pruneScoresLoading = false;
-      updatePrunePanelUi();
-    }
-  }
-}
-
-async function applyPruneSelection(messageIds, { label = "selected" } = {}) {
-  const normalizedIds = Array.from(new Set((messageIds || []).map((messageId) => Number(messageId)))).filter(
-    (messageId) => Number.isInteger(messageId) && messageId > 0
-  );
-  if (!currentConvId) {
-    showToast("No active conversation.", "warning");
-    return;
-  }
-  if (!normalizedIds.length) {
-    showToast(`Choose at least one message to prune.`, "warning");
-    return;
-  }
-
-  setPruneBusyState(true);
-  updatePrunePanelUi();
-
-  try {
-    const response = await fetch(`/api/conversations/${currentConvId}/prune-selected`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message_ids: normalizedIds }),
-    });
-    const data = await response.json().catch(() => null);
-    if (!response.ok) {
-      throw new Error(data?.error || "Pruning failed.");
-    }
-
-    if (Array.isArray(data?.messages)) {
-      history = data.messages.map(normalizeHistoryEntry);
-      rebuildTokenStatsFromHistory();
-      renderConversationHistory();
-      renderCanvasPanel();
-    }
-
-    replaceSelectionSet(
-      "prune",
-      getSelectedMessageIds("prune").filter((messageId) => !normalizedIds.includes(messageId))
-    );
-    await loadPruneScores({ silent: true });
-    void loadSidebar();
-
-    const prunedCount = Number(data?.pruned_count || 0);
-    showToast(
-      prunedCount > 0
-        ? `${prunedCount} ${label} message${prunedCount === 1 ? " was" : "s were"} pruned.`
-        : "No eligible messages were pruned.",
-      prunedCount > 0 ? "success" : "warning"
-    );
-  } catch (error) {
-    pruneScoresError = error.message || "Pruning failed.";
-    showError(pruneScoresError);
-  } finally {
-    setPruneBusyState(false);
-    updatePrunePanelUi();
-  }
-}
-
-function openPrunePanel(triggerEl = null) {
-  closeMobileTools();
-  closeStats();
-  closeCanvas();
-  closeExportPanel();
-  closeParamsPanel({ restoreFocus: false });
-  closeSummaryPanel({ restoreFocus: false });
-  closeMemoryPanel();
-  prunePanel?.classList.add("open");
-  pruneOverlay?.classList.add("open");
-  prunePanel?.setAttribute("aria-hidden", "false");
-  lastPruneTriggerEl = triggerEl instanceof HTMLElement
-    ? triggerEl
-    : (document.activeElement instanceof HTMLElement ? document.activeElement : (pruneToggleBtn || mobilePruneBtn));
-  syncPruneToggleButton();
-  syncMessageSelectionMode({ render: true });
-  updatePrunePanelUi();
-  void loadPruneScores({ silent: true });
-  window.setTimeout(() => pruneClose?.focus({ preventScroll: true }), 0);
-}
-
-function closePrunePanel({ restoreFocus = true } = {}) {
-  prunePanel?.classList.remove("open");
-  pruneOverlay?.classList.remove("open");
-  prunePanel?.setAttribute("aria-hidden", "true");
-  syncPruneToggleButton();
-  syncMessageSelectionMode({ render: true });
-  if (restoreFocus && lastPruneTriggerEl && typeof lastPruneTriggerEl.focus === "function") {
-    lastPruneTriggerEl.focus();
-  }
-}
-
 function getSummaryDetailLabel(value) {
   const normalizedValue = String(value || "balanced").trim() || "balanced";
   return SUMMARY_DETAIL_LABELS[normalizedValue] || SUMMARY_DETAIL_LABELS.balanced;
@@ -832,9 +417,6 @@ function setSummaryBusyState(isBusy) {
   }
   if (summaryPreviewBtn) {
     summaryPreviewBtn.disabled = isSummaryOperationInFlight;
-  }
-  if (summaryNowBtn) {
-    summaryNowBtn.disabled = isSummaryOperationInFlight || !currentConvId;
   }
   if (summaryFocusInput) {
     summaryFocusInput.disabled = isSummaryOperationInFlight;
@@ -960,7 +542,6 @@ async function refreshSummarySettingsFromServer() {
       summary_retry_min_source_tokens: data.summary_retry_min_source_tokens,
     });
     setSummaryDetailLevel(String(appSettings.chat_summary_detail_level || "balanced").trim() || "balanced");
-    renderSummaryInspector();
   } catch (_) {
     // Ignore settings refresh failures and keep the bootstrapped values.
   }
@@ -1034,7 +615,6 @@ let activeCanvasDocumentId = null;
 let streamingCanvasDocuments = [];
 let isCanvasEditing = false;
 let editingCanvasDocumentId = null;
-let pendingCanvasDiff = null;
 let canvasPageByDocumentId = new Map();
 let pendingCanvasPageSyncFrame = 0;
 let canvasHasUnreadUpdates = false;
@@ -1042,7 +622,7 @@ let lastCanvasTriggerEl = null;
 let lastCanvasConfirmTriggerEl = null;
 let lastExportTriggerEl = null;
 let lastSummaryTriggerEl = null;
-let lastPruneTriggerEl = null;
+
 let lastMemoryTriggerEl = null;
 let lastParamsTriggerEl = null;
 let streamingCanvasPreviews = new Map();
@@ -1057,19 +637,12 @@ let pendingDeferredCanvasRenderFlushTimer = 0;
 let lastCanvasPreviewRenderAt = 0;
 let latestSummaryStatus = null;
 let isSummaryOperationInFlight = false;
-let isPruneOperationInFlight = false;
+
 let summaryProgressTimer = 0;
 let summaryProgressCurrentValue = 0;
 let summaryPreviewConversationId = null;
 let messageSelectionMode = null;
 let selectedSummaryMessageIds = new Set();
-let selectedPruneMessageIds = new Set();
-let pruneScores = [];
-let pruneScoreRequestNonce = 0;
-let pruneScoresLoading = false;
-let pruneScoresError = "";
-let pruneRecommendedBatchSize = 5;
-let pruneTokenThreshold = 0;
 let conversationRefreshGeneration = 0;
 let pendingConversationRefreshTimers = new Set();
 let lastConversationSignature = "";
@@ -1528,7 +1101,7 @@ function openParamsPanel(triggerEl = null) {
   closeCanvas();
   closeExportPanel();
   closeSummaryPanel({ restoreFocus: false });
-  closePrunePanel({ restoreFocus: false });
+  
   closeMemoryPanel({ restoreFocus: false });
   closeConvToolsPanel({ restoreFocus: false });
   paramsPanel?.classList.add("open");
@@ -1625,7 +1198,7 @@ function openConvToolsPanel(triggerEl = null) {
   closeExportPanel();
   closeParamsPanel({ restoreFocus: false });
   closeSummaryPanel();
-  closePrunePanel({ restoreFocus: false });
+  
   closeMemoryPanel();
   convToolsPanel?.classList.add("open");
   convToolsOverlay?.classList.add("open");
@@ -1741,7 +1314,7 @@ function openMemoryPanel(triggerEl = null) {
   closeExportPanel();
   closeParamsPanel({ restoreFocus: false });
   closeSummaryPanel();
-  closePrunePanel({ restoreFocus: false });
+  
   memoryPanel?.classList.add("open");
   memoryOverlay?.classList.add("open");
   memoryPanel?.setAttribute("aria-hidden", "false");
@@ -1917,7 +1490,7 @@ let chatDragDepth = 0;
 let isCanvasMobileTreeOpen = false;
 let isCanvasFullscreen = false;
 let canvasZoomLevelIndex = 0;
-const featureFlags = bootstrapData.features || appSettings.features || {};
+const featureFlags = window.__featureFlags || appSettings.features || {};
 conversationMemoryEnabled = featureFlags.conversation_memory_enabled !== false;
 if (youtubeUrlBtn && !Boolean(featureFlags.youtube_transcripts_enabled)) {
   youtubeUrlBtn.hidden = true;
@@ -2778,7 +2351,6 @@ function sanitizeEditedUserMetadata(metadata) {
   }
   return Object.keys(sanitizedMetadata).length ? sanitizedMetadata : null;
 }
-const ragDisabledNoteEl = document.getElementById("rag-disabled-note");
 const visionDisabledNoteEl = document.getElementById("vision-disabled-note");
 const RAG_SENSITIVITY_HINTS = {
   flexible: "Flexible: lower threshold around 0.20, so the system injects broader matches.",
@@ -3250,7 +2822,6 @@ function getCanvasPathFilterValue() {
 function resetCanvasWorkspaceState() {
   isCanvasEditing = false;
   editingCanvasDocumentId = null;
-  pendingCanvasDiff = null;
   if (pendingCanvasPageSyncFrame) {
     globalThis.cancelAnimationFrame(pendingCanvasPageSyncFrame);
     pendingCanvasPageSyncFrame = 0;
@@ -4264,373 +3835,6 @@ function getCanvasDocumentById(documents, documentId) {
   return documents.find((document) => document.id === targetId) || null;
 }
 
-const CANVAS_DIFF_CONTEXT_LINE_COUNT = 2;
-const CANVAS_DIFF_MAX_VISIBLE_LINES = 160;
-const CANVAS_DIFF_MAX_MATRIX_CELLS = 60000;
-
-function buildCanvasDiffOperations(previousLines, nextLines) {
-  const previousLength = previousLines.length;
-  const nextLength = nextLines.length;
-  if (!previousLength && !nextLength) {
-    return [];
-  }
-
-  if (previousLength && nextLength && previousLength * nextLength <= CANVAS_DIFF_MAX_MATRIX_CELLS) {
-    const lcsMatrix = Array.from({ length: previousLength + 1 }, () => new Uint32Array(nextLength + 1));
-    for (let previousIndex = previousLength - 1; previousIndex >= 0; previousIndex -= 1) {
-      for (let nextIndex = nextLength - 1; nextIndex >= 0; nextIndex -= 1) {
-        lcsMatrix[previousIndex][nextIndex] = previousLines[previousIndex] === nextLines[nextIndex]
-          ? lcsMatrix[previousIndex + 1][nextIndex + 1] + 1
-          : Math.max(lcsMatrix[previousIndex + 1][nextIndex], lcsMatrix[previousIndex][nextIndex + 1]);
-      }
-    }
-
-    const operations = [];
-    let previousIndex = 0;
-    let nextIndex = 0;
-    while (previousIndex < previousLength && nextIndex < nextLength) {
-      if (previousLines[previousIndex] === nextLines[nextIndex]) {
-        operations.push({ kind: "context", text: previousLines[previousIndex] });
-        previousIndex += 1;
-        nextIndex += 1;
-        continue;
-      }
-
-      if (lcsMatrix[previousIndex + 1][nextIndex] >= lcsMatrix[previousIndex][nextIndex + 1]) {
-        operations.push({ kind: "removed", text: previousLines[previousIndex] });
-        previousIndex += 1;
-        continue;
-      }
-
-      operations.push({ kind: "added", text: nextLines[nextIndex] });
-      nextIndex += 1;
-    }
-
-    while (previousIndex < previousLength) {
-      operations.push({ kind: "removed", text: previousLines[previousIndex] });
-      previousIndex += 1;
-    }
-
-    while (nextIndex < nextLength) {
-      operations.push({ kind: "added", text: nextLines[nextIndex] });
-      nextIndex += 1;
-    }
-
-    return operations;
-  }
-
-  return [
-    ...previousLines.map((text) => ({ kind: "removed", text })),
-    ...nextLines.map((text) => ({ kind: "added", text })),
-  ];
-}
-
-function buildCanvasDiffHunkLabel(lines) {
-  const firstChangedLine = lines.find((line) => line.kind !== "context") || lines[0] || null;
-  const oldAnchor = firstChangedLine?.previousLineNumber
-    ?? lines.find((line) => Number.isInteger(line.previousLineNumber))?.previousLineNumber
-    ?? null;
-  const newAnchor = firstChangedLine?.nextLineNumber
-    ?? lines.find((line) => Number.isInteger(line.nextLineNumber))?.nextLineNumber
-    ?? null;
-
-  if (Number.isInteger(oldAnchor) && Number.isInteger(newAnchor)) {
-    return `Around old line ${oldAnchor} · new line ${newAnchor}`;
-  }
-  if (Number.isInteger(oldAnchor)) {
-    return `Around old line ${oldAnchor}`;
-  }
-  if (Number.isInteger(newAnchor)) {
-    return `Around new line ${newAnchor}`;
-  }
-  return "Changed lines";
-}
-
-function buildCanvasDiffHunks(lines, contextLineCount = CANVAS_DIFF_CONTEXT_LINE_COUNT, maxVisibleLines = CANVAS_DIFF_MAX_VISIBLE_LINES) {
-  const changeIndices = [];
-  lines.forEach((line, index) => {
-    if (line.kind !== "context") {
-      changeIndices.push(index);
-    }
-  });
-
-  if (!changeIndices.length) {
-    return {
-      hunks: [],
-      truncated: false,
-      totalHunkCount: 0,
-      visibleLineCount: 0,
-    };
-  }
-
-  const mergedRanges = [];
-  changeIndices.forEach((changeIndex) => {
-    const nextRange = {
-      start: Math.max(0, changeIndex - contextLineCount),
-      end: Math.min(lines.length - 1, changeIndex + contextLineCount),
-    };
-    const previousRange = mergedRanges[mergedRanges.length - 1] || null;
-    if (previousRange && nextRange.start <= previousRange.end + 1) {
-      previousRange.end = Math.max(previousRange.end, nextRange.end);
-      return;
-    }
-    mergedRanges.push(nextRange);
-  });
-
-  const hunks = [];
-  let visibleLineCount = 0;
-  let truncated = false;
-  mergedRanges.forEach((range) => {
-    if (visibleLineCount >= maxVisibleLines) {
-      truncated = true;
-      return;
-    }
-
-    const remainingLineBudget = maxVisibleLines - visibleLineCount;
-    const fullLines = lines.slice(range.start, range.end + 1);
-    const visibleLines = fullLines.slice(0, remainingLineBudget);
-    if (!visibleLines.length) {
-      truncated = true;
-      return;
-    }
-
-    if (visibleLines.length < fullLines.length) {
-      truncated = true;
-    }
-
-    hunks.push({
-      label: buildCanvasDiffHunkLabel(visibleLines),
-      lines: visibleLines,
-    });
-    visibleLineCount += visibleLines.length;
-  });
-
-  if (mergedRanges.length > hunks.length) {
-    truncated = true;
-  }
-
-  return {
-    hunks,
-    truncated,
-    totalHunkCount: mergedRanges.length,
-    visibleLineCount,
-  };
-}
-
-function buildCanvasDiff(previousContent, nextContent) {
-  const previousLines = String(previousContent || "").replace(/\r\n?/g, "\n").split("\n");
-  const nextLines = String(nextContent || "").replace(/\r\n?/g, "\n").split("\n");
-  let start = 0;
-  while (start < previousLines.length && start < nextLines.length && previousLines[start] === nextLines[start]) {
-    start += 1;
-  }
-
-  let previousEnd = previousLines.length - 1;
-  let nextEnd = nextLines.length - 1;
-  while (previousEnd >= start && nextEnd >= start && previousLines[previousEnd] === nextLines[nextEnd]) {
-    previousEnd -= 1;
-    nextEnd -= 1;
-  }
-
-  const removed = previousEnd >= start ? previousLines.slice(start, previousEnd + 1) : [];
-  const added = nextEnd >= start ? nextLines.slice(start, nextEnd + 1) : [];
-  if (!removed.length && !added.length) {
-    return null;
-  }
-
-  const numberedLines = [];
-  const prefixContextStart = Math.max(0, start - CANVAS_DIFF_CONTEXT_LINE_COUNT);
-  for (let index = prefixContextStart; index < start; index += 1) {
-    numberedLines.push({
-      kind: "context",
-      previousLineNumber: index + 1,
-      nextLineNumber: index + 1,
-      text: previousLines[index],
-    });
-  }
-
-  let previousLineNumber = start + 1;
-  let nextLineNumber = start + 1;
-  buildCanvasDiffOperations(removed, added).forEach((operation) => {
-    if (operation.kind === "context") {
-      numberedLines.push({
-        kind: operation.kind,
-        previousLineNumber,
-        nextLineNumber,
-        text: operation.text,
-      });
-      previousLineNumber += 1;
-      nextLineNumber += 1;
-      return;
-    }
-
-    if (operation.kind === "removed") {
-      numberedLines.push({
-        kind: operation.kind,
-        previousLineNumber,
-        nextLineNumber: null,
-        text: operation.text,
-      });
-      previousLineNumber += 1;
-      return;
-    }
-
-    numberedLines.push({
-      kind: operation.kind,
-      previousLineNumber: null,
-      nextLineNumber,
-      text: operation.text,
-    });
-    nextLineNumber += 1;
-  });
-
-  const sharedSuffixCount = Math.min(
-    CANVAS_DIFF_CONTEXT_LINE_COUNT,
-    Math.max(0, previousLines.length - (previousEnd + 1)),
-    Math.max(0, nextLines.length - (nextEnd + 1)),
-  );
-  for (let offset = 0; offset < sharedSuffixCount; offset += 1) {
-    numberedLines.push({
-      kind: "context",
-      previousLineNumber,
-      nextLineNumber,
-      text: previousLines[previousEnd + 1 + offset],
-    });
-    previousLineNumber += 1;
-    nextLineNumber += 1;
-  }
-
-  const addedCount = numberedLines.filter((line) => line.kind === "added").length;
-  const removedCount = numberedLines.filter((line) => line.kind === "removed").length;
-  const { hunks, truncated, totalHunkCount, visibleLineCount } = buildCanvasDiffHunks(numberedLines);
-
-  return {
-    startLine: start + 1,
-    removed,
-    added,
-    addedCount,
-    removedCount,
-    hunkCount: totalHunkCount,
-    hunks,
-    truncated,
-    visibleLineCount,
-  };
-}
-
-function openDiffFullscreen(diff) {
-  if (!canvasDiffModalEl || !canvasDiffModalBefore || !canvasDiffModalAfter || !diff) {
-    return;
-  }
-  // Reconstruct before/after full text from hunk lines
-  const beforeLines = [];
-  const afterLines = [];
-  for (const hunk of (diff.hunks || [])) {
-    for (const line of (hunk.lines || [])) {
-      if (line.kind === "removed" || line.kind === "context") {
-        beforeLines.push(line.text || "");
-      }
-      if (line.kind === "added" || line.kind === "context") {
-        afterLines.push(line.text || "");
-      }
-    }
-  }
-  canvasDiffModalBefore.textContent = beforeLines.join("\n");
-  canvasDiffModalAfter.textContent = afterLines.join("\n");
-  canvasDiffModalEl.hidden = false;
-  canvasDiffModalEl.focus?.();
-}
-
-function closeDiffFullscreen() {
-  if (canvasDiffModalEl) {
-    canvasDiffModalEl.hidden = true;
-  }
-}
-
-function renderCanvasDiffPreview(activeDocument) {
-  if (!canvasDiffEl) {
-    return;
-  }
-  if (!pendingCanvasDiff || pendingCanvasDiff.documentId !== activeDocument?.id || activeDocument?.isStreamingPreview) {
-    canvasDiffEl.hidden = true;
-    canvasDiffEl.innerHTML = "";
-    return;
-  }
-
-  const diff = pendingCanvasDiff.diff;
-  const fileLabel = getCanvasDocumentLabel(activeDocument);
-  const metaParts = [
-    fileLabel,
-    `+${diff.addedCount}`,
-    `-${diff.removedCount}`,
-    `${diff.hunkCount} hunk${diff.hunkCount === 1 ? "" : "s"}`,
-  ];
-  if (diff.truncated) {
-    metaParts.push(`showing first ${diff.visibleLineCount} diff line${diff.visibleLineCount === 1 ? "" : "s"}`);
-  }
-  const sourceBadge = pendingCanvasDiff.source === "live-preview"
-    ? '<span class="canvas-diff__badge">Saved after live preview</span>'
-    : "";
-
-  canvasDiffEl.hidden = false;
-  canvasDiffEl.innerHTML =
-    `<div class="canvas-diff__header">` +
-      `<div class="canvas-diff__summary">` +
-        `<div class="canvas-diff__title-row">` +
-          `<div class="canvas-diff__title">Recent AI change</div>` +
-          sourceBadge +
-        `</div>` +
-        `<div class="canvas-diff__meta">${escHtml(metaParts.join(" · "))}</div>` +
-      `</div>` +
-      `<div class="canvas-diff__actions">` +
-        `<button class="canvas-diff__expand" type="button" data-action="fullscreen-canvas-diff" title="View side by side fullscreen">⤢ Side by side</button>` +
-        `<button class="canvas-diff__close" type="button" data-action="dismiss-canvas-diff">Hide diff</button>` +
-      `</div>` +
-    `</div>` +
-    `<div class="canvas-diff__body" tabindex="0">` +
-      diff.hunks.map((hunk) =>
-        `<section class="canvas-diff__hunk">` +
-          `<div class="canvas-diff__hunk-header">${escHtml(hunk.label)}</div>` +
-          hunk.lines.map((line) => {
-            const marker = line.kind === "added" ? "+" : line.kind === "removed" ? "-" : "·";
-            const previousLineNumber = Number.isInteger(line.previousLineNumber) ? String(line.previousLineNumber) : "";
-            const nextLineNumber = Number.isInteger(line.nextLineNumber) ? String(line.nextLineNumber) : "";
-            return `<div class="canvas-diff__line canvas-diff__line--${line.kind}"><span class="canvas-diff__line-marker">${marker}</span><span class="canvas-diff__line-num">${previousLineNumber}</span><span class="canvas-diff__line-num">${nextLineNumber}</span><span class="canvas-diff__line-text">${escHtml(line.text || " ")}</span></div>`;
-          }).join("") +
-        `</section>`
-      ).join("") +
-      `<div class="canvas-diff__scroll-hint" hidden aria-hidden="true">↓ scroll to see more</div>` +
-      `<div class="canvas-diff__scroll-sentinel" aria-hidden="true"></div>` +
-    `</div>`;
-
-  const diffBodyEl = canvasDiffEl.querySelector(".canvas-diff__body");
-  const scrollHintEl = canvasDiffEl.querySelector(".canvas-diff__scroll-hint");
-  const sentinelEl = canvasDiffEl.querySelector(".canvas-diff__scroll-sentinel");
-
-  // Show the sticky scroll-hint whenever the sentinel (placed after the last hunk)
-  // is not visible within the diff body's scrollport.  This is more reliable than
-  // a one-shot rAF measurement and ensures the hint is only shown when the user
-  // genuinely has content below the fold.  Because the hint lives INSIDE the body,
-  // hovering over it and using the mouse-wheel scrolls the correct element.
-  if (diffBodyEl && scrollHintEl && sentinelEl) {
-    const scrollObserver = new IntersectionObserver(
-      (entries) => {
-        scrollHintEl.hidden = entries[0].isIntersecting;
-      },
-      { root: diffBodyEl, threshold: 0 },
-    );
-    scrollObserver.observe(sentinelEl);
-  }
-
-  canvasDiffEl.querySelector('[data-action="dismiss-canvas-diff"]')?.addEventListener("click", () => {
-    pendingCanvasDiff = null;
-    renderCanvasDiffPreview(getActiveCanvasDocument());
-  });
-
-  canvasDiffEl.querySelector('[data-action="fullscreen-canvas-diff"]')?.addEventListener("click", () => {
-    openDiffFullscreen(pendingCanvasDiff?.diff);
-  });
-}
-
 function setCanvasEditing(enabled) {
   if (enabled && guardCanvasMutation("edit the active file")) {
     return;
@@ -4852,7 +4056,6 @@ async function createCanvasDocumentFromData({ title, content, format, language =
     setCanvasMutationState("", { rerender: false });
     history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
     streamingCanvasDocuments = [];
-    pendingCanvasDiff = null;
     activeCanvasDocumentId = String(payload.active_document_id || payload.document?.id || "").trim() || null;
     isCanvasEditing = true;
     editingCanvasDocumentId = null;
@@ -4941,7 +4144,6 @@ async function createCanvasDocumentFromFile(file) {
     setCanvasMutationState("", { rerender: false });
     history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
     streamingCanvasDocuments = [];
-    pendingCanvasDiff = null;
     activeCanvasDocumentId = String(payload.active_document_id || payload.document?.id || "").trim() || null;
     isCanvasEditing = true;
     editingCanvasDocumentId = null;
@@ -5009,7 +4211,6 @@ async function importGithubRepositoryToCanvas() {
     setCanvasMutationState("", { rerender: false });
     history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
     streamingCanvasDocuments = [];
-    pendingCanvasDiff = null;
     activeCanvasDocumentId = String(payload.active_document_id || "").trim() || null;
     isCanvasEditing = false;
     editingCanvasDocumentId = null;
@@ -5765,11 +4966,6 @@ function resetCanvasContentDisplay({ clearEditorValue = true, clearTabs = true }
     canvasDocumentEl.innerHTML = "";
   }
 
-  if (canvasDiffEl) {
-    canvasDiffEl.hidden = true;
-    canvasDiffEl.innerHTML = "";
-  }
-
   if (clearTabs && canvasDocumentTabsEl) {
     canvasDocumentTabsEl.hidden = true;
     canvasDocumentTabsEl.innerHTML = "";
@@ -6141,7 +5337,6 @@ function updateCanvasActiveDocumentDisplay(renderState) {
     }
   }
 
-  renderCanvasDiffPreview(activeDocument);
   const matchCount = !isCanvasEditing && !isStreamingPreviewActive ? applyCanvasSearchHighlight(searchTerm) : 0;
   updateCanvasSearchFeedback(renderState, matchCount);
   const copySourceText = isCanvasEditing && canvasEditorEl ? canvasEditorEl.value : displayDocument.content;
@@ -6640,7 +5835,7 @@ function openCanvas(triggerEl = null, options = {}) {
   closeParamsPanel({ restoreFocus: false });
   closeMemoryPanel();
   closeSummaryPanel();
-  closePrunePanel({ restoreFocus: false });
+  
   closeMobileTools();
   closeCanvasConfirmModal("cancel", false);
   closeStats();
@@ -6802,7 +5997,7 @@ function openExportPanel(triggerEl = null) {
   closeCanvas();
   closeParamsPanel({ restoreFocus: false });
   closeSummaryPanel();
-  closePrunePanel({ restoreFocus: false });
+  
   closeMemoryPanel();
   updateExportPanel();
   exportPanel?.classList.add("open");
@@ -6814,10 +6009,6 @@ function openExportPanel(triggerEl = null) {
   exportClose?.focus();
 }
 
-async function pruneConversationHistory() {
-  openPrunePanel(pruneToggleBtn || mobilePruneBtn || mobileToolsBtn || null);
-}
-
 function closeExportPanel() {
   exportPanel?.classList.remove("open");
   exportOverlay?.classList.remove("open");
@@ -6825,10 +6016,6 @@ function closeExportPanel() {
   if (lastExportTriggerEl && typeof lastExportTriggerEl.focus === "function") {
     lastExportTriggerEl.focus();
   }
-}
-
-function isPrunePanelOpen() {
-  return Boolean(prunePanel?.classList.contains("open"));
 }
 
 function getHistoryMessageSortValue(message) {
@@ -6850,16 +6037,9 @@ function sortHistoryMessagesByPosition(entries = []) {
   });
 }
 
-function getPruneEligibleMessages(entries = history) {
-  return sortHistoryMessagesByPosition((entries || []).filter(isPrunableHistoryMessage));
-}
-
 function getSelectionSetForMode(mode = messageSelectionMode) {
   if (mode === "summary") {
     return selectedSummaryMessageIds;
-  }
-  if (mode === "prune") {
-    return selectedPruneMessageIds;
   }
   return null;
 }
@@ -6867,9 +6047,6 @@ function getSelectionSetForMode(mode = messageSelectionMode) {
 function getSelectableMessagesForMode(mode, entries = history) {
   if (mode === "summary") {
     return getSummaryEligibleMessages(entries);
-  }
-  if (mode === "prune") {
-    return getPruneEligibleMessages(entries);
   }
   return [];
 }
@@ -6892,35 +6069,7 @@ function replaceSelectionSet(mode, messageIds) {
 
   if (mode === "summary") {
     selectedSummaryMessageIds = nextSet;
-  } else if (mode === "prune") {
-    selectedPruneMessageIds = nextSet;
   }
-}
-
-function getSelectedMessageIds(mode = messageSelectionMode) {
-  const selectedIds = Array.from(getSelectionSetForMode(mode) || []);
-  return selectedIds
-    .filter((messageId) => Number.isInteger(Number(messageId)) && Number(messageId) > 0)
-    .sort((left, right) => {
-      const leftMessage = getHistoryMessage(left);
-      const rightMessage = getHistoryMessage(right);
-      const positionDelta = getHistoryMessageSortValue(leftMessage) - getHistoryMessageSortValue(rightMessage);
-      if (positionDelta !== 0) {
-        return positionDelta;
-      }
-      return Number(left) - Number(right);
-    });
-}
-
-function pruneStaleMessageSelections() {
-  const summaryEligibleIds = getSelectableMessageIdSet("summary");
-  const pruneEligibleIds = getSelectableMessageIdSet("prune");
-  const nextSummaryIds = new Set([...selectedSummaryMessageIds].filter((messageId) => summaryEligibleIds.has(messageId)));
-  const nextPruneIds = new Set([...selectedPruneMessageIds].filter((messageId) => pruneEligibleIds.has(messageId)));
-  const changed = nextSummaryIds.size !== selectedSummaryMessageIds.size || nextPruneIds.size !== selectedPruneMessageIds.size;
-  selectedSummaryMessageIds = nextSummaryIds;
-  selectedPruneMessageIds = nextPruneIds;
-  return changed;
 }
 
 function isMessageSelectableForMode(message, mode = messageSelectionMode) {
@@ -6964,31 +6113,20 @@ function renderHistorySelectionBar() {
   }
 
   const selectedCount = getSelectedMessageIds(messageSelectionMode).length;
-  const modeLabel = messageSelectionMode === "prune" ? "Prune selection" : "Summary selection";
+  const modeLabel = "Summary selection";
   historySelectionLabel.textContent = selectedCount ? `${modeLabel} · ${fmt(selectedCount)}` : modeLabel;
-  historySelectionDetail.textContent = messageSelectionMode === "prune"
-    ? (
-      selectedCount
-        ? `${fmt(selectedCount)} message${selectedCount === 1 ? " is" : "s are"} ready for pruning. Use the tick next to each message or click the message bubble to adjust the selection, then apply it from the Prune panel.`
-        : "Tick messages in the conversation or click a message bubble, then use the panel actions or the recommended prune list."
-    )
-    : (
-      selectedCount
-        ? `${fmt(selectedCount)} message${selectedCount === 1 ? " is" : "s are"} selected for summary. Use the tick next to each message or click the message bubble to adjust the selection. Clear it to return to automatic rules.`
-        : "Tick eligible messages in the conversation or click a message bubble to build a custom summary selection. Leaving it empty falls back to automatic rules."
-    );
+  historySelectionDetail.textContent = selectedCount
+    ? `${fmt(selectedCount)} message${selectedCount === 1 ? " is" : "s are"} selected for summary. Use the tick next to each message or click the message bubble to adjust the selection. Clear it to return to automatic rules.`
+    : "Tick eligible messages in the conversation or click a message bubble to build a custom summary selection. Leaving it empty falls back to automatic rules.";
 
   if (historySelectionClear) {
     historySelectionClear.disabled = selectedCount === 0;
-  }
-  if (historySelectionCancel) {
-    historySelectionCancel.textContent = messageSelectionMode === "prune" ? "Close prune" : "Close summary";
   }
   historySelectionBar.hidden = false;
 }
 
 function syncMessageSelectionMode({ render = false } = {}) {
-  const nextMode = isPrunePanelOpen() ? "prune" : isSummaryPanelOpen() ? "summary" : null;
+  const nextMode = isSummaryPanelOpen() ? "summary" : null;
   const changed = nextMode !== messageSelectionMode;
   messageSelectionMode = nextMode;
   renderHistorySelectionBar();
@@ -6997,29 +6135,29 @@ function syncMessageSelectionMode({ render = false } = {}) {
   }
 }
 
-function refreshSelectionUi({ render = true } = {}) {
-  pruneStaleMessageSelections();
-  renderHistorySelectionBar();
-  updateSummarySelectionUi();
-  updatePrunePanelUi();
-  if (render) {
-    renderConversationHistory({ preserveScroll: true });
-  }
-}
-
 function clearMessageSelection(mode = messageSelectionMode, { render = true } = {}) {
   if (!mode) {
     selectedSummaryMessageIds = new Set();
-    selectedPruneMessageIds = new Set();
   } else {
     replaceSelectionSet(mode, []);
   }
   renderHistorySelectionBar();
   updateSummarySelectionUi();
-  updatePrunePanelUi();
   if (render) {
     renderConversationHistory({ preserveScroll: true });
   }
+}
+
+function selectEligibleSummaryMessages() {
+  replaceSelectionSet(
+    "summary",
+    getSelectableMessagesForMode("summary")
+      .map((message) => Number(message?.id || 0))
+      .filter((messageId) => Number.isInteger(messageId) && messageId > 0)
+  );
+  renderHistorySelectionBar();
+  updateSummarySelectionUi();
+  renderConversationHistory({ preserveScroll: true });
 }
 
 function toggleHistoryMessageSelection(messageId, mode = messageSelectionMode) {
@@ -7040,34 +6178,22 @@ function toggleHistoryMessageSelection(messageId, mode = messageSelectionMode) {
   replaceSelectionSet(mode, nextSelection);
   renderHistorySelectionBar();
   updateSummarySelectionUi();
-  updatePrunePanelUi();
   renderConversationHistory({ preserveScroll: true });
 }
 
-function selectEligibleSummaryMessages() {
-  replaceSelectionSet(
-    "summary",
-    getSelectableMessagesForMode("summary")
-      .map((message) => Number(message?.id || 0))
-      .filter((messageId) => Number.isInteger(messageId) && messageId > 0)
-  );
-  renderHistorySelectionBar();
-  updateSummarySelectionUi();
-  renderConversationHistory({ preserveScroll: true });
-}
-
-function getRecommendedPruneMessageIds(limit = pruneRecommendedBatchSize) {
-  return pruneScores
-    .slice(0, Math.max(1, Number(limit) || 1))
-    .map((score) => Number(score?.id || 0))
-    .filter((messageId) => Number.isInteger(messageId) && messageId > 0);
-}
-
-function selectRecommendedPruneMessages() {
-  replaceSelectionSet("prune", getRecommendedPruneMessageIds());
-  renderHistorySelectionBar();
-  updatePrunePanelUi();
-  renderConversationHistory({ preserveScroll: true });
+function getSelectedMessageIds(mode = messageSelectionMode) {
+  const selectedIds = Array.from(getSelectionSetForMode(mode) || []);
+  return selectedIds
+    .filter((messageId) => Number.isInteger(Number(messageId)) && Number(messageId) > 0)
+    .sort((left, right) => {
+      const leftMessage = getHistoryMessage(left);
+      const rightMessage = getHistoryMessage(right);
+      const positionDelta = getHistoryMessageSortValue(leftMessage) - getHistoryMessageSortValue(rightMessage);
+      if (positionDelta !== 0) {
+        return positionDelta;
+      }
+      return Number(left) - Number(right);
+    });
 }
 
 function isSummaryPanelOpen() {
@@ -7080,7 +6206,7 @@ function openSummaryPanel(triggerEl = null) {
   closeCanvas();
   closeExportPanel();
   closeParamsPanel({ restoreFocus: false });
-  closePrunePanel({ restoreFocus: false });
+  
   closeMemoryPanel();
   summaryPanel?.classList.add("open");
   summaryOverlay?.classList.add("open");
@@ -7095,7 +6221,6 @@ function openSummaryPanel(triggerEl = null) {
   if (summaryPreviewConversationId !== currentConvId) {
     resetSummaryPreview({ hide: true });
   }
-  renderSummaryInspector();
   setSummaryBusyState(isSummaryOperationInFlight);
   syncMessageSelectionMode({ render: true });
   void refreshSummarySettingsFromServer();
@@ -7166,7 +6291,6 @@ async function runConversationSummary({ triggerButton = null, closePanel = false
       showToast(data.failure_detail || data.reason || "Summary was not applied.", "warning");
       latestSummaryStatus = { applied: false, reason: data.reason, failure_detail: data.failure_detail };
     }
-    renderSummaryInspector();
   } catch (error) {
     failSummaryProgress(error.message || "Failed to summarize.");
     showToast(error.message, "error");
@@ -7179,7 +6303,6 @@ async function runConversationSummary({ triggerButton = null, closePanel = false
         triggerButton.focus();
       }
     }
-    renderSummaryInspector();
   }
 }
 
@@ -7387,7 +6510,6 @@ async function deleteCanvasDocuments({ documentId = null, clearAll = false, conf
     setCanvasMutationState("", { rerender: false });
     history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
     streamingCanvasDocuments = [];
-    pendingCanvasDiff = null;
     isCanvasEditing = false;
     editingCanvasDocumentId = null;
     activeCanvasDocumentId = payload.cleared
@@ -7486,7 +6608,6 @@ async function saveCanvasEdits() {
     setCanvasMutationState("", { rerender: false });
     history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
     streamingCanvasDocuments = [];
-    pendingCanvasDiff = null;
     activeCanvasDocumentId = String(payload.active_document_id || activeDocument.id).trim() || activeDocument.id;
     isCanvasEditing = false;
     editingCanvasDocumentId = null;
@@ -8340,9 +7461,6 @@ function isRenderableHistoryEntry(message) {
   }
 
   const metadata = message.metadata && typeof message.metadata === "object" ? message.metadata : null;
-  if (metadata?.is_pruned === true) {
-    return false;
-  }
 
   return message.role === "user" || message.role === "assistant" || message.role === "summary";
 }
@@ -8883,7 +8001,7 @@ function isPrunableHistoryMessage(message) {
     return false;
   }
   const metadata = message.metadata && typeof message.metadata === "object" ? message.metadata : null;
-  if (metadata?.is_summary === true || metadata?.is_pruned === true) {
+  if (metadata?.is_summary === true) {
     return false;
   }
   return String(message.content || "").trim().length > 0;
@@ -9124,7 +8242,6 @@ function createMessageActions(message, options = {}) {
   const messageId = message.id;
   const isDeletingThisMessage = messageId !== null && deletingMessageId !== null && Number(deletingMessageId) === Number(messageId);
   const isDeleteConfirmationOpen = messageId !== null && pendingDeleteMessageId !== null && Number(pendingDeleteMessageId) === Number(messageId);
-  const showInlinePruneButton = isPrunePanelOpen() && isPrunableHistoryMessage(message);
   if (message.role === "user" || message.role === "assistant") {
     if (options.editable && isEditableHistoryMessage(message)) {
       const editBtn = createMessageActionButton({
@@ -9149,20 +8266,6 @@ function createMessageActions(message, options = {}) {
       disabled: !String(message.content || "").trim() || isDeletingThisMessage,
     });
     actions.appendChild(copyButton);
-
-    if (showInlinePruneButton) {
-      const pruneButton = createMessageActionButton({
-        label: "Prune",
-        title: "Prune this message now",
-        icon: MESSAGE_ACTION_ICONS.prune,
-        showLabel: true,
-        onClick: () => {
-          void pruneMessage(messageId);
-        },
-        disabled: !isPersistedMessageId(messageId) || isDeletingThisMessage || isStreaming || isFixing || isPruneOperationInFlight,
-      });
-      actions.appendChild(pruneButton);
-    }
 
     const deleteButton = createMessageActionButton({
       label: isDeleteConfirmationOpen ? "Cancel delete" : "Delete",
@@ -9273,15 +8376,6 @@ const MESSAGE_ACTION_ICONS = {
       <path d="M17 4h4v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
       <path d="M21 12a9 9 0 0 1-15.3 6.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
       <path d="M7 20H3v-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-    </svg>
-  `,
-  prune: `
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
-      <path d="M5 7h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
-      <path d="M8 7V5.8A1.8 1.8 0 0 1 9.8 4h4.4A1.8 1.8 0 0 1 16 5.8V7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-      <path d="M8 11.5h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
-      <path d="M10 15h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
-      <path d="M7 7l1 11a2 2 0 0 0 2 1.8h4a2 2 0 0 0 2-1.8L17 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
     </svg>
   `,
   delete: `
@@ -9588,9 +8682,7 @@ function createHistorySelectionToggle(message, mode) {
   }
 
   const isSelected = isMessageSelectedForMode(messageId, mode);
-  const selectionAction = mode === "prune"
-    ? (isSelected ? "Remove message from prune selection" : "Add message to prune selection")
-    : (isSelected ? "Remove message from summary selection" : "Add message to summary selection");
+  const selectionAction = isSelected ? "Remove message from summary selection" : "Add message to summary selection";
   const button = document.createElement("button");
   button.type = "button";
   button.className = "msg-selection-toggle";
@@ -9699,45 +8791,7 @@ function createInlineMessageEditor(message) {
   return form;
 }
 
-async function pruneMessage(messageId) {
-  if (isStreaming || isFixing) {
-    return;
-  }
-
-  const message = getHistoryMessage(messageId);
-  if (!isPrunableHistoryMessage(message)) {
-    return;
-  }
-
-  try {
-    const response = await fetch(`/api/messages/${messageId}/prune`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ conversation_id: currentConvId }),
-    });
-    const data = await response.json().catch(() => null);
-    if (!response.ok) {
-      throw new Error(data?.error || "Message could not be pruned.");
-    }
-    if (!data?.message) {
-      throw new Error("Pruned message payload is missing.");
-    }
-
-    const index = getHistoryMessageIndex(messageId);
-    if (index >= 0) {
-      history[index] = normalizeHistoryEntry(data.message);
-      renderConversationHistory();
-    } else {
-      await refreshConversationFromServer();
-    }
-    showToast("Message pruned.", "success");
-  } catch (error) {
-    showError(error.message || "Message could not be pruned.");
-  }
-}
-
 function renderConversationHistory(options = {}) {
-  pruneStaleMessageSelections();
   const activeInlineMessage = getHistoryMessage(inlineEditingMessageId);
   if (inlineEditingMessageId !== null && !isEditableHistoryMessage(activeInlineMessage)) {
     clearInlineEditingTarget();
@@ -9755,8 +8809,6 @@ function renderConversationHistory(options = {}) {
     messagesEl.replaceChildren(fragment);
     scrollToBottom();
     renderHistorySelectionBar();
-    renderSummaryInspector();
-    updatePrunePanelUi();
     return;
   }
 
@@ -9793,8 +8845,6 @@ function renderConversationHistory(options = {}) {
     scrollToBottom();
   }
   renderHistorySelectionBar();
-  renderSummaryInspector();
-  updatePrunePanelUi();
 }
 
 async function refreshConversationFromServer() {
@@ -9838,9 +8888,6 @@ async function refreshConversationFromServer() {
     renderCanvasPanel();
     updateExportPanel();
     rebuildTokenStatsFromHistory();
-    if (isPrunePanelOpen()) {
-      void loadPruneScores({ silent: true });
-    }
   }
 
   if (memoryChanged) {
@@ -10083,9 +9130,6 @@ function estimateSummaryTriggerTokens(entries = history) {
       return total;
     }
     const metadata = entry?.metadata && typeof entry.metadata === "object" ? entry.metadata : null;
-    if (metadata?.is_pruned === true) {
-      return total;
-    }
     if (role === "assistant" && Array.isArray(entry?.tool_calls) && entry.tool_calls.length > 0) {
       return total;
     }
@@ -10315,7 +9359,6 @@ function describeSummaryFailure(status) {
 }
 
 function updateSummarySelectionUi() {
-  pruneStaleMessageSelections();
   const eligibleMessages = getSummaryEligibleMessages(history);
   const eligibleCount = eligibleMessages.length;
   const allMessagesEligibleCount = eligibleCount;
@@ -10429,168 +9472,15 @@ async function undoConversationSummary(summaryId, { triggerButton = null } = {})
         : "Summary was undone.",
       "success"
     );
-    renderSummaryInspector();
   } catch (error) {
     failSummaryProgress(error.message || "Failed to undo summary.");
     showToast(error.message || "Failed to undo summary.", "error");
-    renderSummaryInspector();
   } finally {
     setSummaryBusyState(false);
     if (triggerButton) {
       triggerButton.textContent = originalButtonText || "Undo";
     }
-    renderSummaryInspector();
   }
-}
-
-function renderSummaryInspector() {
-  if (!summaryInspectorBadge || !summaryInspectorHeadline) {
-    return;
-  }
-
-  const mode = getSummaryModeValue();
-  const effectiveTrigger = getEffectiveSummaryTriggerValue();
-  const currentEstimate = estimateSummaryTriggerTokens(history);
-  const latestSummary = findLatestSummaryEntry(history);
-  const lastSummaryMeta = latestSummary?.metadata && typeof latestSummary.metadata === "object"
-    ? latestSummary.metadata
-    : null;
-  const canUndoLatestSummary = Boolean(currentConvId && Number.isInteger(Number(latestSummary?.id)) && lastSummaryMeta?.is_summary);
-  const remaining = Math.max(0, effectiveTrigger - currentEstimate);
-  const overBy = Math.max(0, currentEstimate - effectiveTrigger);
-  const latestServerCheck = Number(latestSummaryStatus?.visible_token_count || 0);
-  const mergedAssistantCount = Number(latestSummaryStatus?.merged_assistant_message_count || 0);
-  const skippedErrorCount = Number(latestSummaryStatus?.skipped_error_message_count || 0);
-
-  let badgeTone = "muted";
-  let badgeText = "Waiting";
-  let headline = "Start chatting to see when automatic summary will run.";
-
-  if (mode === "never") {
-    badgeTone = "warning";
-    badgeText = "Disabled";
-    headline = "Auto summary is disabled. Long chats will keep growing until you re-enable it.";
-  } else if (mode === "conservative") {
-    badgeTone = "muted";
-    badgeText = "Conservative";
-    headline = "Auto summary is using a higher threshold, so it will compress less often.";
-  } else if (!currentConvId) {
-    badgeTone = "muted";
-    badgeText = "Idle";
-    headline = "Auto summary watches each conversation after messages are saved.";
-  } else if (latestSummaryStatus?.reason === "summary_generation_failed") {
-    badgeTone = "error";
-    badgeText = "Failed";
-    headline = describeSummaryFailure(latestSummaryStatus);
-  } else if (latestSummaryStatus?.reason === "locked") {
-    badgeTone = "warning";
-    badgeText = "Busy";
-    headline = "A summary pass was already in progress for this conversation, so this turn skipped a duplicate run.";
-  } else if (currentEstimate >= effectiveTrigger) {
-    badgeTone = "accent";
-    badgeText = "Ready";
-    headline = "This conversation is large enough for auto summary. The next completed turn can compress older user and assistant messages.";
-  } else if (latestSummary) {
-    badgeTone = "success";
-    badgeText = "Tracked";
-    headline = "This conversation has already been summarized before and is being monitored for the next pass.";
-  } else {
-    badgeTone = "muted";
-    badgeText = "Tracking";
-    headline = `Current conversation is ${fmt(remaining)} estimated tokens below the next auto-summary pass.`;
-  }
-
-  summaryInspectorBadge.dataset.tone = badgeTone;
-  summaryInspectorBadge.textContent = badgeText;
-  summaryInspectorHeadline.textContent = headline;
-  summaryInspectorCurrent.textContent = fmt(currentEstimate);
-  summaryInspectorTrigger.textContent = fmt(effectiveTrigger);
-  summaryInspectorGap.textContent = overBy > 0 ? `${fmt(overBy)} over` : `${fmt(remaining)} left`;
-
-  const detailParts = [
-    "Counts user, assistant, tool, and summary history toward the summary trigger, while ignoring assistant tool-call placeholders and stored context-injection metadata.",
-    "Does not count runtime system prompt, RAG context, or final-answer instructions.",
-  ];
-  if (latestServerCheck > 0) {
-    detailParts.push(`Last server-side check saw ${fmt(latestServerCheck)} counted tokens.`);
-  }
-  if (mergedAssistantCount > 0) {
-    detailParts.push(`Merged ${fmt(mergedAssistantCount)} consecutive assistant blocks before sending the summary prompt.`);
-  }
-  if (skippedErrorCount > 0) {
-    detailParts.push(`Skipped ${fmt(skippedErrorCount)} assistant error placeholders during prompt cleanup.`);
-  }
-  summaryInspectorDetail.textContent = detailParts.join(" ");
-
-  if (summaryInspectorToolMessages) {
-    const toolMessageParts = [
-      "Assistant tool-call placeholders are excluded from the trigger estimate.",
-      "Tool outputs and cleaned assistant content still count toward summary readiness.",
-    ];
-    if (mergedAssistantCount > 0) {
-      toolMessageParts.push(`${fmt(mergedAssistantCount)} assistant blocks were merged during the latest cleanup pass.`);
-    }
-    if (skippedErrorCount > 0) {
-      toolMessageParts.push(`${fmt(skippedErrorCount)} assistant error placeholders were skipped.`);
-    }
-    summaryInspectorToolMessages.textContent = toolMessageParts.join(" ");
-  }
-
-  if (summaryInspectorReason) {
-    let reasonText = "The latest summary decision will appear here after each completed assistant turn.";
-    if (latestSummaryStatus) {
-      if (latestSummaryStatus.reason === "summary_generation_failed" || latestSummaryStatus.reason === "locked" || latestSummaryStatus.reason === "below_threshold" || latestSummaryStatus.reason === "mode_never") {
-        reasonText = describeSummaryFailure(latestSummaryStatus);
-      } else if (latestSummaryStatus.applied) {
-        reasonText = "Latest summary pass completed successfully.";
-      } else {
-        reasonText = "Latest summary check completed.";
-      }
-      const failureDetail = String(latestSummaryStatus.failure_detail || "").trim();
-      const failureSummary = describeSummaryFailure(latestSummaryStatus);
-      if (failureDetail && failureDetail !== failureSummary) {
-        reasonText = `${reasonText} ${failureDetail}`;
-      }
-    }
-    summaryInspectorReason.textContent = reasonText;
-  }
-
-  if (lastSummaryMeta?.is_summary) {
-    const generatedAt = formatSummaryTimestamp(lastSummaryMeta.generated_at);
-    const coveredCount = Number(lastSummaryMeta.covered_message_count || 0);
-    const summaryModel = String(lastSummaryMeta.summary_model || latestSummaryStatus?.summary_model || "—").trim() || "—";
-    summaryInspectorLast.textContent = `Last pass: ${fmt(coveredCount)} messages compressed on ${generatedAt} using ${summaryModel}.`;
-  } else if (latestSummaryStatus?.reason === "summary_generation_failed") {
-    const checkedAt = formatSummaryTimestamp(latestSummaryStatus.checked_at);
-    summaryInspectorLast.textContent = `Last attempt: failed on ${checkedAt}. No messages were deleted because failed summaries are never applied.`;
-  } else if (latestSummaryStatus?.reason === "below_threshold") {
-    summaryInspectorLast.textContent = "No summary pass was needed on the latest turn because the conversation stayed below the trigger.";
-  } else if (latestSummaryStatus?.reason === "mode_never") {
-    summaryInspectorLast.textContent = "No summary pass will run while summary mode is set to Never.";
-  } else {
-    summaryInspectorLast.textContent = "No summary pass has run in this conversation yet.";
-  }
-
-  if (summaryUndoBtn) {
-    summaryUndoBtn.disabled = isSummaryOperationInFlight || !canUndoLatestSummary;
-    summaryUndoBtn.title = canUndoLatestSummary
-      ? "Restore the messages covered by the latest summary."
-      : "No summary is available to undo in this conversation.";
-  }
-  if (summaryNowBtn) {
-    summaryNowBtn.disabled = isSummaryOperationInFlight || !currentConvId;
-    summaryNowBtn.title = currentConvId
-      ? "Run a manual summary using the current panel settings."
-      : "Open a conversation before running a summary.";
-  }
-  if (summaryPreviewBtn) {
-    summaryPreviewBtn.disabled = isSummaryOperationInFlight || !currentConvId;
-    summaryPreviewBtn.title = currentConvId
-      ? "Preview which messages will be summarized without applying changes."
-      : "Open a conversation before running a preview.";
-  }
-  updateSummarySelectionUi();
-  renderSummaryHistoryList();
 }
 
 function openStats() {
@@ -10599,7 +9489,7 @@ function openStats() {
   closeExportPanel();
   closeParamsPanel({ restoreFocus: false });
   closeSummaryPanel();
-  closePrunePanel({ restoreFocus: false });
+  
   closeMemoryPanel();
   statsPanel.classList.add("open");
   statsOverlay.classList.add("open");
@@ -10616,7 +9506,7 @@ function openMobileTools() {
   closeExportPanel();
   closeParamsPanel({ restoreFocus: false });
   closeSummaryPanel();
-  closePrunePanel({ restoreFocus: false });
+  
   closeMemoryPanel();
   mobileToolsPanel?.classList.add("open");
   mobileToolsOverlay?.classList.add("open");
@@ -10920,12 +9810,6 @@ function closeSidebarOnMobile() {
 
 statsClose.addEventListener("click", closeStats);
 statsOverlay.addEventListener("click", closeStats);
-if (uploadedFilesPanelClose) {
-  uploadedFilesPanelClose.addEventListener("click", closeUploadedFilesPanel);
-}
-if (uploadedFilesOverlay) {
-  uploadedFilesOverlay.addEventListener("click", closeUploadedFilesPanel);
-}
 if (toolMemoryPanelClose) {
   toolMemoryPanelClose.addEventListener("click", closeToolMemoryPanel);
 }
@@ -10991,13 +9875,6 @@ if (canvasCancelBtn) {
 if (mobileCanvasBtn) {
   mobileCanvasBtn.addEventListener("click", () => openCanvas(mobileToolsBtn || mobileCanvasBtn, { deferPanelRender: false }));
 }
-document.getElementById("canvas-diff-modal-close")?.addEventListener("click", closeDiffFullscreen);
-canvasDiffModalEl?.addEventListener("click", (e) => {
-  if (e.target === canvasDiffModalEl) closeDiffFullscreen();
-});
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && canvasDiffModalEl && !canvasDiffModalEl.hidden) closeDiffFullscreen();
-});
 if (canvasToggleBtn) {
   canvasToggleBtn.addEventListener("click", () => {
     if (isCanvasOpen()) {
@@ -11025,22 +9902,11 @@ if (summaryToggleBtn) {
     }
   });
 }
-if (pruneToggleBtn) {
-  pruneToggleBtn.addEventListener("click", () => {
-    void pruneConversationHistory();
-  });
-}
 if (mobileExportBtn) {
   mobileExportBtn.addEventListener("click", () => openExportPanel(mobileToolsBtn || mobileExportBtn));
 }
 if (mobileMemoryBtn) {
   mobileMemoryBtn.addEventListener("click", () => openMemoryPanel(mobileToolsBtn || mobileMemoryBtn));
-}
-if (mobilePruneBtn) {
-  mobilePruneBtn.addEventListener("click", () => {
-    closeMobileTools();
-    void pruneConversationHistory();
-  });
 }
 if (mobileConvToolsBtn) {
   mobileConvToolsBtn.addEventListener("click", () => {
@@ -11055,18 +9921,6 @@ if (mobileConvToolsBtn) {
     }
   });
 }
-if (mobileUploadedFilesBtn) {
-  mobileUploadedFilesBtn.addEventListener("click", () => {
-    if (!currentConvId) {
-      showToast("Open a conversation first to view uploaded files.", "warning");
-      return;
-    }
-    closeMobileTools();
-    setTimeout(() => {
-      openUploadedFilesPanel();
-    }, 150);
-  });
-}
 if (mobileToolMemoryBtn) {
   mobileToolMemoryBtn.addEventListener("click", () => {
     closeMobileTools();
@@ -11074,25 +9928,6 @@ if (mobileToolMemoryBtn) {
       openToolMemoryPanel();
     }, 150);
   });
-}
-
-function openUploadedFilesPanel() {
-  const panel = document.getElementById("uploaded-files-panel");
-  const overlay = document.getElementById("uploaded-files-overlay");
-  if (!panel) return;
-  panel.classList.add("open");
-  panel.setAttribute("aria-hidden", "false");
-  if (overlay) overlay.classList.add("open");
-  void loadUploadedFilesPanelInPanel();
-}
-
-function closeUploadedFilesPanel() {
-  const panel = document.getElementById("uploaded-files-panel");
-  const overlay = document.getElementById("uploaded-files-overlay");
-  if (!panel) return;
-  panel.classList.remove("open");
-  panel.setAttribute("aria-hidden", "true");
-  if (overlay) overlay.classList.remove("open");
 }
 
 function openToolMemoryPanel() {
@@ -11180,78 +10015,6 @@ async function loadToolMemoryPanel() {
     body.appendChild(fragment);
   } catch (_) {
     body.innerHTML = '<p class="tool-memory-empty">Could not load tool memory.</p>';
-  }
-}
-
-async function loadUploadedFilesPanelInPanel() {
-  const body = document.getElementById("uploaded-files-panel-body");
-  if (!body) return;
-  if (!currentConvId) {
-    body.innerHTML = '<p class="sidebar-empty">No conversation selected.</p>';
-    return;
-  }
-  try {
-    const response = await fetch(`/api/conversations/${currentConvId}/uploaded-files`);
-    if (!response.ok) {
-      body.innerHTML = '<p class="sidebar-empty">Could not load files.</p>';
-      return;
-    }
-    const data = await response.json();
-    const files = Array.isArray(data.files) ? data.files : [];
-    if (files.length === 0) {
-      body.innerHTML = '<p class="sidebar-empty">No uploaded files.</p>';
-      return;
-    }
-    body.innerHTML = "";
-    const list = document.createElement("ul");
-    list.className = "uploaded-files-list";
-    files.forEach((file) => {
-      const isDoc = file.kind === "document";
-      const icon = isDoc
-        ? `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`
-        : `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`;
-      const name = escHtml(file.filename || "unknown");
-      const isExcluded = file.excluded_from_context === true;
-      const row = document.createElement("li");
-      row.className = "uploaded-file-row" + (isExcluded ? " uploaded-file-row--excluded" : "");
-      row.innerHTML =
-        `<span class="uploaded-file-row__icon">${icon}</span>` +
-        `<span class="uploaded-file-row__name" title="${name}">${name}</span>` +
-        `<button class="uploaded-file-row__toggle" data-id="${escHtml(file.id)}" data-excluded="${isExcluded}" title="${isExcluded ? "Add back to context" : "Remove from context"}">` +
-        (isExcluded
-          ? `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`
-          : `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`) +
-        `</button>`;
-      row.querySelector(".uploaded-file-row__toggle").addEventListener("click", async () => {
-        const btn = row.querySelector(".uploaded-file-row__toggle");
-        const fileId = file.id;
-        const currentlyExcluded = file.excluded_from_context === true;
-        btn.disabled = true;
-        try {
-          const res = await fetch(`/api/conversations/${currentConvId}/uploaded-files/${encodeURIComponent(fileId)}/context`, {
-            method: "PATCH",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({excluded: !currentlyExcluded}),
-          });
-          if (res.ok) {
-            file.excluded_from_context = !currentlyExcluded;
-            row.classList.toggle("uploaded-file-row--excluded", !currentlyExcluded);
-            btn.title = currentlyExcluded ? "Add back to context" : "Remove from context";
-            btn.innerHTML = currentlyExcluded
-              ? `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`
-              : `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
-          }
-        } catch (e) {
-          console.error("Failed to update file context:", e);
-        } finally {
-          btn.disabled = false;
-        }
-      });
-      list.appendChild(row);
-    });
-    body.appendChild(list);
-  } catch (error) {
-    body.innerHTML = '<p class="sidebar-empty">Could not load files.</p>';
   }
 }
 if (paramsClose) {
@@ -11461,16 +10224,6 @@ if (sidebarToggleBtn) {
 if (sidebarOverlay) {
   sidebarOverlay.addEventListener("click", () => setSidebarOpen(false));
 }
-if (uploadedFilesToggle) {
-  uploadedFilesToggle.addEventListener("click", () => {
-    const panel = document.getElementById("uploaded-files-panel");
-    if (panel && panel.classList.contains("open")) {
-      closeUploadedFilesPanel();
-    } else {
-      openUploadedFilesPanel();
-    }
-  });
-}
 if (mobileToolsBtn) {
   mobileToolsBtn.addEventListener("click", () => {
     if (mobileToolsPanel?.classList.contains("open")) {
@@ -11550,8 +10303,7 @@ if (mobilePersonaSel) {
 }
 summaryClose?.addEventListener("click", closeSummaryPanel);
 summaryOverlay?.addEventListener("click", closeSummaryPanel);
-pruneClose?.addEventListener("click", closePrunePanel);
-pruneOverlay?.addEventListener("click", closePrunePanel);
+
 memoryClose?.addEventListener("click", closeMemoryPanel);
 memoryOverlay?.addEventListener("click", closeMemoryPanel);
 summarySelectEligibleBtn?.addEventListener("click", selectEligibleSummaryMessages);
@@ -11562,27 +10314,7 @@ summarySubmitBtn?.addEventListener("click", () => {
 summaryPreviewBtn?.addEventListener("click", () => {
   void previewConversationSummary({ triggerButton: summaryPreviewBtn });
 });
-pruneRefreshBtn?.addEventListener("click", () => {
-  void loadPruneScores();
-});
-pruneSelectRecommendedBtn?.addEventListener("click", selectRecommendedPruneMessages);
-pruneClearSelectionBtn?.addEventListener("click", () => clearMessageSelection("prune"));
-pruneApplyRecommendedBtn?.addEventListener("click", () => {
-  void applyPruneSelection(getRecommendedPruneMessageIds(), { label: "recommended" });
-});
-pruneApplySelectedBtn?.addEventListener("click", () => {
-  void applyPruneSelection(getSelectedMessageIds("prune"), { label: "selected" });
-});
 historySelectionClear?.addEventListener("click", () => clearMessageSelection(messageSelectionMode));
-historySelectionCancel?.addEventListener("click", () => {
-  if (messageSelectionMode === "prune") {
-    closePrunePanel();
-    return;
-  }
-  if (messageSelectionMode === "summary") {
-    closeSummaryPanel();
-  }
-});
 summaryMessageCountInput?.addEventListener("input", updateSummarySelectionUi);
 summaryAllMessagesCheckbox?.addEventListener("change", () => {
   if (summaryAllMessagesCheckbox.checked && summaryMessageCountInput) {
@@ -11638,10 +10370,6 @@ if (canvasResizeHandle) {
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && isMemoryPanelOpen()) {
     closeMemoryPanel();
-    return;
-  }
-  if (event.key === "Escape" && isPrunePanelOpen()) {
-    closePrunePanel();
     return;
   }
   if (event.key === "Escape" && isSummaryPanelOpen()) {
@@ -11724,88 +10452,6 @@ document.addEventListener("click", (event) => {
     }
   }
 });
-
-async function loadUploadedFilesPanel() {
-  const panel = document.getElementById("sidebar-uploaded-files-panel");
-  if (!panel || !currentConvId) {
-    if (panel) panel.hidden = true;
-    return;
-  }
-  try {
-    const response = await fetch(`/api/conversations/${currentConvId}/uploaded-files`);
-    if (!response.ok) {
-      panel.innerHTML = '<p class="sidebar-empty">Could not load files.</p>';
-      panel.hidden = false;
-      return;
-    }
-    const data = await response.json();
-    const files = Array.isArray(data.files) ? data.files : [];
-    if (files.length === 0) {
-      panel.innerHTML = '<p class="sidebar-empty">No uploaded files.</p>';
-      panel.hidden = false;
-      if (uploadedFilesToggle) {
-        uploadedFilesToggle.classList.add("open");
-        uploadedFilesToggle.querySelector(".sidebar-uploaded-files__chevron")?.classList.add("rotated");
-      }
-      return;
-    }
-    panel.innerHTML = "";
-    const list = document.createElement("ul");
-    list.className = "uploaded-files-list";
-    files.forEach((file) => {
-      const isDoc = file.kind === "document";
-      const icon = isDoc
-        ? `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`
-        : `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`;
-      const name = escHtml(file.filename || "unknown");
-      const isExcluded = file.excluded_from_context === true;
-      const row = document.createElement("li");
-      row.className = "uploaded-file-row" + (isExcluded ? " uploaded-file-row--excluded" : "");
-      row.innerHTML =
-        `<span class="uploaded-file-row__icon">${icon}</span>` +
-        `<span class="uploaded-file-row__name" title="${name}">${name}</span>` +
-        `<button class="uploaded-file-row__toggle" data-id="${escHtml(file.id)}" data-excluded="${isExcluded}" title="${isExcluded ? "Add back to context" : "Remove from context"}">` +
-        (isExcluded
-          ? `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`
-          : `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`) +
-        `</button>`;
-      row.querySelector(".uploaded-file-row__toggle").addEventListener("click", async () => {
-        const btn = row.querySelector(".uploaded-file-row__toggle");
-        const fileId = file.id;
-        const currentlyExcluded = file.excluded_from_context === true;
-        btn.disabled = true;
-        try {
-          const res = await fetch(`/api/conversations/${currentConvId}/uploaded-files/${encodeURIComponent(fileId)}/context`, {
-            method: "PATCH",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({excluded: !currentlyExcluded}),
-          });
-          if (res.ok) {
-            file.excluded_from_context = !currentlyExcluded;
-            row.classList.toggle("uploaded-file-row--excluded", !currentlyExcluded);
-            btn.title = currentlyExcluded ? "Add back to context" : "Remove from context";
-            btn.innerHTML = currentlyExcluded
-              ? `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`
-              : `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
-          }
-        } catch (e) {
-          console.error("Failed to update file context:", e);
-        } finally {
-          btn.disabled = false;
-        }
-      });
-      list.appendChild(row);
-    });
-    panel.appendChild(list);
-    panel.hidden = false;
-  } catch (error) {
-    const panel = document.getElementById("sidebar-uploaded-files-panel");
-    if (panel) {
-      panel.innerHTML = '<p class="sidebar-empty">Could not load files.</p>';
-      panel.hidden = false;
-    }
-  }
-}
 
 async function loadSidebar() {
   cancelSidebarRename();
@@ -12101,12 +10747,6 @@ async function openConversation(id) {
   clearEditTarget();
   clearInlineEditingTarget();
   selectedSummaryMessageIds = new Set();
-  selectedPruneMessageIds = new Set();
-  pruneScores = [];
-  pruneScoresError = "";
-  pruneScoresLoading = false;
-  pruneRecommendedBatchSize = 5;
-  pruneTokenThreshold = 0;
   resetCanvasWorkspaceState();
 
   history = Array.isArray(data.messages) ? data.messages.map(normalizeHistoryEntry) : [];
@@ -12122,14 +10762,8 @@ async function openConversation(id) {
   renderParamsPanel();
   updateExportPanel();
   rebuildTokenStatsFromHistory();
-  if (isPrunePanelOpen()) {
-    void loadPruneScores({ silent: true });
-  } else {
-    updatePrunePanelUi();
-  }
 
   loadSidebar();
-  loadUploadedFilesPanel();
   scrollToBottom();
   inputEl.focus();
 }
@@ -12166,12 +10800,6 @@ function startNewChat() {
   currentConversationParameterOverrides = null;
   latestSummaryStatus = null;
   selectedSummaryMessageIds = new Set();
-  selectedPruneMessageIds = new Set();
-  pruneScores = [];
-  pruneScoresError = "";
-  pruneScoresLoading = false;
-  pruneRecommendedBatchSize = 5;
-  pruneTokenThreshold = 0;
   streamingCanvasDocuments = [];
   resetStreamingCanvasPreview();
   activeCanvasDocumentId = null;
@@ -12468,19 +11096,6 @@ messagesEl.addEventListener("scroll", () => {
   userScrolledUp = distanceFromBottom > 100;
 });
 
-if (summaryNowBtn) {
-  summaryNowBtn.addEventListener("click", () => {
-    void runConversationSummary({ triggerButton: summaryNowBtn, closePanel: false });
-  });
-}
-
-if (summaryUndoBtn) {
-  summaryUndoBtn.addEventListener("click", () => {
-    const latestSummary = findLatestSummaryEntry(history);
-    void undoConversationSummary(Number(latestSummary?.id || 0), { triggerButton: summaryUndoBtn });
-  });
-}
-
 inputEl.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && isSlashCommandMenuOpen()) {
     event.preventDefault();
@@ -12587,7 +11202,6 @@ attachBtn.addEventListener("contextmenu", (e) => {
   e.preventDefault();
   docInputEl.click();
 });
-kbSyncBtn?.addEventListener("click", syncKnowledgeBaseConversations);
 
 imageInputEl.addEventListener("change", () => {
   const files = Array.from(imageInputEl.files || []);
@@ -12790,9 +11404,6 @@ function setStreaming(active) {
   if (youtubeUrlBtn) {
     youtubeUrlBtn.disabled = active;
   }
-  if (mobilePruneBtn) {
-    mobilePruneBtn.disabled = active;
-  }
 }
 
 function setFixing(active) {
@@ -12853,129 +11464,6 @@ function clearToastRegion() {
 
 function showError(message) {
   showToast(message, "error");
-}
-
-function setKbStatus(message, tone = "muted") {
-  if (!kbStatusEl) {
-    return;
-  }
-  kbStatusEl.textContent = message;
-  kbStatusEl.dataset.tone = tone;
-}
-
-async function loadKnowledgeBaseDocuments() {
-  if (!kbDocumentsListEl || !kbStatusEl) {
-    return;
-  }
-  if (!Boolean(featureFlags.rag_enabled)) {
-    renderKnowledgeBaseDocuments([]);
-    setKbStatus("RAG disabled in .env", "warning");
-    return;
-  }
-  try {
-    const response = await fetch("/api/rag/documents");
-    if (response.status === 410) {
-      renderKnowledgeBaseDocuments([]);
-      setKbStatus("RAG disabled in .env", "warning");
-      return;
-    }
-    const docs = await response.json();
-    renderKnowledgeBaseDocuments(Array.isArray(docs) ? docs : []);
-  } catch (_) {
-    renderKnowledgeBaseDocuments([]);
-  }
-}
-
-function renderKnowledgeBaseDocuments(docs) {
-  if (!kbDocumentsListEl) {
-    return;
-  }
-  kbDocumentsListEl.innerHTML = "";
-
-  if (!docs.length) {
-    kbDocumentsListEl.innerHTML = '<p class="kb-empty">No indexed sources yet.</p>';
-    return;
-  }
-
-  docs.forEach((doc) => {
-    const item = document.createElement("div");
-    item.className = "kb-doc-item";
-
-    const meta = document.createElement("div");
-    meta.className = "kb-doc-meta";
-
-    const title = document.createElement("div");
-    title.className = "kb-doc-title";
-    title.textContent = doc.source_name || "Untitled source";
-
-    const sub = document.createElement("div");
-    sub.className = "kb-doc-subtitle";
-    sub.textContent = `${doc.source_type || "document"} · ${doc.category || "general"} · ${doc.chunk_count || 0} chunks`;
-
-    meta.appendChild(title);
-    meta.appendChild(sub);
-
-    const del = document.createElement("button");
-    del.type = "button";
-    del.className = "kb-doc-delete";
-    del.textContent = "Delete";
-    del.addEventListener("click", () => deleteKnowledgeBaseDocument(doc.source_key));
-
-    item.appendChild(meta);
-    item.appendChild(del);
-    kbDocumentsListEl.appendChild(item);
-  });
-}
-
-async function deleteKnowledgeBaseDocument(sourceKey) {
-  if (!sourceKey) {
-    return;
-  }
-  setKbStatus("Deleting source…");
-  try {
-    const response = await fetch(`/api/rag/documents/${encodeURIComponent(sourceKey)}`, { method: "DELETE" });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(data.error || "Delete failed.");
-    }
-    setKbStatus("Source deleted", "success");
-    loadKnowledgeBaseDocuments();
-  } catch (error) {
-    setKbStatus(error.message, "error");
-  }
-}
-
-async function syncKnowledgeBaseConversations() {
-  if (!kbSyncBtn) {
-    return;
-  }
-  if (!Boolean(featureFlags.rag_enabled)) {
-    setKbStatus("RAG disabled in .env", "warning");
-    return;
-  }
-  setKbStatus("Syncing conversations into RAG…");
-  if (kbSyncBtn) {
-    kbSyncBtn.disabled = true;
-  }
-  try {
-    const response = await fetch("/api/rag/sync-conversations", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(data.error || "Conversation sync failed.");
-    }
-    setKbStatus(`${data.count || 0} RAG sources synced`, "success");
-    loadKnowledgeBaseDocuments();
-  } catch (error) {
-    setKbStatus(error.message, "error");
-  } finally {
-    if (kbSyncBtn) {
-      kbSyncBtn.disabled = false;
-    }
-  }
 }
 
 function formatFileSize(size) {
@@ -14244,12 +12732,6 @@ function createMessageGroup(role, text, metadata = null, options = {}) {
     summaryMeta.textContent = summaryMetaParts.join(" • ");
     labelGroup.appendChild(summaryMeta);
   }
-  if (normalizedMetadata?.is_pruned === true) {
-    const prunedBadge = document.createElement("span");
-    prunedBadge.className = "pruned-badge";
-    prunedBadge.textContent = "Pruned";
-    labelGroup.appendChild(prunedBadge);
-  }
   if (role === "user" && slashCommandState?.command?.badgeLabel) {
     const doubleCheckBadge = document.createElement("span");
     doubleCheckBadge.className = "double-check-badge";
@@ -14586,7 +13068,6 @@ async function sendMessage(options = {}) {
     };
     streamingCanvasDocuments = [];
     resetStreamingCanvasPreview();
-    pendingCanvasDiff = null;
     isCanvasEditing = false;
     editingCanvasDocumentId = null;
     activeCanvasDocumentId = getActiveCanvasDocument(history)?.id || null;
@@ -15152,23 +13633,6 @@ async function sendMessage(options = {}) {
         const hadStreamingPreviewForDoc =
           nextActiveCandidate &&
           [...streamingCanvasPreviews.values()].some((p) => p.id === nextActiveCandidate.id);
-        if (previousVersionOfNextDocument && nextActiveCandidate) {
-          const nextDiff = previousVersionOfNextDocument.content !== nextActiveCandidate.content
-            ? buildCanvasDiff(previousVersionOfNextDocument.content, nextActiveCandidate.content)
-            : null;
-          if (nextDiff) {
-            pendingCanvasDiff = {
-              documentId: nextActiveCandidate.id,
-              source: hadStreamingPreviewForDoc ? "live-preview" : "direct-sync",
-              diff: nextDiff,
-            };
-          }
-          // Do NOT clear pendingCanvasDiff here when nextDiff is null.
-          // A second canvas_sync (e.g. from the final tool_capture after an early
-          // commit emit) sees identical content on both sides → nextDiff = null,
-          // but the diff shown to the user is still valid and should stay visible
-          // until they explicitly dismiss it or a new canvas_sync produces a new diff.
-        }
         resetStreamingCanvasPreview();
         streamingCanvasDocuments = nextDocuments;
         if (streamingCanvasDocuments.length) {
@@ -15209,7 +13673,6 @@ async function sendMessage(options = {}) {
             setCanvasStatus("Canvas updated. Open the panel to review.", "success");
           }
         } else if (event.cleared) {
-          pendingCanvasDiff = null;
           isCanvasEditing = false;
           editingCanvasDocumentId = null;
           activeCanvasDocumentId = null;
@@ -15233,7 +13696,6 @@ async function sendMessage(options = {}) {
         renderCanvasPanel();
       } else if (event.type === "conversation_summary_status") {
         latestSummaryStatus = event && typeof event === "object" ? { ...event } : null;
-        renderSummaryInspector();
       } else if (event.type === "conversation_summary_applied") {
         latestSummaryStatus = event && typeof event === "object"
           ? { ...event, applied: true, reason: "applied", failure_stage: null, failure_detail: "Summary completed successfully." }
@@ -15295,7 +13757,6 @@ async function sendMessage(options = {}) {
         : assistantEntry
     );
     clearEditTarget();
-    renderSummaryInspector();
 
     if (shouldGenerateConversationTitle()) {
       generateTitle(currentConvId);
@@ -15348,7 +13809,6 @@ async function sendMessage(options = {}) {
           : assistantEntry
       );
       clearEditTarget();
-      renderSummaryInspector();
       loadSidebar();
 
       if (wasCancelledByUser) {
@@ -15405,17 +13865,14 @@ async function generateTitle(convId) {
   }
 }
 
-setKbStatus("Knowledge base idle");
 clearEditTarget();
 updateHeaderOffset();
 applyCanvasPanelWidth(readCanvasWidthPreference(), false);
 syncCanvasToggleButton();
 syncCanvasViewportControls();
 syncSummaryToggleButton();
-syncPruneToggleButton();
 renderHistorySelectionBar();
 updateSummarySelectionUi();
-updatePrunePanelUi();
 const initialSidebarPref = readSidebarPreference();
 setSidebarOpen(initialSidebarPref === null ? !isMobileViewport() : initialSidebarPref, false);
 const initialModelId = resolvePreferredModelSelection(modelSel ? modelSel.value : "");
@@ -15423,4 +13880,3 @@ syncModelSelectors(initialModelId, getKnownModelLabel(initialModelId));
 applyConversationPersonaSelection("");
 loadSidebar();
 updateExportPanel();
-void loadKnowledgeBaseDocuments();

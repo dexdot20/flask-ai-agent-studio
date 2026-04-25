@@ -2,64 +2,77 @@
 (function () {
   "use strict";
 
-  // Parse bootstrap data from the page
+  // ── Bootstrap data parsing ───────────────────────────────────────
   var bootstrapEl = document.getElementById("app-bootstrap");
   var bootstrapData;
   if (!bootstrapEl) {
-    bootstrapData = {};
+    bootstrapData = { settings: {} };
   } else {
     try {
-      bootstrapData = JSON.parse(bootstrapEl.textContent || "{}") || {};
+      bootstrapData = JSON.parse(bootstrapEl.textContent || "{}") || { settings: {} };
     } catch (_) {
-      bootstrapData = {};
+      bootstrapData = { settings: {} };
     }
   }
 
-  // Export csrfToken globally
+  // Export globally so app.js / settings.js can use them without duplication
+  window.__bootstrapData = bootstrapData;
+  window.__appSettings = bootstrapData.settings || {};
   window.__csrfToken = String(bootstrapData.csrf_token || "").trim();
+  window.__featureFlags = bootstrapData.features || window.__appSettings.features || {};
 
-  // CSRF-safe HTTP methods that don't need CSRF token
+  // ── Fetch override ───────────────────────────────────────────────
+  var nativeFetch = typeof globalThis.fetch === "function" ? globalThis.fetch.bind(globalThis) : null;
   var CSRF_SAFE_HTTP_METHODS = new Set(["GET", "HEAD", "OPTIONS", "TRACE"]);
 
-  // Store native fetch before overriding
-  var nativeFetch = window.fetch;
-
-  // Override fetch to automatically add CSRF token to mutations
-  window.fetch = function (input, init) {
-    var method = "GET";
-    if (init && init.method) {
-      method = String(init.method).toUpperCase();
-    } else if (input && typeof input === "object" && input.method) {
-      method = String(input.method).toUpperCase();
+  function resolveFetchMethod(input, init) {
+    var explicitMethod = String(init?.method || "").trim();
+    if (explicitMethod) {
+      return explicitMethod.toUpperCase();
     }
+    if (input instanceof Request) {
+      return String(input.method || "GET").trim().toUpperCase() || "GET";
+    }
+    return "GET";
+  }
 
-    // Safe methods: pass through directly
+  function resolveFetchUrl(input) {
+    if (input instanceof Request) {
+      return input.url;
+    }
+    return String(input || "").trim();
+  }
+
+  function shouldAttachCsrfHeader(input, init) {
+    if (!nativeFetch || !window.__csrfToken) {
+      return false;
+    }
+    var method = resolveFetchMethod(input, init);
     if (CSRF_SAFE_HTTP_METHODS.has(method)) {
-      return nativeFetch.call(window, input, init);
+      return false;
     }
-
-    // If no token, pass through without token (let server handle error)
-    if (!window.__csrfToken) {
-      return nativeFetch.call(window, input, init);
+    var rawUrl = resolveFetchUrl(input);
+    if (!rawUrl) {
+      return true;
     }
+    try {
+      var resolvedUrl = new URL(rawUrl, window.location.href);
+      return resolvedUrl.origin === window.location.origin;
+    } catch (_) {
+      return true;
+    }
+  }
 
-    // Build new headers with CSRF token
-    var headers = {};
-    if (init && init.headers) {
-      if (init.headers instanceof Headers) {
-        init.headers.forEach(function (value, key) {
-          headers[key] = value;
-        });
-      } else if (typeof init.headers === "object") {
-        Object.assign(headers, init.headers);
+  if (nativeFetch) {
+    globalThis.fetch = function (input, init) {
+      if (!shouldAttachCsrfHeader(input, init)) {
+        return nativeFetch(input, init);
       }
-    }
-    headers["X-CSRF-Token"] = window.__csrfToken;
-
-    var newInit = Object.assign({}, init || {}, { headers: headers });
-    return nativeFetch.call(window, input, newInit);
-  };
-
-  // Export bootstrap data
-  window.__bootstrapData = bootstrapData;
+      var headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+      if (!headers.has("X-CSRF-Token")) {
+        headers.set("X-CSRF-Token", window.__csrfToken);
+      }
+      return nativeFetch(input, { ...(init || {}), headers });
+    };
+  }
 })();

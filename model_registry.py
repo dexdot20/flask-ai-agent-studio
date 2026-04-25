@@ -37,7 +37,6 @@ IMAGE_PROCESSING_METHODS = {"auto", "llm_helper", "llm_direct", "local_ocr"}
 MODEL_OPERATION_KEYS = (
     "summarize",
     "fetch_summarize",
-    "prune",
     "fix_text",
     "generate_title",
     "upload_metadata",

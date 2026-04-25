@@ -906,7 +906,7 @@ _RUNTIME_PROPAGATION_MODULES = (
     "image_service",
     "messages",
     "ocr_service",
-    "prune_service",
+
     "rag_service",
     "routes.chat",
     "routes.conversations",
@@ -942,7 +942,7 @@ def propagate_runtime_settings_to_loaded_modules() -> None:
                 refreshed_deepseek_client = None
 
     if refreshed_deepseek_client is not None:
-        for module_name in ("agent", "prune_service", "routes.conversations"):
+        for module_name in ("agent", "routes.conversations"):
             module = sys.modules.get(module_name)
             if module is not None and hasattr(module, "client"):
                 setattr(module, "client", refreshed_deepseek_client)

@@ -83,7 +83,7 @@
     <button class="mobile-tools-action" id="mobile-canvas-btn" type="button">Canvas panel</button>
     <button class="mobile-tools-action" id="mobile-memory-btn" type="button">Conversation memory</button>
     <button class="mobile-tools-action" id="mobile-export-btn" type="button">Export chat</button>
-    <button class="mobile-tools-action" id="mobile-prune-btn" type="button">Prune history</button>
+
     <button class="mobile-tools-action" id="mobile-conv-tools-btn" type="button">Tool permissions</button>
     <button class="mobile-tools-action" id="mobile-params-btn" type="button">Set Parameters</button>
     <button class="mobile-tools-action" id="mobile-uploaded-files-btn" type="button">Uploaded Files</button>
@@ -116,33 +116,6 @@
     </button>
   </div>
   <div class="summary-panel__body">
-    <section class="summary-card summary-inspector">
-      <div class="summary-inspector__header">
-        <span id="summary-inspector-badge" class="summary-inspector__badge" data-tone="muted">Waiting</span>
-        <div class="summary-inspector__header-copy">
-          <div id="summary-inspector-headline" class="summary-inspector__headline">Start chatting to see when automatic summary will run.</div>
-        </div>
-      </div>
-      <div class="summary-inspector__grid">
-        <div class="summary-inspector__metric">
-          <span>Current estimate</span>
-          <strong id="summary-inspector-current">0</strong>
-        </div>
-        <div class="summary-inspector__metric">
-          <span>Trigger</span>
-          <strong id="summary-inspector-trigger">0</strong>
-        </div>
-        <div class="summary-inspector__metric">
-          <span>Gap</span>
-          <strong id="summary-inspector-gap">0 left</strong>
-        </div>
-      </div>
-      <p id="summary-inspector-detail" class="summary-inspector__detail"></p>
-      <p id="summary-inspector-tool-messages" class="summary-inspector__detail"></p>
-      <p id="summary-inspector-reason" class="summary-inspector__detail"></p>
-      <p id="summary-inspector-last" class="summary-inspector__detail"></p>
-    </section>
-
     <section class="summary-card">
       <div class="summary-card__header">
         <div>
@@ -228,56 +201,6 @@
   </div>
 </div>
 <div id="summary-overlay" class="summary-overlay"></div>
-
-<div id="prune-panel" class="summary-panel prune-panel" aria-hidden="true" aria-labelledby="prune-panel-title">
-  <div class="summary-panel__header">
-    <div>
-      <span id="prune-panel-title">Prune Conversation History</span>
-      <p id="prune-panel-subtitle" class="summary-panel__subtitle">Entropy + RAG scores help surface lower-value history first.</p>
-    </div>
-    <button id="prune-close" title="Close" type="button">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-      </svg>
-    </button>
-  </div>
-  <div class="summary-panel__body">
-    <section class="summary-card">
-      <div class="summary-card__header">
-        <div>
-          <span>Selection</span>
-          <p>Tick exact messages in the conversation, or let the recommended list do the heavy lifting.</p>
-        </div>
-      </div>
-      <div class="summary-selection-actions">
-        <button class="btn-ghost" id="prune-select-recommended-btn" type="button">Select recommended</button>
-        <button class="btn-ghost" id="prune-clear-selection-btn" type="button">Clear selection</button>
-      </div>
-      <p id="prune-selection-count" class="summary-support-copy">No messages selected yet. Use the ticks in the conversation or the recommended list.</p>
-      <p id="prune-status" class="summary-support-copy">Open a conversation to inspect prune candidates. Tick messages in the chat or click a message bubble while this panel is open.</p>
-    </section>
-
-    <section class="summary-card">
-      <div class="summary-card__header">
-        <div>
-          <span>Entropy + RAG scores</span>
-          <p>Higher scores are stronger prune candidates. Scores load in the background.</p>
-        </div>
-        <button class="btn-ghost" id="prune-refresh-btn" type="button">Refresh</button>
-      </div>
-      <div id="prune-score-loading" class="prune-score-loading" hidden>
-        <span class="summary-spinner" aria-hidden="true"></span>
-        <span>Loading prune scores…</span>
-      </div>
-      <div id="prune-score-list" class="prune-score-list"></div>
-    </section>
-  </div>
-  <div class="summary-panel__actions">
-    <button class="btn-ghost" id="prune-apply-recommended-btn" type="button">Prune recommended</button>
-    <button class="btn-primary" id="prune-apply-selected-btn" type="button">Prune selected</button>
-  </div>
-</div>
-<div id="prune-overlay" class="summary-overlay"></div>
 
 <div id="memory-panel" class="summary-panel memory-panel" aria-hidden="true" aria-labelledby="memory-panel-title">
   <div class="summary-panel__header">
@@ -643,25 +566,6 @@
         <div id="canvas-tree" class="canvas-tree" role="tree" aria-label="Canvas project tree"></div>
       </aside>
       <div class="canvas-workspace-main">
-        <section id="canvas-diff" class="canvas-diff" hidden></section>
-        <div id="canvas-diff-modal" class="canvas-diff-modal" hidden role="dialog" aria-modal="true" aria-labelledby="canvas-diff-modal-title">
-          <div class="canvas-diff-modal__inner">
-            <div class="canvas-diff-modal__header">
-              <span id="canvas-diff-modal-title" class="canvas-diff-modal__title">Diff — side by side</span>
-              <button id="canvas-diff-modal-close" class="canvas-diff-modal__close" type="button" title="Close fullscreen diff">Close</button>
-            </div>
-            <div class="canvas-diff-modal__body">
-              <div class="canvas-diff-modal__pane canvas-diff-modal__pane--removed">
-                <div class="canvas-diff-modal__pane-header">Before</div>
-                <pre id="canvas-diff-modal-before" class="canvas-diff-modal__pane-content"></pre>
-              </div>
-              <div class="canvas-diff-modal__pane canvas-diff-modal__pane--added">
-                <div class="canvas-diff-modal__pane-header">After</div>
-                <pre id="canvas-diff-modal-after" class="canvas-diff-modal__pane-content"></pre>
-              </div>
-            </div>
-          </div>
-        </div>
         <div id="canvas-empty-state" class="canvas-empty-state">
           <h3>No canvas document yet</h3>
           <p>Ask the assistant to draft something substantial, then continue refining it with line-based edits.</p>
@@ -733,19 +637,6 @@
       </button>
     </div>
     <nav class="sidebar-list" id="sidebar-list"></nav>
-    <div class="sidebar-uploaded-files" id="sidebar-uploaded-files">
-      <button class="sidebar-uploaded-files__toggle" id="sidebar-uploaded-files-toggle" type="button">
-        <svg class="sidebar-uploaded-files__icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-          <polyline points="14 2 14 8 20 8"/>
-        </svg>
-        Uploaded Files
-        <svg class="sidebar-uploaded-files__chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="6 9 12 15 18 9"/>
-        </svg>
-      </button>
-      <div class="sidebar-uploaded-files__panel" id="sidebar-uploaded-files-panel" hidden></div>
-    </div>
   </aside>
 
   <div class="chat-area" id="chat-area">
@@ -822,6 +713,7 @@
   <div id="sidebar-overlay" class="sidebar-overlay"></div>
 
 <script id="app-bootstrap" type="application/json">{{ {"settings": settings, "features": settings.features, "csrf_token": csrf_token}|tojson }}</script>
+<script src="/static/shared/csrf-utils.js?v={{ app_js_version }}"></script>
 <script src="/static/app.js?v={{ app_js_version }}"></script>
 </body>
 </html>

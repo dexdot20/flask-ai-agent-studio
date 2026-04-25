@@ -1722,6 +1722,7 @@
   </main>
 
   <script id="app-bootstrap" type="application/json">{{ {"settings": settings, "features": settings.features, "csrf_token": csrf_token}|tojson }}</script>
+  <script src="/static/shared/csrf-utils.js"></script>
   <script src="/static/settings.js?v={{ settings_js_version }}"></script>
 </body>
 </html>

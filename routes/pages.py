@@ -96,11 +96,6 @@ from db import (
     get_prompt_tool_memory_max_tokens,
     get_prompt_tool_trace_max_tokens,
     get_proxy_enabled_operations,
-    get_pruning_batch_size,
-    get_pruning_enabled,
-    get_pruning_min_target_tokens,
-    get_pruning_target_reduction_ratio,
-    get_pruning_token_threshold,
     get_reasoning_auto_collapse,
     get_rag_auto_inject_enabled,
     get_rag_auto_inject_source_types,
@@ -177,7 +172,7 @@ from proxy_settings import (
 from tool_registry import TOOL_SPEC_BY_NAME, get_tool_runtime_metadata
 
 SETTINGS_VISIBLE_OPERATION_MODEL_KEYS = tuple(
-    key for key in MODEL_OPERATION_KEYS if key not in {"prune", "generate_title"}
+    key for key in MODEL_OPERATION_KEYS if key not in {"generate_title"}
 )
 
 
@@ -634,11 +629,6 @@ def build_settings_payload() -> dict:
         "entropy_protect_tool_results": get_entropy_protect_tool_results_enabled(raw),
         "entropy_reference_boost": get_entropy_reference_boost_enabled(raw),
         "reasoning_auto_collapse": get_reasoning_auto_collapse(raw),
-        "pruning_enabled": get_pruning_enabled(raw),
-        "pruning_token_threshold": get_pruning_token_threshold(raw),
-        "pruning_batch_size": get_pruning_batch_size(raw),
-        "pruning_target_reduction_ratio": get_pruning_target_reduction_ratio(raw),
-        "pruning_min_target_tokens": get_pruning_min_target_tokens(raw),
         "fetch_url_token_threshold": get_fetch_url_token_threshold(raw),
         "fetch_url_clip_aggressiveness": get_fetch_url_clip_aggressiveness(raw),
         "fetch_html_converter_mode": get_fetch_html_converter_mode(raw),
