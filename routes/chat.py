@@ -192,6 +192,7 @@ from rag_service import (
 )
 from rag_service import sync_conversations_to_rag_background, sync_conversations_to_rag_safe
 from routes.request_utils import is_valid_model_id, normalize_model_id, parse_messages_payload, parse_optional_int
+from routes.conversations import normalize_title_source
 from token_utils import estimate_text_tokens
 from tool_registry import get_prompt_visible_tool_names, get_ui_hidden_tool_names, resolve_runtime_tool_names
 from video_transcript_service import (
@@ -980,8 +981,8 @@ def _conversation_uses_default_title(conversation_id: int) -> bool:
     if title_overridden == 1:
         return False
     title = str(row["title"] or "").strip()
-    title_source = str(row["title_source"] or "").strip().lower()
-    return title == TITLE_FALLBACK or title_source in {"system", "persona", ""}
+    title_source = normalize_title_source(row["title_source"])
+    return title == TITLE_FALLBACK or title_source in {"system", "persona"}
 
 
 def _acquire_summary_lock_state(conversation_id: int) -> _ConversationSummaryLockState:

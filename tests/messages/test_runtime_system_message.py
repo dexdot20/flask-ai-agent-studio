@@ -952,10 +952,12 @@ class TestRuntimeSystemMessage:
         assert "## Active Canvas Document" in content
         assert "## Tool Execution History" in content
         assert "## Current Date and Time" in content
-        assert content.index("## Current Date and Time") < content.index("## Tool Memory")
-        assert content.index("## Tool Memory") < content.index("## Tool Execution History")
-        assert content.index("## Active Canvas Document") < content.index("## Tool Execution History")
+        # New order per Data-Structuring-and-Optimization-Protocol-for-AI:
+        # Time -> Tool Execution History -> Tool Memory -> Canvas Runtime Context -> Active Tools
         assert content.index("## Current Date and Time") < content.index("## Tool Execution History")
+        assert content.index("## Tool Execution History") < content.index("## Tool Memory")
+        assert content.index("## Tool Memory") < content.index("## Active Canvas Document")
+        assert content.index("## Active Canvas Document") < content.index("## Active Tools This Turn")
 
     def test_runtime_system_message_includes_workspace_sandbox(self):
         message = build_runtime_system_message(

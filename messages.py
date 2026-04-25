@@ -2585,6 +2585,20 @@ def _build_runtime_volatile_parts(
         )
         volatile_parts.append("")
 
+    # Tool Execution History: moved here (after Double-Check Protocol) per
+    # Data-Structuring-and-Optimization-Protocol-for-AI (chronological integrity)
+    normalized_tool_trace_context = str(tool_trace_context or "").strip()
+    if normalized_tool_trace_context:
+        volatile_parts.append("## Tool Execution History")
+        volatile_parts.append(
+            "*Use this as recent operational memory about which tools were already tried, what they returned, and which paths should not be repeated without a concrete reason.*\n"
+        )
+        volatile_parts.append(
+            "- Before calling any tool again, confirm there is concrete new evidence to gather; otherwise reuse the existing result and continue."
+        )
+        volatile_parts.append(normalized_tool_trace_context)
+        volatile_parts.append("")
+
     tool_memory_payload = _build_tool_memory_payload(tool_memory_context, active_tool_names)
     if tool_memory_payload:
         volatile_parts.append("## Tool Memory")
@@ -2650,18 +2664,13 @@ def _build_runtime_volatile_parts(
         )
         volatile_parts.append("")
 
-    normalized_tool_trace_context = str(tool_trace_context or "").strip()
-    if normalized_tool_trace_context:
-        volatile_parts.append("## Tool Execution History")
-        volatile_parts.append(
-            "*Use this as recent operational memory about which tools were already tried, what they returned, and which paths should not be repeated without a concrete reason.*\n"
-        )
-        volatile_parts.append(
-            "- Before calling any tool again, confirm there is concrete new evidence to gather; otherwise reuse the existing result and continue."
-        )
-        volatile_parts.append(normalized_tool_trace_context)
-        volatile_parts.append("")
-
+    # Active Tools is kept at the end of volatile (rather than in static contract)
+    # because it is determined after runtime gating and can change based on:
+    # - Canvas state (some tools require active document)
+    # - Sub-agent depth (tools are restricted in nested agents)
+    # - Settings changes (tool toggles)
+    # - Runtime memory state (tool_memory can affect available tools)
+    # Since the callable tool list is dynamic per-turn, it must remain in volatile.
     active_tools_context = _build_active_tools_context(active_tool_names)
     if active_tools_context:
         volatile_parts.extend(active_tools_context)

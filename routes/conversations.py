@@ -122,6 +122,26 @@ from image_utils import extract_json_object, extract_text_from_response_content
 
 client = get_provider_client(DEEPSEEK_PROVIDER)
 
+# Title source constants - centralized per UI-Backend-Synchronization
+TITLE_SOURCE_SYSTEM = "system"
+TITLE_SOURCE_PERSONA = "persona"
+TITLE_SOURCE_MANUAL = "manual"
+VALID_TITLE_SOURCES = {TITLE_SOURCE_SYSTEM, TITLE_SOURCE_PERSONA, TITLE_SOURCE_MANUAL}
+
+
+def normalize_title_source(value: str | None) -> str:
+    """Normalize title source to a valid value.
+
+    Returns TITLE_SOURCE_SYSTEM if value is None or not a valid source.
+    This ensures consistent title_source handling across backend routes.
+    """
+    if value is None:
+        return TITLE_SOURCE_SYSTEM
+    normalized = str(value or "").strip().lower()
+    if normalized in VALID_TITLE_SOURCES:
+        return normalized
+    return TITLE_SOURCE_SYSTEM
+
 
 def _deserialize_parameter_overrides(raw_value) -> dict | None:
     if raw_value in (None, ""):
@@ -1738,11 +1758,11 @@ def register_conversation_routes(app) -> None:
 
             if title_provided:
                 next_title = title
-                next_title_source = "manual"
+                next_title_source = TITLE_SOURCE_MANUAL
                 next_title_overridden = 1
             else:
                 next_title = str(conversation["title"] or "New Chat").strip() or "New Chat"
-                next_title_source = str(conversation["title_source"] or "system").strip() or "system"
+                next_title_source = normalize_title_source(conversation["title_source"])
                 next_title_overridden = int(conversation["title_overridden"] or 0)
 
                 if persona_provided and next_title_overridden == 0:
@@ -1751,10 +1771,10 @@ def register_conversation_routes(app) -> None:
                         persona_name = str((persona or {}).get("name") or "").strip()[:120]
                         if persona_name:
                             next_title = persona_name
-                            next_title_source = "persona"
-                    elif next_title_source == "persona":
+                            next_title_source = TITLE_SOURCE_PERSONA
+                    elif next_title_source == TITLE_SOURCE_PERSONA:
                         next_title = "New Chat"
-                        next_title_source = "system"
+                        next_title_source = TITLE_SOURCE_SYSTEM
 
             conn.execute(
                 """

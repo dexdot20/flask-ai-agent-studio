@@ -1666,6 +1666,71 @@ def _conversation_has_clarification_tool_call(messages: list[dict]) -> bool:
     return False
 
 
+def _should_sub_agent_retry(
+    aggregate_history: list[dict],
+    aggregate_tool_trace: list[dict],
+    missing_final_answer_state: bool,
+    timed_out: bool,
+    retryable_model_error: bool,
+    child_answer: str,
+    retry_attempts: int,
+    retry_count: int,
+) -> tuple[bool, str]:
+    """Evaluate whether retrying a sub-agent makes sense.
+
+    Returns (should_retry, reason).
+
+    Per LLM-Autonomy-over-Static-Heuristics principle:
+    - Avoid forced retries without evaluating reasoning
+    - If model intentionally skipped (e.g., clarification), don't retry
+    - Consider token cost vs. alternative approaches
+    """
+    # 1. Check if we have partial useful output
+    has_partial_output = bool(
+        aggregate_tool_trace
+        or child_answer
+        or any(m.get("content") for m in aggregate_history[-4:] if isinstance(m, dict))
+    )
+
+    # 2. If missing final answer but has partial output, evaluate if intentional
+    if missing_final_answer_state and has_partial_output:
+        # Check if sub-agent hit a clarification point
+        last_messages = aggregate_history[-3:] if aggregate_history else []
+        if any("clarification" in str(m.get("content", "")).lower() for m in last_messages if isinstance(m, dict)):
+            return False, "sub_agent_hit_clarification_point"
+
+        # Check if sub-agent explicitly stopped for user input
+        if any("awaiting" in str(m.get("content", "")).lower() for m in last_messages if isinstance(m, dict)):
+            return False, "sub_agent_awaiting_user_input"
+
+        # Check if clarification tool was called
+        if _conversation_has_clarification_tool_call(list(aggregate_history)):
+            return False, "sub_agent_called_clarification"
+
+    # 3. If timed out with no output, retry might help
+    if timed_out and not has_partial_output:
+        if retry_count < retry_attempts:
+            return True, "timeout_no_output"
+
+    # 4. If retryable error but no useful partial progress, retry might help
+    if retryable_model_error and not has_partial_output:
+        if retry_count < retry_attempts:
+            return True, "error_no_output"
+
+    # 5. If timeout/error but HAS partial output, evaluate token cost
+    if (timed_out or retryable_model_error) and has_partial_output:
+        # Consider: is more work likely to succeed?
+        tool_count = len(aggregate_tool_trace) if aggregate_tool_trace else 0
+        if tool_count == 0:
+            # No tools were tried - maybe the task was unclear
+            return False, "no_tools_tried_suggest_different_approach"
+        # Partial progress exists - could continue but at token cost
+        # Let the orchestrator decide based on budget
+
+    # 6. Default: don't force retry, return what we have
+    return False, "default_no_retry"
+
+
 def _is_tool_execution_result_message(message: dict) -> bool:
     content = str(message.get("content") or "").strip()
     return content.startswith(TOOL_EXECUTION_RESULTS_MARKER)
@@ -5273,20 +5338,30 @@ def _run_sub_agent_stream(tool_args: dict, runtime_state: dict):
             if missing_final_answer_state and not has_partial_output and not error_text:
                 error_text = "The delegated model did not return a final answer."
 
-            if (
-                (timed_out or retryable_model_error or missing_final_answer_state)
-                and retry_count < retry_attempts
-                and time.monotonic() < overall_deadline
-            ):
-                retry_reason = (
-                    "a timeout"
-                    if timed_out
-                    else "a missing final answer"
-                    if missing_final_answer_state
-                    else "a model error"
-                )
+            # Evaluate retry via _should_sub_agent_retry (per LLM-Autonomy-over-Static-Heuristics)
+            should_retry, retry_decision_reason = _should_sub_agent_retry(
+                aggregate_history=aggregate_history,
+                aggregate_tool_trace=aggregate_tool_trace,
+                missing_final_answer_state=missing_final_answer_state,
+                timed_out=timed_out,
+                retryable_model_error=retryable_model_error,
+                child_answer=child_answer,
+                retry_attempts=retry_attempts,
+                retry_count=retry_count,
+            )
+
+            if should_retry and time.monotonic() < overall_deadline:
+                # Build informative resume message based on evaluation
                 resume_messages.extend(_build_sub_agent_retry_messages(aggregate_history))
-                resume_messages.append(_build_sub_agent_resume_message(child_model, retry_reason))
+
+                # Provide context-aware resume message
+                if retry_decision_reason == "timeout_no_output":
+                    resume_messages.append(_build_sub_agent_resume_message(child_model, "timeout with no output - retrying from start"))
+                elif retry_decision_reason == "error_no_output":
+                    resume_messages.append(_build_sub_agent_resume_message(child_model, "model error with no output - retrying"))
+                else:
+                    resume_messages.append(_build_sub_agent_resume_message(child_model, retry_decision_reason))
+
                 retry_count += 1
                 sleep_for = min(float(retry_delay_seconds), max(0.0, overall_deadline - time.monotonic()))
                 if sleep_for > 0:
@@ -5680,11 +5755,13 @@ def _run_create_canvas_document(tool_args: dict, runtime_state: dict):
 
 
 def _run_expand_canvas_document(tool_args: dict, runtime_state: dict):
+    # NOTE: Previously this function had a skip pattern where if the document
+    # was already fully visible in the viewport, it would return early with
+    # an informational message. This violated LLM-Autonomy-over-Static-Heuristics
+    # because the backend was making a decision (skip expand) that should be
+    # the LLM's. The LLM calls expand when it needs the full document content
+    # or metadata, and the decision to skip must not be made unilaterally.
     canvas_state = _get_canvas_runtime_state(runtime_state)
-    skip_result = _build_already_visible_canvas_expand_result(tool_args, runtime_state)
-    if skip_result is not None:
-        target_label = str(skip_result.get("document_path") or skip_result.get("title") or "Canvas").strip()
-        return skip_result, f"Canvas already fully visible: {target_label}"
     canvas_limits = runtime_state.get("canvas_limits") if isinstance(runtime_state.get("canvas_limits"), dict) else {}
     expand_max_lines = int(canvas_limits.get("expand_max_lines") or 0) or None
     result = build_canvas_document_context_result(
@@ -6492,6 +6569,12 @@ def _refresh_latest_canvas_context_injection_message(messages: list[dict], runti
     return False
 
 
+# DEPRECATED: This function is no longer used.
+# expand_canvas_document now always executes the expand operation without skipping.
+# Previously this function was used to short-circuit the expand when the document
+# was already visible in the viewport, but this violated LLM-Autonomy-over-Static-Heuristics
+# because the backend was making a unilateral decision to skip the tool.
+# The LLM is responsible for determining whether to call expand based on viewport content.
 def _build_already_visible_canvas_expand_result(tool_args: dict, runtime_state: dict) -> dict | None:
     prompt_payload = _build_active_canvas_prompt_payload(runtime_state)
     if not isinstance(prompt_payload, dict) or prompt_payload.get("is_truncated") is not False:
@@ -6630,6 +6713,11 @@ def _resolve_canvas_read_targets(tool_name: str, tool_args: dict, canvas_state: 
     return resolved_targets
 
 
+# DEPRECATED: This function is no longer used for execution gating.
+# Canvas read tools are now filtered during slot building via
+# _is_canvas_read_blocked_by_mutation() instead, which uses a pre-pass
+# to identify mutations before executing any sequential slots.
+# Kept for backward compatibility with tests.
 def _should_skip_canvas_read_after_same_turn_mutation(
     tool_name: str,
     tool_args: dict,
@@ -6661,6 +6749,37 @@ def _should_skip_canvas_read_after_same_turn_mutation(
         return True, guard_message
 
     return False, ""
+
+
+def _is_canvas_read_blocked_by_mutation(
+    tool_name: str,
+    tool_args: dict,
+    canvas_state: dict,
+    mutated_doc_ids: set[str],
+    mutated_doc_paths: set[str],
+) -> bool:
+    """Returns True if this read tool targets a document mutated in this turn.
+
+    This is the boolean-only variant used for pre-filtering read tools
+    during slot building, per the Dynamic Tool Gating principle
+    (LLM-Autonomy-over-Static-Heuristics).
+    """
+    normalized_tool_name = _normalize_tool_name(tool_name)
+    if normalized_tool_name not in CANVAS_ALL_READ_TOOL_NAMES:
+        return False
+    if not mutated_doc_ids and not mutated_doc_paths:
+        return False
+
+    read_targets = _resolve_canvas_read_targets(normalized_tool_name, tool_args, canvas_state)
+    for target in read_targets:
+        target_document_id = str(target.get("document_id") or "").strip()
+        target_document_path = _normalize_canvas_document_path_key(target.get("document_path"))
+        if target_document_id and target_document_id in mutated_doc_ids:
+            return True
+        if target_document_path and target_document_path in mutated_doc_paths:
+            return True
+
+    return False
 
 
 def _collect_canvas_mutation_locators(tool_name: str, tool_args: dict, result) -> tuple[set[str], set[str]]:
@@ -9024,32 +9143,50 @@ def run_agent_stream(
                         if isinstance(event, dict):
                             yield event
 
-            # Canvas self-read guard: track which document IDs/paths were mutated
-            # in this batch so that a subsequent same-batch read of the same
-            # document can be short-circuited with a helpful message instead
-            # of wasting tokens on a redundant inspection.
+            # ---- Phase 2b: Pre-identify canvas mutations and filter blocked reads ----
+            # Per LLM-Autonomy-over-Static-Heuristics: filter read tools BEFORE execution
+            # if they target documents mutated in this batch, rather than executing
+            # them and then skipping the result.
             _canvas_mutated_doc_ids: set[str] = set()
             _canvas_mutated_doc_paths: set[str] = set()
+            _canvas_current_state = runtime_state.get("canvas") if isinstance(runtime_state.get("canvas"), dict) else {}
+
+            # First pass: identify all mutations in this batch
+            for s in sequential_slots:
+                if s["tool_name"] in CANVAS_MUTATION_TOOL_NAMES:
+                    tracked_doc_ids, tracked_doc_paths = _collect_canvas_mutation_locators(
+                        s["tool_name"], s.get("tool_args") or {}, None
+                    )
+                    _canvas_mutated_doc_ids.update(tracked_doc_ids)
+                    _canvas_mutated_doc_paths.update(tracked_doc_paths)
+
+            # Second pass: mark blocked reads as filtered (do NOT execute them)
+            for s in sequential_slots:
+                if s["tool_name"] in CANVAS_ALL_READ_TOOL_NAMES:
+                    if _is_canvas_read_blocked_by_mutation(
+                        s["tool_name"],
+                        s.get("tool_args") or {},
+                        _canvas_current_state,
+                        _canvas_mutated_doc_ids,
+                        _canvas_mutated_doc_paths,
+                    ):
+                        # Tool is blocked by prior mutation in this batch - mark as filtered
+                        guard_message = (
+                            f"Skipped: target document was already modified in this turn. "
+                            "The mutation result above contains the updated snapshot. "
+                            "Re-reading immediately is unnecessary."
+                        )
+                        s["exec_result"] = {"ok": True, "result": guard_message, "summary": "Tool filtered by backend (mutation barrier)"}
+                        s["_canvas_read_filtered"] = True
 
             for s in sequential_slots:
+                # Skip already-filtered read tools
+                if s.get("_canvas_read_filtered"):
+                    continue
                 try:
                     _raise_if_agent_cancelled(runtime_state.get("agent_context"))
                     _tool_name = s["tool_name"]
                     _tool_args = s.get("tool_args") or {}
-
-                    # Self-read guard: if this is a canvas read targeting a
-                    # document that was just mutated in the same batch,
-                    # return a short-circuit result instead of executing.
-                    should_skip_read, guard_message = _should_skip_canvas_read_after_same_turn_mutation(
-                        _tool_name,
-                        _tool_args,
-                        runtime_state.get("canvas") if isinstance(runtime_state.get("canvas"), dict) else {},
-                        _canvas_mutated_doc_ids,
-                        _canvas_mutated_doc_paths,
-                    )
-                    if should_skip_read:
-                        s["exec_result"] = {"ok": True, "result": guard_message, "summary": guard_message}
-                        continue
 
                     if _tool_name == "sub_agent":
                         res, summ = yield from _run_sub_agent_stream(_tool_args, runtime_state)
@@ -9059,7 +9196,8 @@ def run_agent_stream(
                         res, summ = _execute_tool(_tool_name, _tool_args, runtime_state=runtime_state)
                     s["exec_result"] = {"ok": True, "result": res, "summary": summ}
 
-                    # Track mutated canvas document IDs/paths for the self-read guard.
+                    # Track mutated canvas document IDs/paths for audit/debugging.
+                    # Note: This is no longer used for skipping (filtering happens in pre-pass above).
                     if _tool_name in CANVAS_MUTATION_TOOL_NAMES and s["exec_result"].get("ok"):
                         tracked_doc_ids, tracked_doc_paths = _collect_canvas_mutation_locators(
                             _tool_name, _tool_args, res
