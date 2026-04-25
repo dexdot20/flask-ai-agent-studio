@@ -280,7 +280,9 @@ TOOL_SPECS = [
             "guidance": (
                 "Use this for important chat-specific details, constraints, decisions, and tool outcomes. "
                 "Default to this over scratchpad unless the fact is durable and cross-conversation. "
-                "Pass multiple entries in one call. Reuse the same key when updating to keep memory compact."
+                "Pass multiple entries in one call by using the entries array where each item is an object with entry_type, key, and value fields — for example: {\"entries\": [{\"entry_type\": \"task_context\", \"key\": \"user_goal\", \"value\": \"install Python package\"}]}. "
+                "To save a single entry, pass entry_type, key, and value as separate top-level arguments instead. "
+                "Reuse the same key when updating existing entries to keep memory compact."
             ),
         },
     },

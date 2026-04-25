@@ -135,6 +135,17 @@ def create_app(database_path: str | None = None, *, load_persisted_runtime_setti
     register_chat_routes(app)
     register_activity_routes(app)
 
+    # Validate tool catalog synchronization between TOOL_SPECS and UI labels/descriptions
+    # This uses a deferred import to avoid circular import issues at module load time
+    from routes.pages import validate_tool_catalog_sync
+    missing_labels, missing_descs, missing_specs = validate_tool_catalog_sync()
+    if missing_labels:
+        _logger.warning("Tools missing in TOOL_PERMISSION_LABELS (UI may not display them correctly): %s", missing_labels)
+    if missing_descs:
+        _logger.warning("Tools missing in TOOL_PERMISSION_DESCRIPTIONS (UI may not display them correctly): %s", missing_descs)
+    if missing_specs:
+        _logger.warning("Tools in TOOL_PERMISSION_LABELS but not in TOOL_SPECS (stale UI entries): %s", missing_specs)
+
     _logger.info("All routes registered successfully")
     _logger.info("Application startup complete")
     _logger.info("=" * 60)

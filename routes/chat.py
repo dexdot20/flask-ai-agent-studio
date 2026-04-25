@@ -637,9 +637,25 @@ def _rollback_edit_replay_snapshot(
             restore_soft_deleted_messages(conn, conversation_id, later_message_ids)
 
         if max_message_id > 0:
-            conn.execute(
-                "DELETE FROM messages WHERE conversation_id = ? AND id > ?",
-                (conversation_id, max_message_id),
+            # Use soft delete instead of hard delete to prevent data loss
+            # due to race conditions or incorrect max_message_id values
+            deleted_at = datetime.now().astimezone().isoformat(timespec="seconds")
+            cursor = conn.execute(
+                "UPDATE messages SET deleted_at = ? WHERE conversation_id = ? AND id > ? AND deleted_at IS NULL",
+                (deleted_at, conversation_id, max_message_id),
+            )
+            current_app.logger.info(
+                "Edit replay rollback: soft-deleted %s messages with id > %s in conversation %s",
+                cursor.rowcount,
+                max_message_id,
+                conversation_id,
+            )
+        else:
+            current_app.logger.warning(
+                "Edit replay rollback called with max_message_id=%s for conversation %s. "
+                "This may indicate a snapshot capture issue. No messages were deleted.",
+                max_message_id,
+                conversation_id,
             )
 
         replace_conversation_memory_snapshot(
@@ -6542,9 +6558,11 @@ def register_chat_routes(app) -> None:
                 return jsonify({"error": "This summary cannot be undone because its source messages are missing."}), 400
 
             restored_message_count = restore_soft_deleted_messages(conn, conv_id, resolved_covered_message_ids)
+            # Use soft delete for summary message instead of hard delete to prevent data loss
+            deleted_at = datetime.now().astimezone().isoformat(timespec="seconds")
             conn.execute(
-                "DELETE FROM messages WHERE conversation_id = ? AND id = ?",
-                (conv_id, summary_id),
+                "UPDATE messages SET deleted_at = ? WHERE conversation_id = ? AND id = ? AND deleted_at IS NULL",
+                (deleted_at, conv_id, summary_id),
             )
             if summary_insert_strategy == "after_covered_block":
                 shift_message_positions(conn, conv_id, summary_position + 1, -1)

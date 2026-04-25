@@ -51,7 +51,7 @@ from db import (
     read_image_asset_bytes,
 )
 from token_utils import estimate_text_tokens
-from tool_registry import PARALLEL_SAFE_READ_ONLY_TOOL_NAMES, resolve_runtime_tool_names
+from tool_registry import PARALLEL_SAFE_READ_ONLY_TOOL_NAMES, get_prompt_tool_context, resolve_runtime_tool_names
 
 SUMMARY_LABEL = "Conversation summary (generated from deleted messages):"
 MODEL_SUMMARY_LABEL = "Conversation summary:"
@@ -2760,6 +2760,7 @@ def _build_runtime_static_parts(
     max_parallel_tools: int | None = None,
     canvas_payload: dict | None = None,
     workspace_root: str | None = None,
+    canvas_documents: list[dict] | None = None,
 ) -> list[str]:
     preferences_text = (user_preferences or "").strip()
     persona_memory_tools_enabled = any(
@@ -2801,6 +2802,34 @@ def _build_runtime_static_parts(
         if batching_guidance:
             parts.append("## Batching Strategy")
             parts.append(batching_guidance)
+            parts.append("")
+
+    # Tool Usage Guide: detailed purpose, inputs, and guidance for each active tool
+    tool_context = get_prompt_tool_context(
+        runtime_tool_names,
+        canvas_documents=canvas_documents,
+        clarification_max_questions=clarification_max_questions,
+        search_tool_query_limit=search_tool_query_limit,
+        workspace_root=workspace_root,
+    )
+    if tool_context:
+        parts.append("## Tool Usage Guide")
+        parts.append("*Authoritative reference for each active tool: purpose, required arguments, and usage guidance. Follow this exactly when calling tools.*\n")
+        for tool_entry in tool_context:
+            tool_name = tool_entry.get("name", "")
+            use_for = tool_entry.get("use_for", "")
+            arguments = tool_entry.get("arguments", {})
+            guidance = tool_entry.get("guidance", "")
+
+            parts.append(f"### `{tool_name}`")
+            if use_for:
+                parts.append(f"**Use for**: {use_for}")
+            if arguments:
+                parts.append("**Arguments**:")
+                for arg_name, arg_desc in arguments.items():
+                    parts.append(f"- `{arg_name}`: {arg_desc}")
+            if guidance:
+                parts.append(f"**Guidance**: {guidance}")
             parts.append("")
 
     policies = []
@@ -3003,6 +3032,7 @@ def build_runtime_system_message(
         max_parallel_tools=max_parallel_tools,
         canvas_payload=canvas_payload,
         workspace_root=workspace_root,
+        canvas_documents=canvas_documents,
     )
 
     if include_dynamic_context:

@@ -235,6 +235,9 @@ TOOL_PERMISSION_LABELS = {
     "preview_github_import_to_canvas": "Preview GitHub repo for Canvas import",
     "import_github_repository_to_canvas": "Import GitHub repo to Canvas",
     "validate_canvas_document": "Validate canvas document",
+    "expand_truncated_tool_result": "Expand truncated tool result",
+    "delete_tool_result": "Delete tool result",
+    "list_tool_memory": "List tool memory",
 }
 
 TOOL_PERMISSION_DESCRIPTIONS = {
@@ -286,7 +289,40 @@ TOOL_PERMISSION_DESCRIPTIONS = {
     "preview_github_import_to_canvas": "Fetch GitHub repository metadata and show a file-listing preview without modifying Canvas.",
     "import_github_repository_to_canvas": "Download a GitHub repository archive and add supported text files into Canvas as path-aware project documents.",
     "validate_canvas_document": "Run a syntax or structure check on a canvas document without editing it.",
+    "expand_truncated_tool_result": "Retrieve the full uncropped content of a previously executed tool call that was truncated in the conversation history.",
+    "delete_tool_result": "Delete a tool result from the current context and store a preview in tool memory for future reference.",
+    "list_tool_memory": "List recently deleted tool results from tool memory to recall what was previously cleaned up.",
 }
+
+
+def validate_tool_catalog_sync() -> tuple[list[str], list[str], list[str]]:
+    """Check synchronization between TOOL_SPEC_BY_NAME and UI tool catalog.
+
+    Returns:
+        Tuple of (missing_in_labels, missing_in_descriptions, missing_in_specs)
+        - missing_in_labels: visible tools in TOOL_SPEC_BY_NAME but not in TOOL_PERMISSION_LABELS
+        - missing_in_descriptions: visible tools in TOOL_SPEC_BY_NAME but not in TOOL_PERMISSION_DESCRIPTIONS
+        - missing_in_specs: tools in TOOL_PERMISSION_LABELS but not in TOOL_SPEC_BY_NAME
+
+    Note: Tools marked as ui_hidden=True in TOOL_RUNTIME_METADATA are excluded from the check
+    since they are intentionally not shown in the UI for user configuration.
+    """
+    # Get tools that are intentionally hidden from UI configuration
+    hidden_tool_names = {
+        tool_name for tool_name in TOOL_SPEC_BY_NAME
+        if get_tool_runtime_metadata(tool_name).get("ui_hidden") is True
+    }
+
+    spec_tool_names = set(TOOL_SPEC_BY_NAME.keys()) - hidden_tool_names
+    label_tool_names = set(TOOL_PERMISSION_LABELS.keys())
+    desc_tool_names = set(TOOL_PERMISSION_DESCRIPTIONS.keys())
+
+    missing_in_labels = sorted(spec_tool_names - label_tool_names)
+    missing_in_descriptions = sorted(spec_tool_names - desc_tool_names)
+    missing_in_specs = sorted(label_tool_names - spec_tool_names)
+
+    return missing_in_labels, missing_in_descriptions, missing_in_specs
+
 
 TOOL_PERMISSION_SECTION_ORDER = ["assistant", "research", "canvas", "workspace"]
 TOOL_PERMISSION_SECTION_METADATA = {
