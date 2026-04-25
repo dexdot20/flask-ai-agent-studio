@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import os
-import logging
 import threading
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 
 from config import RAG_EMBED_BATCH_SIZE, RAG_EMBED_MODEL
+from logging_config import get_logger
+
+LOGGER = get_logger(__name__)
 
 _embedder = None
 _embedder_lock = threading.Lock()
@@ -30,7 +32,7 @@ def _resolve_device() -> str:
         import torch
     except Exception:
         if requested:
-            logging.warning(
+            LOGGER.warning(
                 "BGE_M3_DEVICE=%s was requested, but torch could not be imported; falling back to CPU.",
                 requested,
             )
@@ -38,7 +40,7 @@ def _resolve_device() -> str:
 
     if not torch.cuda.is_available():
         if requested:
-            logging.warning(
+            LOGGER.warning(
                 "BGE_M3_DEVICE=%s was requested, but no CUDA-capable GPU was detected; falling back to CPU.",
                 requested,
             )
@@ -77,20 +79,14 @@ def get_embedder():
                 "BGE-M3 dependencies are missing. Install sentence-transformers and torch before using RAG."
             ) from exc
 
-        sentence_transformers_logger = logging.getLogger("sentence_transformers")
-        previous_level = sentence_transformers_logger.level
-        if previous_level < logging.WARNING:
-            sentence_transformers_logger.setLevel(logging.WARNING)
-        try:
-            with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
-                model = SentenceTransformer(
-                    model_name,
-                    trust_remote_code=trust_remote_code,
-                    device=device,
-                    local_files_only=local_files_only,
-                )
-        finally:
-            sentence_transformers_logger.setLevel(previous_level)
+        # sentence_transformers logger is silenced globally in logging_config.py
+        with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+            model = SentenceTransformer(
+                model_name,
+                trust_remote_code=trust_remote_code,
+                device=device,
+                local_files_only=local_files_only,
+            )
         _embedder = {
             "model": model,
             "device": device,
@@ -109,7 +105,7 @@ def preload_embedder() -> None:
     except RuntimeError as exc:
         if not _is_missing_dependency_error(exc):
             raise
-        logging.warning("BGE-M3 preload skipped: %s", exc)
+        LOGGER.warning("BGE-M3 preload skipped: %s", exc)
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:

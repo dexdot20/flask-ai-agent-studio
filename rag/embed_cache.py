@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import logging
 import os
 import sqlite3
 import struct
@@ -9,6 +8,9 @@ import threading
 import time
 
 from config import RAG_EMBED_CACHE_ENABLED, RAG_EMBED_CACHE_MAX_ENTRIES
+from logging_config import get_logger
+
+LOGGER = get_logger(__name__)
 
 _cache_lock = threading.Lock()
 _cache_db: sqlite3.Connection | None = None
@@ -79,7 +81,7 @@ def get_cached_embedding(text: str, model_name: str) -> list[float] | None:
                 return None
             return _unpack_embedding(row[0])
         except Exception:
-            logging.debug("Embed cache read error", exc_info=True)
+            LOGGER.debug("Embed cache read error", exc_info=True)
             return None
 
 
@@ -106,4 +108,4 @@ def set_cached_embedding(text: str, model_name: str, embedding: list[float]) -> 
             )
             db.commit()
         except Exception:
-            logging.debug("Embed cache write error", exc_info=True)
+            LOGGER.debug("Embed cache write error", exc_info=True)

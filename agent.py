@@ -17,9 +17,10 @@ from typing import Any
 
 import re
 import string
-from logging.handlers import RotatingFileHandler
 from urllib.parse import urlparse
 from uuid import uuid4
+
+from logging_config import get_logger
 
 from canvas_service import (
     batch_read_canvas_documents,
@@ -75,7 +76,7 @@ from config import (
     AGENT_TRACE_LOG_ENABLED,
     AGENT_TRACE_LOG_INCLUDE_RAW,
     AGENT_TOOL_RESULT_TRANSCRIPT_MAX_CHARS,
-    AGENT_TRACE_LOG_PATH,
+    APP_LOG_PATH,
     CONVERSATION_MEMORY_ENABLED,
     DEFAULT_SETTINGS,
     DEFAULT_MAX_PARALLEL_TOOLS,
@@ -283,8 +284,8 @@ MAX_COMPACTION_ATTEMPTS = 3
 EMERGENCY_TRUNCATION_MIN_TOKENS = 1500
 EMERGENCY_TRUNCATION_TARGET_RATIO = 0.60
 
-_AGENT_TRACE_LOGGER = None
-_AGENT_TRACE_LOGGER_LOCK = threading.Lock()
+# Module-level logger for centralized logging
+LOGGER = get_logger(__name__)
 
 
 def _get_default_deepseek_client():
@@ -292,38 +293,6 @@ def _get_default_deepseek_client():
 
 
 client = _get_default_deepseek_client()
-
-
-def _get_agent_trace_logger():
-    if not AGENT_TRACE_LOG_ENABLED:
-        return None
-
-    global _AGENT_TRACE_LOGGER
-    if _AGENT_TRACE_LOGGER is not None:
-        return _AGENT_TRACE_LOGGER
-
-    with _AGENT_TRACE_LOGGER_LOCK:
-        if _AGENT_TRACE_LOGGER is not None:
-            return _AGENT_TRACE_LOGGER
-
-        logger = logging.getLogger("chatbot.agent.trace")
-        target_log_path = os.path.abspath(AGENT_TRACE_LOG_PATH)
-        has_target_handler = any(
-            isinstance(handler, RotatingFileHandler)
-            and os.path.abspath(str(getattr(handler, "baseFilename", ""))) == target_log_path
-            for handler in logger.handlers
-        )
-        if not has_target_handler:
-            log_dir = os.path.dirname(target_log_path)
-            if log_dir:
-                os.makedirs(log_dir, exist_ok=True)
-            handler = RotatingFileHandler(target_log_path, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
-            handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-            logger.addHandler(handler)
-        logger.setLevel(logging.INFO)
-        logger.propagate = False
-        _AGENT_TRACE_LOGGER = logger
-        return logger
 
 
 def _coerce_usage_int(value) -> int:
@@ -2121,12 +2090,14 @@ def _trace_agent_event(event: str, *, raw_fields: dict | None = None, **fields):
     if AGENT_TRACE_LOG_INCLUDE_RAW and isinstance(raw_fields, dict) and raw_fields:
         payload["raw"] = {str(key): _serialize_for_raw_log(value) for key, value in raw_fields.items()}
     try:
-        logger = _get_agent_trace_logger()
-        if logger is None:
-            return
-        logger.info(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        LOGGER.info("TRACE %s", json.dumps(payload, ensure_ascii=False, sort_keys=True))
     except Exception:
-        return
+        # Fallback to stderr if logging fails (disk full, permission error, etc.)
+        import sys
+        try:
+            print(f"TRACE FAILED: event={event}", file=sys.stderr)
+        except Exception:
+            pass  # Absolutely silent fallback
 
 
 def trace_agent_stream_payload(
@@ -7890,7 +7861,7 @@ def run_agent_stream(
         prompt_tool_names=normalized_prompt_tool_names,
         max_parallel_tools=normalized_parallel_tool_limit,
         api_messages=_summarize_messages_for_log(messages),
-        log_path=AGENT_TRACE_LOG_PATH,
+        log_path=APP_LOG_PATH,
         raw_fields={
             "messages": messages,
             "enabled_tool_names": normalized_enabled_tool_names,

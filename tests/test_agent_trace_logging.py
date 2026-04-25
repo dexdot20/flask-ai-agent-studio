@@ -14,7 +14,10 @@ class _ListLogger:
     def __init__(self) -> None:
         self.messages: list[str] = []
 
-    def info(self, message: str) -> None:
+    def info(self, message: str, *args, **kwargs) -> None:
+        # Handle Python logging's %-formatting
+        if args:
+            message = message % args
         self.messages.append(message)
 
 
@@ -22,7 +25,7 @@ def test_trace_agent_event_includes_raw_payload_when_enabled(monkeypatch) -> Non
     logger = _ListLogger()
     monkeypatch.setattr(agent, "AGENT_TRACE_LOG_ENABLED", True)
     monkeypatch.setattr(agent, "AGENT_TRACE_LOG_INCLUDE_RAW", True)
-    monkeypatch.setattr(agent, "_get_agent_trace_logger", lambda: logger)
+    monkeypatch.setattr(agent.LOGGER, "info", logger.info)
 
     agent._trace_agent_event(
         "demo_event",
@@ -35,7 +38,7 @@ def test_trace_agent_event_includes_raw_payload_when_enabled(monkeypatch) -> Non
     )
 
     assert len(logger.messages) == 1
-    payload = json.loads(logger.messages[0])
+    payload = json.loads(logger.messages[0].replace("TRACE ", ""))
     assert payload["event"] == "demo_event"
     assert payload["trace_id"] == "trace-1"
     assert payload["raw"]["content"] == "FULL CONTENT"
@@ -46,7 +49,7 @@ def test_trace_agent_event_is_silent_when_disabled(monkeypatch) -> None:
     logger = _ListLogger()
     monkeypatch.setattr(agent, "AGENT_TRACE_LOG_ENABLED", False)
     monkeypatch.setattr(agent, "AGENT_TRACE_LOG_INCLUDE_RAW", True)
-    monkeypatch.setattr(agent, "_get_agent_trace_logger", lambda: logger)
+    monkeypatch.setattr(agent.LOGGER, "info", logger.info)
 
     agent._trace_agent_event("disabled_event", raw_fields={"content": "ignored"})
 
@@ -57,7 +60,7 @@ def test_append_model_invocation_log_traces_raw_request_and_response_without_sin
     logger = _ListLogger()
     monkeypatch.setattr(agent, "AGENT_TRACE_LOG_ENABLED", True)
     monkeypatch.setattr(agent, "AGENT_TRACE_LOG_INCLUDE_RAW", True)
-    monkeypatch.setattr(agent, "_get_agent_trace_logger", lambda: logger)
+    monkeypatch.setattr(agent.LOGGER, "info", logger.info)
 
     agent._append_model_invocation_log(
         None,
@@ -73,7 +76,7 @@ def test_append_model_invocation_log_traces_raw_request_and_response_without_sin
     )
 
     assert len(logger.messages) == 1
-    payload = json.loads(logger.messages[0])
+    payload = json.loads(logger.messages[0].replace("TRACE ", ""))
     assert payload["event"] == "model_invocation_recorded"
     assert payload["provider"] == "demo-provider"
     assert payload["api_model"] == "demo-model"
@@ -85,7 +88,7 @@ def test_trace_agent_stream_payload_logs_event_type_and_full_payload(monkeypatch
     logger = _ListLogger()
     monkeypatch.setattr(agent, "AGENT_TRACE_LOG_ENABLED", True)
     monkeypatch.setattr(agent, "AGENT_TRACE_LOG_INCLUDE_RAW", True)
-    monkeypatch.setattr(agent, "_get_agent_trace_logger", lambda: logger)
+    monkeypatch.setattr(agent.LOGGER, "info", logger.info)
 
     agent.trace_agent_stream_payload(
         "chat_stream_chunk",
@@ -96,7 +99,7 @@ def test_trace_agent_stream_payload_logs_event_type_and_full_payload(monkeypatch
     )
 
     assert len(logger.messages) == 1
-    payload = json.loads(logger.messages[0])
+    payload = json.loads(logger.messages[0].replace("TRACE ", ""))
     assert payload["event"] == "chat_stream_chunk"
     assert payload["event_type"] == "answer_delta"
     assert payload["conversation_id"] == 42

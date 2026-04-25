@@ -10,10 +10,14 @@ import httpx
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from logging_config import get_logger
 from proxy_settings import PROXY_OPERATION_OPENROUTER
 from token_utils import estimate_text_tokens
 
 load_dotenv()
+
+# Module-level logger
+LOGGER = get_logger(__name__)
 
 DEEPSEEK_PROVIDER = "deepseek"
 OPENROUTER_PROVIDER = "openrouter"
@@ -490,10 +494,6 @@ class _MiniMaxClientProxy:
 
     def _translate_openai_to_anthropic(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         """Translate OpenAI-style kwargs to Anthropic API format."""
-        import logging
-        _logger = logging.getLogger(__name__)
-        _logger.warning(f"[MiniMax Debug] Input kwargs keys: {list(kwargs.keys())}")
-
         translated: dict[str, Any] = {}
 
         def _coerce_positive_int(value, default: int) -> int:
@@ -697,13 +697,6 @@ class _MiniMaxClientProxy:
         }
         translated_copy = {k: v for k, v in translated.items() if k in allowed_params}
 
-        import logging
-        _logger = logging.getLogger(__name__)
-        _logger.warning(f"[MiniMax Debug] After whitelist - translated keys: {list(translated_copy.keys())}")
-        filtered = set(translated.keys()) - set(translated_copy.keys())
-        if filtered:
-            _logger.warning(f"[MiniMax Debug] Filtered out params: {filtered}")
-
         return translated_copy
 
     def _create_chat_completion(self, *args, **kwargs):
@@ -718,11 +711,6 @@ class _MiniMaxClientProxy:
 
         # Translate to Anthropic format
         anthropic_kwargs = self._translate_openai_to_anthropic(kwargs)
-
-        import logging
-        _logger = logging.getLogger(__name__)
-        _logger.warning(f"[MiniMax Debug] Final anthropic_kwargs keys: {list(anthropic_kwargs.keys())}")
-        _logger.warning(f"[MiniMax Debug] anthropic_kwargs: {anthropic_kwargs}")
 
         # Get the client
         client = self._get_anthropic_client()

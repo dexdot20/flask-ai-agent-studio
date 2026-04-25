@@ -4,7 +4,6 @@ from concurrent.futures import ThreadPoolExecutor
 import html
 import hashlib
 import json
-import logging
 import math
 import os
 import re
@@ -14,6 +13,7 @@ from threading import Lock
 
 from flask import current_app, has_app_context
 
+from logging_config import get_logger
 from config import (
     RAG_DISABLED_FEATURE_ERROR,
     RAG_ENABLED,
@@ -102,7 +102,7 @@ RAG_QUERY_POISONING_DENYLIST = {
     "prompt_engineering",
 }
 RAG_QUERY_MIN_INFORMATIVE_TOKEN_COUNT = 2
-logger = logging.getLogger(__name__)
+LOGGER = get_logger(__name__)
 
 
 def _require_rag_enabled() -> None:
@@ -386,7 +386,7 @@ def purge_expired_rag_documents() -> int:
             deleted_keys.append(source_key)
             removed += 1
         except Exception as exc:
-            logger.warning("Failed to delete expired RAG source %s from ChromaDB: %s", source_key, exc)
+            LOGGER.warning("Failed to delete expired RAG source %s from ChromaDB: %s", source_key, exc)
     if deleted_keys:
         delete_rag_document_records(deleted_keys)
     return removed
@@ -458,7 +458,7 @@ def ensure_supported_rag_sources(force: bool = False) -> int:
     try:
         removed = purge_expired_rag_documents()
     except Exception as exc:
-        logger.warning("Failed to purge expired RAG documents: %s", exc)
+        LOGGER.warning("Failed to purge expired RAG documents: %s", exc)
         removed = 0
     if (
         _rag_sources_verified
@@ -477,13 +477,13 @@ def ensure_supported_rag_sources(force: bool = False) -> int:
         try:
             rag_delete_source(row["source_key"])
         except Exception as exc:
-            logger.warning("Failed to delete unsupported RAG source %s from ChromaDB: %s", row["source_key"], exc)
+            LOGGER.warning("Failed to delete unsupported RAG source %s from ChromaDB: %s", row["source_key"], exc)
             continue
         try:
             delete_rag_document_record(row["source_key"])
             removed_invalid += 1
         except Exception as exc:
-            logger.warning("Failed to delete unsupported RAG source record from DB: %s: %s", row["source_key"], exc)
+            LOGGER.warning("Failed to delete unsupported RAG source record from DB: %s: %s", row["source_key"], exc)
 
     _rag_sources_verified = True
     _rag_sources_last_verified_at = now
@@ -1767,7 +1767,7 @@ def sync_conversations_to_rag_safe(conversation_id: int | None = None, force: bo
     try:
         return sync_conversations_to_rag(conversation_id=conversation_id, force=force)
     except Exception:
-        logger.exception(
+        LOGGER.exception(
             "Automatic conversation sync failed", extra={"conversation_id": conversation_id, "force": force}
         )
         return []
