@@ -127,9 +127,10 @@ def _extract_text_from_docx(doc_bytes: bytes) -> str:
 
 _PDF_OCR_MIN_TEXT_CHARS = 20
 _PDF_OCR_RENDER_DPI = 200
-PDF_VISION_PAGE_LIMIT = 3
-_PDF_VISION_RENDER_DPI = 144
-_PDF_VISION_MAX_DIMENSION = 1600
+
+# Non-convertible content markers for PDF pages
+_NON_CONVERTIBLE_IMAGE = "[non-convertible content: image]"
+_NON_CONVERTIBLE_DRAWING = "[non-convertible content: drawing]"
 
 
 def _build_pdf_ocr_unavailable_notice(status: str) -> str:
@@ -201,6 +202,9 @@ def _extract_text_from_pdf(doc_bytes: bytes) -> str:
         multi_page = len(pdf.pages) > 1
         for page_num, page in enumerate(pdf.pages, start=1):
             page_parts: list[str] = []
+            page_images = list(getattr(page, "images", None) or [])
+            has_drawings = bool(getattr(page, "drawings", None))
+
             table_chunks = _extract_markdown_tables_from_page(page)
             if table_chunks:
                 page_parts.extend(table_chunks)
@@ -209,7 +213,8 @@ def _extract_text_from_pdf(doc_bytes: bytes) -> str:
             if plain_text:
                 page_parts.insert(0, plain_text)
 
-            if not plain_text and bool(getattr(page, "images", None)):
+            # Handle image-only pages with OCR fallback
+            if not plain_text and page_images:
                 ocr_text, ocr_status = _extract_text_from_pdf_ocr(page)
                 cleaned_ocr_text = _clean_pdf_text(ocr_text)
                 if cleaned_ocr_text:
@@ -218,14 +223,24 @@ def _extract_text_from_pdf(doc_bytes: bytes) -> str:
                     ocr_notice = _build_pdf_ocr_unavailable_notice(ocr_status)
                     if ocr_notice:
                         page_parts.append(ocr_notice)
+                    page_parts.append(_NON_CONVERTIBLE_IMAGE)
 
-            if page_parts and len(_clean_pdf_text("\n\n".join(page_parts))) < _PDF_OCR_MIN_TEXT_CHARS and bool(getattr(page, "images", None)):
+            # If extracted text is too short but page has images, try OCR
+            if page_parts and len(_clean_pdf_text("\n\n".join(page_parts))) < _PDF_OCR_MIN_TEXT_CHARS and page_images:
                 ocr_text, _ocr_status = _extract_text_from_pdf_ocr(page)
                 cleaned_ocr_text = _clean_pdf_text(ocr_text)
                 if cleaned_ocr_text:
                     page_parts.insert(0, cleaned_ocr_text)
+                elif _NON_CONVERTIBLE_IMAGE not in page_parts:
+                    page_parts.append(_NON_CONVERTIBLE_IMAGE)
+
+            # Report drawings if present (regardless of images)
+            if has_drawings:
+                page_parts.append(_NON_CONVERTIBLE_DRAWING)
 
             if not page_parts:
+                # Page with no extractable content at all
+                page_parts.append(_NON_CONVERTIBLE_IMAGE)
                 continue
 
             page_content = "\n\n".join(part for part in page_parts if part)
@@ -237,83 +252,6 @@ def _extract_text_from_pdf(doc_bytes: bytes) -> str:
                 parts.append(page_content)
 
     return ("\n\n---\n\n" if len(parts) > 1 else "\n\n").join(parts)
-
-
-def _render_pdf_page_image_bytes(page, *, dpi: int = _PDF_VISION_RENDER_DPI, max_dimension: int = _PDF_VISION_MAX_DIMENSION) -> tuple[bytes, str]:
-    try:
-        from PIL import Image
-    except ImportError as exc:  # pragma: no cover - Pillow is an indirect runtime dependency here
-        raise ValueError("PDF page rendering requires Pillow.") from exc
-
-    try:
-        page_image = page.to_image(
-            resolution=dpi,
-            antialias=True,
-            force_mediabox=True,
-        )
-        pil_image = page_image.original.convert("RGB")
-    except Exception as exc:
-        raise ValueError(f"Could not render PDF page as an image: {exc}") from exc
-
-    if max_dimension > 0:
-        pil_image.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
-
-    image_buffer = io.BytesIO()
-    pil_image.save(image_buffer, format="JPEG", quality=82, optimize=True)
-    return image_buffer.getvalue(), "image/jpeg"
-
-
-def render_pdf_pages_for_vision(doc_bytes: bytes, *, max_pages: int = PDF_VISION_PAGE_LIMIT) -> list[dict]:
-    page_limit = max(1, int(max_pages or 1))
-    rendered_pages: list[dict] = []
-    failed_page_numbers: list[int] = []
-
-    try:
-        with pdfplumber.open(io.BytesIO(doc_bytes)) as pdf:
-            total_pages = len(pdf.pages)
-            if total_pages <= 0:
-                raise ValueError("The uploaded PDF does not contain any pages.")
-
-            is_truncated = total_pages > page_limit
-            for page_number, page in enumerate(pdf.pages[:page_limit], start=1):
-                try:
-                    image_bytes, mime_type = _render_pdf_page_image_bytes(page)
-                except ValueError as exc:
-                    LOGGER.warning(
-                        "Visual PDF rendering failed on page %s/%s: %s",
-                        page_number,
-                        total_pages,
-                        exc,
-                    )
-                    failed_page_numbers.append(page_number)
-                    continue
-                rendered_pages.append(
-                    {
-                        "page_number": page_number,
-                        "image_bytes": image_bytes,
-                        "mime_type": mime_type,
-                        "total_pages": total_pages,
-                        "truncated": is_truncated,
-                    }
-                )
-    except ValueError:
-        raise
-    except Exception as exc:
-        LOGGER.warning("Could not open PDF for visual rendering: %s", exc)
-        raise ValueError(f"Could not render the uploaded PDF as page images: {exc}") from exc
-
-    if not rendered_pages:
-        if failed_page_numbers:
-            failed_label = ", ".join(str(page_number) for page_number in failed_page_numbers)
-            raise ValueError(f"Could not render the uploaded PDF as page images. Failed pages: {failed_label}")
-        raise ValueError("Could not render the uploaded PDF as page images.")
-
-    if failed_page_numbers:
-        for page in rendered_pages:
-            page["failed_page_numbers"] = list(failed_page_numbers)
-            page["partial_failure"] = True
-
-    return rendered_pages
 
 
 def _extract_text_plain(doc_bytes: bytes) -> str:
@@ -365,38 +303,6 @@ def build_canvas_markdown(filename: str, text: str) -> str:
     if os.path.splitext(name)[-1].lower() == ".md":
         return text
     return f"# {name}\n\n{text}"
-
-
-def build_visual_canvas_markdown(filename: str, page_count: int, *, total_pages: int | None = None) -> str:
-    name = os.path.basename(filename or "document")
-    normalized_page_count = max(1, int(page_count or 1))
-    normalized_total_pages = max(normalized_page_count, int(total_pages or normalized_page_count))
-    lines = [
-        f"# {name}",
-        "",
-        "> This is a visual, read-only canvas preview backed by rendered page images.",
-        "> Use page navigation to inspect each page in the Canvas panel.",
-        "",
-    ]
-    if normalized_total_pages > normalized_page_count:
-        lines.extend(
-            [
-                f"> This PDF contains {normalized_total_pages} pages. Only the first {normalized_page_count} are available in visual preview.",
-                "",
-            ]
-        )
-    for page_number in range(1, normalized_page_count + 1):
-        lines.extend(
-            [
-                f"## Page {page_number}",
-                "",
-                f"[Visual page {page_number} preview is available in the Canvas panel.]",
-                "",
-            ]
-        )
-        if page_number < normalized_page_count:
-            lines.extend(["---", ""])
-    return "\n".join(lines).strip()
 
 
 def build_document_context_block(filename: str, text: str) -> tuple[str, bool]:

@@ -144,15 +144,12 @@ from db import (
     update_message_metadata,
 )
 from doc_service import (
-    PDF_VISION_PAGE_LIMIT,
     build_canvas_markdown,
     build_document_context_block,
     extract_document_text,
     infer_canvas_format,
     infer_canvas_language,
-    render_pdf_pages_for_vision,
     read_uploaded_document,
-    build_visual_canvas_markdown,
 )
 from messages import (
     SUMMARY_LABEL,
@@ -475,7 +472,6 @@ def _build_processed_document_upload_from_attachment(attachment: dict, *, conver
     if str(attachment.get("kind") or "").strip().lower() != "document":
         return None
 
-    submission_mode = str(attachment.get("submission_mode") or "text").strip().lower()
     file_id = str(attachment.get("file_id") or "").strip()
     asset = get_file_asset(file_id, conversation_id=conversation_id) if file_id else None
     doc_name = (
@@ -483,45 +479,6 @@ def _build_processed_document_upload_from_attachment(attachment: dict, *, conver
         or "document"
     )
     doc_mime_type = str(attachment.get("file_mime_type") or (asset or {}).get("mime_type") or "").strip().lower()
-
-    if submission_mode == "visual":
-        visual_page_image_ids = [
-            str(image_id or "").strip()
-            for image_id in (
-                attachment.get("visual_page_image_ids")
-                if isinstance(attachment.get("visual_page_image_ids"), list)
-                else []
-            )
-            if str(image_id or "").strip()
-        ]
-        visual_page_count = max(
-            len(visual_page_image_ids),
-            int(attachment.get("visual_page_count") or 0),
-            1,
-        )
-        visual_total_page_count = max(
-            visual_page_count,
-            int(attachment.get("visual_total_page_count") or 0),
-        )
-        return {
-            "attachment": attachment,
-            "doc_name": doc_name,
-            "doc_mime_type": doc_mime_type,
-            "text_truncated": False,
-            "canvas_md": build_visual_canvas_markdown(
-                doc_name,
-                visual_page_count,
-                total_pages=visual_total_page_count,
-            ),
-            "canvas_format": "markdown",
-            "canvas_language": None,
-            "content_mode": "visual",
-            "canvas_mode": "preview_only",
-            "source_file_id": file_id or None,
-            "source_mime_type": doc_mime_type or None,
-            "visual_page_image_ids": visual_page_image_ids,
-            "visual_only": True,
-        }
 
     extracted_text = str((asset or {}).get("extracted_text") or "").strip()
     context_body = _extract_document_context_body(attachment.get("file_context_block"))
@@ -4870,104 +4827,6 @@ def register_chat_routes(app) -> None:
                 processing_stage = "document"
                 for document_index, uploaded_document in enumerate(uploaded_documents):
                     doc_name, doc_mime_type, doc_bytes = read_uploaded_document(uploaded_document)
-                    mode_entry = (
-                        uploaded_document_modes[document_index] if document_index < len(uploaded_document_modes) else {}
-                    )
-                    requested_submission_mode = str((mode_entry or {}).get("submission_mode") or "text").strip().lower()
-                    submission_mode = (
-                        "visual"
-                        if requested_submission_mode == "visual" and doc_mime_type == "application/pdf"
-                        else "text"
-                    )
-
-                    if submission_mode == "visual":
-                        if not can_model_process_images(model, settings):
-                            raise ValueError(
-                                "The selected model does not support visual PDF analysis. Choose a vision-capable model or send the PDF as extracted text."
-                            )
-
-                        rendered_pages = render_pdf_pages_for_vision(doc_bytes, max_pages=PDF_VISION_PAGE_LIMIT)
-                        if not rendered_pages:
-                            raise ValueError("Could not render the uploaded PDF as page images.")
-
-                        rendered_page_count = len(rendered_pages)
-                        visual_total_page_count = max(
-                            rendered_page_count,
-                            int(rendered_pages[0].get("total_pages") or rendered_page_count),
-                        )
-                        rendered_page_numbers = sorted(
-                            {
-                                int(page.get("page_number") or 0)
-                                for page in rendered_pages
-                                if int(page.get("page_number") or 0) > 0
-                            }
-                        )
-                        rendered_page_number_set = set(rendered_page_numbers)
-                        attempted_page_limit = min(visual_total_page_count, PDF_VISION_PAGE_LIMIT)
-                        failed_render_pages = [
-                            page_number
-                            for page_number in range(1, attempted_page_limit + 1)
-                            if page_number not in rendered_page_number_set
-                        ]
-                        visual_pages_truncated = visual_total_page_count > rendered_page_count or any(
-                            bool(page.get("truncated")) for page in rendered_pages
-                        )
-
-                        created_file_asset = create_file_asset(conv_id, doc_name, doc_mime_type, doc_bytes, None)
-                        created_file_assets.append(created_file_asset)
-
-                        visual_page_image_ids = []
-                        for page in rendered_pages:
-                            page_number = int(page.get("page_number") or 0)
-                            page_filename = f"{doc_name.rsplit('.', 1)[0]}-page-{page_number}.jpg"
-                            created_page_asset = create_image_asset(
-                                conv_id,
-                                page_filename,
-                                page.get("mime_type") or "image/jpeg",
-                                page.get("image_bytes") or b"",
-                            )
-                            created_image_assets.append(created_page_asset)
-                            visual_page_image_ids.append(created_page_asset["image_id"])
-
-                        attachment = {
-                            "kind": "document",
-                            "file_id": created_file_asset["file_id"],
-                            "file_name": doc_name,
-                            "file_mime_type": doc_mime_type,
-                            "submission_mode": "visual",
-                            "canvas_mode": "preview_only",
-                            "visual_page_count": len(visual_page_image_ids),
-                            "visual_total_page_count": visual_total_page_count,
-                            "visual_pages_truncated": visual_pages_truncated,
-                            "visual_page_limit": PDF_VISION_PAGE_LIMIT,
-                            "visual_page_numbers": rendered_page_numbers,
-                            "visual_failed_pages": failed_render_pages,
-                            "visual_pages_partial": bool(failed_render_pages),
-                            "visual_page_image_ids": visual_page_image_ids,
-                        }
-                        processed_attachments.append(attachment)
-                        processed_document_uploads.append(
-                            {
-                                "attachment": attachment,
-                                "doc_name": doc_name,
-                                "doc_mime_type": doc_mime_type,
-                                "text_truncated": False,
-                                "canvas_md": build_visual_canvas_markdown(
-                                    doc_name,
-                                    len(visual_page_image_ids),
-                                    total_pages=visual_total_page_count,
-                                ),
-                                "canvas_format": "markdown",
-                                "canvas_language": None,
-                                "content_mode": "visual",
-                                "canvas_mode": "preview_only",
-                                "source_file_id": created_file_asset["file_id"],
-                                "source_mime_type": doc_mime_type,
-                                "visual_page_image_ids": visual_page_image_ids,
-                                "visual_only": True,
-                            }
-                        )
-                        continue
 
                     extracted_text = extract_document_text(doc_bytes, doc_mime_type)
                     if not extracted_text.strip():
@@ -5405,7 +5264,6 @@ def register_chat_routes(app) -> None:
                         canvas_mode=upload.get("canvas_mode"),
                         source_file_id=upload.get("source_file_id"),
                         source_mime_type=upload.get("source_mime_type"),
-                        visual_page_image_ids=upload.get("visual_page_image_ids"),
                     )
                     canvas_documents_by_file_id[str(upload["attachment"]["file_id"])] = canvas_doc
                 initial_canvas_documents = get_canvas_runtime_documents(pre_created_canvas_state)
@@ -5596,7 +5454,6 @@ def register_chat_routes(app) -> None:
                             prompt_cache_hit_tokens=entry.get("prompt_cache_hit_tokens"),
                             prompt_cache_miss_tokens=entry.get("prompt_cache_miss_tokens"),
                             prompt_cache_write_tokens=entry.get("prompt_cache_write_tokens"),
-                            cost=entry.get("cost"),
                             latency_ms=entry.get("latency_ms"),
                             response_status=str(entry.get("response_status") or "").strip() or None,
                             error_type=str(entry.get("error_type") or "").strip() or None,

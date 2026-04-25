@@ -865,55 +865,9 @@ def build_user_message_for_model(
     file_context_blocks = []
     video_context_blocks = []
     vision_attachments = []
-    visual_document_notices = []
     direct_image_notices = []
     for attachment in attachments:
         if attachment.get("kind") == "document":
-            if str(attachment.get("submission_mode") or "").strip().lower() == "visual":
-                file_name = str(attachment.get("file_name") or "PDF").strip() or "PDF"
-                page_image_ids = (
-                    attachment.get("visual_page_image_ids")
-                    if isinstance(attachment.get("visual_page_image_ids"), list)
-                    else []
-                )
-                try:
-                    page_count = max(0, int(attachment.get("visual_page_count") or len(page_image_ids) or 0))
-                except (TypeError, ValueError):
-                    page_count = len(page_image_ids)
-                try:
-                    total_page_count = max(page_count, int(attachment.get("visual_total_page_count") or 0))
-                except (TypeError, ValueError):
-                    total_page_count = page_count
-                if page_count <= 0 and total_page_count > 0:
-                    visual_document_notices.append(
-                        f"Uploaded PDF for visual analysis: {file_name}. PDF has {total_page_count} pages, but no rendered page images are currently attached below."
-                    )
-                elif page_count <= 0:
-                    visual_document_notices.append(
-                        f"Uploaded PDF for visual analysis: {file_name}. No rendered page images are currently attached below."
-                    )
-                elif total_page_count > page_count:
-                    visual_document_notices.append(
-                        f"Uploaded PDF for visual analysis: {file_name}. PDF has {total_page_count} pages; only the first {page_count} page{'s are' if page_count != 1 else ' is'} attached as image input below."
-                    )
-                else:
-                    visual_document_notices.append(
-                        f"Uploaded PDF for visual analysis: {file_name}. {page_count} page{'s are' if page_count != 1 else ' is'} attached as image input below."
-                    )
-
-                failed_pages = [
-                    int(page_number)
-                    for page_number in (attachment.get("visual_failed_pages") or [])
-                    if isinstance(page_number, int) or str(page_number).isdigit()
-                ]
-                if failed_pages:
-                    failed_page_labels = ", ".join(str(page_number) for page_number in failed_pages[:10])
-                    if len(failed_pages) > 10:
-                        failed_page_labels += ", ..."
-                    visual_document_notices.append(
-                        f"Warning: Visual rendering skipped PDF page(s) {failed_page_labels}. Analyze only the attached rendered pages."
-                    )
-                continue
             context_block = str(attachment.get("file_context_block") or "").strip()
             if _document_attachment_is_represented_in_canvas(attachment, canvas_document_lookup):
                 continue
@@ -952,7 +906,6 @@ def build_user_message_for_model(
         not file_context_blocks
         and not video_context_blocks
         and not vision_attachments
-        and not visual_document_notices
         and not direct_image_notices
     ):
         return content
@@ -963,7 +916,6 @@ def build_user_message_for_model(
 
     parts.extend(file_context_blocks)
     parts.extend(video_context_blocks)
-    parts.extend(visual_document_notices)
     parts.extend(direct_image_notices)
 
     for index, attachment in enumerate(vision_attachments, start=1):
@@ -1079,13 +1031,8 @@ def build_user_message_for_api(
         clarification_questions=clarification_questions,
     )
     visual_warning_messages: list[str] = []
-    visual_blocks = [
-        *_build_direct_image_api_blocks(metadata),
-        *_build_visual_document_api_blocks(metadata, warning_messages=visual_warning_messages),
-    ]
+    visual_blocks = _build_direct_image_api_blocks(metadata)
     prompt_text = str(text_content or "").strip() or "Analyze the attached visual inputs carefully."
-    if visual_warning_messages:
-        prompt_text = "\n\n".join([prompt_text, *visual_warning_messages])
     if not visual_blocks:
         return prompt_text
     return [

@@ -2459,7 +2459,8 @@ function normalizeCanvasDocument(document) {
 }
 
 function isVisualCanvasDocument(document) {
-  return String(document?.content_mode || "text").trim().toLowerCase() === "visual";
+  // Visual mode is no longer supported - all documents are treated as text
+  return false;
 }
 
 function isCanvasDocumentEditable(document) {
@@ -2467,22 +2468,13 @@ function isCanvasDocumentEditable(document) {
 }
 
 function getVisualCanvasPageImageId(document, pageNumber) {
-  if (!isVisualCanvasDocument(document)) {
-    return "";
-  }
-  const normalizedPage = clampCanvasPageNumber(document, pageNumber || 1);
-  if (normalizedPage < 1) {
-    return "";
-  }
-  return String(document.visual_page_image_ids?.[normalizedPage - 1] || "").trim();
+  // Visual mode is no longer supported
+  return "";
 }
 
 function getVisualCanvasPageImageUrl(document, pageNumber) {
-  const imageId = getVisualCanvasPageImageId(document, pageNumber);
-  if (!imageId || !currentConvId) {
-    return "";
-  }
-  return `/api/conversations/${encodeURIComponent(String(currentConvId))}/images/${encodeURIComponent(imageId)}`;
+  // Visual mode is no longer supported
+  return "";
 }
 
 function buildVisualCanvasImageUnavailableMarkup(document, pageNumber) {
